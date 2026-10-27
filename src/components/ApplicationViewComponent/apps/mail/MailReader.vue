@@ -32,7 +32,7 @@
             aria-label="在新窗口里回复"
             @click="$emit('reply', detail, { newWindow: true })"
           >
-            <MailIcon name="note" />
+            <MailIcon name="replyWindow" />
           </button>
           <span class="mail-toolbar-sep"></span>
           <button

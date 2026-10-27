@@ -564,6 +564,11 @@
 .mail-search input::placeholder {
   color: var(--mail-text-muted);
 }
+/* 焦点已经由 .mail-search 的外框颜色标出；再叠一圈全局 :focus-visible 焦点环，
+   看起来就是「搜索框里还有一个框」。 */
+.mail-search input:focus-visible {
+  outline: 0;
+}
 .mail-search-clear {
   border: 0;
   background: transparent;
@@ -1169,6 +1174,26 @@
   margin: 0;
 }
 
+/* 邮件里的 <pre> 常被排版工具写成固定宽度（Outlook 的 width:75em），又默认不换行。
+   自动表格布局会把它当成单元格的最小内容宽度，整张表被顶到远超阅读区，
+   其余列（比如工单模板的标签列）就被压成一字一行。宽度交还给单元格，
+   长行允许换行——否则表格的最小宽度永远收不回来。 */
+.mail-body pre {
+  width: auto !important;
+  max-width: 100%;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+/* 单元格里的 <pre> 是 Outlook 的排版产物，不是代码块：不要给它底色与内边距，
+   否则表格里会凭空多出一块黑底、行高也被撑开。 */
+.mail-body td pre,
+.mail-body th pre {
+  background: transparent;
+  padding: 0;
+  border-radius: 0;
+  overflow: visible;
+}
+
 .mail-body th,
 .mail-body td {
   border: 0;
@@ -1664,6 +1689,11 @@
 .mail-input:focus,
 .mail-textarea:focus {
   border-color: var(--mail-accent);
+}
+/* 同上：输入框用边框颜色表示焦点，不需要再加一圈外圈。 */
+.mail-input:focus-visible,
+.mail-textarea:focus-visible {
+  outline: 0;
 }
 .mail-textarea {
   resize: vertical;

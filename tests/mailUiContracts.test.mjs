@@ -108,3 +108,33 @@ test('定时邮件在发件箱里可见，并能在到点前管理', () => {
     '定时邮件按发送时间筛选',
   )
 })
+
+test('搜索框与输入框只有一圈焦点提示', () => {
+  // 全局 :focus-visible 焦点环叠在输入框自己的边框上，看起来像「框里还有一个框」。
+  assert.ok(
+    /\.mail-search input:focus-visible\s*\{\s*outline:\s*0;?\s*\}/.test(css),
+    '搜索框应取消内层焦点环',
+  )
+  assert.ok(
+    /\.mail-input:focus-visible,\s*\.mail-textarea:focus-visible\s*\{\s*outline:\s*0;?\s*\}/.test(css),
+    '带边框的输入框不应再叠外圈',
+  )
+})
+
+test('正文表格：邮件里的 <pre> 不能撑坏表格布局', () => {
+  // Outlook 会给 <pre> 写死 width:75em，自动表格布局据此把标签列压成一字宽。
+  assert.ok(/\.mail-body pre\s*\{[\s\S]*?width:\s*auto !important/.test(css), '应解除 pre 的固定宽度')
+  assert.ok(/\.mail-body pre\s*\{[\s\S]*?white-space:\s*pre-wrap/.test(css), '长行应允许换行')
+  assert.ok(/\.mail-body td pre,[\s\S]{0,120}background:\s*transparent/.test(css), '单元格里的 pre 不应有底色')
+})
+
+test('收信规则：编辑器与弹层同底色，且条件支持从通讯录选人', () => {
+  const rules = read('src/components/ApplicationViewComponent/apps/mail/MailRulesDialog.vue')
+  assert.ok(/\.mail-rule-editor\s*\{[\s\S]*?background:\s*var\(--mail-panel\)/.test(rules), '编辑器底色应跟弹层一致')
+  assert.ok(
+    !/\.mail-rule-editor\s*\{[^}]*background:\s*var\(--mail-bg-sunken\)/.test(rules),
+    '不应再用比面板更暗的凹陷色',
+  )
+  assert.ok(rules.includes('AddressPicker'), '条件应能打开通讯录选择器')
+  assert.ok(rules.includes('togglePicker(\'from\')') && rules.includes('togglePicker(\'to\')'), '发件人和收件人都要有入口')
+})

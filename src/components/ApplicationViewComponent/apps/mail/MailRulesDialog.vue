@@ -95,12 +95,45 @@
           <div class="mail-field-row">
             <div class="mail-field">
               <label class="mail-flabel">发件人包含</label>
-              <input v-model="cond.from" class="mail-input" placeholder="用逗号分隔多个" />
+              <div class="mail-rule-input-row">
+                <input v-model="cond.from" class="mail-input" placeholder="用逗号分隔多个" />
+                <button
+                  class="mail-btn mail-rule-pick-btn"
+                  :class="{ 'is-on': pickerTarget === 'from' }"
+                  title="从通讯录选择发件人"
+                  @click="togglePicker('from')"
+                >
+                  通讯录
+                </button>
+              </div>
             </div>
             <div class="mail-field">
               <label class="mail-flabel">收件人包含</label>
-              <input v-model="cond.to" class="mail-input" placeholder="用逗号分隔多个" />
+              <div class="mail-rule-input-row">
+                <input v-model="cond.to" class="mail-input" placeholder="用逗号分隔多个" />
+                <button
+                  class="mail-btn mail-rule-pick-btn"
+                  :class="{ 'is-on': pickerTarget === 'to' }"
+                  title="从通讯录选择收件人"
+                  @click="togglePicker('to')"
+                >
+                  通讯录
+                </button>
+              </div>
             </div>
+          </div>
+          <!-- 内联展开而不是浮层：弹层正文自带滚动容器，浮层会被裁掉一截。 -->
+          <div v-if="pickerTarget" class="mail-rule-picker">
+            <div class="mail-rule-picker-head">
+              选择{{ pickerTarget === 'from' ? '发件人' : '收件人' }}（可多选，选完继续追加）
+            </div>
+            <AddressPicker
+              :exclude="splitList(pickerTarget === 'from' ? cond.from : cond.to)"
+              keep-open
+              @pick="onPickAddress"
+              @pick-group="onPickGroup"
+              @close="pickerTarget = ''"
+            />
           </div>
           <div class="mail-field-row">
             <div class="mail-field">
@@ -180,7 +213,9 @@
 </template>
 
 <script setup>
-import { computed, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import AddressPicker from './AddressPicker.vue'
+import { useContactsStore, expandGroupMembers } from '../../../../stores/contactsStore'
 
 const props = defineProps({
   rules: { type: Array, default: () => [] },
@@ -250,6 +285,49 @@ const act = reactive({
   delete: false,
 })
 
+/** 通讯录选择器当前挂在哪个条件上：'from' | 'to' | ''。 */
+const pickerTarget = ref('')
+const contacts = useContactsStore()
+
+function togglePicker(target) {
+  pickerTarget.value = pickerTarget.value === target ? '' : target
+}
+
+/** 把选中的地址追加进「发件人 / 收件人包含」，去重后仍用逗号分隔。 */
+function appendAddresses(target, addresses) {
+  const field = target === 'from' ? 'from' : 'to'
+  const existing = new Set(splitList(cond[field]).map((item) => item.toLowerCase()))
+  const additions = addresses
+    .map((item) => String(item || '').trim())
+    .filter((item) => item && !existing.has(item.toLowerCase()))
+  if (!additions.length) return
+  const base = String(cond[field] || '').trim().replace(/[,;，；]\s*$/, '')
+  cond[field] = base ? `${base}, ${additions.join(', ')}` : additions.join(', ')
+}
+
+function onPickAddress(address) {
+  const target = pickerTarget.value
+  if (!target) return
+  appendAddresses(target, [address])
+}
+
+/** 通讯组：规则里存具体的成员地址，匹配才生效（组名本身不是邮箱）。 */
+function onPickGroup(groupId) {
+  const target = pickerTarget.value
+  if (!target) return
+  const members = expandGroupMembers(contacts.groups, groupId)
+  appendAddresses(target, members.map((member) => member.email))
+}
+
+function onDocMouseDown(event) {
+  if (!pickerTarget.value) return
+  if (event.target.closest?.('.mail-rule-picker, .mail-rule-pick-btn')) return
+  pickerTarget.value = ''
+}
+
+onMounted(() => document.addEventListener('mousedown', onDocMouseDown))
+onBeforeUnmount(() => document.removeEventListener('mousedown', onDocMouseDown))
+
 const orderedRules = computed(() =>
   [...props.rules].sort((a, b) => (a.priority ?? 0) - (b.priority ?? 0)),
 )
@@ -295,6 +373,7 @@ function describeRule(rule) {
 }
 
 function startNew() {
+  pickerTarget.value = ''
   Object.assign(draft, blankDraft())
   Object.assign(cond, {
     from: '',
@@ -319,6 +398,7 @@ function startNew() {
 }
 
 function editRule(rule) {
+  pickerTarget.value = ''
   Object.assign(draft, JSON.parse(JSON.stringify(rule)))
   const c = rule.condition || {}
   Object.assign(cond, {
@@ -345,6 +425,7 @@ function editRule(rule) {
 }
 
 function saveDraft() {
+  pickerTarget.value = ''
   const payload = {
     ...draft,
     condition: {
@@ -393,6 +474,41 @@ function removeRule(rule) {
   padding: 14px;
   border: 1px solid var(--mail-border);
   border-radius: var(--mail-radius-sm);
-  background: var(--mail-bg-sunken);
+  /* 与弹层同一块底面：--mail-bg-sunken 比面板暗一档，在暗色主题下像贴了一块黑板。 */
+  background: var(--mail-panel);
+}
+
+.mail-rule-input-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.mail-rule-input-row .mail-input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.mail-rule-pick-btn {
+  flex: 0 0 auto;
+  height: 31px;
+}
+
+/* 通讯录面板：内联在条件行下方，标题写清楚这次是往哪一栏里加人。 */
+.mail-rule-picker {
+  margin: 2px 0 14px;
+  border: 1px solid var(--mail-border-strong);
+  border-radius: var(--mail-radius-sm);
+  background: var(--mail-panel);
+  overflow: hidden;
+}
+.mail-rule-picker-head {
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--mail-border);
+  color: var(--mail-text-muted);
+  font-size: 11.5px;
+}
+/* AddressPicker 本身是内联面板配色（凹陷底 + 底边线），嵌进来后跟着弹层底面走。 */
+.mail-rule-picker :deep(.address-picker) {
+  background: var(--mail-panel);
+  border-bottom: 0;
 }
 </style>

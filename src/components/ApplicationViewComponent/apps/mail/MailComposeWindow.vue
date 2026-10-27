@@ -16,19 +16,20 @@
       :undo-seconds="Number(settings.undoSendSeconds) || 0"
       :templates="templates"
       :attachment-checks="attachmentChecks"
+      embedded
       @update="patchDraft"
       @send="onSend"
       @save-draft="onSaveDraft"
       @schedule="onSchedule"
       @apply-template="applyTemplate"
       @check-attachments="onCheckAttachments"
-      @close="onClose"
     />
   </div>
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { getCurrentWindow } from '@tauri-apps/api/window'
 import MailComposer from './MailComposer.vue'
 import {
   accounts as windowAccounts,
@@ -109,28 +110,36 @@ function applyTemplate(template) {
   }
 }
 
-/** 关闭：先存草稿再关窗。 */
-function onClose() {
-  closeWindow({ save: true })
-}
+let unlistenClose = null
+let closing = false
 
 onMounted(() => {
   loadComposeWindow(props.label)
-  // 窗口被系统关掉（Alt+F4 / 点 ×）时同样要存草稿：
-  // beforeunload 里发 IPC 不保证送达，所以这里用「关闭前先存」的主动路径——
-  // 用户在窗口内点关闭走 onClose；系统级关闭由主窗口的 closed 事件兜底。
-  window.addEventListener('beforeunload', onBeforeUnload)
+  // 独立窗口没有内部 × 了，系统标题栏的关闭是唯一出口：拦下来先存草稿再关。
+  // 存完由 closeWindow 走 `mail_close_compose_window`，那一次 close 会再次进入
+  // 本回调——`closing` 让它放行，否则窗口永远关不掉。
+  getCurrentWindow()
+    .onCloseRequested(async (event) => {
+      if (closing || !windowDraft.value) return
+      event.preventDefault()
+      closing = true
+      try {
+        await closeWindow({ save: true })
+      } catch (err) {
+        closing = false
+        notify(String(err?.message || err))
+      }
+    })
+    .then((unlisten) => {
+      unlistenClose = unlisten
+    })
+    .catch((err) => {
+      console.warn('[mail-compose] 关闭拦截不可用', err)
+    })
 })
 
-function onBeforeUnload(event) {
-  if (!windowDraft.value) return
-  // 有未保存内容时阻止直接丢弃：让 closeWindow 先写库。
-  event.preventDefault()
-  event.returnValue = ''
-}
-
 onBeforeUnmount(() => {
-  window.removeEventListener('beforeunload', onBeforeUnload)
+  unlistenClose?.()
 })
 </script>
 

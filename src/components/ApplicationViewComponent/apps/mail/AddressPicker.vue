@@ -71,6 +71,8 @@ import { useContactsStore } from '../../../../stores/contactsStore'
 const props = defineProps({
   /** 已经在收件人里的地址，选的时候不再重复列出。 */
   exclude: { type: Array, default: () => [] },
+  /** 选中后不自动关闭：规则条件这类需要连续挑选多个地址的场景。 */
+  keepOpen: { type: Boolean, default: false },
 })
 const emit = defineEmits(['pick', 'pick-group', 'close'])
 
@@ -136,7 +138,7 @@ function pickContact(contact) {
   const address = contact.emails?.[0]?.value
   if (address) {
     emit('pick', address)
-    emit('close')
+    if (!props.keepOpen) emit('close')
   }
 }
 
@@ -146,14 +148,15 @@ function pickSuggestion(item) {
   } else {
     emit('pick', item.email)
   }
-  emit('close')
+  if (!props.keepOpen) emit('close')
 }
 
 function addTyped() {
   const address = typedAddress.value
   if (!address) return
   emit('pick', address)
-  emit('close')
+  query.value = ''
+  if (!props.keepOpen) emit('close')
 }
 </script>
 
