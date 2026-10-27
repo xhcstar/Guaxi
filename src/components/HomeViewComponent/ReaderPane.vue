@@ -162,7 +162,48 @@
         @outline="onOutline"
         @page-change="onPdfPageChange"
         @highlight-click="onPdfHighlightClick"
-      />
+      >
+        <!--
+          侧栏开关：交给 PDF 阅读器的工具栏托管。
+
+          原先这里是 absolute 浮在正文左上角的独立浮层，而工具栏固定占着顶部
+          38px —— 两者空间必然重叠，实测盖住分页簇 60px，文件名与状态被挤成不可见。
+          放进工具栏插槽后它参与正常排布，不再需要靠调 top 值躲避。
+
+          仍不塞进 GuaxiPdfViewer 内部：它是通用组件，还被 LaTeX 预览、资料库阅读器
+          复用；「大纲 / 批注」是独立阅读器的宿主专属入口，其它调用方用不上。
+        -->
+        <template #toolbar-leading>
+          <div v-if="!pdfAside" class="gdr-pdf-switch">
+            <button
+              class="guaxi-doc-reader__icon-btn"
+              :disabled="!outlineItems.length"
+              :title="outlineItems.length ? '显示文档大纲' : '这份 PDF 没有内嵌目录'"
+              aria-label="显示文档大纲"
+              @click="pdfAside = 'outline'"
+            >
+              <Icon :icon="outlineIcon" width="15" height="15" />
+            </button>
+            <button
+              class="guaxi-doc-reader__icon-btn"
+              title="本页译文"
+              aria-label="本页译文"
+              @click="pdfAside = 'translate'"
+            >
+              <Icon :icon="translateIcon" width="15" height="15" />
+            </button>
+            <button
+              class="guaxi-doc-reader__icon-btn"
+              title="显示批注列表"
+              aria-label="显示批注列表"
+              @click="pdfAside = 'notes'"
+            >
+              <Icon :icon="noteIcon" width="15" height="15" />
+              <span v-if="pdfHighlights.length" class="gdr-pdf-switch__badge">{{ pdfHighlights.length }}</span>
+            </button>
+          </div>
+        </template>
+      </GuaxiPdfViewer>
 
       <!--
         划词高亮条：浮在选区附近。
@@ -265,42 +306,6 @@
         @update:to-lang="(v) => { pdfTranslate.toLang.value = v }"
         @close="pdfTranslate.close()"
       />
-
-      <!--
-        侧栏开关：浮在正文左上角。
-
-        为什么不放进 PDF 阅读器的工具栏：GuaxiPdfViewer 是通用组件，还被
-        LaTeX 预览、资料库阅读器等多处复用；把「大纲/批注」这类宿主专属的入口
-        塞进它，会让其它调用方也背上这两个用不上的按钮。
-      -->
-      <div v-if="!pdfAside" class="gdr-pdf-switch">
-        <button
-          class="guaxi-doc-reader__icon-btn"
-          :disabled="!outlineItems.length"
-          :title="outlineItems.length ? '显示文档大纲' : '这份 PDF 没有内嵌目录'"
-          aria-label="显示文档大纲"
-          @click="pdfAside = 'outline'"
-        >
-          <Icon :icon="outlineIcon" width="15" height="15" />
-        </button>
-        <button
-          class="guaxi-doc-reader__icon-btn"
-          title="本页译文"
-          aria-label="本页译文"
-          @click="pdfAside = 'translate'"
-        >
-          <Icon :icon="translateIcon" width="15" height="15" />
-        </button>
-        <button
-          class="guaxi-doc-reader__icon-btn"
-          title="显示批注列表"
-          aria-label="显示批注列表"
-          @click="pdfAside = 'notes'"
-        >
-          <Icon :icon="noteIcon" width="15" height="15" />
-          <span v-if="pdfHighlights.length" class="gdr-pdf-switch__badge">{{ pdfHighlights.length }}</span>
-        </button>
-      </div>
     </template>
 
     <DocImageReader
@@ -1065,35 +1070,53 @@ const openExternally = async () => {
   color: #e06c75;
 }
 
-/* 侧栏开关：浮在正文左上角，不占布局高度。 */
+/* 侧栏开关：由 GuaxiPdfViewer 的 #toolbar-leading 插槽托管，参与工具栏正常排布。
+   形状刻意与旁边的 .gpv__cluster 一致（同为胶囊），三等分的三个按钮看起来是
+   「同一件事的三个入口」，而不是外挂上去的控制条。 */
 .gdr-pdf-switch {
-  position: absolute;
-  left: 8px;
-  top: 8px;
-  z-index: 9;
-  display: flex;
-  gap: 2px;
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
   padding: 2px;
-  border-radius: 8px;
-  background: var(--guaxi-panel-bg, #fafbfc);
-  border: 1px solid var(--guaxi-border, #e1e4e8);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  border-radius: 9px;
+  background: var(--gpv-cluster-bg, rgba(255, 255, 255, 0.06));
+  box-shadow: inset 0 0 0 1px var(--gpv-cluster-border, rgba(255, 255, 255, 0.14));
+}
+
+/* 插槽内容挂在 GuaxiPdfViewer 内部，随之继承 PDF 的主题变量，
+   所以这里刻意用 --gpv-* 而不是阅读器外壳的 --guaxi-*：
+   深色 PDF 工具栏上用 --guaxi-text-primary（深墨色）会几乎看不见。 */
+.gdr-pdf-switch .guaxi-doc-reader__icon-btn {
+  position: relative;
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
+  color: var(--gpv-btn-text, #3b4148);
+}
+
+.gdr-pdf-switch .guaxi-doc-reader__icon-btn:hover:not(:disabled) {
+  background: var(--gpv-hover-bg, rgba(15, 23, 42, 0.06));
+}
+
+.gdr-pdf-switch .guaxi-doc-reader__icon-btn:active:not(:disabled) {
+  background: var(--gpv-hover-bg, rgba(15, 23, 42, 0.06));
 }
 
 .gdr-pdf-switch__badge {
   position: absolute;
-  top: -3px;
-  right: -3px;
-  min-width: 14px;
-  height: 14px;
+  top: -1px;
+  right: -1px;
+  min-width: 13px;
+  height: 13px;
   padding: 0 3px;
   border-radius: 7px;
   background: #2f6fdf;
   color: #fff;
   font-size: 9px;
-  line-height: 14px;
+  line-height: 13px;
   text-align: center;
   font-variant-numeric: tabular-nums;
+  pointer-events: none;
 }
 
 /* 划词高亮条：浮在选区附近，深色玻璃底 + 高对比按钮。

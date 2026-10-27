@@ -16,6 +16,15 @@
       工具栏会长到把正文挤走，这正是原先一列图标看不过来的原因。
     -->
     <div v-if="features.toolbar !== false" class="gpv__toolbar">
+      <!--
+        宿主专属控件的插槽（独立阅读器的大纲 / 译文 / 批注，见 ReaderPane）。
+
+        为什么放在工具栏内部而不是浮在正文上：这些入口原本是 absolute 浮层，
+        压在 fixed 高度 38px 的工具栏上，必然遮住左侧的文件名与分页控件。
+        放进工具栏后它自然参与这一行的排布，不再需要靠调数字躲开。
+        不传插槽时（LaTeX 预览等调用方）这里渲染为空，工具栏与原先完全一致。
+      -->
+      <slot name="toolbar-leading" />
       <span v-if="titleLabel" class="gpv__title" :title="titleLabel">{{ titleLabel }}</span>
       <span class="gpv__status" :class="statusTone">{{ status }}</span>
       <div class="gpv__spacer" />
