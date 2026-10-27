@@ -845,11 +845,14 @@ export default { name: 'GuaxiOrgTaskPreview' }
    * 3. 使用组件级变量统一管理，后续调整主编辑器字体时可以直接同步这一处。
    */
   --otp-editor-font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei', 'Courier New';
+  /* 正文尺度。任务条目里真正要读的是字段内容（日志、命令、步骤），不是标题，
+     所以正文基准单独成变量：改这一处，段落、代码块、列表、属性值一起跟着变。
+     界面控件（工具栏、芯片）不跟着放，否则整块面板会显得臃肿。 */
+  --otp-content-font-size: 16.5px;
+  --otp-content-line-height: 1.85;
   display: flex; flex-direction: column; height: 100%; min-width: 0;
   font-family: var(--otp-editor-font-family);
-  /* 阅读态的字号基线。任务条目常是大段日志与步骤，14px 在 ≥2K 屏上明显偏小；
-     这里整体抬到 16px，正文行高同步放大，标题/属性等各自在此基础上按比例上调。 */
-  font-size: 16px;
+  font-size: var(--otp-content-font-size);
 }
 
 /* Bug/Task 的所有条目、操作控件和编辑区统一继承主编辑器字体。
@@ -971,21 +974,21 @@ export default { name: 'GuaxiOrgTaskPreview' }
 .otp-mini.danger:hover { background: rgba(208,48,80,0.18); color: #d03050; border-color: #d03050; }
 
 .otp-props { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 12px; }
-.otp-prop { display: inline-flex; align-items: center; gap: 5px; background: var(--otp-chip); border-radius: 6px; padding: 3px 9px; font-size: 14px; }
+.otp-prop { display: inline-flex; align-items: center; gap: 5px; background: var(--otp-chip); border-radius: 6px; padding: 3px 9px; font-size: 14.5px; }
 .otp-prop .k { color: var(--otp-sub); }
 .otp-prop.done-t .v { color: #18a058; }
 
 .otp-sec { margin-top: 14px; }
 .otp-sec-head { display: flex; align-items: center; gap: 6px; cursor: pointer; user-select: none; padding: 3px 0; border-bottom: 1px solid var(--otp-border); }
-.otp-sec-caret { color: var(--otp-sub); font-size: 13px; width: 15px; }
-.otp-sec-head h4 { margin: 0; font-size: 16px; font-weight: 700; flex: 1; letter-spacing: 0.01em; }
+.otp-sec-caret { color: var(--otp-sub); font-size: 14px; width: 15px; }
+.otp-sec-head h4 { margin: 0; font-size: calc(var(--otp-content-font-size) + 1px); font-weight: 700; flex: 1; letter-spacing: 0.01em; }
 .otp-sec-actions { opacity: 0; transition: opacity .15s; }
 .otp-sec-head:hover .otp-sec-actions { opacity: 1; }
 .otp-sec-body { margin-top: 7px; }
-.otp-text { font-size: 15px; line-height: 1.8; white-space: pre-wrap; word-break: break-word; }
-.otp-pre { margin: 0 0 6px; font-size: 14.5px; line-height: 1.7; white-space: pre-wrap; word-break: break-word; background: var(--otp-chip); border-radius: 8px; padding: 10px 12px; }
+.otp-text { font-size: var(--otp-content-font-size); line-height: var(--otp-content-line-height); white-space: pre-wrap; word-break: break-word; }
+.otp-pre { margin: 0 0 6px; font-size: var(--otp-content-font-size); line-height: var(--otp-content-line-height); white-space: pre-wrap; word-break: break-word; background: var(--otp-chip); border-radius: 8px; padding: 10px 12px; }
 .otp-extra-list { display: flex; flex-direction: column; gap: 8px; }
-.otp-link, .otp-notes-file { color: #2080f0; word-break: break-all; font-size: 15px; }
+.otp-link, .otp-notes-file { color: #2080f0; word-break: break-all; font-size: var(--otp-content-font-size); }
 :deep(mark.otp-hit) { background: var(--otp-hit); color: inherit; border-radius: 3px; padding: 0 1px; }
 
 /* 编辑表单：大字段全宽 + 高文本域 */
@@ -1058,8 +1061,8 @@ export default { name: 'GuaxiOrgTaskPreview' }
  * 这些节点来自 v-html，scoped 样式够不到，必须用 :deep。
  * 只覆盖阅读需要的间距与字重，颜色一律跟随主题变量，避免暗色下出现黑字。 */
 .otp-md, .otp-bigedit-preview {
-  font-size: 15px;
-  line-height: 1.8;
+  font-size: var(--otp-content-font-size);
+  line-height: var(--otp-content-line-height);
   word-break: break-word;
 }
 .otp-md :deep(p), .otp-bigedit-preview :deep(p) { margin: 6px 0; }
@@ -1099,9 +1102,9 @@ export default { name: 'GuaxiOrgTaskPreview' }
 
 .otp-md :deep(pre), .otp-bigedit-preview :deep(pre) {
   background: var(--otp-chip); border-radius: 8px; padding: 10px 12px;
-  overflow-x: auto; font-size: 0.94em; line-height: 1.6; margin: 8px 0;
+  overflow-x: auto; font-size: 1em; line-height: 1.65; margin: 8px 0;
 }
-.otp-md :deep(code), .otp-bigedit-preview :deep(code) { font-size: 0.94em; }
+.otp-md :deep(code), .otp-bigedit-preview :deep(code) { font-size: 0.97em; }
 .otp-md :deep(:not(pre) > code), .otp-bigedit-preview :deep(:not(pre) > code) {
   background: var(--otp-chip); border-radius: 4px; padding: 1px 5px;
 }
@@ -1132,11 +1135,11 @@ export default { name: 'GuaxiOrgTaskPreview' }
 /* 大窗里的分区标题只是标签，不参与折叠，所以去掉手型与悬停效果。 */
 .otp-sec-head.static { cursor: default; }
 .otp-cardzoom-body .otp-sec { margin-top: 18px; }
-.otp-cardzoom-body .otp-text { font-size: 16px; line-height: 1.85; }
-.otp-cardzoom-body .otp-pre { font-size: 15.5px; line-height: 1.75; }
+.otp-cardzoom-body .otp-text { font-size: var(--otp-content-font-size); line-height: var(--otp-content-line-height); }
+.otp-cardzoom-body .otp-pre { font-size: var(--otp-content-font-size); line-height: var(--otp-content-line-height); }
 .otp-cardzoom-body .otp-md,
 .otp-cardzoom-body .otp-md :deep(p),
-.otp-cardzoom-body .otp-md :deep(li) { font-size: 16px; line-height: 1.85; }
+.otp-cardzoom-body .otp-md :deep(li) { font-size: var(--otp-content-font-size); line-height: var(--otp-content-line-height); }
 
 .otp-body::-webkit-scrollbar, .otp-bigedit-area::-webkit-scrollbar,
 .otp-cardzoom-body::-webkit-scrollbar { width: 9px; }
