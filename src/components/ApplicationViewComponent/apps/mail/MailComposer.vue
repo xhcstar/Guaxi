@@ -1,8 +1,13 @@
 <template>
-  <div class="mail-modal-backdrop" @click.self="$emit('close')">
+  <!-- embedded：独立写信窗口里没有「弹层」这回事——窗口本身就是容器。
+       再套一层 backdrop + 圆角边框，用户看到的就是一个黑框套白框。 -->
+  <div
+    :class="embedded ? 'mail-composer-window' : 'mail-modal-backdrop'"
+    @click.self="embedded ? null : $emit('close')"
+  >
     <div
       class="mail-modal mail-composer"
-      :class="{ 'is-maximized': maximized }"
+      :class="{ 'is-maximized': maximized, 'is-embedded': embedded }"
       role="dialog"
       aria-label="写邮件"
     >
@@ -19,6 +24,7 @@
           </option>
         </select>
         <button
+          v-if="!embedded"
           class="mail-icon-btn"
           :title="maximized ? '还原窗口' : '最大化'"
           :aria-label="maximized ? '还原窗口' : '最大化'"
@@ -67,7 +73,10 @@
           </button>
         </div>
 
-        <button class="mail-modal-close" title="关闭" @click="$emit('close')">×</button>
+        <!-- 独立窗口用系统标题栏的关闭按钮，这里再放一个只是重复。 -->
+        <button v-if="!embedded" class="mail-modal-close" title="关闭" @click="$emit('close')">
+          ×
+        </button>
       </div>
 
       <div class="mail-compose-fields">
@@ -830,6 +839,8 @@ const props = defineProps({
   templates: { type: Array, default: () => [] },
   /** 附件检查结果：[{ path, name, size, level, detail }]（store.checkAttachments）。 */
   attachmentChecks: { type: Array, default: () => [] },
+  /** 独立窗口模式：不画弹层外壳、不显示最大化与内部关闭按钮。 */
+  embedded: { type: Boolean, default: false },
 })
 const emit = defineEmits([
   'update',

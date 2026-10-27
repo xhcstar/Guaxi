@@ -242,9 +242,21 @@ test('邮件里写死的浅色边框在暗色下被压成细线，切回亮色�
   const lum = luminance(parseCssColor(mapped))
   assert.ok(lum > paper, `边框应比纸面亮一点：${mapped}`)
   assert.ok(lum < 0.05, `边框不能亮成一块白边：${mapped}`)
-  // 深色 / 彩色边框不动。
-  assert.equal(mapBorderColor('#333333'), null)
-  assert.equal(mapBorderColor('#0071e3'), null)
+  // 深色边框：在深色纸面上本来「看不见」，抬到刚好能分辨的位置，但仍贴近纸面。
+  const dark = mapBorderColor('#333333')
+  assert.ok(dark, '深色边框也要抬一点，才有分隔感')
+  assert.ok(luminance(parseCssColor(dark)) < 0.035, `深色边框不能抬高成亮线：${dark}`)
+
+  // 中间灰的边框是最容易漏的一类：`#888a85`（工单系统模板常见）在浅色纸面上很克制，
+  // 压到深色纸面上就是一条明晃晃的亮线。它必须被压到纸面附近。
+  const midGrey = mapBorderColor('#888a85')
+  assert.ok(midGrey, '中间灰边框必须映射')
+  assert.ok(luminance(parseCssColor(midGrey)) < 0.035, `中间灰不能保持亮线：${midGrey}`)
+
+  // 彩色边框保留色相，只压亮度。
+  const blue = mapBorderColor('#0071e3')
+  assert.ok(blue, '彩色边框也要压暗')
+  assert.ok(luminance(parseCssColor(blue)) < 0.04, `彩色边框不能过亮：${blue}`)
 
   // 端到端：<table style="border:1px solid #f1f1f1"> 在暗色下被改写，亮色下还原。
   const style = { borderTopColor: 'rgb(241, 241, 241)', borderRightColor: 'rgb(241, 241, 241)',

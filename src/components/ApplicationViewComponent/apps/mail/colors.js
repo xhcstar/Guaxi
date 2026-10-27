@@ -353,23 +353,24 @@ export function mapBorderColor(value, mode = 'dark') {
   if (color.a < 0.06) return null
   const lum = luminance(color)
   const { h, s } = rgbToHsl(color)
+  const paper = luminance(DARK_PAPER)
 
-  // 已经很暗的边框：在深色纸面上本来就看不见，抬到纸面上方一点点。
-  if (lum < 0.02) {
-    return formatColor(hslToRgb(h, Math.min(s, 0.3), 0.26), color.a)
+  // 判断标准是「这条线在深色纸面上会不会刺眼」，不是「原色白不白」。
+  // 真实踩到的例子：`border: 1px #888a85 solid`（工单系统模板）——它是中间灰，
+  // 在浅色纸面上很克制，但压在 0.019 的深色纸面上就是一条明晃晃的亮线。
+  // 所以只有「本来就该在深底上可见」的深色边框才保留原样。
+  if (lum <= paper * 1.6) {
+    // 深色边框：在深色纸面上本来就看不见，抬到纸面上方一点点，保持「有分隔感」。
+    return formatColor(hslToRgb(h, Math.min(s, 0.3), 0.2), color.a)
   }
-  // 浅色边框（#fff / #f1f1f1 / #eee 这类）：压成纸面上方一档的细线。
-  // 越接近纯白的边框，在原设计里越「隐形」，这里也压得越接近纸面。
-  if (lum > 0.3) {
-    // 目标亮度落在「纸面(0.019)」与「浅色表面(0.030)」之间：比纸面能看出线，
-    // 又不会像原来的 #f1f1f1 那样在深底上发白。越接近纯白，越贴近纸面。
-    const closeness = Math.min(1, (lum - 0.3) / 0.7)
-    // 表面在 0.030 左右；边框取 0.024 上下——能看见线，又不会被读成一块亮边。
-    const level = 0.155 + closeness * 0.012
-    return formatColor(hslToRgb(h, Math.min(s, 0.3), level), Math.max(color.a, 0.5))
-  }
-  // 中间调边框保持不动。
-  return null
+
+  // 其余一律压成纸面附近的一条细线：
+  // - 越接近纯白（#fff / #f1f1f1），在原设计里越「隐形」，这里压得越贴近纸面；
+  // - 中间灰（#888a85 / #bbb）在原设计里是一条可见的线，压完要比纸面稍亮一点，
+  //   否则整张卡片会失去轮廓。
+  const closeness = Math.min(1, Math.max(0, (lum - paper) / 0.9))
+  const level = 0.155 + closeness * 0.03
+  return formatColor(hslToRgb(h, Math.min(s, 0.35), level), Math.max(color.a, 0.5))
 }
 
 /** 元素自己声明的颜色：内联 style 优先，其次 `font color` / `bgcolor` 这类表现属性。 */

@@ -1911,6 +1911,33 @@
   height: 28px;
 }
 
+/* 独立写信窗口：窗口本身已经是容器，不要再套一层"黑框里的白框"。
+   去掉边框、圆角、阴影与固定尺寸，直接铺满窗口。 */
+.mail-composer-window {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--mail-bg);
+}
+.mail-composer-window .mail-composer.is-embedded {
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  max-height: none;
+  min-width: 0;
+  min-height: 0;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  background: var(--mail-bg);
+  /* 窗口自己可以拖大小，内部这个盒子不需要再提供 resize 手柄。 */
+  resize: none;
+}
+/* 顶栏留一点左右边距即可，不要像弹层那样内缩。 */
+.mail-composer.is-embedded .mail-modal-head {
+  padding: 10px 14px;
+}
+
 /* 最大化：铺满整个可用区域，正文获得全部剩余高度。 */
 .mail-composer.is-maximized {
   width: 96vw !important;

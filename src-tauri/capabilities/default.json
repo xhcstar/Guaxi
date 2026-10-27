@@ -24,7 +24,8 @@
     "task_manager",
     "diff-compare",
     "life-album-viewer",
-    "library-site"
+    "library-site",
+    "mail-compose-*"
   ],
   "permissions": [
     "core:default",

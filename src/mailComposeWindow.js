@@ -51,11 +51,19 @@ app.use(createPinia())
 app.mount('#app')
 
 // 窗口已经开着时，主窗口再发一次请求：让页面重新取草稿。
+//
+// 这里必须 catch：Tauri 的 `event.listen` 是受 capability 白名单管控的，
+// 窗口名不在白名单里时它会抛一个 **Promise 拒绝**——没有 catch 就是一条
+// 未捕获错误，而且后续的初始化被中断，窗口里的按钮全部失灵。
+// 白名单已经补上（capabilities/default.json 的 mail-compose-*），
+// 但这条兜底要留着：漏配的时候窗口至少还能正常写信、发送。
 listen('mail-compose:request', async () => {
   const { reloadComposeRequest } = await import(
     './components/ApplicationViewComponent/apps/mail/composeWindowBridge'
   )
   reloadComposeRequest()
+}).catch((error) => {
+  console.warn('[mail-compose] 事件监听不可用，跳过重新加载草稿', error)
 })
 
 // 首帧就绪后告诉后端可以显示窗口了（后端有 5 秒兜底，脚本出错也不会永远隐藏）。
