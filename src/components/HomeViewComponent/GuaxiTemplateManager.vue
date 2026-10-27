@@ -4,6 +4,7 @@
     class="tm"
     :class="{
       'is-inspector-collapsed': inspectorCollapsed,
+      'is-browser-collapsed': browserCollapsed,
       'is-dragging': dragActive,
     }"
     tabindex="-1"
@@ -67,6 +68,15 @@
         <button
           type="button"
           class="tm-icon-btn"
+          :title="browserCollapsed ? '显示模板列表' : '收起模板列表'"
+          :aria-label="browserCollapsed ? '显示模板列表' : '收起模板列表'"
+          @click="toggleBrowser"
+        >
+          <Icon :icon="browserCollapsed ? panelLeftOpenIcon : panelLeftCloseIcon" width="16" height="16" />
+        </button>
+        <button
+          type="button"
+          class="tm-icon-btn"
           :title="inspectorCollapsed ? '显示预览面板' : '收起预览面板'"
           :aria-label="inspectorCollapsed ? '显示预览面板' : '收起预览面板'"
           @click="toggleInspector"
@@ -102,6 +112,34 @@
         </button>
       </div>
 
+      <div v-if="hasDraft && !inspectorCollapsed" class="tm-inline-fields">
+        <label class="tm-inline-field is-name">
+          <span class="tm-inline-label">名称</span>
+          <input
+            v-model="draft.name"
+            class="tm-inline-input"
+            placeholder="模板名称"
+            spellcheck="false"
+            aria-label="模板名称"
+            @input="markDirty"
+          />
+        </label>
+        <label class="tm-inline-field is-type">
+          <span class="tm-inline-label">分类</span>
+          <input
+            v-model="draft.type"
+            class="tm-inline-input"
+            placeholder="例如 工作 / 周报"
+            spellcheck="false"
+            aria-label="模板分类"
+            list="tm-type-options"
+            @input="markDirty"
+          />
+        </label>
+        <span v-if="draft.builtin" class="tm-badge">内置</span>
+        <span v-else-if="draft.isUser" class="tm-badge is-user">自定义</span>
+      </div>
+
       <div class="tm-view-actions">
         <button
           v-if="searchActive"
@@ -134,7 +172,7 @@
 
     <!-- ───────────── 主体：列表 + 文档 ───────────── -->
     <main class="tm-main" :style="mainStyle">
-      <section class="tm-browser">
+      <section v-if="!browserCollapsed" class="tm-browser">
         <div v-if="loadError" class="tm-banner is-danger">
           <Icon :icon="alertIcon" width="15" height="15" />
           <span class="tm-banner-text">{{ loadError }}</span>
@@ -331,7 +369,7 @@
       </section>
 
       <div
-        v-if="!inspectorCollapsed"
+        v-if="!inspectorCollapsed && !browserCollapsed"
         class="tm-resizer"
         title="拖动调整文档宽度"
         @pointerdown="startResize"
@@ -345,8 +383,6 @@
                 <Icon :icon="draftKind === 'python' ? codeIcon : fileTextIcon" width="15" height="15" />
               </span>
               <span class="tm-doc-name" :title="draft.name">{{ draft.name || '未命名模板' }}</span>
-              <span v-if="draft.builtin" class="tm-badge">内置</span>
-              <span v-else-if="draft.isUser" class="tm-badge is-user">自定义</span>
             </div>
             <div class="tm-doc-head-actions">
               <button
@@ -378,30 +414,6 @@
                 <Icon :icon="xIcon" width="14" height="14" />
               </button>
             </div>
-          </div>
-
-          <div class="tm-doc-fields">
-            <label class="tm-field">
-              <span class="tm-field-label">名称</span>
-              <input
-                v-model="draft.name"
-                class="tm-text-input"
-                placeholder="模板名称"
-                spellcheck="false"
-                @input="markDirty"
-              />
-            </label>
-            <label class="tm-field">
-              <span class="tm-field-label">分类</span>
-              <input
-                v-model="draft.type"
-                class="tm-text-input"
-                placeholder="例如 工作 / 周报"
-                spellcheck="false"
-                list="tm-type-options"
-                @input="markDirty"
-              />
-            </label>
           </div>
 
           <div class="tm-doc-preview-toggle">
@@ -620,6 +632,8 @@ import folderSearchIcon from '@iconify-icons/lucide/folder-search'
 import gridIcon from '@iconify-icons/lucide/layout-grid'
 import libraryIcon from '@iconify-icons/lucide/library'
 import listTreeIcon from '@iconify-icons/lucide/list-tree'
+import panelLeftCloseIcon from '@iconify-icons/lucide/panel-left-close'
+import panelLeftOpenIcon from '@iconify-icons/lucide/panel-left-open'
 import panelCloseIcon from '@iconify-icons/lucide/panel-right-close'
 import panelOpenIcon from '@iconify-icons/lucide/panel-right-open'
 import pencilIcon from '@iconify-icons/lucide/pencil'
@@ -697,6 +711,7 @@ const docMode = ref('edit')
 const inspectorWidth = ref(560)
 const inspectorViewWidth = ref(0)
 const inspectorCollapsed = ref(false)
+const browserCollapsed = ref(false)
 const resizing = ref(false)
 let resizeState = null
 
@@ -1039,12 +1054,15 @@ const loadPrefs = () => {
       if (typeof value?.searchContent === 'boolean') searchContent.value = value.searchContent
       if (Number(value?.inspectorWidth) > 0) inspectorWidth.value = Math.round(Number(value.inspectorWidth))
       if (typeof value?.inspectorCollapsed === 'boolean') inspectorCollapsed.value = value.inspectorCollapsed
+      if (typeof value?.browserCollapsed === 'boolean') browserCollapsed.value = value.browserCollapsed
       if (typeof value?.selectedName === 'string') selectedName.value = value.selectedName
       if (typeof value?.familyFilter === 'string') familyFilter.value = value.familyFilter
     }
   } catch (error) {
     logger.debug('[TemplateManager] read prefs failed', { error })
   }
+  // 两侧都收起会只剩空白，恢复上次状态时至少留下文档区。
+  if (browserCollapsed.value && inspectorCollapsed.value) inspectorCollapsed.value = false
   try {
     const raw = localStorage.getItem(COLLAPSED_KEY)
     const list = raw ? JSON.parse(raw) : []
@@ -1068,6 +1086,7 @@ const savePrefs = () => {
           searchContent: searchContent.value,
           inspectorWidth: inspectorWidth.value,
           inspectorCollapsed: inspectorCollapsed.value,
+          browserCollapsed: browserCollapsed.value,
           selectedName: selectedName.value || '',
           familyFilter: familyFilter.value,
         })
@@ -1751,8 +1770,25 @@ const toggleGroup = (family) => {
 
 const toggleInspector = () => {
   inspectorCollapsed.value = !inspectorCollapsed.value
+  // 文档区收起后若列表也收起就只剩空白，把列表放回来。
+  if (inspectorCollapsed.value) browserCollapsed.value = false
   savePrefs()
   if (!inspectorCollapsed.value) nextTick(() => editor?.layout?.())
+}
+
+const toggleBrowser = () => {
+  browserCollapsed.value = !browserCollapsed.value
+  // 反过来同理：列表收起时文档区必须是展开的，才能独占整屏。
+  if (browserCollapsed.value) {
+    inspectorCollapsed.value = false
+    nextTick(() => {
+      mountEditor()
+      editor?.layout?.()
+    })
+  } else {
+    nextTick(() => editor?.layout?.())
+  }
+  savePrefs()
 }
 
 const scrollRowIntoView = async (name) => {
@@ -2330,6 +2366,67 @@ watch(hasDraft, async (open) => {
   font-variant-numeric: tabular-nums;
 }
 
+/* 文档字段搬到工具栏：不占正文高度，收起列表时还能贴着文档用。 */
+.tm-inline-fields {
+  flex: 0 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-left: 12px;
+  border-left: 1px solid var(--tm-line-soft);
+}
+
+.tm-inline-field {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  min-width: 0;
+  padding: 0 8px;
+  border: 1px solid var(--tm-line);
+  border-radius: 7px;
+  background: var(--tm-bg);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.tm-inline-field:focus-within {
+  border-color: var(--tm-accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--tm-accent) 16%, transparent);
+}
+
+.tm-inline-field.is-name {
+  flex: 1 1 200px;
+  max-width: 360px;
+}
+
+.tm-inline-field.is-type {
+  flex: 0 1 180px;
+  min-width: 112px;
+}
+
+.tm-inline-label {
+  flex: 0 0 auto;
+  color: var(--tm-fg-3);
+  font-size: 10.5px;
+  white-space: nowrap;
+}
+
+.tm-inline-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--tm-fg);
+  font: inherit;
+  font-size: 12px;
+}
+
+.tm-inline-input::placeholder {
+  color: var(--tm-fg-3);
+}
+
 .tm-view-actions {
   flex: 0 0 auto;
   display: flex;
@@ -2403,6 +2500,10 @@ watch(hasDraft, async (open) => {
 }
 
 .tm.is-inspector-collapsed .tm-main {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.tm.is-browser-collapsed .tm-main {
   grid-template-columns: minmax(0, 1fr);
 }
 
@@ -2970,6 +3071,10 @@ watch(hasDraft, async (open) => {
   background: color-mix(in srgb, var(--tm-panel) 62%, var(--tm-bg));
 }
 
+.tm.is-browser-collapsed .tm-inspector {
+  border-left: 0;
+}
+
 .tm-doc-head {
   flex: 0 0 auto;
   display: flex;
@@ -3002,15 +3107,6 @@ watch(hasDraft, async (open) => {
   display: flex;
   align-items: center;
   gap: 6px;
-}
-
-.tm-doc-fields {
-  flex: 0 0 auto;
-  display: grid;
-  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
-  gap: 10px;
-  padding: 9px 12px 8px;
-  border-bottom: 1px solid var(--tm-line-soft);
 }
 
 .tm-field {
@@ -3389,6 +3485,10 @@ body.template-inspector-resizing {
 
   .tm-resizer,
   .tm-inspector {
+    display: none;
+  }
+
+  .tm-inline-fields {
     display: none;
   }
 
