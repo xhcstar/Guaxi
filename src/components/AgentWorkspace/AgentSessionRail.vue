@@ -57,7 +57,7 @@
             />
             <span v-if="group.color" class="group-color" :style="{ background: group.color }" />
             <input
-              v-if="renamingSectionId === group.id"
+              v-if="group.id && renamingSectionId === group.id"
               v-model="sectionNameValue"
               class="group-rename"
               type="text"
