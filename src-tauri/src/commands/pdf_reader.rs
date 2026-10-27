@@ -1100,6 +1100,9 @@ pub struct AddHighlightRequest {
     pub color: Option<[u8; 4]>,
     #[serde(default)]
     pub note: Option<String>,
+    /// 被高亮的原文。存进批注元数据，重新打开 PDF 后笔记面板仍能显示「高亮的是什么」。
+    #[serde(default)]
+    pub text: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1114,6 +1117,9 @@ pub struct HighlightInfo {
     pub rects: Vec<HighlightRect>,
     pub color: [u8; 4],
     pub note: String,
+    /// 被高亮的原文（旧批注没有这个字段时为空串）。
+    #[serde(default)]
+    pub text: String,
 }
 
 const DEFAULT_HL_COLOR: [u8; 4] = [255, 235, 59, 90];
@@ -1130,20 +1136,32 @@ fn new_annot_id() -> String {
     format!("h{:x}{:x}", nanos, c)
 }
 
-fn build_marker(id: &str, note: &str, rects: &[HighlightRect], color: [u8; 4]) -> String {
+fn build_marker(
+    id: &str,
+    note: &str,
+    text: &str,
+    rects: &[HighlightRect],
+    color: [u8; 4],
+) -> String {
     let meta = serde_json::json!({
-        "v": 1, "id": id, "note": note, "rects": rects, "color": color,
+        "v": 1, "id": id, "note": note, "text": text, "rects": rects, "color": color,
     });
     format!("{}{}", HL_MARKER, meta)
 }
 
-fn parse_marker(contents: &str) -> Option<(String, String, Vec<HighlightRect>, [u8; 4])> {
+fn parse_marker(contents: &str) -> Option<(String, String, String, Vec<HighlightRect>, [u8; 4])> {
     let idx = contents.find(HL_MARKER)?;
     let json = &contents[idx + HL_MARKER.len()..];
     let v: serde_json::Value = serde_json::from_str(json).ok()?;
     let id = v.get("id")?.as_str()?.to_string();
     let note = v
         .get("note")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .to_string();
+    // 旧版本写入的批注没有 text 字段，缺省为空串，不影响读取。
+    let text = v
+        .get("text")
         .and_then(|x| x.as_str())
         .unwrap_or("")
         .to_string();
@@ -1157,7 +1175,7 @@ fn parse_marker(contents: &str) -> Option<(String, String, Vec<HighlightRect>, [
         .cloned()
         .and_then(|c| serde_json::from_value(c).ok())
         .unwrap_or(DEFAULT_HL_COLOR);
-    Some((id, note, rects, color))
+    Some((id, note, text, rects, color))
 }
 
 /// 把"左上原点 pt"的矩形转成 pdfium 页坐标（左下原点）下的 PdfRect。
@@ -1199,9 +1217,11 @@ pub async fn pdf_add_highlight(
         rects,
         color,
         note,
+        text,
     } = request;
     let color = color.unwrap_or(DEFAULT_HL_COLOR);
     let note = note.unwrap_or_default();
+    let text = text.unwrap_or_default();
 
     run_pdf(move |state| {
         let annot_id = new_annot_id();
@@ -1246,7 +1266,7 @@ pub async fn pdf_add_highlight(
                         .map_err(|e| format!("设置高亮范围失败: {e}"))?;
                 }
                 stamp
-                    .set_contents(&build_marker(&annot_id, &note, &rects, color))
+                    .set_contents(&build_marker(&annot_id, &note, &text, &rects, color))
                     .map_err(|e| format!("写入高亮元数据失败: {e}"))?;
                 let [r, g, b, a] = color;
                 let fill = PdfColor::new(r, g, b, a);
@@ -1355,13 +1375,14 @@ pub async fn pdf_page_highlights(path: String, page: usize) -> Result<Vec<Highli
                         continue;
                     }
                     if let Some(c) = a.contents() {
-                        if let Some((id, note, rects, color)) = parse_marker(&c) {
+                        if let Some((id, note, text, rects, color)) = parse_marker(&c) {
                             out.push(HighlightInfo {
                                 annot_id: id,
                                 page,
                                 rects,
                                 color,
                                 note,
+                                text,
                             });
                         }
                     }
@@ -1398,13 +1419,14 @@ pub async fn pdf_list_highlights(path: String) -> Result<Vec<HighlightInfo>, Str
                         continue;
                     }
                     let Some(c) = a.contents() else { continue };
-                    if let Some((id, note, rects, color)) = parse_marker(&c) {
+                    if let Some((id, note, text, rects, color)) = parse_marker(&c) {
                         out.push(HighlightInfo {
                             annot_id: id,
                             page: page_idx + 1,
                             rects,
                             color,
                             note,
+                            text,
                         });
                     }
                 }
@@ -1430,7 +1452,7 @@ pub async fn pdf_save(path: String, dest_path: Option<String>) -> Result<(), Str
 
 #[cfg(test)]
 mod highlight_marker_tests {
-    use super::{parse_marker, HL_MARKER};
+    use super::{build_marker, parse_marker, HL_MARKER};
 
     /// 本应用写入批注时用的 Contents 形态：哨兵前缀 + JSON。
     fn marked(json: &str) -> String {
@@ -1444,13 +1466,24 @@ mod highlight_marker_tests {
         let parsed = parse_marker(&contents).expect("应能解析");
         assert_eq!(parsed.0, "gx-123");
         assert_eq!(parsed.1, "重点");
-        assert_eq!(parsed.2.len(), 1);
-        assert_eq!(parsed.3, [255, 235, 59, 90]);
+        assert_eq!(parsed.2, "", "旧批注没有 text 时为空串");
+        assert_eq!(parsed.3.len(), 1);
+        assert_eq!(parsed.4, [255, 235, 59, 90]);
     }
 
     #[test]
-    fn rejects_contents_without_our_marker() {
-        // 别的阅读器写的批注不能被当成我们的 —— 否则删改会波及他人内容。
+    fn text_survives_the_marker_round_trip() {
+        // 原文里可能有引号、换行和反斜杠；写进 JSON 再读回来必须逐字一致，
+        // 否则笔记面板里显示的会是残缺的引文（或整条批注解析失败）。
+        let text = "他说：\"划重点\"\n第二行 \\ 反斜杠";
+        let contents = build_marker("gx-1", "", text, &[], [255, 235, 59, 110]);
+        let parsed = parse_marker(&contents).expect("应能解析");
+        assert_eq!(parsed.0, "gx-1");
+        assert_eq!(parsed.2, text);
+    }
+
+    #[test]
+    fn rejects_contents_without_our_marker() {        // 别的阅读器写的批注不能被当成我们的 —— 否则删改会波及他人内容。
         assert!(parse_marker("Just a normal note").is_none());
         assert!(parse_marker(r#"{"id":"x"}"#).is_none());
     }
@@ -1469,5 +1502,6 @@ mod highlight_marker_tests {
         let parsed = parse_marker(&contents).expect("哨兵之后的 JSON 应被采用");
         assert_eq!(parsed.0, "gx-9");
         assert_eq!(parsed.1, "", "缺 note 时为空串而不是失败");
+        assert_eq!(parsed.2, "", "缺 text 时为空串而不是失败");
     }
 }

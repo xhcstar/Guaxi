@@ -341,11 +341,19 @@ export default function usePdfiumDocument() {
   }
 
   // 仅写回 .pdf 并返回 annot_id；覆盖层由调用方乐观维护，不再强制全量重拉（省一次往返）。
-  const addHighlight = async ({ page, rects, color, note } = {}) => {
+  const addHighlight = async ({ page, rects, color, note, text } = {}) => {
     if (!activePath || !page || !Array.isArray(rects) || !rects.length) return null
     try {
       const resp = await invoke('pdf_add_highlight', {
-        request: { path: activePath, page, rects, color: color || null, note: note || null },
+        request: {
+          path: activePath,
+          page,
+          rects,
+          color: color || null,
+          note: note || null,
+          // 原文一并写进批注元数据：重开 PDF 后笔记面板仍能显示「高亮的是哪段话」。
+          text: text || null,
+        },
       })
       return resp?.annot_id || null
     } catch (e) {

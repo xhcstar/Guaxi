@@ -179,10 +179,10 @@
       -->
       <div class="gpv__cluster" aria-label="旋转与平移">
         <button type="button" class="gpv__btn gpv__btn--icon" title="向左旋转 90°（[）" aria-label="向左旋转" @click="rotateLeft('toolbar')">
-          <RefreshCircleOutline :rotate="90" />
+          <Icon :icon="RotateCcwIcon" width="16" height="16" />
         </button>
         <button type="button" class="gpv__btn gpv__btn--icon" title="向右旋转 90°（]）" aria-label="向右旋转" @click="rotateRight('toolbar')">
-          <RefreshCircleOutline :rotate="-90" />
+          <Icon :icon="RotateCwIcon" width="16" height="16" />
         </button>
         <button
           type="button"
@@ -343,11 +343,13 @@ import {
   DownloadOutline,
   ExpandOutline,
   HandRightOutline,
-  RefreshCircleOutline,
   RefreshOutline,
   RemoveOutline,
   SearchOutline,
 } from '@vicons/ionicons5'
+import { Icon } from '@iconify/vue'
+import RotateCcwIcon from '@iconify-icons/lucide/rotate-ccw'
+import RotateCwIcon from '@iconify-icons/lucide/rotate-cw'
 import { createLogger } from '../../utils/logger'
 import { markReaderScrollbarActive } from '../ReaderComponent/readerScrollbar'
 import usePdfiumDocument from './usePdfiumDocument'
@@ -1436,6 +1438,7 @@ const onHighlightClick = (hl, pageNum, ev) => {
     altKey: !!ev?.altKey,
     // 带上 rects，供宿主在删除后做撤销重建。
     rects: Array.isArray(hl.rects) ? hl.rects.map((r) => ({ ...r })) : [],
+    text: hl.text || '',
   })
 }
 
@@ -2012,10 +2015,16 @@ const addHighlightFromSelection = async ({ color, note } = {}) => {
   const tempId = `tmp-${++hlTempSeq}`
   if (page) {
     if (!Array.isArray(page.highlights)) page.highlights = []
-    page.highlights.push({ annot_id: tempId, rects: info.rects, color: rgba, note: note || '', pending: true })
+    page.highlights.push({ annot_id: tempId, rects: info.rects, color: rgba, note: note || '', text: info.text, pending: true })
   }
 
-  const annotId = await doc.addHighlight({ page: info.page, rects: info.rects, color: rgba, note })
+  const annotId = await doc.addHighlight({
+    page: info.page,
+    rects: info.rects,
+    color: rgba,
+    note,
+    text: info.text,
+  })
   if (!annotId) {
     if (page && Array.isArray(page.highlights)) {
       const i = page.highlights.findIndex((h) => h.annot_id === tempId)
@@ -2046,16 +2055,16 @@ const deleteHighlight = async (pageNum, annotId) => {
 }
 
 // 无需 DOM 选区地重建一个高亮（撤销"删除"时用）。乐观插入覆盖层 + 后台写回，返回新 annotId。
-const reAddHighlight = async ({ page: pageNum, rects, color, note } = {}) => {
+const reAddHighlight = async ({ page: pageNum, rects, color, note, text } = {}) => {
   if (!pageNum || !Array.isArray(rects) || !rects.length) return null
   const rgba = normalizeHlColor(color)
   const page = pages[pageNum - 1]
   const tempId = `tmp-${++hlTempSeq}`
   if (page) {
     if (!Array.isArray(page.highlights)) page.highlights = []
-    page.highlights.push({ annot_id: tempId, rects, color: rgba, note: note || '', pending: true })
+    page.highlights.push({ annot_id: tempId, rects, color: rgba, note: note || '', text: text || '', pending: true })
   }
-  const annotId = await doc.addHighlight({ page: pageNum, rects, color: rgba, note })
+  const annotId = await doc.addHighlight({ page: pageNum, rects, color: rgba, note, text })
   if (!annotId) {
     if (page && Array.isArray(page.highlights)) {
       const i = page.highlights.findIndex((h) => h.annot_id === tempId)
@@ -2092,6 +2101,7 @@ const findHighlightRaw = (pageNum, annotId) => {
     note: hit.note || '',
     color: hit.color,
     rects: Array.isArray(hit.rects) ? hit.rects.map((r) => ({ ...r })) : [],
+    text: hit.text || '',
   }
 }
 

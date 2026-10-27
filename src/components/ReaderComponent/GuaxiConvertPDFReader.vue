@@ -23,11 +23,11 @@
         <!-- 旧版渲染核心(PDF.js)专用控件 -->
         <template v-if="!useNewPdfViewer">
           <button class="rotate-left" @click="rotate(-90)" title="向左旋转90度">
-            <n-icon :component="RefreshCircleOutline" :rotate="90" />
+            <Icon :icon="RotateCcwIcon" width="16" height="16" />
             <span class="btn-text">左旋</span>
           </button>
           <button class="rotate-right" @click="rotate(90)" title="向右旋转90度">
-            <n-icon :component="RefreshCircleOutline" :rotate="-90" />
+            <Icon :icon="RotateCwIcon" width="16" height="16" />
             <span class="btn-text">右旋</span>
           </button>
           <button class="fit-width" @click="fitToWidth" title="将页面调整为适合宽度">
@@ -65,10 +65,10 @@
           <span class="ctl-sep" />
           <div class="ctl-group">
             <button class="rotate-left" @click="viewerRotateLeft" title="向左旋转90度 (Ctrl+[)">
-              <n-icon :component="RefreshCircleOutline" :rotate="90" />
+              <Icon :icon="RotateCcwIcon" width="16" height="16" />
             </button>
             <button class="rotate-right" @click="viewerRotateRight" title="向右旋转90度 (Ctrl+])">
-              <n-icon :component="RefreshCircleOutline" :rotate="-90" />
+              <Icon :icon="RotateCwIcon" width="16" height="16" />
             </button>
             <button class="pan-toggle" :class="{ active: viewerPanActive }" @click="viewerTogglePan"
               title="锁定拖动平移 (H)。平时在页面空白处直接拖动即可平移，无需开启">
@@ -211,11 +211,21 @@
           </template>
           <template #notes>
             <div class="rsp-list" @click.stop>
-              <div v-if="!selectedHighlight" class="rsp-empty">在正文里点选一条高亮，就能在这里看到它。</div>
-              <div v-else class="rsp-item is-on">
-                <span class="rsp-item__title">第 {{ selectedHighlight.page }} 页</span>
-                <span class="rsp-item__sub">{{ selectedHighlight.note || '（无笔记）' }}</span>
-              </div>
+              <div v-if="highlightsLoading && !allHighlights.length" class="rsp-empty">正在读取高亮…</div>
+              <div v-else-if="!allHighlights.length" class="rsp-empty">还没有高亮。在正文里选中文字，点浮条上的荧光笔即可添加。</div>
+              <button
+                v-for="h in allHighlights"
+                :key="h.annotId"
+                class="rsp-item"
+                :class="{ 'is-on': selectedHighlight?.annotId === h.annotId }"
+                :title="[h.text, h.note].filter(Boolean).join('\n')"
+                @click="jumpToHighlight(h)"
+              >
+                <span class="rsp-item__title">{{ h.text || h.note || '（空高亮）' }}</span>
+                <span class="rsp-item__sub">
+                  第 {{ h.page }} 页<span v-if="h.text && h.note"> · {{ h.note }}</span>
+                </span>
+              </button>
             </div>
           </template>
         </ReaderSidePanel>
@@ -383,6 +393,33 @@
         </button>
       </div>
       <div class="notes-content guaxi-reader-scrollbar" ref="notesContentEl" @mouseenter="setScrollTargetFromEvent">
+        <!--
+          高亮摘录排在手写笔记卡前面：对 PDF 来说，「我标了哪些话」比「我写了什么卡片」
+          更常用。此前右侧笔记面板只渲染笔记卡，新加的高亮哪儿都不出现，
+          读者只能去左侧侧栏（且要先从布局菜单打开）才看得见。
+        -->
+        <div v-if="useNewPdfViewer" class="notes-highlights">
+          <div class="notes-highlights__head">
+            <span>高亮</span>
+            <span class="notes-highlights__count">{{ allHighlights.length }}</span>
+          </div>
+          <div v-if="!allHighlights.length" class="notes-highlights__empty">
+            在正文里选中文字，点浮条上的荧光笔即可添加高亮。
+          </div>
+          <button
+            v-for="h in allHighlights"
+            :key="`nh-${h.annotId}`"
+            type="button"
+            class="notes-highlight"
+            :class="{ 'is-on': selectedHighlight?.annotId === h.annotId }"
+            :title="[h.text, h.note].filter(Boolean).join('\n')"
+            @click="jumpToHighlight(h)"
+          >
+            <span class="notes-highlight__swatch" :style="{ background: rgbaArrToCss(h.color) }"></span>
+            <span class="notes-highlight__text">{{ h.text || h.note || '（空高亮）' }}</span>
+            <span class="notes-highlight__page">第 {{ h.page }} 页</span>
+          </button>
+        </div>
         <n-card v-for="(card, index) in noteCards" :key="card.id" class="note-card"
           :class="{ 'note-card--flashing': flashingNoteIndex === index }" size="small" :title="card.title"
           :bordered="true" :segmented="{
@@ -554,6 +591,8 @@
 import { createLogger } from '../../utils/logger'
 import { Icon } from '@iconify/vue'
 import HighlighterOutline from '@iconify-icons/lucide/highlighter'
+import RotateCcwIcon from '@iconify-icons/lucide/rotate-ccw'
+import RotateCwIcon from '@iconify-icons/lucide/rotate-cw'
 import { ref, computed, watchEffect, onMounted, onBeforeUnmount, watch, nextTick, h } from 'vue'
 import { markReaderScrollbarActive } from './readerScrollbar'
 import { invoke } from '@tauri-apps/api/core'
@@ -578,7 +617,6 @@ import GuaxiPdfViewer from '../PdfViewer/GuaxiPdfViewer.vue'
 import {
   ArrowBackOutline,
   ArrowForwardOutline,
-  RefreshCircleOutline,
   ExpandOutline,
   TrashOutline,
   AddOutline,
@@ -1109,6 +1147,8 @@ const viewerTogglePan = () => { pdfViewer.value?.togglePan(); bindViewerState() 
 const onViewerReady = ({ totalPages: tp } = {}) => {
   if (tp) totalPages.value = tp
   bindViewerState()
+  // 文档就绪后再列高亮：pdf_list_highlights 要求该 PDF 已在本进程内打开。
+  void refreshAllHighlights()
   if (pendingRestorePage.value != null && tp) {
     const p = Math.max(1, Math.min(Number(pendingRestorePage.value) || 1, tp))
     pendingRestorePage.value = null
@@ -1230,6 +1270,66 @@ const onViewerSelection = ({ text } = {}) => {
 // 高亮的选中态。宿主持有它，是因为选中之后还要联动右侧笔记面板（滚到对应摘录卡）。
 const selectedHighlight = ref(null)
 
+// ─────────── 全书高亮列表（侧栏「笔记」标签）───────────
+//
+// viewer 的页模型只按可见页懒加载高亮，拿不到全书清单；而「笔记」标签要回答的是
+// 「这本书里我标记了哪些地方」。所以这里单独问后端要全量：pdf_list_highlights 一次扫完
+// 所有页的批注，页数再多也只有一次 IPC。新增/删除/撤销后都要重拉，列表才不会落后于文件。
+const allHighlights = ref([])
+const highlightsLoading = ref(false)
+// 列表落后于文件的标记。高亮增删后只置脏；侧栏没开就等它开时再拉，
+// 免得每划一条高亮就把整本 PDF 的批注扫一遍。
+let highlightsStale = true
+// 刷新期间又有新请求（连续加几条高亮）：记一笔，本轮结束后再拉一次，别把后来的改动吞掉。
+let highlightRefreshQueued = false
+// 换文档时旧请求可能晚到：用 token 丢弃不属于当前文件的结果。
+let highlightLoadToken = 0
+const normalizeHighlight = (h) => ({
+  annotId: String(h?.annot_id ?? h?.annotId ?? ''),
+  page: Math.max(1, Number(h?.page) || 1),
+  text: String(h?.text || ''),
+  note: String(h?.note || ''),
+  color: h?.color,
+  rects: Array.isArray(h?.rects) ? h.rects.map((r) => ({ ...r })) : [],
+})
+const refreshAllHighlights = async () => {
+  if (!useNewPdfViewer.value || !props.filePath) return
+  if (highlightsLoading.value) { highlightRefreshQueued = true; return }
+  highlightsLoading.value = true
+  const token = ++highlightLoadToken
+  try {
+    const list = await invoke('pdf_list_highlights', {
+      path: String(props.filePath).split('?')[0],
+    })
+    if (token !== highlightLoadToken) return
+    allHighlights.value = (Array.isArray(list) ? list : [])
+      .map(normalizeHighlight)
+      .filter((h) => h.annotId)
+      .sort((a, b) => a.page - b.page)
+    highlightsStale = false
+  } catch (e) {
+    logger.warn('加载高亮列表失败', { error: String(e?.message || e) })
+  } finally {
+    if (token === highlightLoadToken) highlightsLoading.value = false
+    if (highlightRefreshQueued) {
+      highlightRefreshQueued = false
+      void refreshAllHighlights()
+    }
+  }
+}
+const jumpToHighlight = (h) => {
+  if (!h?.annotId) return
+  selectedHighlight.value = { ...h }
+  const p = Number(h.page) || 1
+  gotoReadingPage(p)
+}
+
+/** 高亮增删后调用：任一面板开着就立刻重拉，都关着则等打开时再拉。 */
+const markHighlightsDirty = () => {
+  highlightsStale = true
+  if (showOutline.value || showNotes.value) void refreshAllHighlights()
+}
+
 const clearHighlightSelection = () => {
   if (selectedHighlight.value) selectedHighlight.value = null
 }
@@ -1237,11 +1337,18 @@ const clearHighlightSelection = () => {
 // 单击 = 选中，Alt+点击 = 删除。
 // 以前单击直接删：没有确认，而光标和悬停描边都像"选中"——等于把一个破坏性操作
 // 藏在一个看起来无害的手势里，误删只能靠 Ctrl+Z 捞回来。
-const onViewerHighlightClick = async ({ annotId, page, note, color, rects, altKey } = {}) => {
+const onViewerHighlightClick = async ({ annotId, page, note, color, rects, altKey, text } = {}) => {
   if (!annotId) return
   const pg = Number(page) || currentPage.value
-  // 删除前已由 viewer 带回 rects/color/note，用于撤销时重建。
-  const snapshot = { page: pg, annotId, note: note || '', color, rects: Array.isArray(rects) ? rects : [] }
+  // 删除前已由 viewer 带回 rects/color/note/text，用于撤销时重建。
+  const snapshot = {
+    page: pg,
+    annotId,
+    note: note || '',
+    color,
+    rects: Array.isArray(rects) ? rects : [],
+    text: text || '',
+  }
 
   if (!altKey) {
     selectedHighlight.value = snapshot
@@ -1261,6 +1368,7 @@ const deleteHighlightBySnapshot = async (snapshot) => {
   if (!ok) return false
   pushHighlightHistory({ type: 'delete', ...snapshot })
   if (selectedHighlight.value?.annotId === snapshot.annotId) selectedHighlight.value = null
+  markHighlightsDirty()
   return true
 }
 
@@ -1296,11 +1404,12 @@ const undoHighlight = async () => {
   } else if (entry.type === 'delete') {
     // 撤销删除 -> 重建
     const r = await pdfViewer.value?.reAddHighlight({
-      page: entry.page, rects: entry.rects, color: entry.color, note: entry.note,
+      page: entry.page, rects: entry.rects, color: entry.color, note: entry.note, text: entry.text,
     })
     if (r) { highlightRedoStack.value.push({ ...entry, annotId: r.annotId }); message.info('已恢复高亮') }
     else highlightUndoStack.value.push(entry)
   }
+  markHighlightsDirty()
 }
 const redoHighlight = async () => {
   const entry = highlightRedoStack.value.pop()
@@ -1308,7 +1417,7 @@ const redoHighlight = async () => {
   clearHighlightSelection()
   if (entry.type === 'add') {
     const r = await pdfViewer.value?.reAddHighlight({
-      page: entry.page, rects: entry.rects, color: entry.color, note: entry.note,
+      page: entry.page, rects: entry.rects, color: entry.color, note: entry.note, text: entry.text,
     })
     if (r) { highlightUndoStack.value.push({ ...entry, annotId: r.annotId }); message.info('已重做高亮') }
     else highlightRedoStack.value.push(entry)
@@ -1317,6 +1426,7 @@ const redoHighlight = async () => {
     if (ok) { highlightUndoStack.value.push(entry); message.info('已重做删除') }
     else highlightRedoStack.value.push(entry)
   }
+  markHighlightsDirty()
 }
 // 高亮颜色（RGBA 0-255）+ 预设色板。乐观渲染下选词点高亮即时出现。
 const clamp255 = (n) => Math.max(0, Math.min(255, Math.round(Number(n) || 0)))
@@ -1358,14 +1468,19 @@ const addHighlightViaViewer = async () => {
   const r = await pdfViewer.value?.addHighlightFromSelection({ color: highlightColor.value })
   highlightPaletteOpen.value = false
   if (r) {
-    pushHighlightHistory({
-      type: 'add',
+    const snapshot = {
       page: r.page,
       annotId: r.annotId,
       rects: Array.isArray(r.rects) ? r.rects.map((x) => ({ ...x })) : [],
       color: [...highlightColor.value],
       note: '',
-    })
+      text: r.text || '',
+    }
+    pushHighlightHistory({ type: 'add', ...snapshot })
+    // 新加的高亮立即进入侧栏「笔记」标签，并保持选中：
+    // 读者点完荧光笔，列表里就能看到刚划的那一段，而不是要重开文档才出现。
+    selectedHighlight.value = snapshot
+    markHighlightsDirty()
     message.success('已高亮')
   } else message.info('请先在页面中选择文本')
 }
@@ -1655,8 +1770,14 @@ const sortedBookmarks = computed(() => [...new Set(bookmarks.value)].sort((a, b)
 const sideTabs = computed(() => [
   { key: 'outline', label: '大纲' },
   { key: 'bookmarks', label: '书签', count: sortedBookmarks.value.length },
-  { key: 'notes', label: '笔记', count: selectedHighlight.value ? 1 : 0 },
+  { key: 'notes', label: '笔记', count: allHighlights.value.length },
 ])
+
+// 侧栏打开、或切到「笔记」标签时，如果列表落后于文件就补一次。
+watch([showOutline, sideTab], ([open, tab]) => {
+  if (!open) return
+  if (tab === 'notes' || highlightsStale) void refreshAllHighlights()
+})
 
 const viewModeOptions = [
   { label: '左右分栏', key: 'split' },
@@ -1714,6 +1835,10 @@ function jumpToHeading(index) {
 
 // 6. 笔记相关
 const showNotes = ref(false)
+// 右侧「我的笔记」打开时，如果高亮列表落后于文件就补一次。
+watch(showNotes, (open) => {
+  if (open && highlightsStale) void refreshAllHighlights()
+})
 const notesContent = ref('')
 const showNoteBubble = ref(false)
 const isFitting = false
@@ -6519,6 +6644,85 @@ button:disabled {
   flex-direction: column;
   gap: 16px;
   overflow-y: auto;
+}
+
+/* 笔记面板里的「高亮」分组：一条一行，色块 + 原文 + 页码。 */
+.notes-highlights {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 8px;
+  border-radius: 8px;
+  background: var(--guaxi-hover-bg, rgba(120, 120, 120, 0.06));
+}
+
+.notes-highlights__head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 0 4px 4px;
+  font-size: 12px;
+  font-weight: 600;
+  opacity: 0.8;
+}
+
+.notes-highlights__count {
+  font-size: 11px;
+  font-weight: 400;
+  opacity: 0.7;
+}
+
+.notes-highlights__empty {
+  padding: 6px 4px;
+  font-size: 12px;
+  line-height: 1.6;
+  opacity: 0.6;
+}
+
+.notes-highlight {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 5px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.notes-highlight:hover {
+  background: var(--guaxi-hover-bg, rgba(120, 120, 120, 0.1));
+}
+
+.notes-highlight.is-on {
+  background: var(--guaxi-selection-bg, rgba(0, 122, 204, 0.14));
+}
+
+.notes-highlight__swatch {
+  flex: 0 0 auto;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+}
+
+.notes-highlight__text {
+  flex: 1 1 auto;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.notes-highlight__page {
+  flex: 0 0 auto;
+  font-size: 11px;
+  opacity: 0.6;
+  font-variant-numeric: tabular-nums;
 }
 
 .assistant-panel {

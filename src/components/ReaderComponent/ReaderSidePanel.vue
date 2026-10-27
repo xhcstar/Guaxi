@@ -173,3 +173,65 @@ defineEmits(['update:active', 'close', 'resize-start'])
   background: var(--guaxi-selection-bg, rgba(0, 122, 204, 0.18));
 }
 </style>
+
+<!--
+  条目样式刻意不用 scoped：内容来自宿主的插槽，渲染在宿主的 scoped 作用域里，
+  子组件的 scoped 选择器管不到它们。这几个类原先只写在 readers/readerPane.css，
+  而那个文件只有 DocEbookReader 引入 —— 于是 PDF / EPUB / Markdown / Text 的侧栏
+  条目（书签、笔记）全都没有样式，挤成一团纯文本。放在这里，凡是用 ReaderSidePanel
+  的阅读器都自动拿到同一套外观。
+-->
+<style>
+.rsp-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 2px;
+}
+
+.rsp-empty {
+  padding: 12px 10px;
+  font-size: 12px;
+  line-height: 1.6;
+  opacity: 0.6;
+}
+
+.rsp-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  padding: 5px 9px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.5;
+  text-align: left;
+  cursor: pointer;
+}
+
+.rsp-item:hover {
+  background: var(--guaxi-hover-bg, rgba(120, 120, 120, 0.1));
+}
+
+.rsp-item.is-on {
+  background: var(--guaxi-selection-bg, rgba(0, 122, 204, 0.14));
+}
+
+.rsp-item__title {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.rsp-item__sub {
+  font-size: 11px;
+  opacity: 0.65;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+</style>

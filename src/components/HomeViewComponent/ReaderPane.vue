@@ -133,8 +133,10 @@
             <button class="gdr-pdf-aside__note-main" @click="jumpToHighlight(hl)">
               <span class="gdr-pdf-aside__note-swatch" :style="{ background: rgbaToCss(hl.color) }" />
               <span class="gdr-pdf-aside__note-text">
-                <span class="gdr-pdf-aside__note-note">{{ hl.note || '（无笔记）' }}</span>
-                <span class="gdr-pdf-aside__note-sub">第 {{ hl.page }} 页</span>
+                <span class="gdr-pdf-aside__note-note">{{ hl.text || hl.note || '（无笔记）' }}</span>
+                <span class="gdr-pdf-aside__note-sub">
+                  第 {{ hl.page }} 页<span v-if="hl.text && hl.note"> · {{ hl.note }}</span>
+                </span>
               </span>
             </button>
             <button
@@ -527,6 +529,7 @@ const undoPdfHighlight = async () => {
         rects: entry.rects,
         color: entry.color,
         note: entry.note,
+        text: entry.text,
       })
       if (r) {
         highlightRedoStack.value.push({ ...entry, annotId: r.annotId })
@@ -556,6 +559,7 @@ const redoPdfHighlight = async () => {
         rects: entry.rects,
         color: entry.color,
         note: entry.note,
+        text: entry.text,
       })
       if (r) {
         highlightUndoStack.value.push({ ...entry, annotId: r.annotId })
@@ -704,8 +708,10 @@ const refreshPdfHighlights = async () => {
   try {
     const list = await invoke('pdf_list_highlights', { path: props.path })
     pdfHighlights.value = (Array.isArray(list) ? list : []).map((h) => ({
-      annotId: h.annotId,
+      // 后端 HighlightInfo 是 snake_case；以前只读 annotId，导致列表项 key 与删除都用 undefined。
+      annotId: String(h.annot_id ?? h.annotId ?? ''),
       page: h.page,
+      text: String(h.text || ''),
       note: h.note || '',
       color: h.color,
     }))
@@ -750,6 +756,7 @@ const removePdfHighlight = async (hl) => {
         rects: Array.isArray(raw?.rects) ? raw.rects.map((r) => ({ ...r })) : [],
         color: raw?.color ?? hl.color,
         note: raw?.note ?? hl.note ?? '',
+        text: raw?.text ?? hl.text ?? '',
       })
     }
     pdfHighlights.value = pdfHighlights.value.filter((item) => item.annotId !== hl.annotId)
@@ -881,6 +888,7 @@ const addPdfHighlightFromSelection = async (color) => {
       rects: Array.isArray(res.rects) ? res.rects.map((r) => ({ ...r })) : [],
       color: Array.isArray(color) ? [...color] : color,
       note: '',
+      text: res.text || '',
     })
     // 新增的批注要让侧栏列表跟上；没开着也刷新一下，下次展开就是新的。
     void refreshPdfHighlights()
