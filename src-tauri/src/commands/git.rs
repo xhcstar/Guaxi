@@ -233,6 +233,13 @@ pub struct GitCommit {
     files_changed: usize,
     insertions: usize,
     deletions: usize,
+    // 设计说明：泳道图（commit graph）必须知道每个提交指向哪些父提交，否则只能画成一条直线。
+    // 这是 `git log --graph` 与各大 Git GUI 的通行做法：前端拿 parents 自己算 lane。
+    #[serde(default)]
+    parents: Vec<String>,
+    // 该提交上挂着的引用（分支 / 远端分支 / 标签），供列表右侧的胶囊标记使用。
+    #[serde(default)]
+    refs: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -1436,12 +1443,24 @@ pub fn unstage_file(
     Ok(())
 }
 
+/// 读取提交历史，供 Git 面板的提交列表与泳道图使用。
+///
+/// 两个性能相关的设计：
+/// 1. `all_branches: true` 时遍历所有本地/远端分支，泳道图才能画出合并与并行分支；
+///    默认仍只走 `branch_name` 一条线——统计页靠它数"这个分支每天提交了多少"，
+///    把别的分支混进来会直接改变那个数字的含义。
+/// 2. **逐提交的 diff 统计默认不计算**。`diff_tree_to_tree().stats()` 每多一个提交就多一次
+///    全树比对，80 个提交在中等仓库上要几百毫秒起，而它只用在悬停提示里。
 #[tauri::command]
 pub async fn get_git_log(
     path: String,
     branch_name: String,
     limit: Option<usize>,
+    with_stats: Option<bool>,
+    all_branches: Option<bool>,
 ) -> Result<Vec<GitCommit>, String> {
+    let want_stats = with_stats.unwrap_or(false);
+    let want_all_branches = all_branches.unwrap_or(false);
     let result = tauri::async_runtime::spawn_blocking(move || {
         let max = match limit.unwrap_or(200) {
             0 => 200,
@@ -1451,14 +1470,52 @@ pub async fn get_git_log(
 
         let repo = Repository::discover(&path).map_err(|e| e.to_string())?;
 
-        let branch = repo
-            .find_branch(&branch_name, BranchType::Local)
-            .map_err(|e| format!("Failed to find branch {}: {}", branch_name, e))?;
-
         let mut revwalk = repo.revwalk().map_err(|e| e.to_string())?;
-        revwalk
-            .push_ref(branch.get().name().ok_or("Invalid branch name")?)
-            .map_err(|e| e.to_string())?;
+        // 拓扑排序 + 时间排序：和 `git log --graph` 一致，父提交一定排在子提交之后，
+        // 泳道图据此才能把一条 lane 连续地画下来。
+        let _ = revwalk.set_sorting(git2::Sort::TOPOLOGICAL | git2::Sort::TIME);
+
+        if want_all_branches {
+            // 优先遍历全部本地分支，保证合并提交不会因为只在别的分支上而缺失。
+            let pushed_all = revwalk.push_glob("refs/heads/*").is_ok();
+            if !pushed_all {
+                let branch = repo
+                    .find_branch(&branch_name, BranchType::Local)
+                    .map_err(|e| format!("Failed to find branch {}: {}", branch_name, e))?;
+                revwalk
+                    .push_ref(branch.get().name().ok_or("Invalid branch name")?)
+                    .map_err(|e| e.to_string())?;
+            }
+            // 远端分支只用来补齐泳道上的“并行线”，失败不影响主流程（没有远端也很常见）。
+            let _ = revwalk.push_glob("refs/remotes/*");
+        } else {
+            let branch = repo
+                .find_branch(&branch_name, BranchType::Local)
+                .map_err(|e| format!("Failed to find branch {}: {}", branch_name, e))?;
+            revwalk
+                .push_ref(branch.get().name().ok_or("Invalid branch name")?)
+                .map_err(|e| e.to_string())?;
+        }
+
+        // 引用标记：一次读完全部引用，避免每个提交各查一遍。
+        let mut refs_by_oid: std::collections::HashMap<git2::Oid, Vec<String>> =
+            std::collections::HashMap::new();
+        if let Ok(references) = repo.references() {
+            for reference in references.flatten() {
+                let Some(name) = reference.name() else { continue };
+                let Some(oid) = reference.target() else { continue };
+                let label = name
+                    .strip_prefix("refs/heads/")
+                    .or_else(|| name.strip_prefix("refs/remotes/"))
+                    .unwrap_or(name)
+                    .to_string();
+                // HEAD 本身不是有意义的胶囊标记
+                if label == "HEAD" || label.ends_with("/HEAD") {
+                    continue;
+                }
+                refs_by_oid.entry(oid).or_default().push(label);
+            }
+        }
 
         let mut commits = Vec::new();
         for oid in revwalk.take(max) {
@@ -1468,23 +1525,22 @@ pub async fn get_git_log(
             let message = commit.message().unwrap_or_default().to_string();
             let summary = message.lines().next().unwrap_or_default().to_string();
 
-            let parent_tree = if commit.parent_count() > 0 {
-                Some(
-                    commit
-                        .parent(0)
-                        .map_err(|e| e.to_string())?
-                        .tree()
-                        .map_err(|e| e.to_string())?,
-                )
-            } else {
-                None
-            };
-            let commit_tree = commit.tree().map_err(|e| e.to_string())?;
-            let diff = repo
-                .diff_tree_to_tree(parent_tree.as_ref(), Some(&commit_tree), None)
-                .map_err(|e| e.to_string())?;
+            let parents: Vec<String> = commit.parent_ids().map(|p| p.to_string()).collect();
 
-            let stats = diff.stats().map_err(|e| e.to_string())?;
+            let (files_changed, insertions, deletions) = if want_stats {
+                let parent_tree = commit.parent(0).ok().and_then(|p| p.tree().ok());
+                let commit_tree = commit.tree().map_err(|e| e.to_string())?;
+                let diff = repo
+                    .diff_tree_to_tree(parent_tree.as_ref(), Some(&commit_tree), None)
+                    .map_err(|e| e.to_string())?;
+                let stats = diff.stats().map_err(|e| e.to_string())?;
+                (stats.files_changed(), stats.insertions(), stats.deletions())
+            } else {
+                (0, 0, 0)
+            };
+
+            let mut refs = refs_by_oid.remove(&oid).unwrap_or_default();
+            refs.sort();
 
             commits.push(GitCommit {
                 id: oid.to_string(),
@@ -1492,9 +1548,11 @@ pub async fn get_git_log(
                 summary,
                 author: commit.author().name().unwrap_or_default().to_string(),
                 date: commit.time().seconds().to_string(),
-                files_changed: stats.files_changed(),
-                insertions: stats.insertions(),
-                deletions: stats.deletions(),
+                files_changed,
+                insertions,
+                deletions,
+                parents,
+                refs,
             });
         }
 
@@ -3008,6 +3066,231 @@ pub fn get_file_content(
 
     debug!("Successfully retrieved content for {}", file_path.display());
     Ok(content)
+}
+
+/// Git 面板点击一个文件时，一次性返回渲染 diff 所需的全部东西。
+///
+/// 为什么要把三件事合并成一个命令：旧链路是 `get_file_content(原始)` +
+/// `get_file_content(修改后)` + `get_file_diff_hunks` 三次独立调用，每次都
+/// `Repository::discover` 一遍、各自跑一次 `index.write_tree()`（对整个索引重新哈希），
+/// 最后一个还额外 spawn 一个 `git diff` 子进程。文件一大、仓库一深，这三次串行就是
+/// 界面上那句“点了要等半天”。这里只开一次仓库、只算一次索引树，hunk 直接用
+/// libgit2 现成的 diff 结果切出来，不再起子进程。
+#[derive(Debug, Serialize)]
+pub struct GitFileDiffPayload {
+    original: String,
+    modified: String,
+    language: String,
+    hunks: Vec<GitDiffHunk>,
+}
+
+fn git_index_tree(repo: &Repository) -> Result<Tree<'_>, String> {
+    let mut index = repo
+        .index()
+        .map_err(|e| format!("Failed to get index: {}", e))?;
+    let tree_id = index
+        .write_tree()
+        .map_err(|e| format!("Failed to write index tree: {}", e))?;
+    repo.find_tree(tree_id)
+        .map_err(|e| format!("Failed to find index tree: {}", e))
+}
+
+/// 从某个 tree（HEAD / 索引）里读出单文件内容。文件不存在时返回空串——
+/// 新增文件和删除文件都靠这个语义表达。
+fn read_blob_at_tree(
+    repo: &Repository,
+    tree: &Tree<'_>,
+    file_path: &Path,
+) -> Result<String, String> {
+    let entry = match tree.get_path(file_path) {
+        Ok(entry) => entry,
+        Err(e) if e.code() == git2::ErrorCode::NotFound => return Ok(String::new()),
+        Err(e) => return Err(format!("Failed to get file in revision: {}", e)),
+    };
+    let blob = repo
+        .find_blob(entry.id())
+        .map_err(|e| format!("Failed to find blob: {}", e))?;
+    String::from_utf8(blob.content().to_vec())
+        .map_err(|e| format!("Failed to convert blob content to UTF-8: {}", e))
+}
+
+/// 把 libgit2 的 diff 切成和 `git diff --unified=0` 同构的 hunk 列表。
+///
+/// 前端拿 hunk 做什么：把胶囊按钮锚到当前差异块的位置，并把范围传回
+/// `stage_hunk` / `discard_hunk`。所以行号语义必须和 git 命令输出的 `@@ -a,b +c,d @@` 一致。
+fn collect_diff_hunks(diff: &git2::Diff) -> Vec<GitDiffHunk> {
+    let mut hunks = Vec::<GitDiffHunk>::new();
+    let mut index: u32 = 0;
+    let _ = diff.foreach(
+        &mut |_, _| true,
+        None,
+        Some(&mut |_delta, hunk| {
+            hunks.push(GitDiffHunk {
+                index,
+                header: format!(
+                    "@@ -{},{} +{},{} @@",
+                    hunk.old_start(),
+                    hunk.old_lines(),
+                    hunk.new_start(),
+                    hunk.new_lines()
+                ),
+                old_start: hunk.old_start() as u32,
+                old_count: hunk.old_lines() as u32,
+                new_start: hunk.new_start() as u32,
+                new_count: hunk.new_lines() as u32,
+            });
+            index = index.saturating_add(1);
+            true
+        }),
+        None,
+    );
+    hunks
+}
+
+#[tauri::command]
+pub async fn get_git_file_diff(
+    path: String,
+    file_path: String,
+    staged: bool,
+    orig_path: Option<String>,
+) -> Result<GitFileDiffPayload, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let repo = Repository::discover(&path)
+            .map_err(|e| format!("Failed to open repository: {}", e))?;
+        let normalized = file_path.replace('\\', "/");
+        let target = Path::new(&normalized);
+
+        // 重命名：左侧读移动前的旧路径，右侧读新路径，否则旧路径在新树里不存在，
+        // Monaco 会把整文件渲染成“全部删除”。
+        let original_rel = orig_path
+            .unwrap_or_else(|| normalized.clone())
+            .replace('\\', "/");
+        let original_target = Path::new(&original_rel);
+
+        let head_tree = repo.head().ok().and_then(|h| h.peel_to_tree().ok());
+        // 索引树只算一次：staged 视图拿它当右侧，unstaged 视图拿它当左侧。
+        // write_tree 会把整个索引重新哈希一遍，所以绝不能按“两边各算一次”来写。
+        let index_tree = git_index_tree(&repo).ok();
+        let index = repo.index().ok();
+
+        let (original, modified) = if staged {
+            // 已暂存：HEAD -> 索引
+            let original = match &head_tree {
+                Some(tree) => read_blob_at_tree(&repo, tree, original_target)?,
+                None => String::new(),
+            };
+            let modified = match &index_tree {
+                Some(tree) => read_blob_at_tree(&repo, tree, target)?,
+                None => String::new(),
+            };
+            (original, modified)
+        } else {
+            // 未暂存：索引 -> 工作区
+            let original = match &index_tree {
+                Some(tree) => read_blob_at_tree(&repo, tree, target)?,
+                None => String::new(),
+            };
+            let full_path = repo_workdir_file_path(&repo, &path, target);
+            let modified = match std::fs::read_to_string(&full_path) {
+                Ok(v) => v,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+                Err(e) => return Err(format!("Failed to read file: {}", e)),
+            };
+            (original, modified)
+        };
+
+        // hunk 直接由同一份 diff 切出来，不必再起 git 子进程。
+        //
+        // 这里**不能**像 get_git_status 那样加 ignore_whitespace_eol：状态面板忽略纯换行符
+        // 差异是为了不把 CRLF/LF 混用显示成满屏改动，但 hunk 是用来给胶囊按钮定位的，
+        // 而 Monaco 拿到的两侧原文是逐字节读出来的（含 CRLF）。两边口径必须一致，
+        // 否则大文件里胶囊会落到错行。旧的 get_file_diff_hunks 走 `git diff` 子进程，
+        // 同样不忽略行尾，这里保持等价。
+        let mut diff_options = DiffOptions::new();
+        diff_options.context_lines(0);
+        diff_options.pathspec(normalized.clone());
+
+        // 没有可比基线时（初始仓库没有 HEAD，或索引读不出来）直接给空 hunk，
+        // 这里用 Option 提前短路，避免为了凑类型去伪造一个空 Diff。
+        let hunks = if staged {
+            match (&head_tree, &index_tree) {
+                (Some(head), Some(idx)) => match repo.diff_tree_to_tree(
+                    Some(head),
+                    Some(idx),
+                    Some(&mut diff_options),
+                ) {
+                    Ok(diff) => collect_diff_hunks(&diff),
+                    Err(e) => {
+                        warn!(
+                            "Failed to compute staged hunks for git panel diff: file={}, err={}",
+                            normalized, e
+                        );
+                        Vec::new()
+                    }
+                },
+                _ => Vec::new(),
+            }
+        } else {
+            match index.as_ref().map(|idx| repo.diff_index_to_workdir(Some(idx), Some(&mut diff_options))) {
+                Some(Ok(diff)) => collect_diff_hunks(&diff),
+                Some(Err(e)) => {
+                    warn!(
+                        "Failed to compute workdir hunks for git panel diff: file={}, err={}",
+                        normalized, e
+                    );
+                    Vec::new()
+                }
+                None => Vec::new(),
+            }
+        };
+
+        Ok(GitFileDiffPayload {
+            original,
+            modified,
+            language: language_hint_for_path(&normalized),
+            hunks,
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// 给前端 Monaco 用的语言 id 提示。前端另有更完整的映射，这里只覆盖最常见的几类，
+/// 目的是让大文件不必再往返一次。
+fn language_hint_for_path(file_path: &str) -> String {
+    let lower = file_path.to_ascii_lowercase();
+    let ext = lower.rsplit('.').next().unwrap_or("");
+    let lang = match ext {
+        "rs" => "rust",
+        "ts" | "tsx" => "typescript",
+        "js" | "jsx" | "mjs" | "cjs" => "javascript",
+        "vue" => "vue",
+        "py" => "python",
+        "go" => "go",
+        "java" => "java",
+        "c" | "h" => "c",
+        "cc" | "cpp" | "cxx" | "hpp" | "hxx" => "cpp",
+        "cs" => "csharp",
+        "json" => "json",
+        "md" | "markdown" => "markdown",
+        "html" | "htm" => "html",
+        "css" => "css",
+        "scss" | "sass" => "scss",
+        "less" => "less",
+        "yml" | "yaml" => "yaml",
+        "toml" => "toml",
+        "xml" => "xml",
+        "sh" | "bash" => "shell",
+        "sql" => "sql",
+        "php" => "php",
+        "rb" => "ruby",
+        "swift" => "swift",
+        "kt" | "kts" => "kotlin",
+        "lua" => "lua",
+        "dart" => "dart",
+        _ => "plaintext",
+    };
+    lang.to_string()
 }
 
 #[tauri::command]

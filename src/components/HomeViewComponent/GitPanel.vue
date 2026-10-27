@@ -4,7 +4,7 @@
     <!-- 左侧面板 - 类似VSCode的Git面板 -->
     <div class="git-sidebar" ref="sidebar" :style="{ width: isSidebarCollapsed ? '0px' : sidebarWidth + 'px' }">
       <!-- 侧边栏右侧拖动条 -->
-      <div class="sidebar-resize-handle" @mousedown="startSidebarDrag"></div>
+      <div class="sidebar-resize-handle" @pointerdown="startSidebarDrag"></div>
 
       <!-- 新增的折叠按钮（放在侧边栏内部但绝对定位到右侧） -->
       <div class="sidebar-collapse-button" :class="{ 'collapsed': isSidebarCollapsed }" @click="toggleSidebar">
@@ -17,47 +17,62 @@
       <!-- 仓库管理和提交区域容器 -->
       <div class="sidebar-content" :style="{ display: isSidebarCollapsed ? 'none' : 'flex' }">
         <div class="source-control-header">
-          <n-space vertical size="small">
-            <n-space align="center" justify="space-between">
-              <n-text strong>源代码管理</n-text>
-              <n-button text @click="refreshGitStatus">
-                <template #icon>
-                  <n-icon size="20" class="panel-header-icon">
-                    <RefreshOutline />
-                  </n-icon>
-                </template>
-              </n-button>
-            </n-space>
-            <n-space align="center" justify="space-between" class="scm-header-sub">
-              <n-space align="center">
-                <n-icon size="18" class="panel-header-icon">
-                  <GitBranchOutline />
-                </n-icon>
-                <n-text>{{ currentBranch || '未检出分支' }}</n-text>
-              </n-space>
-              <n-text v-if="workspacePathName" depth="3">{{ workspacePathName }}</n-text>
-            </n-space>
-          </n-space>
+          <div class="scm-header-row">
+            <span class="scm-title">源代码管理</span>
+            <div class="scm-header-actions">
+              <button
+                class="scm-icon-button"
+                type="button"
+                title="刷新状态"
+                :disabled="isRefreshingStatus"
+                @click="refreshGitStatus"
+              >
+                <Codicon name="refresh" />
+              </button>
+              <button
+                class="scm-icon-button"
+                type="button"
+                title="更多操作"
+                @click="showBranchPanel = true"
+              >
+                <Codicon name="ellipsis" />
+              </button>
+            </div>
+          </div>
+          <!-- 分支 + 仓库名：VS Code 把这两条压在同一行，靠间距区分主次；
+               分支名过长时只它自己省略，仓库名保持完整。 -->
+          <div class="scm-header-sub">
+            <span class="scm-branch" :title="currentBranch || '未检出分支'">
+              <Codicon name="git-branch" />
+              <span class="scm-branch-name">{{ currentBranch || '未检出分支' }}</span>
+            </span>
+            <span v-if="workspacePathName" class="scm-repo" :title="workspacePath">{{ workspacePathName }}</span>
+          </div>
         </div>
 
-        <!-- 提交区域 -->
+        <!-- 提交区域。
+             布局对齐 VS Code：输入框在上、提交按钮整宽在下，按钮右侧不需要再放别的东西；
+             暂存数为 0 时按钮禁用并明说原因，比"点了没反应"清楚。 -->
         <div class="commit-section">
           <n-input
             v-model:value="commitForm.message"
             type="textarea"
             placeholder="提交信息（Ctrl+Enter 提交）"
-            :autosize="{ minRows: 1, maxRows: 3 }"
-            style="min-width: 250px; margin-bottom: 8px;"
+            :autosize="{ minRows: 2, maxRows: 6 }"
+            class="commit-message-input"
             @keydown="handleCommitKeydown"
           />
-          <n-button
-            type="primary"
-            @click="handleCommit"
+          <button
+            class="commit-button"
+            type="button"
             :disabled="!commitForm.message.trim() || stagedFiles.length === 0"
-            style="width: 100%;"
+            :title="stagedFiles.length === 0 ? '先暂存要提交的文件' : '提交已暂存的更改（Ctrl+Enter）'"
+            @click="handleCommit"
           >
-            提交
-          </n-button>
+            <Codicon name="check" />
+            <span>提交</span>
+            <span v-if="stagedFiles.length" class="commit-button-count">{{ stagedFiles.length }}</span>
+          </button>
         </div>
 
         <!-- 变更文件列表容器 -->
@@ -158,9 +173,7 @@
             </div>
 
             <!-- Changes和Staged Changes之间的分隔线 -->
-            <div class="section-divider" ref="changesDivider" @mousedown="startChangesDrag">
-              <div class="divider-handle"></div>
-            </div>
+            <div class="section-divider" ref="changesDivider" @pointerdown="startChangesDrag"></div>
 
             <!-- Staged Changes区域 -->
             <div class="staged-section" ref="stagedSection" :style="{ flex: `0 0 ${stagedHeight}px` }">
@@ -230,9 +243,7 @@
             </div>
 
             <!-- Staged Changes和提交历史之间的分隔线 -->
-            <div class="commits-divider" ref="commitsDivider" @mousedown="startCommitsDrag">
-              <div class="divider-handle"></div>
-            </div>
+            <div class="commits-divider" ref="commitsDivider" @pointerdown="startCommitsDrag"></div>
 
             <!-- 提交历史区域 -->
             <div class="commits-section" ref="commitsSection" :style="{ flex: `0 0 ${commitsHeight}px` }">
@@ -297,7 +308,7 @@
                   class="commit-history-spin"
                 >
                   <n-tooltip
-                    v-for="commit in visibleCommits"
+                    v-for="(commit, commitIndex) in visibleCommits"
                     :key="commit.id"
                     trigger="hover"
                     placement="right-start"
@@ -317,6 +328,45 @@
                       @click="selectCommit(commit)"
                     >
                       <div class="git-file-row commit-row">
+                        <!-- 泳道图：按行独立一块 SVG，宽度随 lane 数增长。
+                             连线画在上下边界上，相邻行天然接得上，不会因为滚动错位。 -->
+                        <svg
+                          v-if="getRowNode(commitIndex)"
+                          class="commit-graph"
+                          :width="commitGraphWidth"
+                          :height="COMMIT_ROW_HEIGHT"
+                          :viewBox="`0 0 ${commitGraphWidth} ${COMMIT_ROW_HEIGHT}`"
+                          aria-hidden="true"
+                        >
+                          <path
+                            v-if="getRowPaths(getRowNode(commitIndex)).through"
+                            class="commit-graph-line"
+                            :d="getRowPaths(getRowNode(commitIndex)).through"
+                            :stroke="laneColor(getRowNode(commitIndex).color)"
+                          />
+                          <!-- 进入本行的线用「通往本提交那条线」的颜色。
+                               以前这里画成灰色半透明，于是每条竖线一屏里被切成半灰半彩、
+                               看着像一串珠子——这也是泳道图显得廉价最主要的来源。 -->
+                          <path
+                            v-if="getRowPaths(getRowNode(commitIndex)).incoming"
+                            class="commit-graph-line"
+                            :d="getRowPaths(getRowNode(commitIndex)).incoming"
+                            :stroke="laneColor(getRowNode(commitIndex).color)"
+                          />
+                          <path
+                            v-if="getRowPaths(getRowNode(commitIndex)).outgoing"
+                            class="commit-graph-line"
+                            :d="getRowPaths(getRowNode(commitIndex)).outgoing"
+                            :stroke="laneColor(getRowNode(commitIndex).color)"
+                          />
+                          <circle
+                            class="commit-graph-dot"
+                            :cx="laneCenterX(getRowNode(commitIndex).lane)"
+                            :cy="COMMIT_ROW_HEIGHT / 2"
+                            r="3.5"
+                            :fill="laneColor(getRowNode(commitIndex).color)"
+                          />
+                        </svg>
                         <div class="git-file-left">
                           <n-icon :component="GitCommitOutline" size="16" class="commit-icon" />
                           <div class="git-file-path">
@@ -325,6 +375,19 @@
                         </div>
                         <div class="commit-right">
                           <div class="commit-markers">
+                        <n-tooltip
+                          v-for="ref in getExtraRefs(commit)"
+                          :key="ref"
+                          trigger="hover"
+                        >
+                          <template #trigger>
+                            <span class="commit-marker-pill commit-marker-other">
+                              <n-icon :component="GitBranchOutline" size="14" class="commit-marker-pill-icon" />
+                              <span class="commit-marker-pill-text">{{ ref }}</span>
+                            </span>
+                          </template>
+                          {{ ref }}
+                        </n-tooltip>
                         <n-tooltip v-if="headMarkers.local_head && commit.id === headMarkers.local_head" trigger="hover">
                           <template #trigger>
                             <span class="commit-marker-pill commit-marker-local">
@@ -591,14 +654,9 @@ import {
 } from 'naive-ui'
 import {
   GitBranchOutline,
-  RefreshOutline,
   AddCircleOutline,
-  AddOutline,
   CreateOutline,
   RemoveCircleOutline,
-  RemoveOutline,
-  CloseCircleOutline,
-  TrashOutline,
   CheckmarkCircleOutline,
   DocumentOutline,
   GitCommitOutline,
@@ -619,6 +677,13 @@ import {
   getLanguageForFile as getLanguageForFileShared,
 } from '../../monaco/guaxiMonacoThemes'
 import { registerDiffLanguages } from './utils/monaco-diff' // 自定义语言注册
+import {
+  computeCommitGraph,
+  buildLinkPaths,
+  laneColor,
+  laneCenterX,
+  LANE_WIDTH,
+} from './utils/gitCommitGraph'
 import { createLogger } from '../../utils/logger'
 
 const frontendLogger = createLogger('GitPanel')
@@ -744,17 +809,15 @@ const isDraggingSidebar = ref(false)
 // style，任何响应式重渲染（如每 5s 的 Git 状态自动刷新）都会把宽度复位回 350px，导致拖宽后
 // 又自动缩回、最右侧暂存/丢弃图标被裁掉。用 ref 驱动后，拖动结果会被保留。
 const sidebarWidth = ref(350)
-const startY = ref(0)
-const startX = ref(0)
-const initialHeightChanges = ref(0)
-const initialHeightCommits = ref(0)
+// 侧栏拖动起点宽度：拖动过程中只按"起点 + 位移"计算，避免每帧累加误差。
 const initialWidthSidebar = ref(350)
 const changesDivider = ref(null)
 const stagedSection = ref(null)
 const isDraggingChanges = ref(false)
-const initialHeightStaged = ref(0)
 const commitsDivider = ref(null)
 const isDraggingCommits = ref(false)
+// 用户手动拖过分隔条之后，自动刷新与窗口尺寸变化都不再按比例重算高度。
+let panelsUserResized = false
 
 // 状态数据
 const currentBranch = ref('')
@@ -861,7 +924,109 @@ let diffHunkOriginalScrollDisposable = null
 let diffHunkCursorDisposable = null
 const diffRenderSideBySide = ref(true)
 
+// 侧栏宽度与三段高度都按仓库记住：Git 窗口经常开关，每次回到默认值会很烦。
+const gitPanelLayoutStorageKey = computed(() => `guaxi:gitPanelLayout:v2:${props.workspacePath || ''}`)
+
+const readStoredLayout = () => {
+  try {
+    const raw = localStorage.getItem(gitPanelLayoutStorageKey.value)
+    if (!raw) return null
+    const parsed = JSON.parse(raw)
+    if (!parsed || typeof parsed !== 'object') return null
+    return parsed
+  } catch {
+    return null
+  }
+}
+
+const writeStoredLayout = () => {
+  try {
+    localStorage.setItem(gitPanelLayoutStorageKey.value, JSON.stringify({
+      sidebarWidth: sidebarWidth.value,
+      changesHeight: changesHeight.value,
+      stagedHeight: stagedHeight.value,
+      commitsHeight: commitsHeight.value,
+      userResized: panelsUserResized,
+    }))
+  } catch {}
+}
+
+const restoreLayoutFromStorage = () => {
+  const saved = readStoredLayout()
+  if (!saved) return false
+  const width = Number(saved.sidebarWidth)
+  if (Number.isFinite(width) && width > 0) {
+    sidebarWidth.value = clamp(width, SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH)
+  }
+  if (saved.userResized) {
+    const ch = Number(saved.changesHeight)
+    const st = Number(saved.stagedHeight)
+    const co = Number(saved.commitsHeight)
+    if ([ch, st, co].every((v) => Number.isFinite(v) && v > 0)) {
+      changesHeight.value = ch
+      stagedHeight.value = st
+      commitsHeight.value = co
+      panelsUserResized = true
+    }
+  }
+  return true
+}
+
 const visibleCommits = computed(() => commits.value.slice(0, commitHistoryVisibleLimit.value))
+
+/**
+ * 提交泳道图。
+ *
+ * 必须拿**完整**的 commits 算，不能只算可见的那一段：lane 的分配依赖前面所有行，
+ * 截断后重新计算会让同一条线在滚动到"显示更多"之后突然换列、换色。
+ * 图例按行号索引，渲染时用 `commitGraphNodes[index]` 取。
+ */
+const COMMIT_ROW_HEIGHT = 22
+const commitGraph = computed(() => computeCommitGraph(commits.value))
+const commitGraphNodes = computed(() => commitGraph.value.nodes)
+const commitGraphWidth = computed(() => Math.max(LANE_WIDTH, commitGraph.value.laneCount * LANE_WIDTH))
+
+/**
+ * 每一行的 SVG path 只算一次。
+ *
+ * 渲染时模板里会按行取 `row.outgoingPath` 等；如果直接在模板里调
+ * buildLinkPaths，每次重渲染（拖动列表、悬停、提交弹窗）都会把所有行重新拼一遍字符串。
+ * 用 Map 缓存，键是节点对象本身——commits 变了会生成新对象，缓存自然失效。
+ */
+const rowPathCache = new WeakMap()
+const getRowPaths = (node) => {
+  if (!node) return { incoming: '', outgoing: '', through: '' }
+  const cached = rowPathCache.get(node)
+  if (cached) return cached
+  const paths = {
+    incoming: buildLinkPaths(node.incoming, COMMIT_ROW_HEIGHT, 'in'),
+    outgoing: buildLinkPaths(node.outgoing, COMMIT_ROW_HEIGHT, 'out'),
+    through: buildLinkPaths(node.through, COMMIT_ROW_HEIGHT, 'through'),
+  }
+  rowPathCache.set(node, paths)
+  return paths
+}
+
+/** 本行需要画的圆点位置；合并提交画成空心圈，和线性历史的实心点区分开。 */
+const getRowNode = (index) => commitGraphNodes.value[index] || null
+
+/**
+ * 过滤掉已经被 headMarkers 单独渲染的引用，避免同一个分支在行尾出现两个胶囊。
+ *
+ * 后端返回的 refs 里本来就包含当前分支和远端跟踪分支，而下面那两个 is HEAD 的胶囊
+ * 用的是 headMarkers，两者必须去重，否则当前分支会被画两遍。
+ */
+const getExtraRefs = (commit) => {
+  const all = Array.isArray(commit?.refs) ? commit.refs : []
+  const skip = new Set()
+  const local = String(currentBranch.value || '')
+  if (local) skip.add(local)
+  const remote = String(headMarkers.value?.remote_ref || '')
+  if (remote) skip.add(remote)
+  return all.filter((ref) => ref && !skip.has(ref))
+}
+
+
 const showMoreCommits = () => {
   commitHistoryVisibleLimit.value += 60
   frontendLogger.info('[GitPanel] Expanded visible commit history', {
@@ -880,20 +1045,42 @@ const setGitFileBusy = (filePath, busy) => {
   gitFileOperationKeys.value = next
 }
 
+/**
+ * 按文件规模决定 diff 的渲染参数。
+ *
+ * 三条开销最大的设置，都随行数涨得很凶：
+ * - `diffAlgorithm: 'advanced'`：对每一对行做相似度打分，大文件上是 O(n²) 量级；
+ *   换个词级别（`advanced`）能换来更准的配对，但几千行以上用户要的是「先出画面」。
+ * - `diffWordWrap: 'on'`：每行都要算断行，配合行内 diff 会让首帧更慢。
+ * - 行内字符级高亮：同样按行对计算。
+ * 大文件统一退化成 `smartWidth` + 按字符级关闭，观感和 VS Code 在大文件上的表现一致。
+ */
 const getDiffPerformanceOptions = (originalContent = '', modifiedContent = '') => {
   const originalLines = String(originalContent || '').split(/\r\n|\r|\n/).length
   const modifiedLines = String(modifiedContent || '').split(/\r\n|\r|\n/).length
   const totalLines = originalLines + modifiedLines
-  const largeDiff = totalLines > 8000 || String(originalContent).length + String(modifiedContent).length > 900_000
+  const totalBytes = String(originalContent).length + String(modifiedContent).length
+  // 三档而不是两档：中等文件保留并排视图（可读性明显更好），只砍掉最贵的两三项。
+  const level = totalLines > 8000 || totalBytes > 900_000
+    ? 'huge'
+    : (totalLines > 2000 || totalBytes > 250_000 ? 'large' : 'normal')
+  const huge = level === 'huge'
+  const large = level !== 'normal'
   return {
-    largeDiff,
+    level,
+    largeDiff: large,
     options: {
-      renderSideBySide: !largeDiff,
-      renderIndicators: !largeDiff,
-      renderWhitespace: largeDiff ? 'none' : 'selection',
-      renderOverviewRuler: !largeDiff,
-      occurrencesHighlight: largeDiff ? 'off' : 'singleFile',
-      selectionHighlight: !largeDiff,
+      renderSideBySide: !huge,
+      renderIndicators: !huge,
+      renderWhitespace: 'none',
+      renderOverviewRuler: !huge,
+      occurrencesHighlight: large ? 'off' : 'singleFile',
+      selectionHighlight: !huge,
+      // 大文件关掉「行内字符级高亮」：这是 diff 首帧最贵的一步。
+      renderLineHighlight: huge ? 'none' : 'all',
+      diffWordWrap: huge ? 'off' : 'on',
+      // 'simple' 在几千行以上比 'advanced' 快一个数量级，粗粒度差异仍然准确。
+      diffAlgorithm: huge ? 'simple' : (large ? 'smartWidth' : 'advanced'),
       readOnly: true,
       automaticLayout: false
     }
@@ -1477,6 +1664,12 @@ const toMonacoLikeGitHunk = (hunk) => {
   }
 }
 
+/**
+ * 主动拉一次 hunk 列表（不带文件内容）。
+ *
+ * 正常切换文件时 hunk 由 `get_git_file_diff` 一并返回，用不到这里；
+ * 只有「暂存 / 丢弃某个差异块之后」需要在不重载整个 diff 的前提下刷新这一处缓存。
+ */
 const refreshGitHunksCache = async (context, requestId = diffFileDiffRequestId) => {
   const filePath = context?.filePath || ''
   const staged = !!context?.staged
@@ -1954,6 +2147,11 @@ const updateCommitDiff = async (commit) => {
 
     const { original, modified } = parseUnifiedDiff(diff);
 
+    // 和文件 diff 同样的顺序要求：性能参数先应用，setModel 之后 Monaco 就会直接用这套算法。
+    const diffPerf = getDiffPerformanceOptions(original, modified)
+    diffRenderSideBySide.value = !!diffPerf.options.renderSideBySide
+    diffEditor.updateOptions(diffPerf.options)
+
     const originalModel = monaco.editor.createModel(original, 'plaintext');
     const modifiedModel = monaco.editor.createModel(modified, 'plaintext');
 
@@ -1963,9 +2161,6 @@ const updateCommitDiff = async (commit) => {
       modified: modifiedModel
     });
     refreshDiffLineChangesCache()
-    const diffPerf = getDiffPerformanceOptions(original, modified)
-    diffRenderSideBySide.value = !!diffPerf.options.renderSideBySide
-    diffEditor.updateOptions(diffPerf.options)
 
     if (oldModel) {
       setTimeout(() => {
@@ -2165,33 +2360,76 @@ const handleCreateBranch = async () => {
   }
 }
 
-// 拖动处理函数
-const startSidebarDrag = (e) => {
-  isDraggingSidebar.value = true
-  startX.value = e.clientX
-  initialWidthSidebar.value = sidebarWidth.value
-  document.body.style.cursor = 'col-resize'
-  document.addEventListener('mousemove', handleSidebarDrag)
-  document.addEventListener('mouseup', stopSidebarDrag)
-  e.preventDefault()
-}
+// ───── 拖动 ─────
+//
+// 旧实现有三处会让拖动"时而生效时而失效"：
+// 1. 分隔条只有 2px 高，起点还必须是 e.target 本身，鼠标稍快就脱靶；
+// 2. 移动/松开事件挂在 document 上，指针拖出窗口后收不到 mouseup，状态就卡在"正在拖动"；
+// 3. 每 5 秒的自动刷新会调用 normalizePanelHeightsToContainer，把用户刚拖的高度
+//    按比例重算回去。
+// 现在统一用 pointer capture：一旦按下，后续 pointermove / pointerup 一定回到同一个元素，
+// 拖出窗口也不会丢；并记住"用户手动调过高度"，让自动刷新不再覆盖。
 
-const handleSidebarDrag = (e) => {
-  if (isDraggingSidebar.value) {
-    const dx = e.clientX - startX.value
-    const newWidth = initialWidthSidebar.value + dx
-    if (newWidth > 200 && newWidth < 600) {
-      // 更新响应式宽度（而非直接写 inline style），避免重渲染时被模板复位。
-      sidebarWidth.value = newWidth
-    }
+const SIDEBAR_MIN_WIDTH = 220
+const SIDEBAR_MAX_WIDTH = 640
+
+const clamp = (value, min, max) => Math.min(max, Math.max(min, value))
+
+const beginPointerDrag = (event, { onMove, onEnd, cursor }) => {
+  const startX = event.clientX
+  const startY = event.clientY
+  const target = event.currentTarget
+
+  const handleMove = (e) => {
+    // 同步更新，不经过 rAF 节流：rAF 在后台标签页 / 部分合成器场景会被挂起，
+    // 一旦挂起，用户拖到一半画面就僵住；而这里每次只改两三个 flex 高度，
+    // 浏览器本身会在帧边界合并布局，同步调用没有抖动，反而更跟手。
+    onMove({ dx: e.clientX - startX, dy: e.clientY - startY })
   }
+
+  const teardown = () => {
+    target?.removeEventListener?.('pointermove', handleMove)
+    target?.removeEventListener?.('pointerup', handleUp)
+    target?.removeEventListener?.('pointercancel', handleUp)
+    try {
+      if (target?.hasPointerCapture?.(event.pointerId)) {
+        target.releasePointerCapture(event.pointerId)
+      }
+    } catch {}
+    document.body.classList.remove('git-panel-resizing')
+    document.body.style.cursor = ''
+  }
+
+  function handleUp() {
+    teardown()
+    onEnd?.()
+  }
+
+  try {
+    target?.setPointerCapture?.(event.pointerId)
+  } catch {}
+  target?.addEventListener?.('pointermove', handleMove)
+  target?.addEventListener?.('pointerup', handleUp)
+  target?.addEventListener?.('pointercancel', handleUp)
+  document.body.classList.add('git-panel-resizing')
+  document.body.style.cursor = cursor
+
+  event.preventDefault()
 }
 
-const stopSidebarDrag = () => {
-  isDraggingSidebar.value = false
-  document.body.style.cursor = ''
-  document.removeEventListener('mousemove', handleSidebarDrag)
-  document.removeEventListener('mouseup', stopSidebarDrag)
+// 侧栏宽度：拖过就记住，不要再被模板的初始值覆盖。
+const startSidebarDrag = (event) => {
+  isDraggingSidebar.value = true
+  beginPointerDrag(event, {
+    cursor: 'col-resize',
+    onMove: ({ dx }) => {
+      sidebarWidth.value = clamp(initialWidthSidebar.value + dx, SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH)
+    },
+    onEnd: () => {
+      isDraggingSidebar.value = false
+      writeStoredLayout()
+    }
+  })
 }
 
 // 在setup部分添加以下代码
@@ -2285,6 +2523,12 @@ const applyPanelHeightRatios = (ratios, reason = 'panel-layout') => {
 
 const normalizePanelHeightsToContainer = (reason = 'panel-resize') => {
   if (isDraggingChanges.value || isDraggingCommits.value) return
+  // 用户手动拖过高度之后，自动刷新和窗口尺寸变化都不该再按比例重算——
+  // 这正是"拖好的高度过几秒自己弹回去"的原因。只有容器尺寸真的变了才重新适配。
+  if (panelsUserResized) {
+    applyPanelHeightsAbsolute(reason)
+    return
+  }
   const currentTotal = changesHeight.value + stagedHeight.value + commitsHeight.value
   const ratios = currentTotal > 0
     ? [
@@ -2294,6 +2538,56 @@ const normalizePanelHeightsToContainer = (reason = 'panel-resize') => {
       ]
     : [0.3, 0.3, 0.4]
   applyPanelHeightRatios(ratios, reason)
+}
+
+/**
+ * 按"三段加起来的绝对高度 = 可用高度"来适配，保持用户设定的各段数值不变。
+ *
+ * 用户拖过分隔条之后，三段高度就是他的意图本身；此时容器尺寸变化只能做两件事：
+ * 把多出来的高度补给最下面一段，或者按最小高度从下往上收。绝不能按比例缩放，
+ * 否则窗口一动，用户刚调好的比例又漂了。
+ */
+const applyPanelHeightsAbsolute = (reason = 'panel-resize-absolute') => {
+  if (!panelsContainer.value) return
+  updatePanelHeaderHeights()
+  const availableHeight = getPanelsAvailableHeight()
+  if (availableHeight <= 0) return
+
+  const minimums = [
+    Math.max(changesHeaderHeight.value, 32),
+    Math.max(stagedHeaderHeight.value, 32),
+    Math.max(commitsHeaderHeight.value, 96),
+  ]
+  const heights = [changesHeight.value, stagedHeight.value, commitsHeight.value]
+  const total = heights.reduce((sum, value) => sum + value, 0)
+
+  if (total < availableHeight) {
+    // 有富余：全部给最后一段（提交历史），符合"列表越长越该占满"的直觉。
+    heights[2] += availableHeight - total
+  } else if (total > availableHeight) {
+    let overflow = total - availableHeight
+    for (let i = 2; i >= 0 && overflow > 0; i -= 1) {
+      const room = Math.max(0, heights[i] - minimums[i])
+      const take = Math.min(room, overflow)
+      heights[i] -= take
+      overflow -= take
+    }
+  }
+
+  changesHeight.value = Math.floor(Math.max(minimums[0], heights[0]))
+  stagedHeight.value = Math.floor(Math.max(minimums[1], heights[1]))
+  commitsHeight.value = Math.max(
+    minimums[2],
+    Math.round(availableHeight - changesHeight.value - stagedHeight.value)
+  )
+
+  frontendLogger.debug('[GitPanel] Panel heights fitted to container', {
+    reason,
+    availableHeight,
+    changesHeight: changesHeight.value,
+    stagedHeight: stagedHeight.value,
+    commitsHeight: commitsHeight.value,
+  })
 }
 
 const waitForGitStatusRefreshIdle = async (reason = 'git-refresh') => {
@@ -2353,212 +2647,78 @@ const refreshGitAfterOperation = async ({
   })
 }
 
-// 修改 startChangesDrag 函数
-const startChangesDrag = (e) => {
-  if (e.target === changesDivider.value || e.target.closest('.divider-handle')) {
-    isDraggingChanges.value = true
-    startY.value = e.clientY
-    initialHeightChanges.value = changesHeight.value
-    initialHeightStaged.value = stagedHeight.value
-    panelsHeight.value = panelsContainer.value.offsetHeight
+// ───── 三个分区之间的分隔条 ─────
+//
+// 语义：拖动「更改 / 已暂存」之间的分隔条只调整这两段；拖动「已暂存 / 提交历史」
+// 之间的分隔条调整后两段。两段相加的高度保持不变，所以下方内容不会突然被顶出视口。
+// 三层的最小高度都以「标题栏高度」为准——再小就只剩一条看不出来是谁的空白。
 
-    document.body.style.userSelect = 'none'
-    document.body.style.cursor = 'row-resize'
-    document.addEventListener('mousemove', handleChangesDrag)
-    document.addEventListener('mouseup', stopChangesDrag)
-    e.preventDefault()
-    e.stopPropagation()
+const MIN_COMMITS_HEIGHT = 96
+
+/** 一次纵向拖动：在 [锚点上方, 锚点下方] 两段之间重新分配高度。 */
+const startSectionResize = (event, { topKey, bottomKey, topMin, bottomMin, reason, onStart, onFinish }) => {
+  const heights = {
+    changes: changesHeight.value,
+    staged: stagedHeight.value,
+    commits: commitsHeight.value,
   }
+  // 两段之和在整次拖动中恒定，这是「拖动不会把其他分区挤得跳来跳去」的关键。
+  const pairTotal = heights[topKey] + heights[bottomKey]
+  const startTop = heights[topKey]
+
+  // 拖动期间要挡住 ResizeObserver / 自动刷新发起的高度重算，否则它们会和手指抢控制权。
+  onStart?.()
+
+  beginPointerDrag(event, {
+    cursor: 'row-resize',
+    onMove: ({ dy }) => {
+      const nextTop = clamp(startTop + dy, topMin, Math.max(topMin, pairTotal - bottomMin))
+      heights[topKey] = nextTop
+      heights[bottomKey] = pairTotal - nextTop
+      changesHeight.value = heights.changes
+      stagedHeight.value = heights.staged
+      commitsHeight.value = heights.commits
+    },
+    onEnd: () => {
+      panelsUserResized = true
+      // 收尾时对齐到可用高度，避免 1~2px 的累积误差在底部留一条缝。
+      applyPanelHeightsAbsolute(`${reason}-drag-end`)
+      toggleSectionVisibility(changesSection.value, changesHeaderHeight.value)
+      toggleSectionVisibility(stagedSection.value, stagedHeaderHeight.value)
+      writeStoredLayout()
+      // 复位必须发生在"对齐到可用高度"之后，否则 ResizeObserver 会抢先按比例重算。
+      onFinish?.()
+    },
+  })
 }
 
-// 修改 handleChangesDrag 函数
-const handleChangesDrag = (e) => {
-  if (!isDraggingChanges.value) return;
-
-  const dy = e.clientY - startY.value;
-  const newChangesHeight = initialHeightChanges.value + dy;
-
-  // 计算最小和最大高度限制
-  const minChangesHeight = changesHeaderHeight.value;
-  const maxChangesHeight = panelsHeight.value - stagedHeaderHeight.value - commitsHeaderHeight.value - 16;
-
-  // 确保高度在限制范围内
-  const clampedChangesHeight = Math.max(minChangesHeight, Math.min(maxChangesHeight, newChangesHeight));
-
-  // 计算Staged区域的新高度（剩余空间减去分隔线高度）
-  const newStagedHeight = panelsHeight.value - clampedChangesHeight - 8 - commitsHeight.value;
-
-  requestAnimationFrame(() => {
-    // 更新高度值
-    changesHeight.value = clampedChangesHeight;
-    stagedHeight.value = newStagedHeight;
-
-    // 当区域高度接近最小值时，隐藏内容但保留标题
-    toggleSectionVisibility(changesSection.value, changesHeaderHeight.value);
-    toggleSectionVisibility(stagedSection.value, stagedHeaderHeight.value);
-
-  });
-};
-
-const stopChangesDrag = () => {
-  isDraggingChanges.value = false;
-  logger.debug('停止拖拽Changes区域分隔线', {
-    finalChangesHeight: changesSection.value.offsetHeight,
-    finalStagedHeight: stagedSection.value.offsetHeight
-  });
-  document.body.style.userSelect = '';
-  document.body.style.cursor = '';
-  document.removeEventListener('mousemove', handleChangesDrag);
-  document.removeEventListener('mouseup', stopChangesDrag);
+const startChangesDrag = (event) => {
+  panelsHeight.value = panelsContainer.value?.offsetHeight || 0
+  updatePanelHeaderHeights()
+  startSectionResize(event, {
+    topKey: 'changes',
+    bottomKey: 'staged',
+    topMin: Math.max(changesHeaderHeight.value, 32),
+    bottomMin: Math.max(stagedHeaderHeight.value, 32),
+    reason: 'changes-divider',
+    onStart: () => { isDraggingChanges.value = true },
+    onFinish: () => { isDraggingChanges.value = false },
+  })
 }
 
-// 修改 startCommitsDrag 函数
-const startCommitsDrag = (e) => {
-  if (e.target === commitsDivider.value || e.target.closest('.divider-handle')) {
-    isDraggingCommits.value = true
-    startY.value = e.clientY
-    initialHeightCommits.value = commitsHeight.value
-    initialHeightStaged.value = stagedHeight.value
-    initialHeightChanges.value = changesHeight.value
-    panelsHeight.value = panelsContainer.value.offsetHeight
-
-    document.body.style.userSelect = 'none'
-    document.body.style.cursor = 'row-resize'
-    document.addEventListener('mousemove', handleCommitsDrag)
-    document.addEventListener('mouseup', stopCommitsDrag)
-    e.preventDefault()
-    e.stopPropagation()
-  }
+const startCommitsDrag = (event) => {
+  panelsHeight.value = panelsContainer.value?.offsetHeight || 0
+  updatePanelHeaderHeights()
+  startSectionResize(event, {
+    topKey: 'commits',
+    bottomKey: 'staged',
+    topMin: MIN_COMMITS_HEIGHT,
+    bottomMin: Math.max(stagedHeaderHeight.value, 32),
+    reason: 'commits-divider',
+    onStart: () => { isDraggingCommits.value = true },
+    onFinish: () => { isDraggingCommits.value = false },
+  })
 }
-
-const handleCommitsDrag = (e) => {
-  if (!isDraggingCommits.value) return;
-
-  // 边界检查
-  if (panelsHeight.value <= 0) {
-    logger.warn('无效的panelsHeight', panelsHeight.value);
-    return;
-  }
-
-  const dy = e.clientY - startY.value;
-  // logger.debug('Commits拖动开始', {
-  //   dy,
-  //   startY: startY.value,
-  //   currentY: e.clientY,
-  //   initialCommitsHeight: initialHeightCommits.value,
-  //   initialChangesHeight: initialHeightChanges.value,
-  //   initialStagedHeight: initialHeightStaged.value,
-  //   panelsHeight: panelsHeight.value
-  // });
-
-  // 添加拖动视觉反馈
-  commitsDivider.value?.classList.add('dragging');
-
-  // 计算新高度（注意这里是减dy，确保方向正确）
-  const newCommitsHeight = initialHeightCommits.value - dy;
-
-  // 计算最小和最大高度限制
-  const minCommitsHeight = Math.max(commitsHeaderHeight.value, 22); // 确保最小高度
-  const maxCommitsHeight = Math.min(
-    panelsHeight.value - changesHeaderHeight.value - stagedHeaderHeight.value - 16,
-    panelsHeight.value * 0.8 // 不超过总高度的80%
-  );
-
-  // logger.debug('高度限制检查', {
-  //   minCommitsHeight,
-  //   maxCommitsHeight,
-  //   newCommitsHeight,
-  //   availableSpace: panelsHeight.value - changesHeaderHeight.value - stagedHeaderHeight.value
-  // });
-
-  // 应用边界限制
-  const clampedCommitsHeight = Math.max(
-    minCommitsHeight,
-    Math.min(maxCommitsHeight, newCommitsHeight)
-  );
-
-  // 计算高度变化量（正值表示Commits区域减小）
-  const heightChange = initialHeightCommits.value - clampedCommitsHeight;
-  // logger.debug('高度变化计算', {
-  //   heightChange,
-  //   clampedCommitsHeight,
-  //   initialCommitsHeight: initialHeightCommits.value
-  // });
-
-  // 使用requestAnimationFrame确保流畅更新
-  requestAnimationFrame(() => {
-    // 更新Commits区域高度
-    commitsHeight.value = clampedCommitsHeight;
-
-    // 计算上方区域应分配的高度变化
-    const totalInitialHeight = initialHeightChanges.value + initialHeightStaged.value;
-    const changesRatio = totalInitialHeight > 0
-      ? initialHeightChanges.value / totalInitialHeight
-      : 0.5;
-    const stagedRatio = totalInitialHeight > 0
-      ? initialHeightStaged.value / totalInitialHeight
-      : 0.5;
-
-    // logger.debug('区域比例计算', {
-    //   totalInitialHeight,
-    //   changesRatio,
-    //   stagedRatio,
-    //   changesHeaderHeight: changesHeaderHeight.value,
-    //   stagedHeaderHeight: stagedHeaderHeight.value
-    // });
-
-    // 计算上方区域新高度（确保不低于最小高度）
-    const newChangesHeight = Math.max(
-      changesHeaderHeight.value,
-      initialHeightChanges.value + (heightChange * changesRatio)
-    );
-    const newStagedHeight = Math.max(
-      stagedHeaderHeight.value,
-      initialHeightStaged.value + (heightChange * stagedRatio)
-    );
-
-    // 应用新高度
-    changesHeight.value = newChangesHeight;
-    stagedHeight.value = newStagedHeight;
-
-    // logger.debug('最终高度设置', {
-    //   changesHeight: changesHeight.value,
-    //   stagedHeight: stagedHeight.value,
-    //   commitsHeight: commitsHeight.value,
-    //   remainingSpace: panelsHeight.value - changesHeight.value - stagedHeight.value - commitsHeight.value
-    // });
-
-    // 动态显示/隐藏内容区域
-    toggleSectionVisibility(changesSection.value, changesHeaderHeight.value);
-    toggleSectionVisibility(stagedSection.value, stagedHeaderHeight.value);
-
-    // 强制重新布局（解决某些浏览器渲染问题）
-    if (panelsContainer.value) {
-      panelsContainer.value.style.overflow = 'hidden';
-      panelsContainer.value.offsetHeight; // 触发重绘
-      panelsContainer.value.style.overflow = '';
-    }
-
-  });
-};
-
-const stopCommitsDrag = () => {
-  isDraggingCommits.value = false;
-  commitsDivider.value?.classList.remove('dragging');
-  document.body.style.userSelect = '';
-  document.body.style.cursor = '';
-  document.removeEventListener('mousemove', handleCommitsDrag);
-  document.removeEventListener('mouseup', stopCommitsDrag);
-
-  // 最终布局调整
-  nextTick(() => {
-    if (panelsContainer.value) {
-      panelsContainer.value.style.display = 'none';
-      panelsContainer.value.offsetHeight; // 触发重绘
-      panelsContainer.value.style.display = 'flex';
-    }
-  });
-};
 
 // 新增辅助函数
 const toggleSectionVisibility = (section, headerHeight) => {
@@ -2720,10 +2880,15 @@ const loadCommitHistory = async ({ force = false } = {}) => {
       }
 
       // 提交历史区域优先保证面板响应速度：先加载较小窗口，列表内再逐步展开可见项。
+      // 不请求逐提交的 diff 统计：那会在 80 个提交上跑 80 次全树比对，而它只用于悬停提示，
+      // 需要时由长列表的 tooltip 自己补（见 commitStatsCache）。
       commits.value = await invoke('get_git_log', {
         path: props.workspacePath,
         branchName: branch || currentBranch.value,
-        limit: 80
+        limit: 80,
+        withStats: false,
+        // 泳道图需要跨分支的拓扑：只走当前分支的话，合并进来的那条线永远是直的。
+        allBranches: true
       })
       commitHistoryVisibleLimit.value = 60
 
@@ -3002,28 +3167,20 @@ const updateFileDiff = async (file) => {
     // 设计说明：部分暂存后，同一文件会在“更改”和“已暂存”各出现一条。
     // 已暂存视图展示 HEAD -> INDEX；未暂存视图展示 INDEX -> 工作区，
     // 这样胶囊按钮拿到的 hunk 范围才和当前面板一致。
-    const modifiedContentRequest = {
+    //
+    // 性能：以前这里并发两个 get_file_content，之后再去 get_file_diff_hunks 拉一次
+    // （还会 spawn 一个 git 子进程）。三次调用各自 open 一次仓库、各自 write_tree 一遍索引，
+    // 大仓库里点一个文件就要等一下。现在合成一次调用，后端只算一次索引树。
+    const payload = await invoke('get_git_file_diff', {
       path: props.workspacePath,
-      filePath: filePath
-    }
-    if (modifiedRevision) {
-      modifiedContentRequest.revision = modifiedRevision
-    }
+      filePath,
+      staged: isStagedDiff,
+      // 重命名时左侧要读旧路径，否则旧路径在新树里不存在，会显示成整文件删除。
+      origPath: originalPath !== filePath ? originalPath : null
+    })
 
-    const [originalContent, modifiedContent] = await Promise.all([
-      invoke('get_file_content', {
-        path: props.workspacePath,
-        filePath: originalPath,
-        revision: originalRevision
-      }).catch(e => {
-        frontendLogger.warn('Failed to get original content:', e);
-        return ''; // 对于新文件，原始内容为空
-      }),
-      invoke('get_file_content', modifiedContentRequest).catch(e => {
-        frontendLogger.error('Failed to get modified content:', e);
-        throw e;
-      })
-    ]);
+    const originalContent = String(payload?.original ?? '')
+    const modifiedContent = String(payload?.modified ?? '')
 
     const countLines = (value) => String(value || '').split(/\r\n|\r|\n/).length
     frontendLogger.info('[Diff] Loaded file contents for Monaco diff', {
@@ -3060,7 +3217,15 @@ const updateFileDiff = async (file) => {
       return
     }
 
-    await refreshGitHunksCache(context, requestId)
+    // hunk 已随内容一起返回，直接落缓存；不再为此单独发一次请求。
+    diffGitHunksCache = Array.isArray(payload?.hunks) ? payload.hunks.map(toMonacoLikeGitHunk) : []
+    diffGitHunksCacheContext = context
+    frontendLogger.info('[Diff] Git hunk cache filled from combined payload', {
+      context: context.key,
+      hunks: diffGitHunksCache.length
+    })
+    scheduleHunkActionPositionUpdateAfterLayout('git-hunk-cache-loaded')
+
     if (!isCurrentDiffContext(context, requestId)) {
       frontendLogger.warn('[Diff] Ignored stale file diff after hunk cache refresh', {
         context: context.key,
@@ -3072,7 +3237,14 @@ const updateFileDiff = async (file) => {
       return
     }
 
-    const language = getLanguageForFile(file.path);
+    // 语言优先用后端给的建议值：它和文件扩展名一一对应，省掉一次本地映射的边界情况。
+    const language = payload?.language || getLanguageForFile(file.path);
+
+    // 性能参数必须在 setModel 之前应用：Monaco 一旦拿到新模型就会立刻算 diff，
+    // 放到后面等于先用最贵的算法算一遍、再按新参数重算，大文件上正好慢一倍。
+    const diffPerf = getDiffPerformanceOptions(originalContent, modifiedContent)
+    diffRenderSideBySide.value = !!diffPerf.options.renderSideBySide
+    diffEditor.updateOptions(diffPerf.options);
 
     // 创建新模型
     const originalModel = monaco.editor.createModel(originalContent, language);
@@ -3097,13 +3269,10 @@ const updateFileDiff = async (file) => {
       }, 100);
     }
 
-    // 大文件/大差异时切到性能模式，避免 diff 操作因装饰和分栏计算卡顿。
-    const diffPerf = getDiffPerformanceOptions(originalContent, modifiedContent)
-    diffRenderSideBySide.value = !!diffPerf.options.renderSideBySide
-    diffEditor.updateOptions(diffPerf.options);
     if (diffPerf.largeDiff) {
-      frontendLogger.info('[Diff] Large working tree diff rendered in performance mode', {
+      frontendLogger.info('[Diff] Diff rendered in performance mode', {
         filePath,
+        level: diffPerf.level,
         context: context.key
       })
     }
@@ -3612,7 +3781,15 @@ onMounted(() => {
       // 设置面板高度
       nextTick(() => {
         if (changesSection.value && stagedSection.value && commitsSection.value && panelsContainer.value) {
-          applyPanelHeightRatios([0.3, 0.3, 0.4], 'initial-panel-layout')
+          // 上次手动拖过就沿用存下来的数值，否则按默认比例摊开。
+          const restored = restoreLayoutFromStorage()
+          if (restored && panelsUserResized) {
+            applyPanelHeightsAbsolute('initial-panel-layout-restored')
+          } else {
+            applyPanelHeightRatios([0.3, 0.3, 0.4], 'initial-panel-layout')
+          }
+          toggleSectionVisibility(changesSection.value, changesHeaderHeight.value)
+          toggleSectionVisibility(stagedSection.value, stagedHeaderHeight.value)
           if (!panelsResizeObserver && typeof ResizeObserver !== 'undefined') {
             panelsResizeObserver = new ResizeObserver(() => {
               normalizePanelHeightsToContainer('panels-container-resize')
@@ -3657,12 +3834,9 @@ onUnmounted(() => {
   }
   window.removeEventListener('keydown', handleDiffNavigationShortcut, true)
 
-  document.removeEventListener('mousemove', handleSidebarDrag)
-  document.removeEventListener('mouseup', stopSidebarDrag)
-  document.removeEventListener('mousemove', handleChangesDrag)
-  document.removeEventListener('mouseup', stopChangesDrag)
-  document.removeEventListener('mousemove', handleCommitsDrag)
-  document.removeEventListener('mouseup', stopCommitsDrag)
+  // 拖动用的监听器都挂在分隔条元素自己身上（pointer capture），组件卸载时元素一并销毁，
+  // 这里只需要把可能残留的全局 class 清掉。
+  document.body.classList.remove('git-panel-resizing')
 
   // 清理编辑器
   if (diffEditor) {
@@ -3888,6 +4062,9 @@ onUnmounted(() => {
   justify-content: space-between;
   gap: 8px;
   min-width: 0;
+  /* 行高 22px 与提交泳道图对齐；左右内边距让图标不贴边。 */
+  min-height: 22px;
+  padding: 0 12px;
 }
 
 .git-status-icon {
@@ -4002,6 +4179,17 @@ onUnmounted(() => {
 
 .commit-marker-local .commit-marker-pill-icon {
   color: var(--primary-color);
+}
+
+/* 非当前分支的引用（其它本地分支 / 远端分支 / 标签）：保持低调，
+   只比正文略深一点，避免一屏里出现七八个抢眼的胶囊。 */
+.commit-marker-other {
+  background-color: color-mix(in srgb, var(--text-color-secondary) 10%, transparent);
+  border-color: color-mix(in srgb, var(--divider-color) 70%, transparent);
+}
+
+.commit-marker-other .commit-marker-pill-icon {
+  color: var(--text-color-secondary);
 }
 
 .commit-marker-remote .commit-marker-pill-icon {
@@ -4278,7 +4466,6 @@ onUnmounted(() => {
   border-right: 1px solid var(--divider-color);
   background-color: var(--sidebar-bg);
   position: relative;
-  transition: width 0.2s ease;
 }
 
 /* 修改右侧内容区域样式 */
@@ -4441,17 +4628,160 @@ onUnmounted(() => {
 
 
 .source-control-header {
-  padding: 8px 12px;
+  padding: 6px 12px 8px;
   border-bottom: 1px solid var(--divider-color);
   background-color: var(--card-bg);
   flex-shrink: 0;
 }
 
+.scm-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 24px;
+}
+
+/* 标题用和 VS Code 侧栏一致的字重与字号：13px / 600，不用更粗的字重，
+   否则整条侧栏会显得头重脚轻。 */
+.scm-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-color);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.scm-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: 0 0 auto;
+}
+
+.scm-icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-color-secondary);
+  cursor: pointer;
+  transition: background-color 0.12s ease, color 0.12s ease;
+}
+
+.scm-icon-button:hover:not(:disabled) {
+  background-color: var(--hover-color);
+  color: var(--text-color);
+}
+
+.scm-icon-button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.scm-header-sub {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 2px;
+  min-width: 0;
+  font-size: 11.5px;
+  color: var(--text-color-secondary);
+}
+
+.scm-branch {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.scm-branch-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 仓库名靠右，和分支拉开；只在空间够时才显示完整，否则同样省略。 */
+.scm-repo {
+  margin-left: auto;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  opacity: 0.8;
+}
+
 .commit-section {
-  padding: 12px;
+  padding: 8px 12px 10px;
   border-bottom: 1px solid var(--divider-color);
   background-color: var(--card-bg);
   flex-shrink: 0;
+}
+
+/* 提交信息输入框：去掉 Naive 默认的底部外边距，间距交给这里的 flex gap 管。 */
+.commit-message-input {
+  display: block;
+  margin-bottom: 6px;
+}
+
+.commit-message-input :deep(.n-input__textarea-el) {
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+
+/* 提交按钮：VS Code 的观感——整宽、实心主色、左侧带一个对勾图标。
+   禁用时降到中性灰，而不是保持蓝色只降透明度（后者看起来像还能点）。 */
+.commit-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background-color: var(--primary-color, #0e639c);
+  color: #ffffff;
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+  transition: background-color 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+}
+
+.commit-button:hover:not(:disabled) {
+  background-color: color-mix(in srgb, var(--primary-color, #0e639c) 82%, #ffffff);
+}
+
+.commit-button:active:not(:disabled) {
+  background-color: color-mix(in srgb, var(--primary-color, #0e639c) 88%, #000000);
+}
+
+.commit-button:disabled {
+  background-color: color-mix(in srgb, var(--text-color-secondary) 14%, transparent);
+  color: var(--text-color-secondary);
+  border-color: var(--divider-color);
+  cursor: default;
+}
+
+.commit-button-count {
+  padding: 0 5px;
+  border-radius: 8px;
+  background-color: rgba(255, 255, 255, 0.18);
+  font-size: 11px;
+  line-height: 16px;
+}
+
+.commit-button:disabled .commit-button-count {
+  background-color: color-mix(in srgb, var(--text-color-secondary) 16%, transparent);
 }
 
 /* 设计说明：此前 .commit-history-spin 与内部 .n-spin-container 都设了 min-height:100%。
@@ -4526,7 +4856,6 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   min-height: 40px;
-  transition: flex 0.1s ease-out;
   background-color: var(--card-bg);
   border-top: 1px solid var(--divider-color);
 }
@@ -4629,14 +4958,57 @@ onUnmounted(() => {
 }
 
 .commit-item {
-  padding: 8px 12px;
+  /* 行高与泳道图的行高一致（COMMIT_ROW_HEIGHT = 22px）：
+     泳道图的连线从行上边界画到下边界，行高一旦对不上，折线在相邻行之间就会断开。 */
+  padding: 0 12px;
+  min-height: 22px;
   cursor: pointer;
-  transition: background-color 0.2s ease;
-  border-left: 3px solid transparent;
+  transition: background-color 0.12s ease;
+  border-left: 2px solid transparent;
 }
 
 .commit-item:hover {
   background-color: var(--hover-color);
+}
+
+/* 选中行用和 VS Code 一致的左侧色条 + 淡蓝底，比整块变色更容易在第一眼定位。 */
+.commit-item.selected-commit {
+  background-color: color-mix(in srgb, #4a9eff 14%, transparent);
+  border-left-color: #4a9eff;
+}
+
+/* 泳道图本身。
+   连线用 currentColor 之外的显式颜色；1.5px 描边在 100% 缩放下清晰，
+   在高 DPI 上也不会糊成一片。shape-rendering 保持几何精度，避免细线抖动。 */
+.commit-graph {
+  flex: 0 0 auto;
+  display: block;
+  margin-right: 6px;
+  overflow: visible;
+  shape-rendering: geometricPrecision;
+}
+
+.commit-graph-line {
+  fill: none;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.commit-graph-dot {
+  stroke: var(--card-bg);
+  stroke-width: 1.5;
+}
+
+.commit-row {
+  align-items: center;
+  gap: 6px;
+  /* 行高由 .commit-item 的 min-height 决定，这里只负责垂直居中。
+     左右内边距由 .commit-item 提供；.git-file-row 也有一份，必须在这里压回 0，
+     否则提交行会比文件行多缩进 12px，和泳道图对不齐。 */
+  min-height: 22px;
+  padding-left: 0;
+  padding-right: 0;
 }
 
 .commit-summary {
@@ -4700,41 +5072,47 @@ onUnmounted(() => {
 
 
 
-/* 确保分隔线可见 */
+/* 分隔条。
+ *
+ * 旧版是 2px 高的实心线、事件还要求 e.target 正好命中它，鼠标稍快就脱靶，
+ * 表现成“时而生效时而失效”。参照 VS Code 的做法：本体是一条视觉细线，
+ * 但用一个绝对定位的透明伪元素把命中区撑到 9px（上下各外扩 4px），
+ * 视觉不变、手感稳得多。 */
 .section-divider,
-/* 分隔条样式优化 */
 .commits-divider {
-  height: 2px;
-  background-color: #69abd8;
-  cursor: row-resize;
   position: relative;
-  transition: background-color 0.2s ease;
+  flex: 0 0 auto;
+  height: 1px;
+  background-color: var(--divider-color);
+  cursor: row-resize;
   z-index: 10;
+  transition: background-color 0.12s ease;
 }
 
-.commits-divider.dragging {
-  background-color: #69abd8;
-  height: 2px;
-  z-index: 100;
-}
-
-.commits-divider .divider-handle {
+.section-divider::before,
+.commits-divider::before {
+  content: '';
   position: absolute;
-  top: 2px;
-  left: 50%;
-  transform: translateX(-50%);
-  width: 40px;
-  height: 2px;
-  background-color: var(--primary-color);
-  border-radius: 2px;
-  opacity: 0.3;
-  transition: opacity 0.2s, width 0.2s;
+  left: 0;
+  right: 0;
+  top: -4px;
+  bottom: -4px;
+  /* 命中区是透明的，但必须能接收指针事件 */
+  background: transparent;
 }
 
-.commits-divider:hover .divider-handle,
-.commits-divider.dragging .divider-handle {
-  opacity: 1;
-  width: 60px;
+.section-divider:hover,
+.commits-divider:hover,
+.section-divider.dragging,
+.commits-divider.dragging {
+  background-color: var(--primary-color, #4a9eff);
+}
+
+/* 拖动期间要压住 Monaco / 文本的选中，否则鼠标划过会把右侧内容整片选蓝。 */
+body.git-panel-resizing,
+body.git-panel-resizing * {
+  cursor: row-resize !important;
+  user-select: none !important;
 }
 
 /* 防止拖动时文本选中 */
@@ -4785,14 +5163,29 @@ onUnmounted(() => {
   overflow: visible;
 }
 
+/* 侧栏宽度拖动条。
+   和纵向分隔条同样的思路：细线居中，命中区用伪元素外扩到 8px，
+   否则 4px 的热区在快速拖动时很容易一滑就脱靶。 */
 .sidebar-resize-handle {
   position: absolute;
-  right: 0;
+  right: -2px;
   top: 0;
   bottom: 0;
   width: 4px;
   cursor: col-resize;
-  z-index: 10;
+  z-index: 20;
+  background: transparent;
+  transition: background-color 0.12s ease;
+}
+
+.sidebar-resize-handle::before {
+  content: '';
+  position: absolute;
+  left: -3px;
+  right: -3px;
+  top: 0;
+  bottom: 0;
+  background: transparent;
 }
 
 .sidebar-resize-handle:hover {
@@ -4902,9 +5295,12 @@ onUnmounted(() => {
 }
 
 .n-list-item {
-  padding: 4px 12px;
+  padding: 0;
 }
 
+/* 文件行本身负责左右内边距与行高；n-list-item 只当容器用。
+   以前这里写死 `padding: 4px 12px`，再叠上 .git-file-row 的间距，
+   一屏里能塞下的文件数比 VS Code 少将近三分之一。 */
 .n-list-item:hover {
   background-color: var(--hover-color);
 }

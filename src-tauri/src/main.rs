@@ -1095,6 +1095,7 @@ async fn app_main() {
             commands::language_learning::language_learning_generate_whisper_sync_json_async,
             commands::language_learning::language_learning_read_local_media_base64,
             commands::git::get_file_content,
+            commands::git::get_git_file_diff,
             commands::git::get_file_diff,
             commands::git::get_file_diff_hunks,
             commands::git::get_commit_file_diff,
