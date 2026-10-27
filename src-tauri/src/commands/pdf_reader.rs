@@ -660,6 +660,92 @@ pub async fn pdf_outline(path: String) -> Result<Vec<PdfOutlineItem>, String> {
     .await
 }
 
+// ──────────────────────── pdf_page_links ────────────────────────
+
+/// 一页里的可点击区域。
+///
+/// 两种目标各自表达：`uri` 是外部网址（交给系统浏览器），`page` 是本文档内的目标页
+/// （跳过去）。两者互斥，恰好一个是 Some。
+#[derive(Debug, Serialize)]
+pub struct PdfPageLink {
+    /// 页内矩形（pt，左上原点）。
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+    /// 外部链接的 URL；内部跳转时为 None。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub uri: Option<String>,
+    /// 内部跳转的目标页（1-based）；外部链接时为 None。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub page: Option<usize>,
+}
+
+/// 提取某一页的链接热区。
+///
+/// PDF 的链接不在文字层里，而是页面注释（annotation）上的一块矩形 + 一个动作。
+/// 所以要拿到「点了能跳/能开」的区域，只能问 pdfium 要这份数据。
+#[tauri::command]
+pub async fn pdf_page_links(path: String, page: usize) -> Result<Vec<PdfPageLink>, String> {
+    run_pdf(move |state| {
+        state.with_doc(&path, |document| {
+            let total = document.pages().len() as usize;
+            if page < 1 || page > total {
+                return Err(format!("页码 {} 超出范围(总页数: {})", page, total));
+            }
+            let pdf_page = document
+                .pages()
+                .get((page - 1) as u16)
+                .map_err(|_| format!("获取页面 {} 失败", page))?;
+            // pdfium 的 y 轴向上；前端页内坐标是左上原点、y 向下，所以要用页高翻转。
+            let page_h = pdf_page.height().value;
+
+            let mut out = Vec::new();
+            for link in pdf_page.links().iter() {
+                let Ok(rect) = link.rect() else { continue };
+                let w = (rect.right() - rect.left()).value;
+                let h = (rect.top() - rect.bottom()).value;
+                if w <= 0.0 || h <= 0.0 {
+                    continue;
+                }
+
+                // 外部 URL：action 是 URI 型。
+                let uri = link
+                    .action()
+                    .and_then(|a| a.as_uri_action().and_then(|u| u.uri().ok()))
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty());
+
+                // 内部跳转：destination 指向本文档的某页（0-based -> 1-based）。
+                let dest_page = link
+                    .destination()
+                    .and_then(|d| d.page_index().ok())
+                    .map(|idx| idx as usize + 1)
+                    .filter(|p| *p >= 1 && *p <= total);
+
+                let (uri, page_target) = match (uri, dest_page) {
+                    (Some(u), _) => (Some(u), None),
+                    (None, Some(p)) => (None, Some(p)),
+                    // 既没有 URL 也没有页目标（例如脚本动作）：不可点，跳过。
+                    (None, None) => continue,
+                };
+
+                out.push(PdfPageLink {
+                    x: rect.left().value,
+                    // 翻转 y：pdfium 的 bottom 是「离页底的距离」，换到左上原点就是 页高 - top。
+                    y: page_h - rect.top().value,
+                    w,
+                    h,
+                    uri,
+                    page: page_target,
+                });
+            }
+            Ok(out)
+        })
+    })
+    .await
+}
+
 // ──────────────────────── pdf_locate_point ────────────────────────
 
 #[derive(Debug, Serialize)]

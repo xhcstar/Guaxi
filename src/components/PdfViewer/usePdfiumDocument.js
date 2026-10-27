@@ -234,6 +234,28 @@ export default function usePdfiumDocument() {
     }
   }
 
+  /**
+   * 加载某页的链接热区。
+   *
+   * PDF 的链接是**注释**上的矩形 + 动作，不在文字层里 —— 光靠文本没法凭空推断哪里能点。
+   * 与文字层一样按页懒加载：只有渲染到可见范围的页才去问后端，翻到别处不会囤积。
+   */
+  const loadLinks = async (page) => {
+    if (!activePath) return
+    if (page.links || page.linksLoading) return
+    page.linksLoading = true
+    try {
+      const resp = await invoke('pdf_page_links', { path: activePath, page: page.num })
+      page.links = Array.isArray(resp) ? resp : []
+    } catch (e) {
+      // 链接取不到不该影响阅读本身，当作这页没有链接。
+      page.links = []
+      logger.debug('PDF链接加载失败', { page: page.num, error: String(e?.message || e) })
+    } finally {
+      page.linksLoading = false
+    }
+  }
+
   const freePage = (page) => {
     page.image = ''
     page.dpi = 0
@@ -367,6 +389,7 @@ export default function usePdfiumDocument() {
     renderPage,
     prefetchAdjacent,
     loadText,
+    loadLinks,
     freePage,
     getOutline,
     search,

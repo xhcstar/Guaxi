@@ -476,7 +476,12 @@
         -->
         <button class="selection-tool-btn" type="button" title="高亮所选文本（写回 PDF）"
           :disabled="!selectionText" @click="addHighlightViaViewer">
-          <n-icon :component="ColorWandOutline" :style="{ color: highlightColorCss }" />
+          <!--
+            高亮用它自己的荧光笔图标，不再复用 ColorWandOutline。
+            后者已经是「用AI翻译」的图标 —— 两颗紧挨着的按钮长同一个样子，
+            读者只能靠悬停提示区分，等于没有图标。
+          -->
+          <Icon :icon="HighlighterOutline" width="15" height="15" :style="{ color: highlightColorCss }" />
         </button>
         <button class="selection-tool-btn selection-tool-btn--swatch" type="button"
           :class="{ active: highlightPaletteOpen }"
@@ -547,6 +552,8 @@
 
 <script setup>
 import { createLogger } from '../../utils/logger'
+import { Icon } from '@iconify/vue'
+import HighlighterOutline from '@iconify-icons/lucide/highlighter'
 import { ref, computed, watchEffect, onMounted, onBeforeUnmount, watch, nextTick, h } from 'vue'
 import { markReaderScrollbarActive } from './readerScrollbar'
 import { invoke } from '@tauri-apps/api/core'

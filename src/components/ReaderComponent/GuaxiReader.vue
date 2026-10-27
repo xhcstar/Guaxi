@@ -1,9 +1,15 @@
 <template>
   <n-message-provider>
     <div class="guaxi-reader">
-      <!-- Office 文档走统一入口：交给本机 Office/WPS，否则 WordCraft 系列，不再自绘版式。 -->
+      <!--
+        Word 走 Guaxi 自己的双栏阅读器（左 Word 版式 + 右 Markdown），看书、做笔记、翻译用的；
+        「用 Office 打开」是同一个工具栏上的另一个入口，不替代阅读。
+
+        其余 Office（表格 / 幻灯片）没有对应的双栏阅读器，交给 DocOfficeReader，
+        由它把文件交给本机 Office/WPS —— 这两类文件在 Guaxi 里自绘版式只会「差不多但不对」。
+      -->
       <DocOfficeReader
-        v-if="isOfficeType"
+        v-if="isSpreadsheetOrSlides"
         :path="filePath"
         :name="fileName"
         :kind="fileType"
@@ -26,6 +32,7 @@ import GuaxiMarkdownReader from './GuaxiMarkdownReader.vue'
 import GuaxiHtmlReader from './GuaxiHtmlReader.vue'
 import GuaxiEpubReader from './GuaxiEpubReader.vue'
 import GuaxiTextReader from './GuaxiTextReader.vue'
+import GuaxiWordReader from './GauxiWordReader.vue'
 import DocOfficeReader from './readers/DocOfficeReader.vue'
 
 const logger = createLogger('GuaxiReader')
@@ -39,7 +46,7 @@ const props = defineProps({
   fileType: {
     type: String,
     required: true,
-    validator: (value) => ['pdf', 'md', 'markdown', 'html', 'htm', 'epub', 'mobi', 'azw', 'azw3', 'doc', 'txt', 'docx', 'word'].includes(value)
+    validator: (value) => ['pdf', 'md', 'markdown', 'html', 'htm', 'epub', 'mobi', 'azw', 'azw3', 'doc', 'txt', 'docx', 'word', 'rtf', 'odt', 'xls', 'xlsx', 'ods', 'ppt', 'pptx', 'odp'].includes(value)
   },
   fileName: {
     type: String,
@@ -69,9 +76,15 @@ const props = defineProps({
 // })
 
 // 更严格的组件选择逻辑
-/** Office 三件套（含旧格式）不再自绘，统一交给 DocOfficeReader。 */
-const isOfficeType = computed(() =>
-  ['doc', 'docx', 'word', 'xls', 'xlsx', 'ods', 'ppt', 'pptx', 'odp', 'rtf', 'odt'].includes(
+/**
+ * 只有「表格 / 幻灯片」交给 DocOfficeReader（本机 Office/WPS）。
+ *
+ * Word 不在此列：它有 Guaxi 自己的双栏阅读器（左 Word 版式 + 右 Markdown），
+ * 那是用来读书、做笔记、翻译的，与「用 Office 编辑原文件」是两件事。
+ * 把 word 划进来等于把双栏阅读器整个下线 —— 这次就是那么丢掉的，别再合并。
+ */
+const isSpreadsheetOrSlides = computed(() =>
+  ['xls', 'xlsx', 'ods', 'ppt', 'pptx', 'odp'].includes(
     String(props.fileType || '').toLowerCase()
   )
 )
@@ -98,7 +111,13 @@ const readerComponent = computed(() => {
     mobi: GuaxiEpubReader,
     azw: GuaxiEpubReader,
     azw3: GuaxiEpubReader,
-    txt: GuaxiTextReader
+    txt: GuaxiTextReader,
+    // Word：双栏阅读器（左版式 + 右 Markdown）。旧格式 doc 与 docx/rtf/odt 都走它。
+    doc: GuaxiWordReader,
+    docx: GuaxiWordReader,
+    word: GuaxiWordReader,
+    rtf: GuaxiWordReader,
+    odt: GuaxiWordReader,
   }
 
   return typeMap[fileType] || null

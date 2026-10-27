@@ -250,6 +250,32 @@
         <!-- 高亮图标直接用当前颜色落笔；调色盘图标才展开颜色。 -->
         <button
           class="gdr-pdf-hl-bar__icon"
+          title="查询选中的文字"
+          aria-label="查询"
+          @click="queryPdfSelection"
+        >
+          <Icon :icon="searchQueryIcon" width="15" height="15" />
+        </button>
+        <button
+          class="gdr-pdf-hl-bar__icon"
+          title="用 AI 翻译选中的文字"
+          aria-label="用 AI 翻译"
+          @click="openPdfAssistantTranslate"
+        >
+          <Icon :icon="wandIcon" width="15" height="15" />
+        </button>
+        <button
+          class="gdr-pdf-hl-bar__icon"
+          title="把选中的文字发给 AI 提问"
+          aria-label="问 AI"
+          @click="askPdfSelectionWithAssistant"
+        >
+          <Icon :icon="botIcon" width="15" height="15" />
+        </button>
+        <span class="gdr-pdf-hl-bar__sep" />
+        <!-- 高亮图标直接用当前颜色落笔；调色盘图标才展开颜色。 -->
+        <button
+          class="gdr-pdf-hl-bar__icon"
           title="高亮（当前颜色）"
           aria-label="高亮"
           @click="addPdfHighlightFromSelection(PDF_HL_PRESETS[pdfHighlightPresetIdx])"
@@ -277,14 +303,11 @@
             @click="addPdfHighlightFromSelection(c)"
           />
         </span>
-        <button
-          class="gdr-pdf-hl-bar__icon"
-          title="取消选择（Esc）"
-          aria-label="取消选择"
-          @click="clearPdfSelection"
-        >
-          <Icon :icon="closeIcon" width="13" height="13" />
-        </button>
+        <!--
+          原先这里还有一个 ✕「取消选择」按钮。现在遵循同一套交互：点空白处即收起
+          （见 onPdfGlobalMouseDown），Esc 也能关 —— 揪着鼠标去点那颗小叉，
+          比直接点别处麻烦，而它就占着一颗按钮的位置。
+        -->
       </div>
 
       <!-- 划词译文面板：与电子书 / 编辑器同一套组件，交互一致。 -->
@@ -404,10 +427,14 @@ import codeIcon from '@iconify-icons/lucide/code'
 import volumeIcon from '@iconify-icons/lucide/volume-2'
 import highlighterIcon from '@iconify-icons/lucide/highlighter'
 import paletteIcon from '@iconify-icons/lucide/palette'
-import { openPath } from '@tauri-apps/plugin-opener'
+import searchQueryIcon from '@iconify-icons/lucide/search'
+import botIcon from '@iconify-icons/lucide/bot'
+import wandIcon from '@iconify-icons/lucide/wand-2'
+import { openPath, openUrl } from '@tauri-apps/plugin-opener'
 import { createLogger } from '../../utils/logger'
 import { usePageTranslate, splitIntoParagraphs } from '../../composables/usePageTranslate'
 import { useSelectionReadAloud } from '../../composables/useSelectionReadAloud'
+import { useRightSiderStore } from '../../stores/rightSiderStore'
 
 // 各阅读器按需加载：打开一本 MOBI 不该把 pdfium 阅读器、Office 阅读器一起下载并解析。
 // 阅读器窗口是独立 webview，首帧速度几乎完全取决于入口加载了多少模块（见 reader-main.js）。
@@ -423,6 +450,8 @@ const GuaxiSelectionTranslatePanel = defineAsyncComponent(
 )
 
 const logger = createLogger('ReaderPane')
+// 「问 AI / 用 AI 翻译」把选中文字送进全局右侧助手（应用级 store，打开的是同一个对话）。
+const rightSiderStore = useRightSiderStore()
 
 /** word / spreadsheet / slides 三个 reader 分组，现在都由 DocOfficeReader 承接。 */
 const isOfficeReader = computed(() =>
@@ -884,6 +913,67 @@ const speakPdfSelection = () => {
   }
   void pdfReadAloud.toggle(text)
   pdfSelectionToolbar.value = false
+}
+
+/** 查询：把选中文字交给系统浏览器搜索。 */
+const queryPdfSelection = async () => {
+  const text = String(pdfSelectionText.value || '').trim()
+  if (!text) return
+  const url = `https://www.bing.com/search?q=${encodeURIComponent(text)}`
+  clearPdfSelection()
+  try {
+    await openUrl(url)
+  } catch (error) {
+    logger.warn('[ReaderPane] open search url failed', { error: String(error?.message || error) })
+  }
+}
+
+/**
+ * 把选中文字送到右侧智能助手。
+ *
+ * 独立阅读器窗口没有自己的助手侧栏（GuaxiConvertPDFReader 那一套），所以与 DocEbookReader
+ * 一样走全局右栏：rightSiderStore 是应用级的，打开的是同一个对话。
+ */
+const sendPdfSelectionToAssistant = (text, options = {}) => {
+  const t = String(text || '').trim()
+  if (!t) return false
+  try {
+    rightSiderStore.setPanel('assistant')
+    rightSiderStore.open()
+    rightSiderStore.appendAssistantDraft(t, {
+      autoSend: options.autoSend !== false,
+      disableWebSearch: !!options.disableWebSearch,
+    })
+    return true
+  } catch (error) {
+    logger.warn('[ReaderPane] send selection to assistant failed', {
+      error: String(error?.message || error),
+    })
+    return false
+  }
+}
+
+const askPdfSelectionWithAssistant = () => {
+  const text = String(pdfSelectionText.value || '').trim()
+  if (!text) return
+  sendPdfSelectionToAssistant(text, { autoSend: true })
+  clearPdfSelection()
+}
+
+/**
+ * 「用 AI 翻译」：直接把选中的文字拼成一条翻译指令发给助手。
+ *
+ * 与划词浮条上的「翻译」（走本地/免费翻译面板）是两条路：那颗求的是快，这颗求的是质量。
+ * 目标语言跟随页面译文里选过的那种，读者不必为同一份文档设两遍。
+ */
+const openPdfAssistantTranslate = () => {
+  const text = String(pdfSelectionText.value || '').trim()
+  if (!text) return
+  const lang = pdfTranslate.toLang?.value || 'zh'
+  const label = pdfTranslate.langOptions?.find((x) => x.value === lang)?.label || lang
+  const prompt = `请将以下内容翻译成${label}，保持原意并保留术语与格式，只输出译文：\n\n${text}`
+  const ok = sendPdfSelectionToAssistant(prompt, { autoSend: true, disableWebSearch: true })
+  if (ok) clearPdfSelection()
 }
 
 /**

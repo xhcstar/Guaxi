@@ -282,6 +282,22 @@
               :style="rectStyle(rect)"
             />
 
+            <!--
+              PDF 链接热区：目录跳转与外部网址。
+
+              放在高亮层之前（z 序更低）：点在高亮上的那一层应当仍然命中高亮，
+              而链接区域通常不与高亮重叠；万一重叠，读者的意图更可能是「标记这段」。
+              透明但可点，光标由 .gpv__link 的 pointer 表达。
+            -->
+            <div
+              v-for="(lk, i) in (page.links || [])"
+              :key="`lk${i}`"
+              class="gpv__link"
+              :style="linkStyle(lk)"
+              :title="lk.uri ? lk.uri : (lk.page ? `跳到第 ${lk.page} 页` : '')"
+              @click.stop="onLinkClick(lk, page.num, $event)"
+            />
+
             <!-- 已保存的高亮批注覆盖层 -->
             <template v-for="hl in (page.highlights || [])" :key="hl.annot_id">
               <div
@@ -317,6 +333,7 @@
 <script setup>
 import { ref, reactive, computed, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
+import { openUrl } from '@tauri-apps/plugin-opener'
 import {
   AddOutline,
   ArrowRedoOutline,
@@ -1163,6 +1180,8 @@ const renderVisible = ({ bufferFactor = 1 } = {}) => {
   for (const { page } of active) {
     doc.renderPage(page, renderDpi.value)
     ensureText(page)
+    // 链接与文字层一样按页懒加载：只对可见范围的页问一次，翻走的页不再重复请求。
+    doc.loadLinks(page)
     if (props.features.annotations) doc.loadHighlights(page)
   }
 }
@@ -1356,6 +1375,43 @@ const boxStyle = (box) => {
     top: `${box.y * s}px`,
     width: `${Math.max(box.w * s, 8)}px`,
     height: `${h}px`,
+  }
+}
+
+/** 链接热区：与高亮同用「页内 pt × 缩放」的换算，保证与纸面文字对齐。 */
+const linkStyle = (lk) => {
+  const s = cssScale.value
+  return {
+    left: `${lk.x * s}px`,
+    top: `${lk.y * s}px`,
+    width: `${Math.max(lk.w * s, 4)}px`,
+    height: `${Math.max(lk.h * s, 4)}px`,
+  }
+}
+
+/**
+ * 点击 PDF 里的链接。
+ *
+ * 内部跳转直接 goToPage；外部网址交给系统浏览器 —— 不能在 webview 里直接导航，
+ * 那会把整个阅读器变成那个网页，读者除了关窗口没有退路（EPUB 阅读器同样处理）。
+ *
+ * 拖动平移模式下不触发：那时用户是在拖纸面，不该顺带点开链接。
+ */
+const onLinkClick = async (lk, pageNum, ev) => {
+  if (!lk || panEffective.value) return
+  if (lk.uri) {
+    ev?.preventDefault?.()
+    try {
+      await openUrl(lk.uri)
+    } catch (e) {
+      logger.warn('PDF外链打开失败', { uri: lk.uri, error: String(e?.message || e) })
+    }
+    return
+  }
+  if (lk.page) {
+    ev?.preventDefault?.()
+    logger.info('PDF内部链接跳转', { from: pageNum, to: lk.page })
+    goToPage(lk.page)
   }
 }
 const hlStyle = (rc, color) => {
@@ -2433,10 +2489,19 @@ onBeforeUnmount(() => {
   background-repeat: no-repeat;
   /* 滚动容器里的 scroll（而非 local）= 背景不随内容走，柔光始终自可视区顶部洒下 */
   background-attachment: scroll;
-  /* 默认就是抓手：主流阅读器里"拖空白即平移"是靠光标先告诉用户的。
-     文字段自己声明 cursor: text，所以文字上仍是文本光标，两者天然分开。 */
-  cursor: grab;
+  /* 光标按区域区分，不再全区域抓手：
+       · 纸面（.gpv__page）是「你在读的东西」—— 箭头，和浏览器看 PDF 一致；
+       · 纸外画布才是「可拖动平移」的区域 —— 抓手。
+     之前整个 body 一律 grab，打开文档第一眼就是个张开的手，而且链接、图片、
+     页码跳转这些「可点」的东西也跟着变成手型，用户分不出「能拖」和「能点」。
+     文字段自己声明 cursor: text，链接覆盖为 pointer，三者互不干扰。 */
+  cursor: default;
 }
+/* 纸外的画布：拖空白即平移，用抓手告诉用户这里可以拖。 */
+.gpv__pages { cursor: grab; }
+.gpv__page { cursor: default; }
+/* PDF 里的链接：可点击（跳到内部目标或打开外部网址）。 */
+.gpv__link { cursor: pointer; }
 /* 锁定平移 / 空格临时平移：连文字上也能拖，因此禁止选中，文字段也换手型 */
 .gpv__body--pan { user-select: none; }
 .gpv__body--pan .gpv__text-seg { user-select: none; cursor: grab; }
@@ -2577,8 +2642,27 @@ onBeforeUnmount(() => {
   border-color: rgba(255, 120, 0, 0.9);
 }
 
-/* 已保存的高亮批注覆盖层 */
-.gpv__hl-rect {
+/*
+ * 链接热区：透明、可点。
+ *
+ * 不给底色 —— PDF 自己通常已经把链接画成蓝色下划线，再叠一层就是我们替书做了设计。
+ * 只在悬停时给一圈极淡的描边，让「这里能点」在点下去之前就能看出来。
+ */
+.gpv__link {
+  position: absolute;
+  cursor: pointer;
+  border-radius: 2px;
+  background: transparent;
+}
+.gpv__link:hover {
+  background: rgba(97, 175, 239, 0.12);
+  box-shadow: 0 0 0 1px rgba(97, 175, 239, 0.35);
+}
+/* 锁定平移 / 空格临时平移时，链接跟随全局抓手：此时用户的意图是拖纸面，不是点链接。 */
+.gpv__body--pan .gpv__link,
+.gpv__body--panning .gpv__link { cursor: grab; }
+
+/* 已保存的高亮批注覆盖层 */.gpv__hl-rect {
   position: absolute;
   border-radius: 1px;
   cursor: pointer;

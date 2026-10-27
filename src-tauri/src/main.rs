@@ -574,6 +574,7 @@ async fn app_main() {
             commands::pdf_reader::pdf_page_text,
             commands::pdf_reader::pdf_page_chars,
             commands::pdf_reader::pdf_outline,
+            commands::pdf_reader::pdf_page_links,
             commands::pdf_reader::pdf_locate_point,
             commands::pdf_reader::pdf_page_render_hash,
             commands::pdf_reader::pdf_search,
