@@ -230,3 +230,87 @@ test('applyBodyTheme 对同一份 DOM 重复执行结果不变', async () => {
   assert.equal(legacyFont.style.color, '', 'font 的内联覆盖应被移除')
   assert.equal(legacyFont.getAttribute('color'), '#212121')
 })
+
+test('邮件里写死的浅色边框在暗色下被压成细线，切回亮色能还原', async () => {
+  const { applyBodyTheme, mapBorderColor, luminance, parseCssColor } = await import(
+    '../src/components/ApplicationViewComponent/apps/mail/colors.js'
+  )
+  // 浅色边框必须压到「纸面」和「浅色表面」之间：比纸面能看出线，又不会发白。
+  const paper = luminance(parseCssColor('#23262b'))
+  const mapped = mapBorderColor('#f1f1f1')
+  assert.ok(mapped, '浅色边框应当被映射')
+  const lum = luminance(parseCssColor(mapped))
+  assert.ok(lum > paper, `边框应比纸面亮一点：${mapped}`)
+  assert.ok(lum < 0.05, `边框不能亮成一块白边：${mapped}`)
+  // 深色 / 彩色边框不动。
+  assert.equal(mapBorderColor('#333333'), null)
+  assert.equal(mapBorderColor('#0071e3'), null)
+
+  // 端到端：<table style="border:1px solid #f1f1f1"> 在暗色下被改写，亮色下还原。
+  const style = { borderTopColor: 'rgb(241, 241, 241)', borderRightColor: 'rgb(241, 241, 241)',
+    borderBottomColor: 'rgb(241, 241, 241)', borderLeftColor: 'rgb(241, 241, 241)',
+    borderTopStyle: 'solid', borderRightStyle: 'solid', borderBottomStyle: 'solid',
+    borderLeftStyle: 'solid' }
+  // 真实 DOM 里 setAttribute / getAttribute 是配对的；桩也要配对，
+  // 否则「切回亮色还原」这条路径根本跑不到。
+  const attrs = new Map()
+  const el = {
+    style,
+    hasAttribute: (k) => attrs.has(k),
+    getAttribute: (k) => (attrs.has(k) ? attrs.get(k) : null),
+    setAttribute: (k, v) => attrs.set(k, String(v)),
+    removeAttribute: (k) => attrs.delete(k),
+    classList: { contains: () => false },
+    parentElement: null,
+  }
+  const body = { classList: { contains: () => true }, style: {}, parentElement: null, querySelectorAll: () => [el] }
+  const root = { querySelectorAll: () => [body] }
+  globalThis.getComputedStyle = () => ({
+    backgroundColor: 'rgba(0, 0, 0, 0)', backgroundImage: 'none', color: '',
+  })
+
+  applyBodyTheme(root, 'dark')
+  assert.ok(style.borderBottomColor.startsWith('rgb('), '边框色应被改写')
+  assert.notEqual(style.borderBottomColor, 'rgb(241, 241, 241)')
+  applyBodyTheme(root, 'light')
+  assert.equal(style.borderBottomColor, 'rgb(241, 241, 241)', '切回亮色要还原原边框')
+})
+
+test('近白灰底（#f5f5f7 / #fafafa）在暗色下透出纸面，不再叠成暗色块', async () => {
+  const { applyBodyTheme } = await import(
+    '../src/components/ApplicationViewComponent/apps/mail/colors.js'
+  )
+  // 真实邮件（工单系统 / Outlook）会给整封或每个段落套一层近白灰底。
+  // 这类底色没有设计含义；映射成「比纸面亮一档的表面」就会逐层叠成暗色块。
+  const makeEl = (bg) => {
+    const attrs = new Map()
+    const style = { backgroundColor: bg }
+    return {
+      style,
+      hasAttribute: (k) => attrs.has(k),
+      getAttribute: (k) => (attrs.has(k) ? attrs.get(k) : null),
+      setAttribute: (k, v) => attrs.set(k, String(v)),
+      removeAttribute: (k) => attrs.delete(k),
+      classList: { contains: () => false },
+      parentElement: null,
+    }
+  }
+  const nearWhite = makeEl('rgb(245, 245, 247)')
+  const nearWhite2 = makeEl('#fafafa')
+  const white = makeEl('#ffffff')
+  // 有颜色含义的浅底仍要映射成深色表面（米色 banner）。
+  const beige = makeEl('#f3efe6')
+  const all = [nearWhite, nearWhite2, white, beige]
+  const body = { classList: { contains: () => true }, style: {}, parentElement: null, querySelectorAll: () => all }
+  globalThis.getComputedStyle = (el) => ({
+    backgroundColor: el.style.backgroundColor || 'rgba(0, 0, 0, 0)',
+    backgroundImage: 'none',
+    color: '',
+  })
+
+  applyBodyTheme({ querySelectorAll: () => [body] }, 'dark')
+  assert.equal(nearWhite.style.backgroundColor, 'transparent', '#f5f5f7 应透出纸面')
+  assert.equal(nearWhite2.style.backgroundColor, 'transparent', '#fafafa 应透出纸面')
+  assert.equal(white.style.backgroundColor, 'transparent', '#ffffff 应透出纸面')
+  assert.notEqual(beige.style.backgroundColor, 'transparent', '有色浅底仍要映射成表面')
+})

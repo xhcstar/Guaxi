@@ -84,12 +84,17 @@
 
     <div v-if="searchError" class="mail-search-error">{{ searchError }}</div>
 
-    <!-- 发件箱：这里的邮件是「多次投递失败后暂存」的，列表上方给一条说明与
-         「全部重试」，用户不必逐封点开才知道该怎么办。 -->
-    <div v-if="outboxItems.length" class="mail-outbox-banner">
+    <!-- 发件箱：这里有两种「还没发出去」的邮件——定时待发与多次失败后暂存。
+         列表上方按类别各给一条说明，用户不必逐封点开才知道该怎么办。 -->
+    <div v-if="scheduledItems.length" class="mail-outbox-banner is-scheduled">
       <span>
-        有 {{ outboxItems.length }} 封邮件多次发送失败，已暂存在发件箱里。
+        有 {{ scheduledItems.length }} 封定时邮件还没发出，最近一封
+        {{ scheduledLabel }}。
       </span>
+      <button class="mail-btn" @click="$emit('manage-scheduled')">管理</button>
+    </div>
+    <div v-if="stagedItems.length" class="mail-outbox-banner">
+      <span>有 {{ stagedItems.length }} 封邮件多次发送失败，已暂存在发件箱里。</span>
       <button class="mail-btn" :disabled="retrying" @click="$emit('retry-outbox')">
         {{ retrying ? '重试中…' : '全部重试' }}
       </button>
@@ -202,6 +207,7 @@ const emit = defineEmits([
   'active-change',
   'delete',
   'retry-outbox',
+  'manage-scheduled',
 ])
 
 const props = defineProps({
@@ -228,8 +234,12 @@ const props = defineProps({
   virtual: { type: Boolean, default: true },
   /** 行高（px），虚拟滚动按它计算偏移。与 mail.css 里的 --mail-row-height 保持一致。 */
   rowHeight: { type: Number, default: 76 },
-  /** 当前文件夹是不是发件箱（列表上方显示失败说明与重试按钮）。 */
-  outboxItems: { type: Array, default: () => [] },
+  /** 发件箱里「定时待发」的邮件（还没到发送时间）。 */
+  scheduledItems: { type: Array, default: () => [] },
+  /** 发件箱里「多次失败后暂存」的邮件。 */
+  stagedItems: { type: Array, default: () => [] },
+  /** 最近一封定时邮件的可读时间。 */
+  scheduledLabel: { type: String, default: '' },
   retrying: { type: Boolean, default: false },
 })
 const visible = computed(() => props.messages || [])

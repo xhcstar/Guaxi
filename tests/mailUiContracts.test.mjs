@@ -97,3 +97,14 @@ test('存档是固定入口：缺文件夹时自动补建而不是报错', () =>
     '归档时若没有存档文件夹应自动创建',
   )
 })
+
+test('定时邮件在发件箱里可见，并能在到点前管理', () => {
+  // 以前定时邮件只活在一个悬浮小条里：进了发件箱反而是空的，用户以为邮件丢了。
+  assert.ok(listPane.includes('scheduledItems'), '发件箱应展示定时待发邮件')
+  assert.ok(listPane.includes('manage-scheduled'), '应能从发件箱打开管理面板')
+  assert.ok(mailApp.includes('folderScheduledItems'), '应计算当前发件箱的定时邮件')
+  assert.ok(
+    /folderScheduledItems[\s\S]{0,600}dueAt/.test(mailApp),
+    '定时邮件按发送时间筛选',
+  )
+})

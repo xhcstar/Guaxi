@@ -187,8 +187,33 @@ const props = defineProps({
   accounts: { type: Array, default: () => [] },
   foldersByAccount: { type: Object, default: () => ({}) },
   activeAccountId: { type: String, default: null },
+  // 收/发件人名单（黑名单 / 白名单）。以前模板里用了却没声明，
+  // 渲染时读 `item.kind` 直接抛 TypeError，整个弹层（连同上层的设置页）都白屏。
+  senderRules: { type: Array, default: () => [] },
 })
-const emit = defineEmits(['close', 'save', 'delete'])
+const emit = defineEmits([
+  'close',
+  'save',
+  'delete',
+  'save-sender-rule',
+  'delete-sender-rule',
+])
+
+/** 新增一条发件人名单的草稿。提交后清空，方便连着录入几条。 */
+const senderDraft = reactive({ kind: 'block', pattern: '' })
+
+function addSenderRule() {
+  const pattern = senderDraft.pattern.trim()
+  if (!pattern) return
+  emit('save-sender-rule', {
+    id: '',
+    kind: senderDraft.kind,
+    pattern,
+    note: '',
+    createdAt: 0,
+  })
+  senderDraft.pattern = ''
+}
 
 const editing = ref(false)
 const draftIndex = ref(-1)

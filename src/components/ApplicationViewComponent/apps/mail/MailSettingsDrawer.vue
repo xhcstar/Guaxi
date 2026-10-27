@@ -421,12 +421,14 @@
 
         <div class="mail-section-divider"></div>
         <div class="mail-flabel" style="margin-bottom: 6px">存储位置</div>
-        <p class="mail-hint" style="margin: 0 0 8px">
+        <!-- 用 div 而不是 p：p 里嵌 <template v-if> 会让 Vue 的 HTML 解析器报
+             「Attribute name cannot contain U+0022」并让整个组件编译失败。 -->
+        <div class="mail-hint" style="margin: 0 0 8px">
           当前目录：<code>{{ storage.activeDir || '（读取中）' }}</code>
           <template v-if="storage.dbBytes">
             · 数据库 {{ (storage.dbBytes / 1024 / 1024).toFixed(1) }} MB
           </template>
-        </p>
+        </div>
         <div class="mail-field-row">
           <div class="mail-field">
             <label class="mail-flabel">目标目录</label>

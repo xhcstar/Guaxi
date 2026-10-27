@@ -309,19 +309,24 @@ function backdropLuminance(el, paperLum) {
 }
 
 /**
- * 近乎无彩色的近白色。
+ * 近乎无彩色的浅色底。
  *
- * 邮箱客户端（Outlook / Seznam）常给**每个段落**套一层 `background-color:#fff`。
- * 这类底色没有设计含义，暗色下如果映射成「比纸面亮一档的表面」，就会变成一条条
- * 分层色块——正是用户说的「没必要包裹多层区域」。所以这类白底在暗色下直接透明，
- * 让正文回到同一张纸面；真正有颜色的浅底（米色 banner、浅蓝卡片）仍按色相映射。
+ * 邮箱客户端（Outlook / 工单系统）常给**每个段落**套一层 `background-color:#fff`，
+ * 也会给整封邮件套一层 `#fafafa` / `#f5f5f7`。这类底色没有设计含义，
+ * 暗色下如果映射成「比纸面亮一档的表面」，逐层叠加就成了一条条分层色块——
+ * 正是用户看到的「突兀的暗色块」。所以它们直接透出纸面；
+ * 真正有颜色的浅底（米色 banner、浅蓝卡片）仍按色相映射。
+ *
+ * 阈值取 0.62（与底面判定的「浅底」起点一致）而不是 0.95：`#f5f5f7` 这类近白灰
+ * 在真实邮件里最常见，只认纯白会让它们漏成色块。
  */
 function isNeutralNearWhite(value) {
   const color = typeof value === 'string' ? parseCssColor(value) : value
   if (!color || color.a < 0.12) return false
-  const max = Math.max(color.r, color.g, color.b)
-  const min = Math.min(color.r, color.g, color.b)
-  return luminance(color) > 0.9 && (max - min) / 255 <= 0.04
+  if (luminance(color) <= 0.62) return false
+  // 用 HSL 饱和度而不是 (max-min)/255：#f5f5f7 这种「带一点冷暖的灰」饱和度只有
+  // 0.05 上下，而米色 banner（#f3efe6）在 0.3 左右——按通道差算会把它误判成中性色。
+  return rgbToHsl(color).s <= 0.12
 }
 
 /** 整条渐变是否都是这类近白色。 */
@@ -331,6 +336,40 @@ function isNeutralNearWhiteGradient(value) {
     .filter(Boolean)
     .filter((color) => color.a >= 0.12)
   return colors.length > 0 && colors.every((color) => isNeutralNearWhite(color))
+}
+
+/**
+ * 边框色映射（暗色模式）。
+ *
+ * 邮件里写死的 `border: 1px solid #f1f1f1` 在浅色纸面上是几乎看不见的细分隔线，
+ * 到了深色纸面上却成了一圈刺眼的亮边（用户看到的「莫名其妙的亮色边框」）。
+ * 规则与底色相反：**浅色边框在深色纸面上要压暗**，深色边框要提亮，
+ * 彩色边框保留色相、把明度调到与纸面成比例的位置。
+ */
+export function mapBorderColor(value, mode = 'dark') {
+  if (mode !== 'dark') return null
+  const color = parseCssColor(value)
+  if (!color) return null
+  if (color.a < 0.06) return null
+  const lum = luminance(color)
+  const { h, s } = rgbToHsl(color)
+
+  // 已经很暗的边框：在深色纸面上本来就看不见，抬到纸面上方一点点。
+  if (lum < 0.02) {
+    return formatColor(hslToRgb(h, Math.min(s, 0.3), 0.26), color.a)
+  }
+  // 浅色边框（#fff / #f1f1f1 / #eee 这类）：压成纸面上方一档的细线。
+  // 越接近纯白的边框，在原设计里越「隐形」，这里也压得越接近纸面。
+  if (lum > 0.3) {
+    // 目标亮度落在「纸面(0.019)」与「浅色表面(0.030)」之间：比纸面能看出线，
+    // 又不会像原来的 #f1f1f1 那样在深底上发白。越接近纯白，越贴近纸面。
+    const closeness = Math.min(1, (lum - 0.3) / 0.7)
+    // 表面在 0.030 左右；边框取 0.024 上下——能看见线，又不会被读成一块亮边。
+    const level = 0.155 + closeness * 0.012
+    return formatColor(hslToRgb(h, Math.min(s, 0.3), level), Math.max(color.a, 0.5))
+  }
+  // 中间调边框保持不动。
+  return null
 }
 
 /** 元素自己声明的颜色：内联 style 优先，其次 `font color` / `bgcolor` 这类表现属性。 */
@@ -343,8 +382,19 @@ function declared(el) {
     backgroundImage: style.backgroundImage || '',
     bgcolorAttr: el.getAttribute?.('bgcolor') || '',
     colorAttr: el.getAttribute?.('color') || '',
+    // 四条边分别取：邮件常用 `border: 1px solid #eee` 的简写，也常只写某一边。
+    borders: [style.borderTopColor, style.borderRightColor, style.borderBottomColor, style.borderLeftColor],
+    borderStyle: [style.borderTopStyle, style.borderRightStyle, style.borderBottomStyle, style.borderLeftStyle],
   }
 }
+
+/** 边框简写属性 → 对应的单边颜色属性名（用于把映射结果写回去）。 */
+const BORDER_SIDES = [
+  ['borderTopColor', 'borderTopStyle'],
+  ['borderRightColor', 'borderRightStyle'],
+  ['borderBottomColor', 'borderBottomStyle'],
+  ['borderLeftColor', 'borderLeftStyle'],
+]
 
 // 原值记录：同一个 DOM 会被反复映射（换信、切换主题、显示图片都会重跑），
 // 直接把映射结果再映射一次会一路变暗。把邮件里的原值记在 data-* 上，
@@ -355,6 +405,7 @@ const ORIG = {
   fg: 'data-guaxi-orig-fg',
   fgAttr: 'data-guaxi-orig-fg-attr',
   image: 'data-guaxi-orig-image',
+  border: 'data-guaxi-orig-border',
 }
 
 /**
@@ -367,6 +418,21 @@ function restore(el, key, apply, remove) {
   el.removeAttribute(key)
   if (original) apply(original)
   else remove()
+}
+
+/** camelCase → CSS 属性名（`borderTopColor` → `border-top-color`）。 */
+function kebab(name) {
+  return name.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)
+}
+
+/** 把四条边的原值序列化成一个属性（`top|right|bottom|left`，空串表示原来没有）。 */
+function serializeBorders(values) {
+  return values.join('|')
+}
+
+function parseBorders(text, count) {
+  const parts = String(text || '').split('|')
+  return Array.from({ length: count }, (_, i) => parts[i] || '')
 }
 
 /**
@@ -419,7 +485,40 @@ export function applyBodyTheme(root, mode = 'dark') {
       () => el.removeAttribute('color'),
     )
   }
+  // 边框的还原必须放在 `if (!dark) return` 之前：切回亮色时也要把文档里写死的
+  // 原边框放回去，否则深色的映射结果会一直留在 DOM 上。
+  for (const el of targets) {
+    if (!el.style || !el.hasAttribute) continue
+    const saved = el.getAttribute(ORIG.border)
+    if (saved === null || saved === undefined) continue
+    el.removeAttribute(ORIG.border)
+    const originals = parseBorders(saved, BORDER_SIDES.length)
+    originals.forEach((value, index) => {
+      const [colorProp] = BORDER_SIDES[index]
+      if (value) el.style[colorProp] = value
+      else el.style.removeProperty(kebab(colorProp))
+    })
+  }
   if (!dark) return
+
+  for (const el of targets) {
+    if (!el.style || !el.hasAttribute) continue
+    const own = declared(el)
+    const originals = own.borders.map((value) => value || '')
+    if (!originals.some(Boolean)) continue
+    const next = originals.map((value, index) => {
+      if (!value) return ''
+      // 只有真的画了线（style 不是 none）才值得改颜色。
+      const styleValue = own.borderStyle[index]
+      if (styleValue === 'none' || styleValue === 'hidden') return ''
+      return mapBorderColor(value, mode) || ''
+    })
+    if (!next.some(Boolean)) continue
+    el.setAttribute(ORIG.border, serializeBorders(originals))
+    next.forEach((value, index) => {
+      if (value) el.style[BORDER_SIDES[index][0]] = value
+    })
+  }
 
   for (const el of targets) {
     if (!el.style || !el.hasAttribute) continue
@@ -427,8 +526,12 @@ export function applyBodyTheme(root, mode = 'dark') {
     const own = declared(el)
     const bgOriginal = el.getAttribute(ORIG.bgAttr) || own.bgcolorAttr
     const bgSource = bgOriginal || own.background
-    // 纯白段落底不保留「表面」这一层：直接透明，避免正文变成条带状的分层色块。
-    const nextBg = isNeutralNearWhite(bgSource) ? 'transparent' : mapBackgroundColor(bgSource, mode)
+    // 纯白 / 近白的底色没有设计含义（Outlook、工单系统常给每个段落套一层），
+    // 暗色下不要铺成「比纸面亮一档的表面」——一层层叠起来就是用户看到的突兀色块。
+    // 这类背景直接透出纸面，只在整封邮件**只有**这种底色时才保留一点点表面感。
+    const nextBg = isNeutralNearWhite(bgSource)
+      ? 'transparent'
+      : mapBackgroundColor(bgSource, mode)
     if (nextBg) {
       if (!bgOriginal && own.background) {
         el.setAttribute(ORIG.bg, own.background)

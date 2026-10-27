@@ -29,7 +29,15 @@
 
         <!-- 发送类操作放顶部右侧：工具栏要留给格式按钮，否则两行都挤在一起。 -->
         <div class="mail-compose-actions">
-          <button class="mail-btn" :disabled="sending" @click="$emit('save-draft')">保存草稿</button>
+          <button
+            class="mail-btn"
+            :disabled="sending"
+            title="保存到草稿箱"
+            @click="$emit('save-draft')"
+          >
+            <MailIcon name="note" :size="14" />
+            保存草稿
+          </button>
           <button
             class="mail-btn"
             :class="{ 'is-on': scheduleOpen }"
@@ -37,6 +45,7 @@
             title="选择一个将来的时间发送"
             @click="toggleSchedule"
           >
+            <MailIcon name="clock" :size="14" />
             定时发送
           </button>
           <button
@@ -150,18 +159,30 @@
         <template v-if="!sourceMode">
           <select
             class="mail-select mail-fmt-select mail-fmt-font"
-            title="字体"
+            :class="{ 'is-native': nativeFontsUnavailable }"
+            title="字体（含本机已安装的全部字体）"
+            aria-label="字体"
+            :style="{ fontFamily: currentFontFamily || 'inherit' }"
             @mousedown="rememberSelection"
             @change="onFontFamily($event)"
           >
             <option value="">字体</option>
-            <option v-for="font in FONT_FAMILIES" :key="font.value" :value="font.value">
-              {{ font.label }}
-            </option>
+            <optgroup label="常用">
+              <option v-for="font in FONT_FAMILIES" :key="font.value" :value="font.value">
+                {{ font.label }}
+              </option>
+            </optgroup>
+            <optgroup v-if="systemFonts.length" label="本机字体">
+              <option v-for="name in systemFonts" :key="name" :value="quoteFamily(name)">
+                {{ name }}
+              </option>
+            </optgroup>
           </select>
           <select
             class="mail-select mail-fmt-select"
             title="字号"
+            aria-label="字号"
+            :style="{ fontFamily: currentFontFamily || 'inherit' }"
             @mousedown="rememberSelection"
             @change="onFontSize($event)"
           >
@@ -231,9 +252,10 @@
             class="mail-fmt-btn"
             :class="{ 'is-on': formatState.align === align.key }"
             :title="align.title"
+            :aria-label="align.title"
             @mousedown.prevent="format(align.command)"
           >
-            {{ align.label }}
+            <MailIcon :name="align.icon" :size="15" />
           </button>
 
           <span class="mail-fmt-sep"></span>
@@ -241,47 +263,94 @@
             class="mail-fmt-btn"
             :class="{ 'is-on': formatState.unordered }"
             title="无序列表"
+            aria-label="无序列表"
             @mousedown.prevent="format('insertUnorderedList')"
           >
-            •≡
+            <MailIcon name="listBullet" :size="15" />
           </button>
           <button
             class="mail-fmt-btn"
             :class="{ 'is-on': formatState.ordered }"
             title="有序列表"
+            aria-label="有序列表"
             @mousedown.prevent="format('insertOrderedList')"
           >
-            1≡
+            <MailIcon name="listOrdered" :size="15" />
           </button>
-          <button class="mail-fmt-btn" title="减少缩进" @mousedown.prevent="format('outdent')">
-            ⇤
+          <button
+            class="mail-fmt-btn"
+            title="减少缩进"
+            aria-label="减少缩进"
+            @mousedown.prevent="format('outdent')"
+          >
+            <MailIcon name="indentDecrease" :size="15" />
           </button>
-          <button class="mail-fmt-btn" title="增加缩进" @mousedown.prevent="format('indent')">
-            ⇥
+          <button
+            class="mail-fmt-btn"
+            title="增加缩进"
+            aria-label="增加缩进"
+            @mousedown.prevent="format('indent')"
+          >
+            <MailIcon name="indentIncrease" :size="15" />
           </button>
           <button
             class="mail-fmt-btn"
             :class="{ 'is-on': formatState.quote }"
             title="引用"
+            aria-label="引用"
             @mousedown.prevent="format('formatBlock', 'blockquote')"
           >
-            ❝
+            <MailIcon name="quote" :size="15" />
           </button>
-          <button class="mail-fmt-btn" title="分隔线" @mousedown.prevent="format('insertHorizontalRule')">
-            —
+          <button
+            class="mail-fmt-btn"
+            title="分隔线"
+            aria-label="分隔线"
+            @mousedown.prevent="format('insertHorizontalRule')"
+          >
+            <MailIcon name="divider" :size="15" />
           </button>
 
           <span class="mail-fmt-sep"></span>
-          <button class="mail-fmt-btn" title="插入链接" @mousedown.prevent="insertLink">↗</button>
-          <button class="mail-fmt-btn" title="插入代码块" @mousedown.prevent="insertCode">{ }</button>
-          <button class="mail-fmt-btn" title="清除格式" @mousedown.prevent="format('removeFormat')">
-            ⌫
+          <button
+            class="mail-fmt-btn"
+            title="插入链接"
+            aria-label="插入链接"
+            @mousedown.prevent="insertLink"
+          >
+            <MailIcon name="link" :size="15" />
           </button>
-          <button class="mail-fmt-btn" title="撤销 (Ctrl+Z)" @mousedown.prevent="format('undo')">
-            ↶
+          <button
+            class="mail-fmt-btn"
+            title="插入代码块"
+            aria-label="插入代码块"
+            @mousedown.prevent="insertCode"
+          >
+            <MailIcon name="code" :size="15" />
           </button>
-          <button class="mail-fmt-btn" title="重做 (Ctrl+Y)" @mousedown.prevent="format('redo')">
-            ↷
+          <button
+            class="mail-fmt-btn"
+            title="清除格式"
+            aria-label="清除格式"
+            @mousedown.prevent="format('removeFormat')"
+          >
+            <MailIcon name="clearFormat" :size="15" />
+          </button>
+          <button
+            class="mail-fmt-btn"
+            title="撤销 (Ctrl+Z)"
+            aria-label="撤销"
+            @mousedown.prevent="format('undo')"
+          >
+            <MailIcon name="undo" :size="15" />
+          </button>
+          <button
+            class="mail-fmt-btn"
+            title="重做 (Ctrl+Y)"
+            aria-label="重做"
+            @mousedown.prevent="format('redo')"
+          >
+            <MailIcon name="redo" :size="15" />
           </button>
           <span class="mail-fmt-sep"></span>
         </template>
@@ -290,16 +359,34 @@
           class="mail-fmt-btn"
           :class="{ 'is-on': sourceMode }"
           title="切换 HTML 源码"
+          aria-label="切换 HTML 源码"
           @click="toggleSource"
         >
-          源码
+          <MailIcon name="codeFile" :size="15" />
         </button>
-        <button class="mail-fmt-btn" title="添加附件" @click="pickAttachments">📎 附件</button>
-        <button class="mail-fmt-btn" title="从笔记库选择文件作为附件" @click="pickFromNotes">
-          📚 笔记
+        <button
+          class="mail-fmt-btn"
+          title="添加附件"
+          aria-label="添加附件"
+          @click="pickAttachments"
+        >
+          <MailIcon name="paperclip" :size="15" />
         </button>
-        <button class="mail-fmt-btn" title="把图片插进正文（内联显示，不当作附件）" @click="pickInlineImages">
-          🖼 内联图
+        <button
+          class="mail-fmt-btn"
+          title="从笔记库选择文件作为附件"
+          aria-label="从笔记库选择文件作为附件"
+          @click="pickFromNotes"
+        >
+          <MailIcon name="book" :size="15" />
+        </button>
+        <button
+          class="mail-fmt-btn"
+          title="把图片插进正文（内联显示，不当作附件）"
+          aria-label="插入内联图片"
+          @click="pickInlineImages"
+        >
+          <MailIcon name="image" :size="15" />
         </button>
 
         <select
@@ -432,6 +519,7 @@ import { convertFileSrc, invoke } from '@tauri-apps/api/core'
 import { useContactsStore, expandGroupMembers, groupRecipientToken, parseGroupToken } from '../../../../stores/contactsStore'
 import AddressInput from './AddressInput.vue'
 import AddressPicker from './AddressPicker.vue'
+import MailIcon from './MailIcon.vue'
 import { createLogger } from '../../../../utils/logger'
 
 const logger = createLogger('MailComposer')
@@ -489,11 +577,54 @@ const FONT_FAMILIES = [
   { label: '等宽', value: "Consolas, 'Courier New', monospace" },
 ]
 const FONT_SIZES = [12, 13, 14, 15, 16, 18, 20, 24, 28, 32]
+
+/**
+ * 本机已安装的字体家族。
+ *
+ * WebView 里没有系统字体枚举 API（`queryLocalFonts` 在 WebView2 里拿不到权限），
+ * 所以走后端 `list_system_fonts`（fontdb 读系统字体库，设置页的阅读字体也用它）。
+ * 字体名可能带空格或中文，写进 `execCommand('fontName')` 与内联样式时都要加引号。
+ */
+const systemFonts = ref([])
+/** 一次运行内字体列表不会变，失败也不重试（避免每次打开写信窗口都扫一遍字体库）。 */
+let systemFontsLoaded = false
+
+const nativeFontsUnavailable = computed(() => systemFontsLoaded && systemFonts.value.length === 0)
+
+/** CSS 里 `Microsoft YaHei` 这类带空格的名字必须加引号，否则被当成多个候选。 */
+function quoteFamily(name) {
+  const clean = String(name || '').trim()
+  if (!clean) return ''
+  if (/^['"]/.test(clean)) return clean
+  return /[\s,]/.test(clean) || /[^\x00-\x7F]/.test(clean) ? `'${clean.replace(/'/g, "\\'")}'` : clean
+}
+
+/** 光标所在位置实际用的字体（工具栏下拉回显）。 */
+const currentFontFamily = computed(() => {
+  const family = formatState.fontFamily
+  if (!family) return ''
+  return family.split(',')[0].trim().replace(/^["']|["']$/g, '')
+})
+
+async function loadSystemFonts() {
+  if (systemFontsLoaded) return
+  systemFontsLoaded = true
+  try {
+    const families = await invoke('list_system_fonts')
+    // 后端按「等宽优先」排过序；写信场景更常用正文字体，这里按名字重排一次。
+    systemFonts.value = (families || [])
+      .map((item) => item.name)
+      .filter(Boolean)
+      .sort((a, b) => a.localeCompare(b, 'zh-CN'))
+  } catch {
+    systemFonts.value = []
+  }
+}
 const ALIGNMENTS = [
-  { command: 'justifyLeft', key: 'left', label: '左', title: '左对齐' },
-  { command: 'justifyCenter', key: 'center', label: '中', title: '居中' },
-  { command: 'justifyRight', key: 'right', label: '右', title: '右对齐' },
-  { command: 'justifyFull', key: 'full', label: '两端', title: '两端对齐' },
+  { command: 'justifyLeft', key: 'left', icon: 'alignLeft', title: '左对齐' },
+  { command: 'justifyCenter', key: 'center', icon: 'alignCenter', title: '居中' },
+  { command: 'justifyRight', key: 'right', icon: 'alignRight', title: '右对齐' },
+  { command: 'justifyFull', key: 'full', icon: 'alignJustify', title: '两端对齐' },
 ]
 const formatState = reactive({
   bold: false,
@@ -504,6 +635,7 @@ const formatState = reactive({
   ordered: false,
   quote: false,
   align: '',
+  fontFamily: '',
 })
 const lastTextColor = ref('#1a5fd0')
 const lastHiliteColor = ref('#fff3a3')
@@ -556,6 +688,16 @@ function refreshFormatState() {
     formatState.quote = String(document.queryCommandValue('formatBlock') || '')
       .toLowerCase()
       .includes('blockquote')
+    // 字体下拉要回显「选区现在用的字体」：execCommand 查不到时退回计算样式。
+    const queried = String(document.queryCommandValue('fontName') || '').trim()
+    if (queried) {
+      formatState.fontFamily = queried
+    } else {
+      const anchor = selection.anchorNode?.nodeType === 1
+        ? selection.anchorNode
+        : selection.anchorNode?.parentElement
+      formatState.fontFamily = anchor ? getComputedStyle(anchor).fontFamily || '' : ''
+    }
   } catch {
     /* WebView 对部分命令的查询会抛错：保持上一次状态即可 */
   }
@@ -579,6 +721,8 @@ onMounted(async () => {
   // 通讯组只在地址栏放芯片，成员人数与发送确认要读 contacts.groups；
   // 这里顺手初始化一次，没打开过通讯录页时也能算出真实人数。
   contacts.init().catch(() => {})
+  // 字体列表是「打开写信窗口才需要」的重操作（要扫系统字体库），发出去不等待。
+  loadSystemFonts()
   document.addEventListener('selectionchange', refreshFormatState)
   if (!editorRef.value) return
   // 直接把已有 HTML 灌进 contenteditable：用 innerHTML 而不是 v-html，
@@ -725,8 +869,9 @@ function format(command, value = null) {
 
 function onFontFamily(event) {
   const family = event.target.value
-  event.target.value = ''
+  // 不清空下拉：字体是「当前状态」而不是一次性动作，清空后用户看不到自己选了什么。
   if (family) format('fontName', family)
+  formatState.fontFamily = family
 }
 
 function onFontSize(event) {

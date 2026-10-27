@@ -617,6 +617,26 @@
   padding: 0 4px;
 }
 
+/* 下拉展开后的列表由系统绘制（不是 DOM），但 WebView2 / Chromium 会读 `color-scheme`
+   与 option 的背景 / 前景色。只写 background: transparent 时深色主题下会弹出一块白底，
+   与周围完全脱节——所以这里把 option 也按主题着色，显式声明 color-scheme。 */
+.mail-root select.mail-select,
+.mail-root select.mail-input {
+  color-scheme: light dark;
+}
+.mail-select option,
+.mail-select optgroup,
+.mail-input option,
+.mail-input optgroup {
+  background-color: var(--mail-panel);
+  color: var(--mail-text);
+}
+.mail-select optgroup,
+.mail-input optgroup {
+  color: var(--mail-text-muted);
+  font-weight: 600;
+}
+
 .mail-list-scroll {
   flex: 1 1 auto;
   min-height: 0;
@@ -1905,6 +1925,13 @@
   color: var(--mail-accent);
 }
 
+/* 工具栏图标：统一居中，不撑高按钮。 */
+.mail-fmt-btn .mail-icon,
+.mail-btn .mail-icon {
+  display: block;
+  flex: 0 0 auto;
+}
+
 /* 工具栏里的字体 / 字号下拉：保持和其他图标按钮同高，不把工具栏撑成两行高。 */
 .mail-compose-toolbar .mail-fmt-select {
   height: 26px;
@@ -2565,6 +2592,11 @@
   display: flex;
   gap: 6px;
   margin-top: 9px;
+}
+
+/* 定时待发的那条：与失败提示区分开，用中性色而不是警告色。 */
+.mail-outbox-banner.is-scheduled {
+  background: color-mix(in srgb, var(--mail-accent) 10%, transparent);
 }
 
 /* ---------- 发件箱提示条 ---------- *

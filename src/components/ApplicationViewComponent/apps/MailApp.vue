@@ -124,9 +124,12 @@
           :row-height="rowHeightPx"
           :has-more="store.hasMore"
           :loading-more="store.loadingMore"
-          :outbox-items="stageOutboxItems"
+          :scheduled-items="folderScheduledItems"
+          :staged-items="stageOutboxItems"
+          :scheduled-label="folderScheduledItems.length ? scheduleLabel(folderScheduledItems[0]) : ''"
           :retrying="retryingOutbox"
           @retry-outbox="onRetryOutbox"
+          @manage-scheduled="scheduledOpen = true"
           @update:search-query="onSearchInput"
           @update:search-field="(v) => (store.searchField = v)"
           @search="store.runSearch"
@@ -761,11 +764,28 @@ async function onDeleteFolder(folder) {
 
 // ---------------- 发件箱 ----------------
 
-/** 当前列表就是发件箱时，把失败待发的邮件摆到列表上方。 */
+/** 当前列表就是发件箱时，把「多次失败后暂存」的邮件摆到列表上方。 */
 const stageOutboxItems = computed(() => {
   const folder = store.currentFolder
   if (!folder || folder.role !== 'outbox') return []
   return store.outbox.filter((item) => item.staged)
+})
+
+/**
+ * 发件箱里「定时待发」的邮件：还没到发送时间的那些。
+ *
+ * 定时邮件以前只活在一个悬浮小条里，进了发件箱反而是空的——用户会以为邮件丢了。
+ * 现在它们按时间顺序出现在发件箱列表上方，到点自动发出后消失。
+ */
+const folderScheduledItems = computed(() => {
+  const folder = store.currentFolder
+  if (!folder || folder.role !== 'outbox') return []
+  const now = Date.now() / 1000
+  return store.outbox
+    .filter((item) => !item.staged && Number(item.dueAt) > 0)
+    .filter((item) => Number(item.dueAt) > now)
+    .slice()
+    .sort((a, b) => Number(a.dueAt) - Number(b.dueAt))
 })
 const retryingOutbox = ref(false)
 
