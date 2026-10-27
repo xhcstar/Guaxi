@@ -8,6 +8,15 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use tracing::{error, info, warn};
 use urlencoding::{decode, encode};
+
+/// 预览页 vendor 资源的内容指纹（由 build.rs 计算并注入）。
+///
+/// 资源随二进制打包、运行期不会变，因此可以永久缓存；URL 上的指纹保证升级后
+/// 浏览器拿到的是新文件，而不是一年前缓存下来的旧 mermaid / ECharts。
+const PREVIEW_ASSET_VERSION: &str = env!("GUAXI_PREVIEW_ASSET_VERSION");
+
+/// 静态 vendor 资源的缓存策略。只用于内容指纹已经进 URL 的端点。
+const ASSET_CACHE_CONTROL: &str = "public, max-age=31536000, immutable";
 fn escape_html(input: &str) -> String {
     input
         .replace('&', "&amp;")
@@ -1165,7 +1174,7 @@ async fn browser_preview(query: web::Query<PathQuery>) -> HttpResponse {
               }}
             }}
           </style>
-          <link rel="stylesheet" href="/browser/assets/highlightjs/styles/atom-one-light.css" />
+          <link rel="stylesheet" href="/browser/assets/highlightjs/styles/atom-one-light.css?v={assetVersion}" />
           <script>
             window.MathJax = {{
               tex: {{
@@ -1179,16 +1188,10 @@ async fn browser_preview(query: web::Query<PathQuery>) -> HttpResponse {
               }}
             }};
           </script>
-          <script src="/browser/assets/markdown-it/markdown-it.min.js"></script>
-          <script src="/browser/assets/mermaid/mermaid.min.js"></script>
-          <script id="MathJax-script" src="/browser/assets/mathjax/tex-svg.js"></script>
-          <script src="/browser/assets/highlightjs/highlight.min.js"></script>
-          <script src="/browser/assets/echarts/echarts.min.js"></script>
-          <script src="/browser/assets/echarts/echarts-liquidfill.min.js"></script>
-          <script src="/browser/assets/echarts/echarts-wordcloud.min.js"></script>
-          <script src="/browser/assets/chart-preview/guaxi-chart-preview.js"></script>
+          <script src="/browser/assets/markdown-it/markdown-it.min.js?v={assetVersion}"></script>
+          <script src="/browser/assets/highlightjs/highlight.min.js?v={assetVersion}"></script>
           <script>window.process={{env:{{NODE_ENV:'production'}},platform:'browser',versions:{{}}}};window.global=window;</script>
-          <script src="/browser/assets/excalidraw/excalidraw-export.js"></script>
+          <!-- mermaid / MathJax / ECharts / Excalidraw（合计约 14MB）按文档内容按需注入，见 ensurePreviewAssets。 -->
           </head>
         <body>
           <div class="topbar">
@@ -1206,6 +1209,71 @@ async fn browser_preview(query: web::Query<PathQuery>) -> HttpResponse {
             // 原始绝对路径：使用时统一 encodeURIComponent 一次，避免二次编码。
             const notePath = {notePathJson};
             const baseDir = {baseDirJson};
+
+            // ── 重型渲染资源按需加载 ─────────────────────────────────────────────
+            //
+            // 以前这些依赖全写在 <head> 里同步加载：一篇纯文字的笔记也要下载并执行
+            // 约 14MB（mermaid 2.7MB、MathJax 2.1MB、ECharts 1.1MB、Excalidraw 7.8MB）。
+            // 现在正文渲染完先看实际用到了什么，再按需注入对应脚本。
+            const ASSET_VERSION = {assetVersionJson};
+            const loadedAssets = new Map();
+
+            function assetUrl(path) {{
+              return path + (path.indexOf('?') >= 0 ? '&' : '?') + 'v=' + ASSET_VERSION;
+            }}
+
+            function loadAsset(path) {{
+              const url = assetUrl(path);
+              if (!loadedAssets.has(url)) {{
+                const task = new Promise((resolve, reject) => {{
+                  const script = document.createElement('script');
+                  script.src = url;
+                  script.onload = () => resolve();
+                  script.onerror = () => reject(new Error('资源加载失败：' + url));
+                  document.head.appendChild(script);
+                }});
+                // 失败的任务不留在缓存里，下一轮自动刷新还能重试。
+                task.catch(() => loadedAssets.delete(url));
+                loadedAssets.set(url, task);
+              }}
+              return loadedAssets.get(url);
+            }}
+
+            // 按「这次实际渲染出了什么」判断要加载哪些资源：
+            // 图表 / 白板直接看围栏收集结果，mermaid 看渲染后的代码块，
+            // 比扫原文更准（列表、引用里的围栏也算数）。
+            function detectPreviewAssets(root, chartDrafts, excalidrawDrafts, source) {{
+              const text = String(source || '');
+              return {{
+                chart: chartDrafts.length > 0,
+                excalidraw: excalidrawDrafts.length > 0,
+                mermaid: !!root.querySelector('pre code.language-mermaid, pre code.mermaid'),
+                math: /\$\$[\s\S]+?\$\$/.test(text)
+                  || /\\\(|\\\[/.test(text)
+                  || /(^|[^\\$])\$[^$\n]+?\$/.test(text),
+              }};
+            }}
+
+            async function ensurePreviewAssets(need) {{
+              if (need.chart) {{
+                // liquidfill / wordcloud 是 ECharts 的副作用扩展，加载时必须已经存在 window.echarts。
+                await loadAsset('/browser/assets/echarts/echarts.min.js');
+                await Promise.all([
+                  loadAsset('/browser/assets/echarts/echarts-liquidfill.min.js'),
+                  loadAsset('/browser/assets/echarts/echarts-wordcloud.min.js'),
+                  loadAsset('/browser/assets/chart-preview/guaxi-chart-preview.js'),
+                ]);
+              }}
+              const rest = [];
+              if (need.excalidraw) {{
+                // 白板场景的读取也走 loadChartData，它依赖共享图表模块（仅 32KB）。
+                rest.push(loadAsset('/browser/assets/chart-preview/guaxi-chart-preview.js'));
+                rest.push(loadAsset('/browser/assets/excalidraw/excalidraw-export.js'));
+              }}
+              if (need.mermaid) rest.push(loadAsset('/browser/assets/mermaid/mermaid.min.js'));
+              if (need.math) rest.push(loadAsset('/browser/assets/mathjax/tex-svg.js'));
+              await Promise.all(rest);
+            }}
 
             function escapeHtml(s) {{
               return String(s)
@@ -1280,21 +1348,25 @@ async fn browser_preview(query: web::Query<PathQuery>) -> HttpResponse {
             }}
 
             /**
-             * 等图表完成第一笔绘制。
+             * 等词云的异步布局落笔。
              *
-             * 词云（echarts-wordcloud）的布局在离屏 canvas 上异步进行，`setOption` 返回时
+             * 词云（echarts-wordcloud）在离屏 canvas 上逐轮摆放文字，`setOption` 返回时
              * 画面还是空的；此时若被截图或打印，结果就是一张空图。
-             * 非扩展类型同步绘制，第一次探测就会命中，不产生可感知的等待。
+             *
+             * 其余图表由 ECharts 同步绘制，无需等待。早先这里按 SVG 子元素数量判断
+             * 「画完了」，但 zrender 的 SVG 输出固定是「背景 rect + <g id="main">」
+             * （只有渐变/裁剪才多一个 <defs>），阈值永远不会满足，
+             * 于是非词云图表每张都空等满 3 秒超时。
              */
             async function waitForChartPaint(chart, option, timeoutMs = 3000) {{
               const series = Array.isArray(option && option.series) ? option.series : [];
               const isWordCloud = series.some((s) => /^wordcloud$/i.test(String((s && s.type) || '')));
+              if (!isWordCloud) return true;
               const deadline = Date.now() + timeoutMs;
               const painted = () => {{
                 try {{
                   chart.getZr().refreshImmediately();
                   const svg = chart.getDom() && chart.getDom().querySelector('svg');
-                  if (!isWordCloud) return !!svg && svg.childElementCount > 2;
                   return !!svg && !!svg.querySelector('text');
                 }} catch (_) {{
                   return true;
@@ -1348,6 +1420,23 @@ async fn browser_preview(query: web::Query<PathQuery>) -> HttpResponse {
               }}
             }}
 
+            // 图表实例统一登记：重渲染前逐个 dispose，resize 只挂一个全局监听。
+            // 之前每张图各自 addEventListener('resize')，自动刷新一次就多一批监听，
+            // 旧实例也从不销毁，预览页开久了会越来越卡。
+            const previewCharts = [];
+
+            function disposePreviewCharts() {{
+              while (previewCharts.length) {{
+                try {{ previewCharts.pop().dispose(); }} catch (_) {{}}
+              }}
+            }}
+
+            window.addEventListener('resize', () => {{
+              previewCharts.forEach((chart) => {{
+                try {{ chart.resize(); }} catch (_) {{}}
+              }});
+            }}, {{ passive: true }});
+
             async function renderChartDrafts(root, drafts, baseDirHint) {{
               if (!drafts || !drafts.length) return;
               if (!window.echarts) {{
@@ -1368,13 +1457,10 @@ async fn browser_preview(query: web::Query<PathQuery>) -> HttpResponse {
                   if (built.expectsData && !built.records.length) throw new Error('数据为空');
                   el.style.height = '360px';
                   const chart = window.echarts.init(el, guaxiPreviewChartTheme(), {{ renderer: 'svg' }});
+                  previewCharts.push(chart);
                   chart.setOption(built.option, true);
-                  // 词云布局是异步的（离屏 canvas 逐轮摆放文字），这里等它真正出字，
-                  // 否则静态页截图/打印时会得到一张空图。其余类型同步绘制，循环立刻结束。
+                  // 只有词云是异步布局，其余类型这里立刻返回，不再白白等满超时。
                   await waitForChartPaint(chart, built.option);
-                  window.addEventListener('resize', () => {{
-                    try {{ chart.resize(); }} catch (_) {{}}
-                  }});
                 }} catch (error) {{
                   el.textContent = '图表渲染失败：' + ((error && error.message) || error);
                 }}
@@ -1461,7 +1547,22 @@ async fn browser_preview(query: web::Query<PathQuery>) -> HttpResponse {
               return {{ option: option, records: records, expectsData: !!raw && raw.trim() !== '' }};
             }}
 
+            // 轮询与手动刷新共用同一个入口：同一时间只允许一轮渲染。
+            // 以前文件在渲染途中再次变化时，两轮渲染会互相覆盖，
+            // 图表实例与监听也会成倍叠加。
+            let renderBusy = false;
+
             async function loadAndRender() {{
+              if (renderBusy) return;
+              renderBusy = true;
+              try {{
+                await renderPreviewContent();
+              }} finally {{
+                renderBusy = false;
+              }}
+            }}
+
+            async function renderPreviewContent() {{
               if (!contentEl) {{
                 throw new Error('Missing #content element');
               }}
@@ -1501,9 +1602,7 @@ async fn browser_preview(query: web::Query<PathQuery>) -> HttpResponse {
               }}
 
               const mdIt = window.markdownit({{ html: true, linkify: true, breaks: true }});
-              // ```chart 围栏：先转成占位 div，渲染完 markdown 后再由 ECharts 接管。
-              // 渲染器是独立的静态页面，不能复用软件内的图表模块，所以这里只做
-              // 「解析围栏 → 组装最小 option → echarts.init」这一条最小路径。
+              // ```chart 围栏：先转成占位 div，渲染完 markdown 后再交给 ECharts。
               const chartDrafts = [];
               const excalidrawDrafts = [];
               const defaultFence = mdIt.renderer.rules.fence;
@@ -1527,8 +1626,20 @@ async fn browser_preview(query: web::Query<PathQuery>) -> HttpResponse {
                 return defaultFence(tokens, idx, options, env, self);
               }};
 
+              // 旧 DOM 即将被整体替换，先把挂在它上面的图表实例销毁，避免泄漏。
+              disposePreviewCharts();
               contentEl.innerHTML = mdIt.render(processed);
               enhanceMediaGroups(contentEl);
+
+              // 只有这次渲染真的用到某类图表时才注入对应脚本；不含图表的文档不会下载任何重型资源。
+              try {{
+                await ensurePreviewAssets(
+                  detectPreviewAssets(contentEl, chartDrafts, excalidrawDrafts, processed)
+                );
+              }} catch (error) {{
+                console.warn('[Guaxi Preview] 渲染资源加载失败：', error);
+              }}
+
               await renderChartDrafts(contentEl, chartDrafts, baseDir);
               await renderExcalidrawDrafts(contentEl, excalidrawDrafts, baseDir);
 
@@ -1618,7 +1729,10 @@ async fn browser_preview(query: web::Query<PathQuery>) -> HttpResponse {
         // 才有资格放行它引用的白板场景 / CSV，避免这条通道变成任意路径读取。
         notePathJson = serde_json::to_string(abs).unwrap_or_else(|_| "\"\"".to_string()),
         baseDirJson = serde_json::to_string(&base_dir).unwrap_or_else(|_| "\"\"".to_string()),
-        encodedPath = encoded_path
+        encodedPath = encoded_path,
+        assetVersion = PREVIEW_ASSET_VERSION,
+        assetVersionJson =
+            serde_json::to_string(PREVIEW_ASSET_VERSION).unwrap_or_else(|_| "\"\"".to_string())
     );
 
     HttpResponse::Ok()
@@ -1631,7 +1745,7 @@ async fn browser_preview(query: web::Query<PathQuery>) -> HttpResponse {
 async fn browser_asset_markdown_it() -> HttpResponse {
     HttpResponse::Ok()
         .content_type("application/javascript; charset=utf-8")
-        .append_header(("Cache-Control", "no-store"))
+        .append_header(("Cache-Control", ASSET_CACHE_CONTROL))
         .body(include_str!("../../assets/vendor/markdown-it.min.js"))
 }
 
@@ -1639,7 +1753,7 @@ async fn browser_asset_markdown_it() -> HttpResponse {
 async fn browser_asset_mermaid() -> HttpResponse {
     HttpResponse::Ok()
         .content_type("application/javascript; charset=utf-8")
-        .append_header(("Cache-Control", "no-store"))
+        .append_header(("Cache-Control", ASSET_CACHE_CONTROL))
         .body(include_str!("../../assets/vendor/mermaid.min.js"))
 }
 
@@ -1647,7 +1761,7 @@ async fn browser_asset_mermaid() -> HttpResponse {
 async fn browser_asset_mathjax() -> HttpResponse {
     HttpResponse::Ok()
         .content_type("application/javascript; charset=utf-8")
-        .append_header(("Cache-Control", "no-store"))
+        .append_header(("Cache-Control", ASSET_CACHE_CONTROL))
         .body(include_str!("../../assets/vendor/tex-svg.js"))
 }
 
@@ -1655,7 +1769,7 @@ async fn browser_asset_mathjax() -> HttpResponse {
 async fn browser_asset_highlight_js() -> HttpResponse {
     HttpResponse::Ok()
         .content_type("application/javascript; charset=utf-8")
-        .append_header(("Cache-Control", "no-store"))
+        .append_header(("Cache-Control", ASSET_CACHE_CONTROL))
         .body(include_str!("../../assets/vendor/highlight.min.js"))
 }
 
@@ -1667,7 +1781,7 @@ async fn browser_asset_highlight_js() -> HttpResponse {
 async fn browser_asset_echarts() -> HttpResponse {
     HttpResponse::Ok()
         .content_type("application/javascript; charset=utf-8")
-        .append_header(("Cache-Control", "no-store"))
+        .append_header(("Cache-Control", ASSET_CACHE_CONTROL))
         .body(include_str!("../../assets/vendor/echarts.min.js"))
 }
 
@@ -1676,7 +1790,7 @@ async fn browser_asset_echarts() -> HttpResponse {
 async fn browser_asset_echarts_liquidfill() -> HttpResponse {
     HttpResponse::Ok()
         .content_type("application/javascript; charset=utf-8")
-        .append_header(("Cache-Control", "no-store"))
+        .append_header(("Cache-Control", ASSET_CACHE_CONTROL))
         .body(include_str!("../../assets/vendor/echarts-liquidfill.min.js"))
 }
 
@@ -1684,7 +1798,7 @@ async fn browser_asset_echarts_liquidfill() -> HttpResponse {
 async fn browser_asset_echarts_wordcloud() -> HttpResponse {
     HttpResponse::Ok()
         .content_type("application/javascript; charset=utf-8")
-        .append_header(("Cache-Control", "no-store"))
+        .append_header(("Cache-Control", ASSET_CACHE_CONTROL))
         .body(include_str!("../../assets/vendor/echarts-wordcloud.min.js"))
 }
 
@@ -1697,7 +1811,7 @@ async fn browser_asset_echarts_wordcloud() -> HttpResponse {
 async fn browser_asset_excalidraw_export() -> HttpResponse {
     HttpResponse::Ok()
         .content_type("application/javascript; charset=utf-8")
-        .append_header(("Cache-Control", "no-store"))
+        .append_header(("Cache-Control", ASSET_CACHE_CONTROL))
         .body(include_str!("../../assets/vendor/excalidraw-export.js"))
 }
 
@@ -1710,7 +1824,7 @@ async fn browser_asset_excalidraw_export() -> HttpResponse {
 async fn browser_asset_chart_preview() -> HttpResponse {
     HttpResponse::Ok()
         .content_type("application/javascript; charset=utf-8")
-        .append_header(("Cache-Control", "no-store"))
+        .append_header(("Cache-Control", ASSET_CACHE_CONTROL))
         .body(include_str!("../../assets/vendor/guaxi-chart-preview.js"))
 }
 
@@ -1718,7 +1832,7 @@ async fn browser_asset_chart_preview() -> HttpResponse {
 async fn browser_asset_highlight_css() -> HttpResponse {
     HttpResponse::Ok()
         .content_type("text/css; charset=utf-8")
-        .append_header(("Cache-Control", "no-store"))
+        .append_header(("Cache-Control", ASSET_CACHE_CONTROL))
         .body(include_str!("../../assets/vendor/atom-one-light.css"))
 }
 
@@ -1831,6 +1945,61 @@ mod tests {
         assert!(
             source.contains("await waitForChartPaint(chart, built.option)"),
             "渲染入口没有调用等待逻辑"
+        );
+    }
+
+    /// 非词云图表必须立刻返回。
+    ///
+    /// 早先按 SVG 子元素数量判定「画完了」，但 zrender 的 SVG 输出固定是
+    /// 「背景 rect + <g id="main">」，于是每张普通图表都空等满 3 秒超时。
+    #[test]
+    fn preview_page_does_not_wait_for_synchronous_charts() {
+        let source = include_str!("markdown_browser.rs");
+        // 拼出名字再比对：直接写全名会让断言匹配到它自己。
+        let needle = format!("childElementCount > {}", 2);
+        assert!(
+            !source.contains(&needle),
+            "同步绘制的图表仍会按子元素数量判定，导致空等超时"
+        );
+        assert!(
+            source.contains("if (!isWordCloud) return true"),
+            "非词云图表必须直接返回，不做等待"
+        );
+    }
+
+    /// 重型渲染资源必须按需注入，而不是在 <head> 里同步加载。
+    ///
+    /// mermaid / MathJax / ECharts / Excalidraw 合计约 14MB，一篇纯文字的笔记
+    /// 不该为它们付出下载与解析的代价。
+    #[test]
+    fn preview_page_loads_heavy_assets_on_demand() {
+        let source = include_str!("markdown_browser.rs");
+        assert!(source.contains("ensurePreviewAssets"), "缺少按需加载入口");
+        assert!(source.contains("detectPreviewAssets"), "缺少资源需求探测");
+        // 路径与标签分开拼：整串写出来会让断言匹配到测试自己。
+        let prefix = "<script src=\"/browser/assets/";
+        for path in [
+            "mermaid/mermaid.min.js",
+            "mathjax/tex-svg.js",
+            "echarts/echarts.min.js",
+            "excalidraw/excalidraw-export.js",
+        ] {
+            let needle = format!("{prefix}{path}\"");
+            assert!(!source.contains(&needle), "重型资源仍是同步加载：{path}");
+        }
+    }
+
+    /// vendor 资源必须允许浏览器长期缓存，且 URL 带内容指纹。
+    #[test]
+    fn preview_assets_are_cacheable_and_versioned() {
+        let source = include_str!("markdown_browser.rs");
+        assert!(
+            source.contains("public, max-age=31536000, immutable"),
+            "静态资源没有长缓存，每次打开预览都要重传"
+        );
+        assert!(
+            source.contains("PREVIEW_ASSET_VERSION"),
+            "静态资源 URL 缺少内容指纹，升级后会命中旧缓存"
         );
     }
 
