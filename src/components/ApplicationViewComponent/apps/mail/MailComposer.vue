@@ -1,13 +1,19 @@
 <template>
   <!-- embedded：独立写信窗口里没有「弹层」这回事——窗口本身就是容器。
-       再套一层 backdrop + 圆角边框，用户看到的就是一个黑框套白框。 -->
+       inline：回复直接长在阅读区顶部，不遮住列表，也不再需要 backdrop。 -->
   <div
-    :class="embedded ? 'mail-composer-window' : 'mail-modal-backdrop'"
-    @click.self="embedded ? null : $emit('close')"
+    :class="
+      inline ? 'mail-composer-inline' : embedded ? 'mail-composer-window' : 'mail-modal-backdrop'
+    "
+    @click.self="inline || embedded ? null : $emit('close')"
   >
     <div
       class="mail-modal mail-composer"
-      :class="{ 'is-maximized': maximized, 'is-embedded': embedded }"
+      :class="{
+        'is-maximized': maximized,
+        'is-embedded': embedded,
+        'is-inline': inline,
+      }"
       role="dialog"
       aria-label="写邮件"
     >
@@ -24,7 +30,7 @@
           </option>
         </select>
         <button
-          v-if="!embedded"
+          v-if="!embedded && !inline"
           class="mail-icon-btn"
           :title="maximized ? '还原窗口' : '最大化'"
           :aria-label="maximized ? '还原窗口' : '最大化'"
@@ -802,7 +808,7 @@
 </template>
 
 <script setup>
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { NIcon } from 'naive-ui'
 import { ContractOutline, ExpandOutline } from '@vicons/ionicons5'
 import { open } from '@tauri-apps/plugin-dialog'
@@ -827,6 +833,11 @@ import {
 } from './tableActions'
 import { createLogger } from '../../../../utils/logger'
 
+// 划词翻译面板是写信组件里唯一依赖 naive-ui 的子树：只在真正划词时加载。
+const GuaxiSelectionTranslatePanel = defineAsyncComponent(
+  () => import('../../../HomeViewComponent/GuaxiSelectionTranslatePanel.vue'),
+)
+
 const logger = createLogger('MailComposer')
 
 const props = defineProps({
@@ -841,6 +852,8 @@ const props = defineProps({
   attachmentChecks: { type: Array, default: () => [] },
   /** 独立窗口模式：不画弹层外壳、不显示最大化与内部关闭按钮。 */
   embedded: { type: Boolean, default: false },
+  /** 阅读区内联模式：卡片长在正文上方，不铺满整个应用。 */
+  inline: { type: Boolean, default: false },
 })
 const emit = defineEmits([
   'update',

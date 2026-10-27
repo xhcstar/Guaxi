@@ -190,7 +190,39 @@
           @open-attachment="onOpenAttachment"
           :close-label="settings.listCollapsed ? '收起邮件' : '返回列表'"
           @close="closeReader"
-        />
+        >
+          <!-- 回复 / 转发直接长在阅读区顶部：列表和原文都还能看，不用先关掉浮层。 -->
+          <template #inline-composer>
+            <div
+              v-if="store.composing && !composeOpensInWindow && store.composing.mode !== 'new'"
+              class="mail-inline-composer"
+            >
+              <MailComposer
+                inline
+                :key="
+                  store.composing.mode +
+                  ':' +
+                  (store.composing.inReplyTo || store.composing.draftUid || '')
+                "
+                :draft="store.composing"
+                :accounts="store.accounts"
+                :settings="settings"
+                :theme-mode="store.theme?.mode || 'dark'"
+                :undo-seconds="settings.undoSendSeconds"
+                :templates="store.templates"
+                :attachment-checks="attachmentChecks"
+                @update="(patch) => Object.assign(store.composing, patch)"
+                @send="onSend"
+                @schedule="onScheduleSend"
+                @save-draft="onSaveDraft"
+                @save-to-mailbox="onAutoSaveToMailbox"
+                @apply-template="(tpl) => store.applyTemplate(tpl)"
+                @check-attachments="onCheckAttachments"
+                @close="store.closeCompose"
+              />
+            </div>
+          </template>
+        </MailReader>
         <div v-else-if="!settings.listCollapsed" class="mail-pane mail-reader">
           <div class="mail-reader-placeholder">
             选中左侧的一封邮件开始阅读。<br />
@@ -200,9 +232,14 @@
       </div>
     </template>
 
-    <!-- 写信窗口 -->
+    <!-- 兜底：没有打开的阅读区（例如从列表用快捷键回复），或从通讯录新写一封时，
+         仍用弹层，避免「回复了却看不到编辑器」。 -->
     <MailComposer
-      v-if="store.composing"
+      v-if="
+        store.composing &&
+        !composeOpensInWindow &&
+        (store.composing.mode === 'new' || !store.detail)
+      "
       :draft="store.composing"
       :accounts="store.accounts"
       :settings="settings"
@@ -438,6 +475,8 @@ const scheduledSends = computed(() =>
 const listPaneRef = ref(null)
 const activeKey = ref('')
 const attachmentChecks = ref([])
+/** 「在新窗口里写」的调用过程中先隐藏内联卡片，避免开窗瞬间闪一下编辑区。 */
+const composeOpensInWindow = ref(false)
 let toastTimer = null
 let pendingTimer = null
 
@@ -608,10 +647,16 @@ const rowHeightPx = computed(() => {
 })
 
 /** 键盘导航的「当前行」：打开邮件时同步一次。 */
+let detailKey = ''
 watch(
   () => store.detail,
   (detail) => {
-    if (detail) activeKey.value = `${detail.accountId}:${detail.folder}:${detail.uid}`
+    const key = detail ? `${detail.accountId}:${detail.folder}:${detail.uid}` : ''
+    if (key) activeKey.value = key
+    // 内联回复跟着当前邮件走：换一封/关掉阅读区时把它存进草稿箱，
+    // 否则回复卡片会挂在另一封邮件头上。
+    if (detailKey && detailKey !== key && store.composing) store.closeCompose()
+    detailKey = key
   },
 )
 
@@ -945,9 +990,14 @@ function onReply(detail, all = false, { newWindow = false } = {}) {
     store.composing.text = `\n\n${quote.text}`
     store.composing.html = `<br><br>${quote.html}`
   }
-  // 默认在阅读区就地回复；用户点了「在新窗口里写」才开窗。
+  // 默认在阅读区顶部就地回复；用户点了「在新窗口里写」才开窗。
   if (newWindow) {
-    openComposeInWindow(composeIdFor(all ? 'replyAll' : 'reply', detail)).catch(() => {})
+    composeOpensInWindow.value = true
+    openComposeInWindow(composeIdFor(all ? 'replyAll' : 'reply', detail))
+      .catch(() => {})
+      .finally(() => {
+        composeOpensInWindow.value = false
+      })
   }
 }
 
@@ -972,7 +1022,12 @@ function onForward(detail, { newWindow = false } = {}) {
     messageId: null,
   })
   if (newWindow) {
-    openComposeInWindow(composeIdFor('forward', detail)).catch(() => {})
+    composeOpensInWindow.value = true
+    openComposeInWindow(composeIdFor('forward', detail))
+      .catch(() => {})
+      .finally(() => {
+        composeOpensInWindow.value = false
+      })
   }
 }
 

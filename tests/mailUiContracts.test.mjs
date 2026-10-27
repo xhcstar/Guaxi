@@ -138,3 +138,28 @@ test('收信规则：编辑器与弹层同底色，且条件支持从通讯录�
   assert.ok(rules.includes('AddressPicker'), '条件应能打开通讯录选择器')
   assert.ok(rules.includes('togglePicker(\'from\')') && rules.includes('togglePicker(\'to\')'), '发件人和收件人都要有入口')
 })
+
+test('回复 / 转发直接长在阅读区顶部，不再弹满屏浮层', () => {
+  assert.ok(reader.includes('name="inline-composer"'), '阅读区应留出内联回复插槽')
+  assert.ok(mailApp.includes('#inline-composer'), '应把回复编辑器放进插槽')
+  assert.ok(/MailComposer[\s\S]{0,80}inline/.test(mailApp), '编辑器应以内联模式渲染')
+  assert.ok(css.includes('.mail-inline-composer'), '应有内联卡片的外层样式')
+  assert.ok(/\.mail-composer\.is-inline/.test(css), '内联卡片应有独立的尺寸/圆角样式')
+})
+
+test('写信编辑区：不叠焦点环，插入的表格跟随主题', () => {
+  const composer = read('src/components/ApplicationViewComponent/apps/mail/MailComposer.vue')
+  // 组件模板里引用了翻译面板却没 import，控制台会一直刷 "Failed to resolve component"。
+  assert.ok(
+    /defineAsyncComponent[\s\S]{0,200}GuaxiSelectionTranslatePanel/.test(composer),
+    '翻译面板必须注册，否则每次渲染都会报未解析组件',
+  )
+  assert.ok(
+    /\.mail-compose-editor:focus-visible[\s\S]{0,60}outline:\s*0/.test(css),
+    '正文编辑区不应再叠全局焦点环',
+  )
+  assert.ok(
+    /\.mail-compose-editor thead th,[\s\S]{0,160}background:\s*var\(--mail-bg-sunken\)/.test(css),
+    '表头底色应按主题覆盖邮件里的浅色 bgcolor',
+  )
+})

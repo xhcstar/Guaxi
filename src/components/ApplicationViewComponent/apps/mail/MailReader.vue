@@ -175,6 +175,9 @@
         <span class="mail-reader-when" :title="fullDateLabel">{{ dateLabel }}</span>
       </div>
 
+      <!-- 内联回复卡片：回复/转发直接长在正文上方，不再弹满屏浮层。 -->
+      <slot name="inline-composer" />
+
       <MailAddressCard ref="addressCard" />
 
       <!-- 划词翻译：与 PDF / 电子书 / 认知收件箱同一个面板组件，交互一致。 -->
