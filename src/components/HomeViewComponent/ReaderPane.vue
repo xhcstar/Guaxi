@@ -162,6 +162,10 @@
         @outline="onOutline"
         @page-change="onPdfPageChange"
         @highlight-click="onPdfHighlightClick"
+        @undo-highlight="undoPdfHighlight"
+        @redo-highlight="redoPdfHighlight"
+        @go-reading-back="goReadingBack"
+        @go-reading-forward="goReadingForward"
       >
         <!--
           侧栏开关：交给 PDF 阅读器的工具栏托管。
@@ -437,6 +441,11 @@ defineEmits(['force-editor', 'convert-to-markdown'])
 
 // PDF 阅读器在「打开一份现成 PDF」时不需要 LaTeX 双向定位/重建/导出，
 // 但搜索、分页、大纲、高亮批注都是有用的，全部打开。
+// 撤销/重做与阅读位置：与 GuaxiConvertPDFReader 里那套工具栏对齐，
+// 独立阅读器同样能反悔一次高亮、跳回上一处阅读位置。
+//
+// 注意：下面的栈必须在本 computed 首次求值前就已初始化 —— computed 是惰性的，
+// 真正读取发生在渲染时，那时 setup 已跑完，所以这里引用后面的声明是安全的。
 const pdfFeatures = computed(() => ({
   toolbar: true,
   search: true,
@@ -446,7 +455,138 @@ const pdfFeatures = computed(() => ({
   reverseJump: false,
   export: false,
   rebuild: false,
+  undoHighlight: true,
+  redoHighlight: true,
+  readingHistory: true,
+  canUndoHighlight: highlightUndoStack.value.length > 0,
+  canRedoHighlight: highlightRedoStack.value.length > 0,
+  canGoReadingBack: readingBackStack.value.length > 0,
+  canGoReadingForward: readingForwardStack.value.length > 0,
 }))
+
+// ───────────────────────── 高亮撤销/重做 ─────────────────────────
+// 与 GuaxiConvertPDFReader 同一套语义：一次「加」或「删」都进栈；撤销 = 反向执行。
+// 重建后的高亮会拿到新的 annotId（后端重新分配），因此栈里的 id 在执行后要替换。
+const highlightUndoStack = ref([])
+const highlightRedoStack = ref([])
+
+const pushHighlightHistory = (entry) => {
+  highlightUndoStack.value.push(entry)
+  if (highlightUndoStack.value.length > 200) highlightUndoStack.value.shift()
+  // 新的操作作废重做分支，否则「重做」会跳回到已不存在的那条历史。
+  highlightRedoStack.value = []
+}
+
+const undoPdfHighlight = async () => {
+  const entry = highlightUndoStack.value.pop()
+  if (!entry) return
+  const viewer = pdfViewerRef.value
+  if (!viewer) {
+    highlightUndoStack.value.push(entry)
+    return
+  }
+  try {
+    if (entry.type === 'add') {
+      const ok = await viewer.deleteHighlight?.(entry.page, entry.annotId)
+      if (ok) {
+        highlightRedoStack.value.push(entry)
+        await refreshPdfHighlights()
+      } else highlightUndoStack.value.push(entry)
+    } else if (entry.type === 'delete') {
+      const r = await viewer.reAddHighlight?.({
+        page: entry.page,
+        rects: entry.rects,
+        color: entry.color,
+        note: entry.note,
+      })
+      if (r) {
+        highlightRedoStack.value.push({ ...entry, annotId: r.annotId })
+        await refreshPdfHighlights()
+      } else highlightUndoStack.value.push(entry)
+    }
+  } catch (error) {
+    highlightUndoStack.value.push(entry)
+    logger.warn('[ReaderPane] undo highlight failed', {
+      error: String(error?.message || error),
+    })
+  }
+}
+
+const redoPdfHighlight = async () => {
+  const entry = highlightRedoStack.value.pop()
+  if (!entry) return
+  const viewer = pdfViewerRef.value
+  if (!viewer) {
+    highlightRedoStack.value.push(entry)
+    return
+  }
+  try {
+    if (entry.type === 'add') {
+      const r = await viewer.reAddHighlight?.({
+        page: entry.page,
+        rects: entry.rects,
+        color: entry.color,
+        note: entry.note,
+      })
+      if (r) {
+        highlightUndoStack.value.push({ ...entry, annotId: r.annotId })
+        await refreshPdfHighlights()
+      } else highlightRedoStack.value.push(entry)
+    } else if (entry.type === 'delete') {
+      const ok = await viewer.deleteHighlight?.(entry.page, entry.annotId)
+      if (ok) {
+        highlightUndoStack.value.push(entry)
+        await refreshPdfHighlights()
+      } else highlightRedoStack.value.push(entry)
+    }
+  } catch (error) {
+    highlightRedoStack.value.push(entry)
+    logger.warn('[ReaderPane] redo highlight failed', {
+      error: String(error?.message || error),
+    })
+  }
+}
+
+// ───────────────────────── 阅读位置前后 ─────────────────────────
+// 只记录「跳转式」的页码变化（大纲、批注、页码输入）；连续滚动的逐页变化不记，
+// 否则按一次「上一处」只会退回紧挨着的上一页，等于没用。
+const readingBackStack = ref([])
+const readingForwardStack = ref([])
+let suppressReadingPush = false
+let lastPageForHistory = 1
+
+const pushReadingPosition = (page) => {
+  if (suppressReadingPush) return
+  const p = Number(page) || 0
+  if (p < 1) return
+  if (readingBackStack.value[readingBackStack.value.length - 1] === p) return
+  readingBackStack.value.push(p)
+  if (readingBackStack.value.length > 100) readingBackStack.value.shift()
+  readingForwardStack.value = []
+}
+
+const gotoReadingPage = (page) => {
+  const p = Number(page) || 1
+  suppressReadingPush = true
+  pdfViewerRef.value?.goToPage?.(p)
+  nextTick(() => {
+    suppressReadingPush = false
+  })
+}
+
+const goReadingBack = () => {
+  const target = readingBackStack.value.pop()
+  if (!target) return
+  readingForwardStack.value.push(pdfCurrentPage.value)
+  gotoReadingPage(target)
+}
+
+const goReadingForward = () => {
+  const target = readingForwardStack.value.pop()
+  if (!target) return
+  readingBackStack.value.push(pdfCurrentPage.value)
+  gotoReadingPage(target)
+}
 
 const sizeLabel = computed(() => {
   const size = Number(props.target?.size || 0)
@@ -492,6 +632,13 @@ const onOutline = (raw) => {
 /** 大纲项高亮跟随当前页：取最后一个起始页不晚于当前页的条目。 */
 const onPdfPageChange = (page) => {
   const num = Number(page) || 0
+  const prev = lastPageForHistory || 1
+  // 只有「大跳」才记入阅读位置：连续滚动会逐页触发，那样按一次「上一处」
+  // 只会退回紧挨着的上一页，等于没有历史。与 GuaxiConvertPDFReader 的判据一致。
+  if (!suppressReadingPush && num > 0 && Math.abs(num - prev) > 1) {
+    pushReadingPosition(prev)
+  }
+  lastPageForHistory = num || 1
   pdfCurrentPage.value = num || 1
   let idx = -1
   outlineItems.value.forEach((item, i) => {
@@ -556,15 +703,28 @@ const jumpToHighlight = (hl) => {
 }
 
 const removePdfHighlight = async (hl) => {
-  // 删除会直接改写 .pdf 文件，且 PDF 阅读器没有撤销栈 —— 必须先确认。
+  // 删除会直接改写 .pdf 文件；确认一次，再记入撤销栈（工具栏的撤销按钮可找回）。
   const confirmed = window.confirm?.(
-    `删除这条批注？\n\n${hl.note || '（无笔记）'}\n第 ${hl.page} 页\n\n此操作会修改 PDF 文件本身，无法撤销。`
+    `删除这条批注？\n\n${hl.note || '（无笔记）'}\n第 ${hl.page} 页\n\n此操作会修改 PDF 文件本身，删除后可用撤销恢复。`
   )
   if (!confirmed) return
   try {
-    await pdfViewerRef.value?.deleteHighlight?.(hl.page, hl.annotId)
+    // 侧栏列表里只有摘要，没有矩形 —— 而撤销「删除」要靠 rects 才能重建那条高亮。
+    // 所以在真正删除之前，先从 viewer 的内存里取一次这条批注的原始矩形与颜色。
+    const raw = pdfViewerRef.value?.findHighlightRaw?.(hl.page, hl.annotId)
+    const ok = await pdfViewerRef.value?.deleteHighlight?.(hl.page, hl.annotId)
+    if (ok) {
+      pushHighlightHistory({
+        type: 'delete',
+        page: hl.page,
+        annotId: hl.annotId,
+        rects: Array.isArray(raw?.rects) ? raw.rects.map((r) => ({ ...r })) : [],
+        color: raw?.color ?? hl.color,
+        note: raw?.note ?? hl.note ?? '',
+      })
+    }
     pdfHighlights.value = pdfHighlights.value.filter((item) => item.annotId !== hl.annotId)
-    logger.info('[ReaderPane] pdf highlight deleted', { page: hl.page })
+    logger.info('[ReaderPane] pdf highlight deleted', { page: hl.page, ok, canUndo: !!raw })
   } catch (error) {
     logger.warn('[ReaderPane] delete pdf highlight failed', {
       error: String(error?.message || error),
@@ -684,6 +844,15 @@ const addPdfHighlightFromSelection = async (color) => {
       return
     }
     logger.info('[ReaderPane] pdf highlight added', { page: res.page, annotId: res.annotId })
+    // 记入撤销栈：加高亮改的是 .pdf 文件本身，没有这一步用户只能重开文件找回。
+    pushHighlightHistory({
+      type: 'add',
+      page: res.page,
+      annotId: res.annotId,
+      rects: Array.isArray(res.rects) ? res.rects.map((r) => ({ ...r })) : [],
+      color: Array.isArray(color) ? [...color] : color,
+      note: '',
+    })
     // 新增的批注要让侧栏列表跟上；没开着也刷新一下，下次展开就是新的。
     void refreshPdfHighlights()
   } catch (error) {
@@ -840,6 +1009,22 @@ const onPdfSelectionEscape = (ev) => {
   clearPdfSelection()
 }
 
+/**
+ * 在浮条外按下鼠标 → 立刻收起浮条。
+ *
+ * 为什么非要在 mousedown 这一步做：点阅读器的灰色画布或页边时，浏览器**不会**清掉
+ * 已有的文字选区（只有点在文字上才改选区），紧随其后的 mouseup 会照旧把浮条再浮出来。
+ * 用户看到的就是「点了空白处，浮条还在」。这里在按下时先收起，并主动清掉选区，
+ * 让后续的 syncPdfSelectionToolbar 读到空选区、不会把它重新显示。
+ */
+const onPdfGlobalMouseDown = (ev) => {
+  if (!pdfSelectionToolbar.value) return
+  const target = ev.target
+  // 点在浮条自身（要按按钮）或划词译文面板上：保持浮条。
+  if (target instanceof Element && target.closest('.gdr-pdf-hl-bar, .pot-selection-translate-panel')) return
+  clearPdfSelection()
+}
+
 onMounted(() => {
   // 候选区在 window 上：阅读器的文本层是 transparent span，事件目标就是这些 span，
   // 挂在容器上也能收到；但键盘选择不产生 mouseup，所以 selectionchange 也要听。
@@ -847,6 +1032,8 @@ onMounted(() => {
   window.addEventListener('keyup', schedulePdfSelectionSync)
   document.addEventListener('selectionchange', schedulePdfSelectionSync)
   window.addEventListener('keydown', onPdfSelectionEscape, true)
+  // 捕获阶段：赶在阅读器自己的 mousedown（平移/选词）之前收起，避免同一帧里又被重新浮出。
+  window.addEventListener('mousedown', onPdfGlobalMouseDown, true)
 })
 
 onBeforeUnmount(() => {
@@ -854,6 +1041,7 @@ onBeforeUnmount(() => {
   window.removeEventListener('keyup', schedulePdfSelectionSync)
   document.removeEventListener('selectionchange', schedulePdfSelectionSync)
   window.removeEventListener('keydown', onPdfSelectionEscape, true)
+  window.removeEventListener('mousedown', onPdfGlobalMouseDown, true)
   if (pdfSelectionSyncTimer) clearTimeout(pdfSelectionSyncTimer)
 })
 

@@ -247,6 +247,30 @@
       </button>
       <button
         class="gdr-ebook__selbar-btn"
+        title="查询选中的文字"
+        aria-label="查询"
+        @click="querySelectionText"
+      >
+        <Icon :icon="searchQueryIcon" width="15" height="15" />
+      </button>
+      <button
+        class="gdr-ebook__selbar-btn"
+        title="用 AI 翻译选中的文字"
+        aria-label="用 AI 翻译"
+        @click="openAssistantTranslateDialog"
+      >
+        <Icon :icon="wandIcon" width="15" height="15" />
+      </button>
+      <button
+        class="gdr-ebook__selbar-btn"
+        title="把选中的文字发给 AI 提问"
+        aria-label="问 AI"
+        @click="askSelectionWithAssistant"
+      >
+        <Icon :icon="botIcon" width="15" height="15" />
+      </button>
+      <button
+        class="gdr-ebook__selbar-btn"
         title="朗读选中的文字"
         aria-label="朗读"
         @click="speakSelectionText"
@@ -283,14 +307,36 @@
           @click.stop="highlightSelection(preset.color)"
         />
       </span>
-      <button
-        class="gdr-ebook__selbar-btn"
-        title="关闭（Esc）"
-        aria-label="关闭"
-        @click="hideSelectionBar"
-      >
-        <Icon :icon="closeIcon" width="13" height="13" />
-      </button>
+    </div>
+
+    <!--
+      「用 AI 翻译」目标语言弹窗。
+
+      刻意不用 naive-ui 的 NModal/NSelect：本组件是阅读器窗口首帧的关键路径，静态引入
+      naive-ui 会把整个组件库拖进 reader chunk（见文件顶部对 translate panel 的异步引入）。
+      这里只是一个「选语言 + 两个按钮」的小面板，原生元素足够，也不会有主题不一致的问题。
+    -->
+    <div
+      v-if="assistantTranslateDialogVisible"
+      class="gdr-ebook__dialog-mask"
+      @mousedown.self="assistantTranslateDialogVisible = false"
+    >
+      <div class="gdr-ebook__dialog" role="dialog" aria-modal="true" aria-label="用 AI 翻译">
+        <div class="gdr-ebook__dialog-title">用 AI 翻译</div>
+        <p class="gdr-ebook__dialog-hint">选中的文字会发送到右侧智能助手进行翻译。</p>
+        <label class="gdr-ebook__dialog-field">
+          <span>目标语言</span>
+          <select v-model="assistantTranslateTargetLang" class="gdr-ebook__dialog-select">
+            <option v-for="opt in assistantTranslateLangOptions" :key="opt.value" :value="opt.value">
+              {{ opt.label }}
+            </option>
+          </select>
+        </label>
+        <div class="gdr-ebook__dialog-actions">
+          <button class="gdr-ebook__dialog-btn" @click="assistantTranslateDialogVisible = false">取消</button>
+          <button class="gdr-ebook__dialog-btn is-primary" @click="sendSelectionAsAiTranslate">发送并翻译</button>
+        </div>
+      </div>
     </div>
 
     <div v-if="loading" class="guaxi-doc-reader__body">
@@ -492,8 +538,12 @@ import plusIcon from '@iconify-icons/lucide/plus'
 import highlighterIcon from '@iconify-icons/lucide/highlighter'
 import paletteIcon from '@iconify-icons/lucide/palette'
 import languagesIcon from '@iconify-icons/lucide/languages'
+import searchQueryIcon from '@iconify-icons/lucide/search'
+import botIcon from '@iconify-icons/lucide/bot'
+import wandIcon from '@iconify-icons/lucide/wand-2'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { createLogger } from '../../../utils/logger'
+import { useRightSiderStore } from '../../../stores/rightSiderStore'
 import { useReaderReadAloud } from '../../../composables/useReaderReadAloud'
 import { useSelectionTranslate } from '../../../composables/useSelectionTranslate'
 import { useSelectionReadAloud } from '../../../composables/useSelectionReadAloud'
@@ -508,6 +558,7 @@ const GuaxiSelectionTranslatePanel = defineAsyncComponent(
 )
 
 const logger = createLogger('DocEbookReader')
+const rightSiderStore = useRightSiderStore()
 
 const props = defineProps({
   path: { type: String, required: true },
@@ -1355,6 +1406,21 @@ const HIGHLIGHT_PRESETS = [
 const selectionVisible = ref(false)
 const selectionPaletteOpen = ref(false)
 const selectionText = ref('')
+
+// 「用 AI 翻译」的目标语言。与另外四个阅读器同一份语言表，选过的语言跨阅读器一致。
+const assistantTranslateDialogVisible = ref(false)
+const assistantTranslateSourceText = ref('')
+const assistantTranslateTargetLang = ref('en')
+const assistantTranslateLangOptions = [
+  { label: '中文', value: 'zh' },
+  { label: '英文', value: 'en' },
+  { label: '日文', value: 'ja' },
+  { label: '韩文', value: 'ko' },
+  { label: '法文', value: 'fr' },
+  { label: '德文', value: 'de' },
+  { label: '西班牙语', value: 'es' },
+  { label: '俄语', value: 'ru' },
+]
 /** 选区矩形（iframe 视口坐标），翻译面板定位仍用它。 */
 const selectionRect = ref({ left: 0, top: 0, bottom: 0, width: 0, height: 0 })
 /** 操作条中心点（相对阅读器容器）。 */
@@ -1427,6 +1493,77 @@ const translateSelectionText = () => {
   const rect = selectionRect.value
   hideSelectionBar()
   if (text) openTranslate(text, rect)
+}
+
+/**
+ * 查询：把选中文字送到系统浏览器的搜索页。
+ *
+ * 与另外四个阅读器保持一致：Bing 搜索、用 plugin-opener 真正打开。
+ * 打开失败不提示错误 —— 阅读器里弹一个 toast 只会打断阅读，何况用户已经能看到浏览器没起来。
+ */
+const querySelectionText = async () => {
+  const text = String(selectionText.value || '').trim()
+  if (!text) return
+  hideSelectionBar()
+  const url = `https://www.bing.com/search?q=${encodeURIComponent(text)}`
+  try {
+    await openUrl(url)
+  } catch (error) {
+    logger.debug('[DocEbookReader] open search url failed', {
+      error: String(error?.message || error),
+    })
+  }
+}
+
+/**
+ * 送到智能助手。
+ *
+ * 电子书阅读器自己没有助手侧栏（另外四个阅读器各带一个），这里复用全局右栏的助手面板：
+ * rightSiderStore 是应用级的，打开的是同一个对话，用户不会看到「两个助手」。
+ */
+const sendSelectionToAssistant = (overrideText, options = {}) => {
+  const text = String(overrideText ?? selectionText.value ?? '').trim()
+  if (!text) return false
+  try {
+    rightSiderStore.setPanel('assistant')
+    rightSiderStore.open()
+    rightSiderStore.appendAssistantDraft(text, {
+      autoSend: options.autoSend !== false,
+      disableWebSearch: !!options.disableWebSearch,
+    })
+    hideSelectionBar()
+    return true
+  } catch (error) {
+    logger.warn('[DocEbookReader] send selection to assistant failed', {
+      error: String(error?.message || error),
+    })
+    return false
+  }
+}
+
+const askSelectionWithAssistant = () => {
+  sendSelectionToAssistant(selectionText.value, { autoSend: true })
+}
+
+const openAssistantTranslateDialog = () => {
+  const text = String(selectionText.value || '').trim()
+  if (!text) return
+  assistantTranslateSourceText.value = text
+  assistantTranslateDialogVisible.value = true
+  hideSelectionBar()
+}
+
+const sendSelectionAsAiTranslate = () => {
+  const text = String(assistantTranslateSourceText.value || '').trim()
+  if (!text) {
+    assistantTranslateDialogVisible.value = false
+    return
+  }
+  const lang = String(assistantTranslateTargetLang.value || 'en')
+  const label = assistantTranslateLangOptions.find((x) => x.value === lang)?.label || lang
+  const prompt = `请将以下内容翻译成${label}，保持原意并保留术语与格式，只输出译文：\n\n${text}`
+  const ok = sendSelectionToAssistant(prompt, { autoSend: true, disableWebSearch: true })
+  if (ok) assistantTranslateDialogVisible.value = false
 }
 
 const speakSelectionText = () => {

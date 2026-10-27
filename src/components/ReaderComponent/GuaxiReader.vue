@@ -39,7 +39,7 @@ const props = defineProps({
   fileType: {
     type: String,
     required: true,
-    validator: (value) => ['pdf', 'md', 'markdown', 'html', 'htm', 'epub', 'doc', 'txt', 'docx', 'word'].includes(value)
+    validator: (value) => ['pdf', 'md', 'markdown', 'html', 'htm', 'epub', 'mobi', 'azw', 'azw3', 'doc', 'txt', 'docx', 'word'].includes(value)
   },
   fileName: {
     type: String,
@@ -92,6 +92,12 @@ const readerComponent = computed(() => {
     html: GuaxiHtmlReader,
     htm: GuaxiHtmlReader,
     epub: GuaxiEpubReader,
+    // Kindle 系电子书复用 EPUB 阅读器：它是「源文件 + 转换后 Markdown」双栏的通用电子书壳，
+    // 章节与目录由后端解析器产出；后端 read_document_for_reader 已经认得 mobi / azw3，
+    // 前端只需把真实类型透传下去。
+    mobi: GuaxiEpubReader,
+    azw: GuaxiEpubReader,
+    azw3: GuaxiEpubReader,
     txt: GuaxiTextReader
   }
 

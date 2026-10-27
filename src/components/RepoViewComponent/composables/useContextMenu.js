@@ -146,6 +146,11 @@ export function useContextMenu({ store, message, reconvert = null, onShare = nul
       html: "html",
       htm: "html",
       epub: "epub",
+      // Kindle 系电子书：与 EPUB 走同一个阅读器组件（GuaxiEpubReader），
+      // 只是 fileType 要原样保留，阅读器才知道该调哪个后端解析器。
+      mobi: "mobi",
+      azw: "azw3",
+      azw3: "azw3",
       doc: "word",
       docx: "word",
       word: "word",

@@ -29,6 +29,29 @@
       <span class="gpv__status" :class="statusTone">{{ status }}</span>
       <div class="gpv__spacer" />
 
+      <!--
+        宿主驱动的动作组（撤销/重做、阅读位置前后）。
+
+        这些能力的数据（历史栈）在宿主手里，不在 viewer 内部，所以按「可选按钮」暴露：
+        宿主要什么用 features 打开，点了只 emit 事件，具体做什么由宿主决定。
+        放左侧、紧贴状态文字，是因为它们是「对刚刚那次操作的反悔/回退」，
+        和右侧「找内容 / 翻页 / 调大小」不是一类动作。
+      -->
+      <div v-if="hostActions.length" class="gpv__cluster" aria-label="编辑与导航">
+        <button
+          v-for="act in hostActions"
+          :key="act.key"
+          type="button"
+          class="gpv__btn gpv__btn--icon"
+          :title="act.title"
+          :aria-label="act.title"
+          :disabled="act.disabled"
+          @click="$emit(act.key)"
+        >
+          <component :is="act.icon" />
+        </button>
+      </div>
+
       <!-- 搜索：默认只是一个图标，点开才让输入框占用宽度 -->
       <div v-if="features.search && hasPdf && !errorText" class="gpv__search" :class="{ 'is-open': searchOpen }">
         <button
@@ -146,59 +169,48 @@
       </button>
 
       <!--
-        低频动作收进菜单；点外面 / Esc 关闭。
+        低频动作直接平铺在工具栏上，不再收进「更多」菜单。
 
-        菜单用 Teleport 挂到 body 并 fixed 定位：工具栏有 `overflow-x: auto`（为了让窄窗口
-        横向滚动而不是换行变高），而 overflow 不为 visible 的祖先会**裁掉**绝对定位的
-        弹出层 —— 菜单明明渲染了，却只剩工具栏那 39px 高的一截可见。
-        Teleport 同时避开 scoped 样式的祖先限定，所以下面的样式写了全局块。
+        原先旋转 / 平移锁定 / 重建 / 导出都藏在一个「更多」下拉里：菜单用 Teleport 挂 body、按
+        getBoundingClientRect 定一次位，要维护「点外面关闭」「Esc 关闭」「工具栏横向滚动时
+        菜单跟不跟」三件事，而实际打开的频次很低 —— 收起来的收益抵不过多一次点击和一套浮层状态。
+        现在它们就在工具栏末尾，与其它图标同等对待；放不下时由工具栏自身的横向滚动兜底
+        （它本来就不换行）。
       -->
-      <div ref="moreRef" class="gpv__more">
+      <div class="gpv__cluster" aria-label="旋转与平移">
+        <button type="button" class="gpv__btn gpv__btn--icon" title="向左旋转 90°（[）" aria-label="向左旋转" @click="rotateLeft('toolbar')">
+          <RefreshCircleOutline :rotate="90" />
+        </button>
+        <button type="button" class="gpv__btn gpv__btn--icon" title="向右旋转 90°（]）" aria-label="向右旋转" @click="rotateRight('toolbar')">
+          <RefreshCircleOutline :rotate="-90" />
+        </button>
         <button
           type="button"
           class="gpv__btn gpv__btn--icon"
-          :class="{ 'gpv__btn--active': moreOpen }"
-          title="更多"
-          aria-label="更多操作"
-          :aria-expanded="moreOpen"
-          @click.stop="toggleMoreMenu"
+          :class="{ 'gpv__btn--active': panMode }"
+          :aria-pressed="panMode"
+          :title="panMode ? '解锁拖动平移（H）' : '锁定拖动平移（H）'"
+          aria-label="锁定拖动平移"
+          @click="togglePanMode('toolbar')"
         >
-          <EllipsisHorizontalOutline />
+          <HandRightOutline />
         </button>
       </div>
-      <Teleport to="body">
-        <div
-          v-if="moreOpen"
-          class="gpv-menu-pop"
-          :class="`theme-${theme}`"
-          role="menu"
-          :style="moreMenuStyle"
-          @click.stop
-        >
-          <button type="button" class="gpv-menu-pop__item" role="menuitem" @click="runMenuAction(() => rotateLeft('toolbar'))">
-            <RefreshCircleOutline :rotate="90" /> 向左旋转 90°
-          </button>
-          <button type="button" class="gpv-menu-pop__item" role="menuitem" @click="runMenuAction(() => rotateRight('toolbar'))">
-            <RefreshCircleOutline :rotate="-90" /> 向右旋转 90°
-          </button>
-          <button
-            type="button"
-            class="gpv-menu-pop__item"
-            role="menuitemcheckbox"
-            :aria-checked="panMode"
-            @click="runMenuAction(() => togglePanMode('toolbar'))"
-          >
-            <HandRightOutline /> 锁定拖动平移
-            <span v-if="panMode" class="gpv-menu-pop__check">✓</span>
-          </button>
-          <button v-if="features.rebuild" type="button" class="gpv-menu-pop__item" role="menuitem" @click="runMenuAction(() => $emit('rebuild'))">
-            <RefreshOutline /> 重新构建
-          </button>
-          <button v-if="features.export" type="button" class="gpv-menu-pop__item" role="menuitem" :disabled="!hasPdf" @click="runMenuAction(() => $emit('export'))">
-            导出 PDF
-          </button>
-        </div>
-      </Teleport>
+
+      <button v-if="features.rebuild" type="button" class="gpv__btn gpv__btn--icon" title="重新构建" aria-label="重新构建" @click="$emit('rebuild')">
+        <RefreshOutline />
+      </button>
+      <button
+        v-if="features.export"
+        type="button"
+        class="gpv__btn gpv__btn--icon"
+        title="导出 PDF"
+        aria-label="导出 PDF"
+        :disabled="!hasPdf"
+        @click="$emit('export')"
+      >
+        <DownloadOutline />
+      </button>
     </div>
 
     <div
@@ -307,7 +319,11 @@ import { ref, reactive, computed, watch, nextTick, onMounted, onBeforeUnmount } 
 import { invoke } from '@tauri-apps/api/core'
 import {
   AddOutline,
-  EllipsisHorizontalOutline,
+  ArrowRedoOutline,
+  ArrowUndoOutline,
+  ChevronBackOutline,
+  ChevronForwardOutline,
+  DownloadOutline,
   ExpandOutline,
   HandRightOutline,
   RefreshCircleOutline,
@@ -358,6 +374,11 @@ const emit = defineEmits([
   'ready',
   'highlight-click',
   'scroll',
+  // 宿主动作组（见 hostActions）
+  'undo-highlight',
+  'redo-highlight',
+  'go-reading-back',
+  'go-reading-forward',
 ])
 
 const MIN_ZOOM = 0.4
@@ -581,6 +602,53 @@ const scheduleLayoutRender = (reason = 'layout') => {
 const engineKind = computed(() => {
   if (props.engine) return props.engine
   return /typst/i.test(props.titleLabel) ? 'typst' : 'latex'
+})
+
+/**
+ * 工具栏左侧的宿主动作组。
+ *
+ * 为什么做成「宿主声明、viewer 只负责画和转发」：
+ * 撤销/重做高亮的历史栈、以及「上一/下一阅读位置」的访问栈，都活在宿主里
+ *（只有宿主知道一次高亮是怎么加进去的、哪些跳转算"阅读位置"）。viewer 若自己存一份，
+ * 就会和宿主的状态各走一路。所以这里只接收按钮描述、把点击 emit 回去。
+ *
+ * 保持顺序稳定（撤销→重做→上一处→下一处），读者靠位置记，不靠读标题。
+ */
+const hostActions = computed(() => {
+  const f = props.features || {}
+  const list = []
+  if (f.undoHighlight) {
+    list.push({
+      key: 'undo-highlight',
+      title: '撤销高亮（Ctrl+Z）',
+      icon: ArrowUndoOutline,
+      // 未传 can* 时按「可点」处理：宿主若没提供状态，就不该把按钮画成灰的。
+      disabled: f.canUndoHighlight === false,
+    })
+  }
+  if (f.redoHighlight) {
+    list.push({
+      key: 'redo-highlight',
+      title: '重做高亮（Ctrl+Y）',
+      icon: ArrowRedoOutline,
+      disabled: f.canRedoHighlight === false,
+    })
+  }
+  if (f.readingHistory) {
+    list.push({
+      key: 'go-reading-back',
+      title: '上一阅读位置（Alt+←）',
+      icon: ChevronBackOutline,
+      disabled: f.canGoReadingBack === false,
+    })
+    list.push({
+      key: 'go-reading-forward',
+      title: '下一阅读位置（Alt+→）',
+      icon: ChevronForwardOutline,
+      disabled: f.canGoReadingForward === false,
+    })
+  }
+  return list
 })
 
 // ───────────────────────── 缩放锚点 ─────────────────────────
@@ -1355,52 +1423,9 @@ const searchRectsByPage = ref({})
 // 搜索框默认收起：工具栏上只留一个放大镜，点开才展开输入框。
 // 常驻一个 130px 输入框会让「翻页 + 缩放」这组高频控件被推到右边，窄窗口里尤其明显。
 const searchOpen = ref(false)
-const moreOpen = ref(false)
 let searchTimer = null
 let searchSeq = 0
 let lastSearchedQuery = ''
-
-/** 关闭「更多」菜单。注册在 window 上：点菜单外的任何地方（含阅读区）都该收起它。 */
-const moreRef = ref(null)
-const moreMenuPos = ref({ top: 0, right: 0 })
-const closeMoreMenu = () => { moreOpen.value = false }
-const onEscCloseMore = (ev) => {
-  if (ev.key === 'Escape' && moreOpen.value) {
-    moreOpen.value = false
-    ev.stopPropagation()
-  }
-}
-
-/**
- * 菜单是 Teleport 到 body 的 fixed 元素，位置按触发按钮实时算。
- *
- * 为什么是 fixed + 视口坐标：工具栏自己会横向滚动，若用相对定位，只要工具栏一滚
- * 菜单就跟着漂；用 getBoundingClientRect 在打开那一刻取一次，之后读者滚动工具栏
- * 也不会错位（菜单本来就该在点开的位置）。
- * 右对齐而不是让它溢出屏幕右侧：按钮永远在工具栏末尾，菜单比按钮宽得多。
- */
-const moreMenuStyle = computed(() => ({
-  top: `${moreMenuPos.value.top}px`,
-  right: `${moreMenuPos.value.right}px`,
-}))
-
-const toggleMoreMenu = () => {
-  if (!moreOpen.value) {
-    const rect = moreRef.value?.getBoundingClientRect()
-    if (rect) {
-      moreMenuPos.value = {
-        top: rect.bottom + 6,
-        right: Math.max(8, window.innerWidth - rect.right),
-      }
-    }
-  }
-  moreOpen.value = !moreOpen.value
-}
-
-const runMenuAction = (fn) => {
-  moreOpen.value = false
-  fn()
-}
 
 const toggleSearch = async () => {
   searchOpen.value = !searchOpen.value
@@ -1993,10 +2018,32 @@ const refresh = () => load(props.path, true)
 
 const rotateTo = (deg) => { rotation.value = ((Math.round(deg / 90) * 90) % 360 + 360) % 360 }
 
+/**
+ * 取某条高亮的原始数据（矩形 + 颜色 + 笔记）。
+ *
+ * 宿主侧栏只有 `{ annotId, page, note, color }` 这样的摘要，没有矩形；
+ * 而撤销「删除」需要完整 rects 才能在后端重建。数据只在 viewer 内存里有一份，
+ * 所以由 viewer 提供这个查询，宿主在删除之前调一次。
+ */
+const findHighlightRaw = (pageNum, annotId) => {
+  const page = pages[Number(pageNum) - 1]
+  const list = Array.isArray(page?.highlights) ? page.highlights : []
+  const hit = list.find((h) => String(h.annot_id) === String(annotId))
+  if (!hit) return null
+  return {
+    page: Number(pageNum),
+    annotId: hit.annot_id,
+    note: hit.note || '',
+    color: hit.color,
+    rects: Array.isArray(hit.rects) ? hit.rects.map((r) => ({ ...r })) : [],
+  }
+}
+
 defineExpose({
   forwardSync,
   goToPage,
   flashAnchor,
+  findHighlightRaw,
   search: runSearch,
   runSearch,
   setSearchQuery: (q) => { searchQuery.value = q },
@@ -2075,10 +2122,6 @@ if (typeof window !== 'undefined') {
   window.addEventListener('keydown', onSpaceDown)
   window.addEventListener('keyup', onSpaceUp)
   window.addEventListener('blur', releaseSpacePan)
-  // 「更多」菜单：点外面 / Esc 收起。用 mousedown 捕获阶段，保证在页面自身的
-  // 平移、选词等处理之前就把菜单关掉，不会出现「点了一下，菜单还在、同时又平移了」。
-  window.addEventListener('mousedown', closeMoreMenu, true)
-  window.addEventListener('keydown', onEscCloseMore)
 }
 
 onBeforeUnmount(() => {
@@ -2101,8 +2144,6 @@ onBeforeUnmount(() => {
     window.removeEventListener('blur', releaseSpacePan)
     window.removeEventListener('mousemove', onPanMove, true)
     window.removeEventListener('mouseup', onPanUp, true)
-    window.removeEventListener('mousedown', closeMoreMenu, true)
-    window.removeEventListener('keydown', onEscCloseMore)
   }
   doc.closeDocument()
 })
@@ -2336,8 +2377,6 @@ onBeforeUnmount(() => {
   outline: none;
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--n-color-primary, #61afef) 28%, transparent);
 }
-
-.gpv__more { display: inline-flex; }
 
 .gpv__btn {
   border: none;
@@ -2621,62 +2660,4 @@ onBeforeUnmount(() => {
 }
 @keyframes gpv-spin { to { transform: rotate(360deg); } }
 
-/*
- * 「更多」菜单：Teleport 到 body 的浮层。
- *
- * 必须写在**全局**块里：scoped 样式会给选择器加 data-v 属性，而 Teleport 出来的节点
- * 虽然在 body 下，Vue 仍会给它加 data-v —— 但祖先限定（.gpv .xxx）不成立，且这里刻意
- * 不用 .gpv 前缀（菜单不在 .gpv 里面），所以按主题类收窄。
- *
- * 图标尺寸要显式给：vicons 的 <svg> 没有自带宽高，在 flex 行里会撑到内容盒的尺寸，
- * 菜单会变成一条竖长的白条。
- */
-.gpv-menu-pop {
-  position: fixed;
-  z-index: 3000;
-  min-width: 190px;
-  padding: 5px;
-  border-radius: 10px;
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  font-size: 12px;
-}
-.gpv-menu-pop.theme-light {
-  background: #ffffff;
-  color: #1f2328;
-  box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.1), 0 12px 32px -8px rgba(15, 23, 42, 0.35);
-}
-.gpv-menu-pop.theme-dark {
-  background: #26292d;
-  color: #dfe3e8;
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.1), 0 12px 32px -8px rgba(0, 0, 0, 0.7);
-}
-.gpv-menu-pop__item {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  width: 100%;
-  padding: 7px 9px;
-  border: 0;
-  border-radius: 7px;
-  background: transparent;
-  color: inherit;
-  font-size: 12px;
-  text-align: left;
-  cursor: pointer;
-}
-.gpv-menu-pop__item svg {
-  width: 15px;
-  height: 15px;
-  flex: 0 0 auto;
-  opacity: 0.75;
-}
-.gpv-menu-pop__item:hover:not(:disabled) { background: rgba(128, 128, 128, 0.14); }
-.gpv-menu-pop__item:focus-visible {
-  outline: none;
-  box-shadow: 0 0 0 2px rgba(97, 175, 239, 0.5);
-}
-.gpv-menu-pop__item:disabled { opacity: 0.4; cursor: not-allowed; }
-.gpv-menu-pop__check { margin-left: auto; color: #61afef; }
 </style>

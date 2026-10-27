@@ -20,6 +20,11 @@ const READER_SUBTREE_PATHS = [
   "/src/components/HomeViewComponent/ReaderPane.vue",
   "/src/components/ReaderComponent/DocReaderWindow.vue",
   "/src/components/ReaderComponent/readers/",
+  // 这一层是各阅读器本体（ConvertPDF / Epub / Markdown / Text / Html）与共用外壳
+  //（ReaderSidePanel 侧栏、readerSearch、readerScrollbar、chrome 样式）。
+  // 它们既被独立阅读器窗口用，也被主应用的知识库阅读器页用；不钉进 reader-core，
+  // Rollup 就会把它们并进主入口 chunk，阅读器窗口随之把整个主应用拉起来（见下方说明）。
+  "/src/components/ReaderComponent/",
   "/src/components/PdfViewer/",
   "/src/components/HomeViewComponent/GuaxiSelectionTranslatePanel.vue",
   // 通用 composable / util。阅读器与主应用都在用，正是它们被 Rollup 并进 main 的：

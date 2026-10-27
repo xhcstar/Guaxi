@@ -96,18 +96,53 @@
       <div class="epub-left-wrapper" v-show="viewMode !== 'full-right' || showOutline" :style="{ width: leftPanelWidth }">
         <div v-if="showOutline" class="outline-panel-wrapper outline-panel-wrapper-left" @click.stop
           :style="{ flexBasis: `${outlineWidth}px` }">
-          <GuaxiOutline />
+          <!--
+            左侧改成标签侧栏（大纲 / 书签），与 PDF、Markdown、Text 阅读器的侧栏一致。
+            原先只有孤零零一列大纲，书签却藏在工具栏的下拉里 —— 同是「在书中找一处并跳过去」，
+            现在收进同一列、靠标签切换。
+          -->
+          <ReaderSidePanel
+            :tabs="sideTabs"
+            :active="sideTab"
+            :width="outlineWidth"
+            @update:active="sideTab = $event"
+            @close="showOutline = false"
+            @resize-start="startOutlineResize"
+          >
+            <template #outline>
+              <div @click.stop><GuaxiOutline /></div>
+            </template>
+            <template #bookmarks>
+              <div class="rsp-list" @click.stop>
+                <div v-if="!sortedBookmarks.length" class="rsp-empty">还没有书签。用工具栏的书签按钮添加当前章。</div>
+                <button
+                  v-for="p in sortedBookmarks"
+                  :key="`bm-${p}`"
+                  class="rsp-item"
+                  :class="{ 'is-on': p === currentPage }"
+                  @click="goToPage(p)"
+                >
+                  <span class="rsp-item__title">第 {{ p }} 章</span>
+                </button>
+              </div>
+            </template>
+          </ReaderSidePanel>
         </div>
-        <!-- 大纲列宽拖拽把手：原来那条"分隔线"只是 border-right，没有任何拖拽处理 -->
-        <div v-if="showOutline" class="outline-resize-handle" @mousedown.prevent="startOutlineResize"></div>
 
-        <!-- 左侧epub文档预览区域 -->
+        <!-- 左侧源文预览区域 -->
         <div class="epub-source-panel guaxi-reader-scrollbar" v-show="viewMode !== 'full-right'">
           <div class="epub-source-container">
-            <div ref="epubPreviewContainer" class="epub-preview-container guaxi-reader-scrollbar"></div>
+            <!--
+              EPUB：交给 epub.js 原样渲染（保留书籍自己的版式）。
+              Kindle 系（mobi / azw / azw3）：epub.js 打不开，改用后端已解析好并内联了资源的
+              章节 HTML —— 后端 `read_document_for_reader` 产出的 sections 本来就是逐章 HTML，
+              这里按章插入即可，不需要再引入一套 mobi 解析器。
+            -->
+            <div v-if="isKindleEbook" ref="kindleSourceRef" class="epub-preview-container guaxi-reader-scrollbar"></div>
+            <div v-else ref="epubPreviewContainer" class="epub-preview-container guaxi-reader-scrollbar"></div>
             <!-- 加载状态 -->
             <div v-if="isLoading" class="epub-loading-message">
-              正在加载epub文件...
+              正在加载{{ isKindleEbook ? 'Kindle 电子书' : 'epub 文件' }}...
             </div>
           </div>
         </div>
@@ -330,6 +365,7 @@ import MarkdownIt from 'markdown-it'
 import { useOutlineStore } from '../../stores/outlineStore'
 import { useRightSiderStore } from '../../stores/rightSiderStore'
 import GuaxiOutline from '../HomeViewComponent/GuaxiOutline.vue'
+import ReaderSidePanel from './ReaderSidePanel.vue'
 import GuaxiAgentAssistant from '../HomeViewComponent/GuaxiAgentAssistant.vue'
 import GuaxiSelectionTranslatePanel from '../HomeViewComponent/GuaxiSelectionTranslatePanel.vue'
 import {
@@ -371,7 +407,10 @@ const props = defineProps({
   fileType: {
     type: String,
     required: true,
-    validator: (value) => ['epub'].includes(value)
+    // 同一套组件承接 EPUB 与 Kindle 系（mobi / azw / azw3）：两者都是「分章 + 目录」的
+    // 电子书结构，后端 read_document_for_reader 返回同一种 payload（format: 'ebook'），
+    // 只是解析器不同。分开写两个几近相同的组件只会让改动要同步两遍。
+    validator: (value) => ['epub', 'mobi', 'azw', 'azw3'].includes(value)
   },
   fileName: {
     type: String,
@@ -766,6 +805,8 @@ const stopOutlineResize = () => {
 };
 const currentPage = ref(1)
 const totalPages = ref(0)
+/** Kindle 系电子书的分章内容（仅 mobi/azw/azw3 使用）。 */
+const kindleSections = ref([])
 const jumpPage = ref(1)
 
 const readerStorageKey = computed(() => {
@@ -935,6 +976,14 @@ const viewMode = ref('split')
 const previousLeftWidth = ref(leftPanelWidth.value)
 const showOutline = ref(false)
 
+/** 左侧标签侧栏：大纲 / 书签（见 ReaderSidePanel）。 */
+const sideTab = ref('outline')
+const sortedBookmarks = computed(() => [...new Set(bookmarks.value)].sort((a, b) => a - b))
+const sideTabs = computed(() => [
+  { key: 'outline', label: '大纲' },
+  { key: 'bookmarks', label: '书签', count: sortedBookmarks.value.length },
+])
+
 const viewModeOptions = [
   { label: '左右分栏', key: 'split' },
   { label: '仅左侧', key: 'full-left' },
@@ -951,7 +1000,63 @@ const handleViewModeSelect = (key) => {
 }
 
 const epubPreviewContainer = ref(null)
+/** Kindle 系电子书的源文容器（mobi / azw / azw3）；EPUB 用上面的 epub.js 容器。 */
+const kindleSourceRef = ref(null)
 const isLoading = ref(false)
+
+/** 是否为 Kindle 系电子书：它们不能用 epub.js 打开，源文列改由后端解析结果渲染。 */
+const isKindleEbook = computed(() =>
+  ['mobi', 'azw', 'azw3'].includes(String(props.fileType || '').toLowerCase())
+)
+
+/**
+ * 把 Kindle 电子书渲染进左侧源文列。
+ *
+ * 数据来自后端 `read_document_for_reader`（与右侧 Markdown 的章节划分一一对应）：
+ * 每节的 html 已经做过资源内联与净化，直接按章插入即可。
+ * 只渲染当前章而不是整本：一本 mobi 常有几百节、几百 MB 的图片 data URI，
+ * 全量挂进 DOM 会让翻章卡上好几秒；右侧正文本来就是按章加载的。
+ */
+const loadKindleSections = async () => {
+  try {
+    const payload = await invoke('read_document_for_reader', {
+      path: props.filePath,
+      kind: props.kind || props.fileType,
+    })
+    if (!payload || payload.format !== 'ebook') {
+      throw new Error('后端未返回电子书结构')
+    }
+    const list = Array.isArray(payload.sections) ? payload.sections : []
+    if (!list.length) throw new Error('这本书没有可显示的正文')
+    kindleSections.value = list
+    totalPages.value = list.length
+    renderKindleSection(currentPage.value - 1)
+    applyZoomLevel()
+    logger.info('[EpubReader] kindle sections loaded', {
+      path: props.filePath,
+      sections: list.length,
+      toc: Array.isArray(payload.toc) ? payload.toc.length : 0,
+    })
+  } catch (error) {
+    logger.error('[EpubReader] load kindle sections failed', {
+      path: props.filePath,
+      error: String(error?.message || error),
+    })
+    if (kindleSourceRef.value) {
+      kindleSourceRef.value.innerHTML = `<div class="error-message">加载电子书失败: ${String(error?.message || error)}</div>`
+    }
+    message.error(`加载电子书失败: ${String(error?.message || error)}`)
+  }
+}
+
+const renderKindleSection = (index) => {
+  const el = kindleSourceRef.value
+  if (!el) return
+  const section = kindleSections.value[Math.max(0, Math.min(index, kindleSections.value.length - 1))]
+  el.innerHTML = section?.html || ''
+  // 切章回顶部：停在上一章的滚动位置会让人以为内容没换。
+  el.scrollTop = 0
+}
 
 // Markdown相关
 const markdownContent = ref('')
@@ -1161,6 +1266,12 @@ const loadWithEpubPreview = async () => {
 const loadEpubDocument = async () => {
   isLoading.value = true;
   try {
+    // Kindle 系走另一条路：后端已经把整本书解析成分章节 HTML（见 EbookPayload），
+    // epub.js 只认 EPUB 容器，硬塞 mobi 进去只会在 book.open() 里失败。
+    if (isKindleEbook.value) {
+      await loadKindleSections();
+      return;
+    }
     logger.info('开始加载EPUB文档:', props.filePath);
     await loadWithEpubPreview();
   } catch (error) {
@@ -1220,6 +1331,13 @@ const adjustContainerHeight = (rendition) => {
 
 // 修改缩放函数
 const applyZoomLevel = () => {
+  // Kindle 分支没有 epub.js 实例：缩放直接改源文列的字号，效果等价（都是让正文变大）。
+  if (isKindleEbook.value) {
+    const el = kindleSourceRef.value
+    if (el) el.style.fontSize = `${14 * zoomLevel.value}px`
+    return
+  }
+
   if (!epubInstance.value?.rendition) {
     log.warn('无法应用缩放级别: EPUB渲染实例不存在');
     return;
@@ -1894,6 +2012,19 @@ const closeSelectionToolbar = () => {
   selectionInsertText.value = ''
 }
 
+/**
+ * 在浮条外按下鼠标：收起浮条并清掉选区。
+ *
+ * 正文在 iframe 里，选区也属于 iframe 的 document —— 清主文档的选区没有任何作用。
+ * 不清理的话，点在正文空白处并不会清掉既有选区，紧随的 mouseup 会把浮条原样浮回来。
+ */
+const clearSelectionOnOutsideDown = () => {
+  const doc = epubPreviewContainer.value?.querySelector?.('iframe')?.contentDocument
+  const sel = doc?.getSelection?.()
+  sel?.removeAllRanges?.()
+  closeSelectionToolbar()
+}
+
 const normalizeSelectionTextForLanguageTasks = (raw) => {
   const text = String(raw || '').replace(/\r\n?/g, '\n')
   if (!text.trim()) return ''
@@ -2324,13 +2455,13 @@ const handleSelectionMouseUp = () => {
 const handleGlobalMouseDown = (e) => {
   const t = e?.target
   if (!(t instanceof Element)) {
-    closeSelectionToolbar()
+    clearSelectionOnOutsideDown()
     return
   }
 
   if (t.closest('.selection-toolbar')) return
   if (t.closest('.pot-selection-translate-panel')) return
-  closeSelectionToolbar()
+  clearSelectionOnOutsideDown()
 }
 
 const updateActiveSearchMatch = (nextIndex) => {
@@ -3455,6 +3586,12 @@ watch(() => props.filePath, async (newPath) => {
     loadMarkdownPage(1);
     notesContent.value = '';
   }
+});
+
+// Kindle 电子书：换章时同步左侧源文列。EPUB 由 epub.js 自己在 rendition 里翻页，不经过这里。
+watch(currentPage, (page) => {
+  if (!isKindleEbook.value || !kindleSections.value.length) return
+  renderKindleSection(Number(page) - 1)
 });
 
 watchEffect((onInvalidate) => {

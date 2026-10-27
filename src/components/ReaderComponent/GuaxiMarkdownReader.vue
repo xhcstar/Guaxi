@@ -96,10 +96,38 @@
       <div class="markdown-left-wrapper" v-show="viewMode !== 'full-right' || showOutline" :style="{ width: leftPanelWidth }">
         <div v-if="showOutline" class="outline-panel-wrapper outline-panel-wrapper-left" @click.stop
           :style="{ flexBasis: `${outlineWidth}px` }">
-          <GuaxiOutline />
+          <!--
+            左侧改成标签侧栏（大纲 / 书签），与 PDF、电子书、独立阅读器的侧栏一致。
+            原先只有孤零零一列大纲，书签却藏在工具栏的下拉里 —— 同是「在文中找一处并跳过去」，
+            现在收进同一列、靠标签切换。
+          -->
+          <ReaderSidePanel
+            :tabs="sideTabs"
+            :active="sideTab"
+            :width="outlineWidth"
+            @update:active="sideTab = $event"
+            @close="showOutline = false"
+            @resize-start="startOutlineResize"
+          >
+            <template #outline>
+              <div @click.stop><GuaxiOutline /></div>
+            </template>
+            <template #bookmarks>
+              <div class="rsp-list" @click.stop>
+                <div v-if="!sortedBookmarks.length" class="rsp-empty">还没有书签。用工具栏的书签按钮添加当前页。</div>
+                <button
+                  v-for="p in sortedBookmarks"
+                  :key="`bm-${p}`"
+                  class="rsp-item"
+                  :class="{ 'is-on': p === currentPage }"
+                  @click="goToPage(p)"
+                >
+                  <span class="rsp-item__title">第 {{ p }} 页</span>
+                </button>
+              </div>
+            </template>
+          </ReaderSidePanel>
         </div>
-        <!-- 大纲列宽拖拽把手：原来那条"分隔线"只是 border-right，没有任何拖拽处理 -->
-        <div v-if="showOutline" class="outline-resize-handle" @mousedown.prevent="startOutlineResize"></div>
 
         <!-- Markdown渲染区域 -->
         <div class="markdown-source-panel" ref="sourcePanel" v-show="viewMode !== 'full-right'" @mouseup="handleSelectionMouseUp">
@@ -333,6 +361,7 @@ import MarkdownIt from 'markdown-it'
 import { useOutlineStore } from '../../stores/outlineStore'
 import { useRightSiderStore } from '../../stores/rightSiderStore'
 import GuaxiOutline from '../HomeViewComponent/GuaxiOutline.vue'
+import ReaderSidePanel from './ReaderSidePanel.vue'
 import GuaxiAgentAssistant from '../HomeViewComponent/GuaxiAgentAssistant.vue'
 import GuaxiSelectionTranslatePanel from '../HomeViewComponent/GuaxiSelectionTranslatePanel.vue'
 import {
@@ -951,6 +980,14 @@ const elements = ref([])
 const viewMode = ref('split')
 const previousLeftWidth = ref(leftPanelWidth.value)
 const showOutline = ref(false)
+
+/** 左侧标签侧栏：大纲 / 书签（见 ReaderSidePanel）。 */
+const sideTab = ref('outline')
+const sortedBookmarks = computed(() => [...new Set(bookmarks.value)].sort((a, b) => a - b))
+const sideTabs = computed(() => [
+  { key: 'outline', label: '大纲' },
+  { key: 'bookmarks', label: '书签', count: sortedBookmarks.value.length },
+])
 
 const viewModeOptions = [
   { label: '左右分栏', key: 'split' },
@@ -1711,6 +1748,18 @@ const closeSelectionToolbar = () => {
   selectionInsertText.value = ''
 }
 
+/**
+ * 在浮条外按下鼠标：收起浮条并清掉选区。
+ *
+ * 只把 visible 置 false 不够 —— 点在正文以外的空白（页边、行间、容器底部）时浏览器
+ * 不会清掉已有的文字选区，紧随其后的 mouseup 会再次读到同一段文字，把浮条重新浮出来。
+ * 用户看到的就是「点了空白处，浮条还在」。清掉选区后 syncSelection 读到的就是空串。
+ */
+const clearSelectionOnOutsideDown = () => {
+  window.getSelection?.()?.removeAllRanges()
+  closeSelectionToolbar()
+}
+
 const normalizeSelectionTextForLanguageTasks = (raw) => {
   const text = String(raw || '').replace(/\r\n?/g, '\n')
   if (!text.trim()) return ''
@@ -2154,13 +2203,13 @@ const handleSelectionMouseUp = () => {
 const handleGlobalMouseDown = (e) => {
   const t = e?.target
   if (!(t instanceof Element)) {
-    closeSelectionToolbar()
+    clearSelectionOnOutsideDown()
     return
   }
 
   if (t.closest('.selection-toolbar')) return
   if (t.closest('.pot-selection-translate-panel')) return
-  closeSelectionToolbar()
+  clearSelectionOnOutsideDown()
 }
 
 const updateActiveSearchMatch = (nextIndex) => {

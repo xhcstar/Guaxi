@@ -176,12 +176,49 @@
       </div>
 
       <div class="pdf-left-wrapper" v-show="viewMode !== 'full-right' || showOutline || pdfSearchVisible" :style="{ width: leftPanelWidth }" @mouseenter="lastReaderRegion = 'pdf'">
-        <div v-if="showOutline" class="outline-panel-wrapper outline-panel-wrapper-left" @click.stop
-          :style="{ flexBasis: `${outlineWidth}px` }">
-          <GuaxiOutline />
-        </div>
-        <!-- 大纲列宽拖拽把手：原来那条"分隔线"只是 border-right，没有任何拖拽处理 -->
-        <div v-if="showOutline" class="outline-resize-handle" @mousedown.prevent="startOutlineResize"></div>
+        <!--
+          左侧内容改成标签侧栏：大纲 / 书签 / 笔记共用一列，靠顶部标签切换。
+
+          原先只有「大纲」一列（点工具栏的大纲按钮才出现），书签和笔记都散在工具栏的下拉
+          和右侧浮动面板里 —— 同一类「翻找书里某处」的动作被拆到三个位置。现在与电子书
+          阅读器、独立 PDF 阅读器的侧栏是一致的：一列、几个标签、内容随标签换。
+        -->
+        <ReaderSidePanel
+          v-if="showOutline"
+          :tabs="sideTabs"
+          :active="sideTab"
+          :width="outlineWidth"
+          @update:active="sideTab = $event"
+          @close="showOutline = false"
+          @resize-start="startOutlineResize"
+        >
+          <template #outline>
+            <div @click.stop><GuaxiOutline /></div>
+          </template>
+          <template #bookmarks>
+            <div class="rsp-list" @click.stop>
+              <div v-if="!bookmarks.length" class="rsp-empty">还没有书签。用工具栏的书签按钮添加当前页。</div>
+              <button
+                v-for="p in sortedBookmarks"
+                :key="`bm-${p}`"
+                class="rsp-item"
+                :class="{ 'is-on': p === currentPage }"
+                @click="goToPage(p)"
+              >
+                <span class="rsp-item__title">第 {{ p }} 页</span>
+              </button>
+            </div>
+          </template>
+          <template #notes>
+            <div class="rsp-list" @click.stop>
+              <div v-if="!selectedHighlight" class="rsp-empty">在正文里点选一条高亮，就能在这里看到它。</div>
+              <div v-else class="rsp-item is-on">
+                <span class="rsp-item__title">第 {{ selectedHighlight.page }} 页</span>
+                <span class="rsp-item__sub">{{ selectedHighlight.note || '（无笔记）' }}</span>
+              </div>
+            </div>
+          </template>
+        </ReaderSidePanel>
 
         <!-- 新版统一 pdfium 阅读器（GuaxiPdfViewer，连续滚动 + 虚拟化 + 字级文本层 + 写回式高亮）-->
         <div v-if="useNewPdfViewer" class="pdf-render-panel pdf-render-panel--new guaxi-reader-scrollbar" v-show="viewMode !== 'full-right'">
@@ -198,38 +235,12 @@
             @highlight-click="onViewerHighlightClick"
             @selection="onViewerSelection"
           />
-          <div class="pdf-annotation-toolbar-wrap pdf-annotation-toolbar-wrap--new" @mousedown.stop @click.stop @dblclick.stop>
-            <div class="pdf-annotation-toolbar">
-              <button class="pdf-annotation-tool-btn" type="button" title="高亮所选文本（写回 PDF）" @click="addHighlightViaViewer">
-                <n-icon :component="ColorWandOutline" />
-              </button>
-              <n-popover trigger="click" placement="top" :show-arrow="true">
-                <template #trigger>
-                  <button class="pdf-annotation-tool-btn pdf-hl-color-btn" type="button" title="高亮颜色">
-                    <span class="pdf-hl-swatch" :style="{ background: highlightColorCss }"></span>
-                  </button>
-                </template>
-                <div class="pdf-hl-color-pop">
-                  <div class="pdf-hl-presets">
-                    <button
-                      v-for="(c, i) in highlightPresets"
-                      :key="i"
-                      class="pdf-hl-preset"
-                      :class="{ active: rgbaArrToCss(c) === highlightColorCss }"
-                      :style="{ background: rgbaArrToCss(c) }"
-                      @click="highlightColor = [...c]"
-                    ></button>
-                  </div>
-                  <n-color-picker
-                    :value="highlightColorCss"
-                    :modes="['rgb']"
-                    size="small"
-                    @update:value="(v) => (highlightColor = cssToRgbaArr(v))"
-                  />
-                </div>
-              </n-popover>
-            </div>
-          </div>
+          <!--
+            底部常驻的标注工具条已移除：高亮与配色改由划词浮条接管（见文件顶部的 selection-toolbar）。
+            原先它固定在阅读区左下角、与选区无关，读者选中文字后还得把鼠标挪过去点一下，
+            「选中 → 高亮」被拆成两个位置的两步操作；而它那套颜色入口也只有一个小色块，
+            不如浮条里直接平铺五个预设色直观。
+          -->
         </div>
 
         <!-- 旧版渲染核心（PDF.js）；灰度回退用，验证通过后移除 -->
@@ -456,6 +467,37 @@
           @click="querySelection">
           <n-icon :component="SearchOutline" />
         </button>
+        <!--
+          高亮：直接在选定文字上落笔，颜色取自下面的调色盘。
+
+          这两颗按钮原先挂在阅读区左下角常驻的「标注工具条」上，读者得先把视线
+          挪到角落、点一下、再回到正文。放到划词浮条里之后，「选中 → 高亮」是一个连续动作，
+          和独立 PDF 阅读器（ReaderPane）的交互也统一了。
+        -->
+        <button class="selection-tool-btn" type="button" title="高亮所选文本（写回 PDF）"
+          :disabled="!selectionText" @click="addHighlightViaViewer">
+          <n-icon :component="ColorWandOutline" :style="{ color: highlightColorCss }" />
+        </button>
+        <button class="selection-tool-btn selection-tool-btn--swatch" type="button"
+          :class="{ active: highlightPaletteOpen }"
+          :title="`高亮颜色（当前 ${highlightColorCss}）`"
+          :aria-expanded="highlightPaletteOpen"
+          @click.stop="highlightPaletteOpen = !highlightPaletteOpen">
+          <span class="selection-tool-swatch" :style="{ background: highlightColorCss }"></span>
+        </button>
+        <template v-if="highlightPaletteOpen">
+          <button
+            v-for="(c, i) in highlightPresets"
+            :key="`hlc-${i}`"
+            class="selection-tool-btn selection-tool-btn--preset"
+            :class="{ active: rgbaArrToCss(c) === highlightColorCss }"
+            type="button"
+            :title="`高亮颜色 ${i + 1}`"
+            @click.stop="highlightColor = [...c]"
+          >
+            <span class="selection-tool-swatch" :style="{ background: rgbaArrToCss(c) }"></span>
+          </button>
+        </template>
         <button class="selection-tool-btn" type="button" title="问AI" :disabled="selectionBusy || !selectionText"
           @click="askSelectionWithAssistant">
           <n-icon :component="ChatbubbleEllipsesOutline" />
@@ -522,6 +564,7 @@ import MarkdownIt from 'markdown-it'
 import { useOutlineStore } from '../../stores/outlineStore'
 import { useRightSiderStore } from '../../stores/rightSiderStore'
 import GuaxiOutline from '../HomeViewComponent/GuaxiOutline.vue'
+import ReaderSidePanel from './ReaderSidePanel.vue'
 import GuaxiAgentAssistant from '../HomeViewComponent/GuaxiAgentAssistant.vue'
 import GuaxiSelectionTranslatePanel from '../HomeViewComponent/GuaxiSelectionTranslatePanel.vue'
 import GuaxiPdfViewer from '../PdfViewer/GuaxiPdfViewer.vue'
@@ -1271,6 +1314,8 @@ const redoHighlight = async () => {
 // 高亮颜色（RGBA 0-255）+ 预设色板。乐观渲染下选词点高亮即时出现。
 const clamp255 = (n) => Math.max(0, Math.min(255, Math.round(Number(n) || 0)))
 const highlightColor = ref([255, 235, 59, 110])
+/** 划词浮条上的调色盘是否展开：默认收起，高亮图标直接用当前颜色落笔。 */
+const highlightPaletteOpen = ref(false)
 const highlightPresets = [
   [255, 235, 59, 110],   // 黄
   [76, 217, 100, 110],   // 绿
@@ -1304,6 +1349,7 @@ const highlightColorCss = computed(() => rgbaArrToCss(highlightColor.value))
 
 const addHighlightViaViewer = async () => {
   const r = await pdfViewer.value?.addHighlightFromSelection({ color: highlightColor.value })
+  highlightPaletteOpen.value = false
   if (r) {
     pushHighlightHistory({
       type: 'add',
@@ -1590,6 +1636,20 @@ const elements = ref([])
 const viewMode = ref('split')
 const previousLeftWidth = ref(leftPanelWidth.value)
 const showOutline = ref(false)
+
+/**
+ * 左侧标签侧栏：大纲 / 书签 / 笔记。
+ *
+ * 三者都是「在书里找一处并跳过去」，所以共用一列、靠标签切换；
+ * 数字角标让读者不打开也知道有多少条。
+ */
+const sideTab = ref('outline')
+const sortedBookmarks = computed(() => [...new Set(bookmarks.value)].sort((a, b) => a - b))
+const sideTabs = computed(() => [
+  { key: 'outline', label: '大纲' },
+  { key: 'bookmarks', label: '书签', count: sortedBookmarks.value.length },
+  { key: 'notes', label: '笔记', count: selectedHighlight.value ? 1 : 0 },
+])
 
 const viewModeOptions = [
   { label: '左右分栏', key: 'split' },
@@ -2441,6 +2501,19 @@ const closeSelectionToolbar = () => {
   selectionToolbarVisible.value = false
   selectionText.value = ''
   selectionInsertText.value = ''
+  highlightPaletteOpen.value = false
+}
+
+/**
+ * 在浮条外按下鼠标：收起浮条并清掉文字选区。
+ *
+ * 只置 visible=false 是不够的：选手在 PDF 画布的灰色区域或页边按下时，浏览器不会清掉
+ * 已有的文字选区，紧接着 mouseup 又会读到同一段文字把浮条浮回来。
+ * 高亮矩形的选中态另有处理（见 handleGlobalMouseDown），这里只管文字选区。
+ */
+const clearSelectionOnOutsideDown = () => {
+  window.getSelection?.()?.removeAllRanges()
+  closeSelectionToolbar()
 }
 
 const normalizeSelectionTextForLanguageTasks = (raw) => {
@@ -2866,7 +2939,7 @@ const handleSelectionMouseUp = () => {
 const handleGlobalMouseDown = (e) => {
   const t = e?.target
   if (!(t instanceof Element)) {
-    closeSelectionToolbar()
+    clearSelectionOnOutsideDown()
     return
   }
 
@@ -2874,7 +2947,7 @@ const handleGlobalMouseDown = (e) => {
   if (t.closest('.pot-selection-translate-panel')) return
   // 点在高亮上时先别清选中：那一下正要把它选上（click 在 mousedown 之后才到）。
   if (!t.closest('.gpv__hl-rect')) clearHighlightSelection()
-  closeSelectionToolbar()
+  clearSelectionOnOutsideDown()
 }
 
 const updateActivePdfSearchMatch = (nextIndex) => {
@@ -6024,6 +6097,29 @@ button:disabled {
 .selection-tool-btn:disabled {
   opacity: 0.45;
   cursor: not-allowed;
+}
+
+/* 划词浮条上的高亮配色：一颗当前色 + 展开后平铺的预设色。
+   用圆形色点而不是图标，读者一眼就能认出「这是在挑颜色」。 */
+.selection-tool-btn--swatch {
+  padding: 0;
+}
+
+.selection-tool-btn--preset {
+  width: 24px;
+  padding: 0;
+}
+
+.selection-tool-swatch {
+  display: block;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 1px solid rgba(0, 0, 0, 0.25);
+}
+
+.selection-tool-btn.active {
+  box-shadow: inset 0 0 0 2px var(--n-color-primary, #2f6fdf);
 }
 
 .pdf-annotation-toolbar-wrap {

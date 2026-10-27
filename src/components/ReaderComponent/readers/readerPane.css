@@ -673,6 +673,93 @@
   transform: scale(1.14);
 }
 
+/*
+ * 「用 AI 翻译」弹窗。
+ * 与划词条同一套暗色玻璃风格，保持「悬浮在正文之上」的一致观感；
+ * 遮罩只盖阅读器容器而不是整个页面，读者仍能看到选中的那段原文。
+ */
+.gdr-ebook__dialog-mask {
+  position: absolute;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.32);
+}
+
+.gdr-ebook__dialog {
+  width: min(360px, calc(100% - 32px));
+  padding: 16px 18px;
+  border-radius: 12px;
+  background: var(--guaxi-panel-bg, #fbfbfa);
+  color: var(--guaxi-text-primary, #1f2328);
+  border: 1px solid var(--guaxi-border, #e1e4e8);
+  box-shadow: 0 18px 48px -12px rgba(0, 0, 0, 0.45);
+}
+
+.gdr-ebook__dialog-title {
+  font-size: 14px;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+
+.gdr-ebook__dialog-hint {
+  margin: 0 0 12px;
+  font-size: 12px;
+  opacity: 0.7;
+  line-height: 1.5;
+}
+
+.gdr-ebook__dialog-field {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  margin-bottom: 16px;
+}
+
+.gdr-ebook__dialog-select {
+  flex: 1 1 auto;
+  height: 28px;
+  padding: 0 8px;
+  font-size: 12px;
+  border-radius: 6px;
+  border: 1px solid var(--guaxi-border, #e1e4e8);
+  background: var(--guaxi-app-bg, #fff);
+  color: inherit;
+}
+
+.gdr-ebook__dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.gdr-ebook__dialog-btn {
+  padding: 5px 14px;
+  font-size: 12px;
+  border-radius: 7px;
+  border: 1px solid var(--guaxi-border, #e1e4e8);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.gdr-ebook__dialog-btn:hover {
+  background: var(--guaxi-hover-bg, rgba(15, 23, 42, 0.06));
+}
+
+.gdr-ebook__dialog-btn.is-primary {
+  border-color: transparent;
+  background: #2f6fdf;
+  color: #fff;
+}
+
+.gdr-ebook__dialog-btn.is-primary:hover {
+  background: #2a63c9;
+}
+
 .gdr-ebook__zoom-val {
   min-width: 40px;
   text-align: center;
@@ -966,4 +1053,63 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/*
+ * 标签侧栏里的通用列表条目（ReaderSidePanel 的各标签内容共用）。
+ *
+ * 放在这里而不是各阅读器的 scoped 块：ReaderSidePanel 是插槽容器，条目由宿主渲染，
+ * 宿主各自的 scoped 样式只能覆盖自己那几行；这套「条目」外观是跨阅读器统一的，
+ * 写一份才能保证 PDF / EPUB / Markdown / Text 的侧栏看起来是同一个东西。
+ */
+.rsp-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 2px;
+}
+
+.rsp-empty {
+  padding: 12px 10px;
+  font-size: 12px;
+  line-height: 1.6;
+  opacity: 0.6;
+}
+
+.rsp-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  padding: 5px 9px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font-size: 12px;
+  line-height: 1.45;
+  text-align: left;
+  cursor: pointer;
+}
+
+.rsp-item:hover {
+  background: var(--guaxi-hover-bg, rgba(120, 120, 120, 0.1));
+}
+
+.rsp-item.is-on {
+  background: var(--guaxi-selection-bg, rgba(0, 122, 204, 0.14));
+}
+
+.rsp-item__title {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.rsp-item__sub {
+  font-size: 11px;
+  opacity: 0.65;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
