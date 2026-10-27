@@ -166,6 +166,9 @@ export default defineConfig(async () => ({
       input: {
         main: path.resolve(projectRoot, "index.html"),
         "doc-reader": path.resolve(projectRoot, "doc-reader.html"),
+        // 独立写信窗口：与阅读器同一个理由——只需要 MailComposer 这一棵子树，
+        // 走主入口会把 Monaco / LSP / 全部路由重新解析一遍。
+        "mail-compose": path.resolve(projectRoot, "mail-compose.html"),
       },
       onwarn(warning, defaultHandler) {
         const message = String(warning?.message || "");

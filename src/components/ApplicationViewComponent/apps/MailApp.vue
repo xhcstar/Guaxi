@@ -179,7 +179,7 @@
           :settings="settings"
           :theme-mode="store.theme?.mode || 'dark'"
           :mono-font="settings.monoFont"
-          @reply="(m) => onReply(m)"
+          @reply="(m, opts) => onReply(m, false, opts || {})"
           @reply-all="(m) => onReply(m, true)"
           @forward="onForward"
           @delete="onDeleteCurrent"
@@ -214,6 +214,7 @@
       @send="onSend"
       @schedule="onScheduleSend"
       @save-draft="onSaveDraft"
+      @save-to-mailbox="onAutoSaveToMailbox"
       @apply-template="(tpl) => store.applyTemplate(tpl)"
       @check-attachments="onCheckAttachments"
       @close="store.closeCompose"
@@ -707,13 +708,30 @@ useMailShortcuts(
 
 // ---------------- 生命周期 ----------------
 
+/**
+ * 写信窗口关掉后会广播一次：那里已经把草稿写进库了，主窗口刷新一下草稿箱，
+ * 用户回到主窗口就能看到「刚才写了一半的那封」。
+ */
+let stopComposeClosed = null
+
 onMounted(async () => {
   await store.init()
   await store.loadOutbox()
   if (window.location.search.includes('setup=1')) showAccounts.value = true
+  try {
+    const { listen } = await import('@tauri-apps/api/event')
+    stopComposeClosed = await listen('mail-compose:closed', () => {
+      store.loadOutbox().catch(() => {})
+      store.loadFolders(store.activeAccountId, { refresh: true }).catch(() => {})
+      store.loadMessages({ silent: true }).catch(() => {})
+    })
+  } catch {
+    /* 非 Tauri 环境（浏览器预览）没有事件系统，忽略即可 */
+  }
 })
 
 onBeforeUnmount(() => {
+  stopComposeClosed?.()
   document.removeEventListener('mousemove', onDragMove)
   document.removeEventListener('mouseup', endDrag)
   store.dispose()
@@ -896,11 +914,19 @@ async function expandThread(row) {
   if (row?.threadUids?.length > 1) await store.loadThread(row)
 }
 
-function onCompose() {
+/**
+ * 「写邮件」默认在新窗口里编辑。
+ *
+ * 应用页的写信是一个覆盖层：打开后整个邮件页（列表、阅读区）都用不了，
+ * 想对照原邮件、翻通讯录都得先关掉。独立窗口可以和主窗口并排，
+ * 这也是 Outlook / Thunderbird 的默认行为。
+ */
+async function onCompose() {
   store.startCompose('new')
+  await openComposeInWindow(composeIdFor('new'))
 }
 
-function onReply(detail, all = false) {
+function onReply(detail, all = false, { newWindow = false } = {}) {
   const source = {
     fromAddr: detail.fromAddr,
     fromName: detail.fromName,
@@ -919,6 +945,10 @@ function onReply(detail, all = false) {
     store.composing.text = `\n\n${quote.text}`
     store.composing.html = `<br><br>${quote.html}`
   }
+  // 默认在阅读区就地回复；用户点了「在新窗口里写」才开窗。
+  if (newWindow) {
+    openComposeInWindow(composeIdFor(all ? 'replyAll' : 'reply', detail)).catch(() => {})
+  }
 }
 
 /** 拼 References：原链去重后追加本封的 Message-Id。 */
@@ -932,7 +962,7 @@ function buildReferences(detail) {
   return refs.join(' ')
 }
 
-function onForward(detail) {
+function onForward(detail, { newWindow = false } = {}) {
   store.startCompose('forward', {
     fromAddr: detail.fromAddr,
     fromName: detail.fromName,
@@ -941,6 +971,9 @@ function onForward(detail) {
     ccJson: '[]',
     messageId: null,
   })
+  if (newWindow) {
+    openComposeInWindow(composeIdFor('forward', detail)).catch(() => {})
+  }
 }
 
 function buildQuote(detail) {
@@ -1298,6 +1331,67 @@ async function onDropOnFolder(folderName) {
 
 // ---------------- 发送 ----------------
 
+/**
+ * 草稿 id：同一份草稿重复打开会复用同一扇窗口。
+ *
+ * 新邮件用时间戳；回复 / 转发用「账户 + 源邮件 Message-Id」，
+ * 这样同一封邮件反复点「回复」不会堆出一排窗口。
+ */
+function composeIdFor(mode, detail) {
+  const accountId = store.activeAccountId || 'acct'
+  const base = detail?.messageId || `${detail?.folder || ''}:${detail?.uid ?? ''}`
+  const suffix = base ? `${mode}-${base}` : `${mode}-${Date.now()}`
+  return `${accountId}:${suffix}`
+}
+
+/** 把主窗口的 composing 转成后端交接用的请求体。 */
+function composeRequestOf(id, composing) {
+  return {
+    id,
+    mode: composing.mode,
+    accountId: composing.accountId,
+    to: composing.to || [],
+    cc: composing.cc || [],
+    bcc: composing.bcc || [],
+    subject: composing.subject || '',
+    text: composing.text || '',
+    html: composing.html || '',
+    htmlMode: composing.htmlMode !== false,
+    inReplyTo: composing.inReplyTo || null,
+    references: composing.references || null,
+    draftUid: composing.draftUid ?? null,
+    draftFolder: composing.draftFolder || '',
+    inlineImages: (composing.inlineImages || []).map((img) => ({
+      contentId: img.contentId,
+      path: img.path,
+      name: img.name || '',
+    })),
+    attachments: (composing.attachments || []).map((a) => a.path),
+    sourceMode: Boolean(composing.sourceMode),
+  }
+}
+
+/**
+ * 在新窗口里编辑这封草稿。
+ *
+ * 写信是持续几分钟的事，而应用页的编辑器是模态的——打开后在应用里做不了任何事，
+ * 连回头看一眼原文都不行。所以默认开独立窗口。
+ */
+async function openComposeInWindow(id) {
+  const composing = store.composing
+  if (!composing) return
+  try {
+    await invoke('mail_open_compose_window', {
+      request: composeRequestOf(id, composing),
+      theme: store.theme?.mode || 'dark',
+    })
+    // 内容已经交给窗口，主窗口这份要收起来（否则关窗后 store 里还挂着一份旧的）。
+    store.composing = null
+  } catch (error) {
+    notify(String(error?.message || error), true)
+  }
+}
+
 async function onSend({ useOutbox }) {
   try {
     if (useOutbox) {
@@ -1403,6 +1497,26 @@ async function sendNow() {
   const result = await store.flushOutbox()
   if (result?.errors?.length) notify(result.errors[0], true)
   else notify('已发送')
+}
+
+/**
+ * 编辑器的定时自动保存：写进草稿箱。
+ *
+ * 与「保存草稿」按钮的区别是**不弹提示**——它每 15 秒跑一次，弹提示会刷屏。
+ * 失败也只记日志：下一轮还会重试，断了提示反而打扰正在写信的人。
+ */
+let autoSaveInflight = false
+
+async function onAutoSaveToMailbox(request) {
+  if (!store.composing || autoSaveInflight) return
+  autoSaveInflight = true
+  try {
+    await store.autoSaveDraft(request)
+  } catch (error) {
+    logger.warn('自动保存草稿失败', error)
+  } finally {
+    autoSaveInflight = false
+  }
 }
 
 async function onSaveDraft() {

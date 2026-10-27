@@ -86,6 +86,11 @@ pub(crate) fn connection() -> Result<Connection, String> {
     open()
 }
 
+/// 供批量通道使用：与内部 `open()` 同一套 pragma，但公开给 `batch` 模块。
+pub(crate) fn open_direct() -> Result<Connection, String> {
+    open()
+}
+
 fn open() -> Result<Connection, String> {
     let path = current_db_path().ok_or("邮箱库未初始化")?;
     let conn = Connection::open(path).map_err(|e| format!("打开邮箱库失败: {e}"))?;
@@ -453,7 +458,7 @@ pub fn fts_available() -> bool {
 
 /// 重建一封邮件的索引行。列表（主题/地址）与正文（body）任一变化都调用它。
 fn reindex_message(
-    tx: &rusqlite::Transaction<'_>,
+    tx: &Connection,
     account_id: &str,
     folder: &str,
     uid: u32,
@@ -1031,6 +1036,14 @@ pub fn pop3_uid_for(account_id: &str, uidl: &str) -> Result<u32, String> {
 /// 该账户已经收过的 UIDL（用于「只拉新邮件」）。
 pub fn pop3_known_uids(account_id: &str) -> Result<std::collections::HashSet<String>, String> {
     let conn = open()?;
+    pop3_known_uids_on(&conn, account_id)
+}
+
+/// 复用调用方连接的 UIDL 集合查询（批量同步用）。
+pub fn pop3_known_uids_on(
+    conn: &Connection,
+    account_id: &str,
+) -> Result<std::collections::HashSet<String>, String> {
     let mut stmt = conn
         .prepare("SELECT uidl FROM pop3_uids WHERE account_id=?1")
         .map_err(|e| e.to_string())?;
@@ -1235,8 +1248,21 @@ pub fn upsert_summaries(items: &[MessageSummary]) -> Result<(), String> {
     }
     let mut conn = open()?;
     let tx = conn.transaction().map_err(|e| e.to_string())?;
+    upsert_summaries_on(&tx, items)?;
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// 同一个写入逻辑，但复用调用方的连接 / 事务（批量同步用）。
+pub fn upsert_summaries_on(
+    conn: &Connection,
+    items: &[MessageSummary],
+) -> Result<(), String> {
+    if items.is_empty() {
+        return Ok(());
+    }
     for m in items {
-        tx.execute(
+        conn.execute(
             r#"INSERT INTO messages (account_id, folder, uid, message_id, subject, from_name, from_addr,
                     to_json, cc_json, date, size, snippet, seen, flagged, answered, draft, deleted,
                     has_attachments, thread_key, labels, outgoing)
@@ -1274,9 +1300,8 @@ pub fn upsert_summaries(items: &[MessageSummary]) -> Result<(), String> {
             ],
         )
         .map_err(|e| format!("写入邮件失败: {e}"))?;
-        reindex_message(&tx, &m.account_id, &m.folder, m.uid)?;
+        reindex_message(conn, &m.account_id, &m.folder, m.uid)?;
     }
-    tx.commit().map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -1296,7 +1321,33 @@ pub fn upsert_body(
 ) -> Result<(), String> {
     let mut conn = open()?;
     let tx = conn.transaction().map_err(|e| e.to_string())?;
+    write_body(&tx, account_id, folder, uid, html, text, attachments_json)?;
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(())
+}
 
+/// 复用调用方连接 / 事务的正文写入（批量同步用：一次同步一个事务）。
+pub fn upsert_body_on(
+    conn: &Connection,
+    account_id: &str,
+    folder: &str,
+    uid: u32,
+    html: Option<&str>,
+    text: &str,
+    attachments_json: &str,
+) -> Result<(), String> {
+    write_body(conn, account_id, folder, uid, html, text, attachments_json)
+}
+
+fn write_body(
+    tx: &Connection,
+    account_id: &str,
+    folder: &str,
+    uid: u32,
+    html: Option<&str>,
+    text: &str,
+    attachments_json: &str,
+) -> Result<(), String> {
     // 本地加密（默认开）：正文与附件清单在落盘前加密。
     // 代价要说明白——正文加密后 FTS 索引不到它，正文搜索会退化，
     // 这一点由 `encrypted_body_index_placeholder` 在前面挡住，不会静默失效。
@@ -1326,8 +1377,7 @@ pub fn upsert_body(
         params![account_id, folder, uid, sealed_html, sealed_text, sealed_attachments],
     )
     .map_err(|e| e.to_string())?;
-    reindex_message(&tx, account_id, folder, uid)?;
-    tx.commit().map_err(|e| e.to_string())?;
+    reindex_message(tx, account_id, folder, uid)?;
     Ok(())
 }
 
@@ -1340,6 +1390,18 @@ pub fn upsert_body(
 /// 只缓存「用户已经打开过」的邮件；超过 `RAW_CACHE_LIMIT` 的不缓存。
 /// 原文与正文一样走本地加密：里面有附件内容，不能明文躺在库里。
 pub fn cache_raw_body(account_id: &str, folder: &str, uid: u32, raw: &[u8]) -> Result<(), String> {
+    let conn = open()?;
+    cache_raw_body_on(&conn, account_id, folder, uid, raw)
+}
+
+/// 复用调用方连接的原文缓存（批量同步用）。
+pub fn cache_raw_body_on(
+    conn: &Connection,
+    account_id: &str,
+    folder: &str,
+    uid: u32,
+    raw: &[u8],
+) -> Result<(), String> {
     if raw.is_empty() || raw.len() > RAW_CACHE_LIMIT {
         return Ok(());
     }
@@ -1348,7 +1410,6 @@ pub fn cache_raw_body(account_id: &str, folder: &str, uid: u32, raw: &[u8]) -> R
     } else {
         raw.to_vec()
     };
-    let conn = open()?;
     // 必须是 UPSERT 而不是 UPDATE：第一次打开邮件时正文行还没写（upsert_body 在解析之后），
     // 用 UPDATE 会静默命中 0 行，原文缓存永远存不进去——附件依旧每次重新下载。
     conn.execute(

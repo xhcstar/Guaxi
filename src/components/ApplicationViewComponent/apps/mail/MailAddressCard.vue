@@ -4,6 +4,7 @@
   <Teleport to="body">
     <div
       v-if="card"
+      ref="cardRef"
       class="mail-addr-card"
       :style="{ left: `${card.x}px`, top: `${card.y}px` }"
       @mouseenter="cancelHide"
@@ -49,7 +50,7 @@
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, reactive, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { avatarSeed } from './theme'
 
@@ -88,21 +89,62 @@ function hide() {
  * 打开某地址的卡片。`rect` 是触发元素的位置：卡片贴在该元素下方，
  * 靠近窗口底部时翻到上方，靠近右缘时向左收，避免被裁掉。
  */
+/**
+ * 卡片出现的锚点：优先在地址下方，下方放不下就翻到上方。
+ *
+ * 以前按固定的 280×168 估算位置，卡片内容一多（有组织、有往来统计）就超出屏幕；
+ * 现在先按锚点摆一个初值，卡片渲染后再用**真实尺寸**校正一次（见 `reposition`）。
+ */
 function show(address, data, rect) {
   if (!address) return
   cancelHide()
-  const width = 280
-  const height = 168
-  const x = Math.max(8, Math.min(rect.left, window.innerWidth - width - 12))
-  const below = rect.bottom + 6
-  const y = below + height > window.innerHeight ? Math.max(8, rect.top - height - 6) : below
+  const gap = 6
+  const below = rect.bottom + gap
+  const x = Math.max(8, Math.min(rect.left, window.innerWidth - 288))
   const payload = data || emptyCard(address)
-  if (card.value?.data?.email === payload.email) {
-    // 同一张卡只挪位置，不重新渲染（鼠标在同一行地址之间移动时不闪）。
-    card.value = { data: payload, x, y }
-    return
+  card.value = { data: payload, x, y: below }
+  nextTick(() => reposition(rect))
+}
+
+/**
+ * 用卡片的真实尺寸重新定位。
+ *
+ * 三条约束：不超出视口、尽量贴近鼠标所在的那一行、下方放不下时翻到上方。
+ * 窗口尺寸变化时也会重跑（监听 resize）。
+ */
+function reposition(rect) {
+  const el = cardRef.value
+  if (!el || !rect) return
+  const box = el.getBoundingClientRect()
+  const width = box.width || 280
+  const height = box.height || 160
+  const gap = 6
+  const margin = 8
+
+  // 水平：贴着地址左缘，但右侧超出视口时向左收。
+  let x = Math.min(rect.left, window.innerWidth - width - margin)
+  x = Math.max(margin, x)
+
+  // 垂直：优先下方，放不下就上方，两边都放不下时取空间大的一侧。
+  const spaceBelow = window.innerHeight - rect.bottom - gap - margin
+  const spaceAbove = rect.top - gap - margin
+  let y
+  if (height <= spaceBelow || spaceBelow >= spaceAbove) {
+    y = rect.bottom + gap
+  } else {
+    y = rect.top - gap - height
   }
-  card.value = { data: payload, x, y }
+  y = Math.max(margin, Math.min(y, window.innerHeight - height - margin))
+
+  card.value = { ...card.value, x, y, anchor: rect }
+}
+
+const cardRef = ref(null)
+
+/** 窗口尺寸变化：卡片还是"打开着"的就按原锚点重新摆一次。 */
+function onWindowResize() {
+  const anchor = card.value?.anchor
+  if (anchor) reposition(anchor)
 }
 
 function emptyCard(address) {
@@ -161,7 +203,11 @@ function relative(unix) {
   return `${Math.floor(days / 365)} 年前`
 }
 
-onBeforeUnmount(() => clearTimeout(hideTimer))
+onMounted(() => window.addEventListener('resize', onWindowResize))
+onBeforeUnmount(() => {
+  clearTimeout(hideTimer)
+  window.removeEventListener('resize', onWindowResize)
+})
 
 defineExpose({ show, hide, cancelHide, scheduleHide, card })
 </script>

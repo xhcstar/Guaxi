@@ -1,12 +1,35 @@
 <template>
   <div class="mail-modal-backdrop" @click.self="$emit('close')">
-    <div class="mail-modal" role="dialog" aria-label="外观与设置">
+    <!-- 设置窗口可拖拽调整大小：诊断、诊断报告与模板正文都需要更多空间，
+         固定 760px 的宽度在这些场景下不够用。 -->
+    <div class="mail-modal mail-settings-modal" role="dialog" aria-label="外观与设置">
       <div class="mail-modal-head">
         <h2 class="mail-modal-title">外观与设置</h2>
         <button class="mail-modal-close" @click="$emit('close')">×</button>
       </div>
 
       <div class="mail-modal-body">
+        <!-- 设置分组：过去是一个几百行的长列表，找一项要滚很久。
+             按「做什么」分成四页，每页一句话说明它管什么；窗口本身也可以拖着调整大小。 -->
+        <nav class="mail-settings-tabs" role="tablist">
+          <button
+            v-for="tab in SETTINGS_TABS"
+            :key="tab.key"
+            class="mail-settings-tab"
+            :class="{ 'is-on': activeTab === tab.key }"
+            role="tab"
+            :aria-selected="activeTab === tab.key"
+            :title="tab.hint"
+            @click="activeTab = tab.key"
+          >
+            <MailIcon :name="tab.icon" :size="14" />
+            {{ tab.label }}
+          </button>
+        </nav>
+
+        <p class="mail-settings-hint">{{ activeTabHint }}</p>
+
+        <section v-show="activeTab === 'appearance'" class="mail-settings-panel">
         <!-- 主题 -->
         <div class="mail-flabel" style="margin-bottom: 8px">主题</div>
         <div class="mail-theme-grid">
@@ -100,6 +123,9 @@
         </div>
 
         <!-- 代理 -->
+        </section>
+
+        <section v-show="activeTab === 'receive'" class="mail-settings-panel">
         <div class="mail-section-divider"></div>
         <div class="mail-flabel" style="margin-bottom: 8px">网络代理（收发信都走它）</div>
         <div class="mail-field-row">
@@ -137,6 +163,7 @@
         </div>
 
         <!-- 同步与发送 -->
+
         <div class="mail-section-divider"></div>
         <div class="mail-field-row">
           <div class="mail-field">
@@ -249,6 +276,9 @@
         </label>
 
         <!-- 端到端加密 -->
+        </section>
+
+        <section v-show="activeTab === 'security'" class="mail-settings-panel">
         <div class="mail-section-divider"></div>
         <div class="mail-flabel" style="margin-bottom: 6px">端到端加密与签名</div>
         <div class="mail-crypto-grid">
@@ -291,6 +321,7 @@
         </div>
 
         <!-- 服务器端规则 -->
+
         <div class="mail-section-divider"></div>
         <div class="mail-flabel" style="margin-bottom: 6px">服务器端规则（Sieve）</div>
         <p class="mail-hint" style="margin: 0 0 8px">
@@ -311,6 +342,9 @@
         </ul>
 
         <!-- 模板 -->
+        </section>
+
+        <section v-show="activeTab === 'data'" class="mail-settings-panel">
         <div class="mail-section-divider"></div>
         <div class="mail-flabel" style="margin-bottom: 6px">邮件模板</div>
         <div v-for="tpl in templates" :key="tpl.id" class="mail-account-row">
@@ -339,6 +373,7 @@
         <button class="mail-btn" style="margin-top: 6px" @click="addTemplate">保存为新模板</button>
 
         <!-- 诊断 -->
+
         <div class="mail-section-divider"></div>
         <div class="mail-flabel" style="margin-bottom: 6px">诊断</div>
         <p class="mail-hint" style="margin: 0 0 8px">
@@ -387,6 +422,7 @@
           />
           在收件箱里按会话聚合同一主题的邮件
         </label>
+
         <div class="mail-section-divider"></div>
         <div class="mail-flabel" style="margin-bottom: 6px">本地加密</div>
         <label class="mail-check">
@@ -459,9 +495,9 @@
           备份是完整的 SQLite 库（含所有账户的本地邮件）。恢复前会把当前库另存为
           <code>mail.db.before-restore</code>，恢复失败可手工退回去。
         </p>
+        </section>
       </div>
-
-      <div class="mail-modal-foot">
+            <div class="mail-modal-foot">
         <button class="mail-btn is-danger" @click="clearCache">清空本地缓存</button>
         <span class="spacer"></span>
         <button class="mail-btn is-primary" @click="$emit('close')">完成</button>
@@ -473,6 +509,45 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
+import MailIcon from './MailIcon.vue'
+
+/**
+ * 设置分页。一个长列表里塞下主题、网络、加密、Sieve、模板、诊断，
+ * 用户要找一个开关得滚很久——按「做什么」分页，每页给一句说明。
+ */
+const SETTINGS_TABS = [
+  {
+    key: 'appearance',
+    label: '外观与阅读',
+    icon: 'image',
+    hint: '主题、界面密度、阅读字体与主色',
+  },
+  {
+    key: 'receive',
+    label: '收发与同步',
+    icon: 'unread',
+    hint: '网络代理、收信方式、同步间隔与发信选项',
+  },
+  {
+    key: 'security',
+    label: '安全与规则',
+    icon: 'shield',
+    hint: 'S/MIME、OpenPGP 与服务器端规则（Sieve）',
+  },
+  {
+    key: 'data',
+    label: '数据与诊断',
+    icon: 'note',
+    hint: '邮件模板、诊断报告、本地加密、存储位置与备份',
+  },
+]
+
+const activeTab = ref(SETTINGS_TABS[0].key)
+
+/** 当前页的一句话说明：分页标签只给关键词，真正「这页管什么」放在这里。 */
+const activeTabHint = computed(
+  () => SETTINGS_TABS.find((tab) => tab.key === activeTab.value)?.hint || '',
+)
 
 const props = defineProps({
   settings: { type: Object, required: true },

@@ -309,8 +309,9 @@ const folders = computed(() => {
 const STANDARD_ROLES = [
   { role: 'inbox', label: '收件箱', icon: '▣' },
   { role: 'drafts', label: '草稿', icon: '✎' },
-  // 发件箱：多次投递失败后暂存在这里的邮件，平时不占版面（有内容才显示）。
-  { role: 'outbox', label: '发件箱', icon: '◷', onlyWhenUsed: true },
+  // 发件箱：定时待发与多次投递失败的邮件都在这里。它是固定入口、始终可见——
+  // 用户需要确认「有没有信还没发出去」，藏起来反而让人以为发丢了。
+  { role: 'outbox', label: '发件箱', icon: '◷' },
   { role: 'sent', label: '已发送', icon: '↗' },
   { role: 'archive', label: '存档', icon: '▤' },
   { role: 'junk', label: '垃圾邮件', icon: '⚠' },
@@ -340,14 +341,8 @@ const standardFolders = computed(() => {
       icon: entry.icon,
       unread: folder?.unread || 0,
       total: Number(folder?.total) || 0,
-      onlyWhenUsed: Boolean(entry.onlyWhenUsed),
       folder,
     }
-  }).filter((entry) => {
-    // 存档没有后端占位时也保留入口（点它时后端会提示建一个）；
-    // 发件箱只在真的有失败邮件时才出现，免得侧栏常驻一个空入口。
-    if (entry.onlyWhenUsed) return Boolean(entry.folder) && entry.total > 0
-    return true
   })
 })
 

@@ -112,7 +112,7 @@ pub fn sync_inbox(account: &Account, snippet_len: usize) -> Result<Vec<MessageSu
 
         let known = store::pop3_known_uids(&account.id)?;
         let settings = store::load_settings();
-        let mut refreshed: Vec<MessageSummary> = Vec::new();
+        let mut pending: Vec<(String, Vec<u8>, mime::ParsedMessage, MessageSummary)> = Vec::new();
         let mut downloaded = 0usize;
 
         for entry in &entries {
@@ -131,9 +131,9 @@ pub fn sync_inbox(account: &Account, snippet_len: usize) -> Result<Vec<MessageSu
                 continue;
             }
             match fetch_one(account, &mut session, entry, snippet_len, &settings) {
-                Ok(summary) => {
+                Ok((raw, parsed, summary)) => {
                     downloaded += 1;
-                    refreshed.push(summary);
+                    pending.push((entry.uidl.clone(), raw, parsed, summary));
                 }
                 Err(error) => {
                     // 单封失败（畸形报文、服务器超时）不该让整个收件失败。
@@ -145,6 +145,31 @@ pub fn sync_inbox(account: &Account, snippet_len: usize) -> Result<Vec<MessageSu
                     );
                 }
             }
+        }
+
+        // 一次性写库：分配 uid、写摘要、写正文、缓存原文，全在一个事务里。
+        let mut refreshed: Vec<MessageSummary> = Vec::with_capacity(pending.len());
+        if !pending.is_empty() {
+            let account_id = account.id.clone();
+            let stored = super::batch::with_batch(|batch| {
+                let mut out = Vec::with_capacity(pending.len());
+                for (uidl, raw, parsed, mut summary) in pending {
+                    let uid = batch.assign_uid(&account_id, &uidl)?;
+                    summary.uid = uid;
+                    let attachments_json = serde_json::to_string(&parsed.attachments)
+                        .unwrap_or_else(|_| "[]".into());
+                    batch.store_message(
+                        &summary,
+                        parsed.html.as_deref(),
+                        &parsed.text,
+                        &attachments_json,
+                        Some(&raw),
+                    )?;
+                    out.push(summary);
+                }
+                Ok(out)
+            })?;
+            refreshed = stored;
         }
 
         // 删信语义：只有明确关闭「保留在服务器」时才 DELE。
@@ -224,22 +249,26 @@ fn apply_server_deletions(
 /// 超过这个大小的邮件不在自动同步里下载（打开邮件时照常会取）。
 const MAX_AUTO_FETCH_BYTES: u64 = 32 * 1024 * 1024;
 
-/// 下载一封并入库。
+/// 下载并解析一封（不写库）。
+///
+/// 写库由调用方用 [`batch`] 批量完成：一次同步只开一个连接、一个事务。
+/// 以前每封邮件要开 4 个连接、跑 4 次 `PRAGMA journal_mode=WAL`，
+/// 1000 封就是 4000 次加锁——收信卡顿主要来自这里，不是网络。
 fn fetch_one(
     account: &Account,
     session: &mut pop3::Pop3Session,
     entry: &pop3::Pop3Entry,
     snippet_len: usize,
     settings: &super::model::MailSettings,
-) -> Result<MessageSummary, String> {
-    let uid = store::pop3_uid_for(&account.id, &entry.uidl)?;
+) -> Result<(Vec<u8>, mime::ParsedMessage, MessageSummary), String> {
     let raw = session.retr(entry.number)?;
     let parsed = mime::parse(&raw, !settings.inline_images).ok_or("无法解析邮件内容")?;
 
+    // uid 先占位为 0：真正的 uid 由批量写入器在同一个事务里分配（见 `store_kind`）。
     let summary = MessageSummary {
         account_id: account.id.clone(),
         folder: INBOX.to_string(),
-        uid,
+        uid: 0,
         message_id: parsed.message_id.clone(),
         subject: parsed.subject.clone(),
         from_name: parsed.from_name.clone(),
@@ -259,17 +288,7 @@ fn fetch_one(
         labels: String::new(),
         outgoing: false,
     };
-    let attachments_json = serde_json::to_string(&parsed.attachments).unwrap_or_else(|_| "[]".into());
-    store::upsert_summaries(std::slice::from_ref(&summary))?;
-    store::upsert_body(
-        &account.id,
-        INBOX,
-        uid,
-        parsed.html.as_deref(),
-        &parsed.text,
-        &attachments_json,
-    )?;
-    Ok(summary)
+    Ok((raw, parsed, summary))
 }
 
 /// 按本地库里收件箱的实际行数刷新文件夹的未读 / 总数。

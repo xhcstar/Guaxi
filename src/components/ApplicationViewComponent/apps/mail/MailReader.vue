@@ -24,6 +24,16 @@
           <button class="mail-btn is-icon" title="转发" aria-label="转发" @click="$emit('forward', detail)">
             <MailIcon name="forward" />
           </button>
+          <!-- 默认在下方就地回复；这个按钮把同一封回复搬进独立窗口，
+               方便和主窗口并排对照原文。 -->
+          <button
+            class="mail-btn is-icon"
+            title="在新窗口里回复"
+            aria-label="在新窗口里回复"
+            @click="$emit('reply', detail, { newWindow: true })"
+          >
+            <MailIcon name="note" />
+          </button>
           <span class="mail-toolbar-sep"></span>
           <button
             class="mail-btn is-icon"
@@ -167,7 +177,35 @@
 
       <MailAddressCard ref="addressCard" />
 
-      <div ref="scrollRef" class="mail-reader-scroll">
+      <!-- 划词翻译：与 PDF / 电子书 / 认知收件箱同一个面板组件，交互一致。 -->
+      <GuaxiSelectionTranslatePanel
+        v-if="selectionTranslate.visible.value"
+        :pos="selectionTranslate.pos.value"
+        :raw="selectionTranslate.raw.value"
+        :result="selectionTranslate.result.value"
+        :error="selectionTranslate.error.value"
+        :busy="selectionTranslate.busy.value"
+        :pinned="selectionTranslate.pinned.value"
+        :items="selectionTranslate.items.value"
+        :from-lang="selectionTranslate.fromLang.value"
+        :to-lang="selectionTranslate.toLang.value"
+        :lang-options="selectionTranslate.langOptions"
+        :word-meta="selectionTranslate.wordMeta.value"
+        @translate="selectionTranslate.onTranslate()"
+        @copy="selectionTranslate.onCopy()"
+        @swap-langs="selectionTranslate.onSwapLangs()"
+        @toggle-pin="selectionTranslate.onTogglePin()"
+        @update:pos="(v) => { selectionTranslate.pos.value = v }"
+        @update:from-lang="(v) => { selectionTranslate.fromLang.value = v }"
+        @update:to-lang="(v) => { selectionTranslate.toLang.value = v }"
+        @close="selectionTranslate.close()"
+      />
+
+      <div
+        ref="scrollRef"
+        class="mail-reader-scroll"
+        @mouseup="selectionTranslate.handleMouseUp($event)"
+      >
         <!-- 远端图片默认不加载：先问一句，避免打开即给发件人回一个「已读+IP」的信标 -->
         <div v-if="hasRemoteImages && imagesBlocked" class="mail-remote-banner">
           <span>这封邮件包含外部图片，默认没有加载。</span>
@@ -290,12 +328,18 @@
 </template>
 
 <script setup>
-import { computed, onMounted, onUpdated, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, onUpdated, ref, watch } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { avatarSeed } from './theme'
 import { applyBodyTheme } from './colors'
 import { useMailReaderTools } from './useMailReaderTools'
 import MailAddressCard from './MailAddressCard.vue'
+import { useMailSelectionTranslate } from './useMailSelectionTranslate'
+
+// 翻译面板是邮件页里唯一依赖 naive-ui 的组件：只在真正划词时加载。
+const GuaxiSelectionTranslatePanel = defineAsyncComponent(
+  () => import('../../HomeViewComponent/GuaxiSelectionTranslatePanel.vue'),
+)
 import MailIcon from './MailIcon.vue'
 
 const props = defineProps({
@@ -410,6 +454,14 @@ function maskBlockedImages(html) {
 const scrollRef = ref(null)
 
 /**
+ * 划词翻译：拖选正文里的文字即出译文面板。
+ *
+ * 用阅读区当容器（而不是整个窗口）：邮件正文是「读」的对象，
+ * 列表 / 工具栏上的划选不该触发翻译。
+ */
+const selectionTranslate = useMailSelectionTranslate(() => scrollRef.value)
+
+/**
  * 暗色纸面上，邮件里写死的颜色要逐元素映射（浅底→深表面、深字→浅字）。
  * 映射逻辑与判定规则都在 colors.js：这里是唯一调用点。
  *
@@ -440,6 +492,14 @@ onMounted(() => applyThemeColors())
 // 会被下一次更新（标记已读、工具栏状态变化等）整个冲掉。只在 watch 里跑不够，
 // 这里在每次 patch 之后补一遍。映射是幂等的，重复执行不会越改越暗。
 onUpdated(() => applyThemeColors())
+
+/** 点面板以外的地方收起译文（「固定」时不收，用户要它留着对照看）。 */
+function onTranslateOutside(event) {
+  selectionTranslate.handleDocumentMouseDown(event)
+}
+
+onMounted(() => document.addEventListener('mousedown', onTranslateOutside))
+onBeforeUnmount(() => document.removeEventListener('mousedown', onTranslateOutside))
 
 // ---------------- 会话卡片 ----------------
 

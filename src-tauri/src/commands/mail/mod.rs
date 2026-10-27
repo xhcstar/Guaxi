@@ -34,6 +34,8 @@ pub mod pool;
 pub mod pop3;
 /// POP3 账户的同步与本地文件夹模型。
 pub mod pop3_sync;
+/// 批量写入：一次同步只开一个连接、一个事务。
+pub mod batch;
 pub mod rules;
 pub mod sanitize;
 /// 服务器端规则（Sieve，RFC 5228 / RFC 5804）。
@@ -742,6 +744,9 @@ async fn apply_rules_to_new(
         .map(|f| f.name.clone());
     // 收/发件人名单比规则优先：命中的发件人直接按名单处理，不再跑规则。
     let sender_rules = store::list_sender_rules().unwrap_or_default();
+    // 没有一条规则要看正文时，整个循环都不读正文：正文是密文，读一次就解一次，
+    // 1000 封新邮件 = 1000 次 AES 解密，而绝大多数规则只看发件人 / 主题。
+    let body_needed = rules::needs_body(all_rules);
 
     for msg in messages {
         if msg.outgoing {
@@ -775,11 +780,15 @@ async fn apply_rules_to_new(
                 }
             }
         }
-        let body = store::get_body(&msg.account_id, &msg.folder, msg.uid)
-            .ok()
-            .flatten()
-            .map(|(_, text, _, _)| text)
-            .unwrap_or_default();
+        let body = if body_needed {
+            store::get_body(&msg.account_id, &msg.folder, msg.uid)
+                .ok()
+                .flatten()
+                .map(|(_, text, _, _)| text)
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
         let ctx = rules::RuleContext {
             message: msg,
             body_preview: &body,

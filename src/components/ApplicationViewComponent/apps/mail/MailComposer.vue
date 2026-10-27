@@ -224,26 +224,111 @@
             <span class="mail-fmt-strike">S</span>
           </button>
 
-          <label class="mail-fmt-btn mail-color-btn" title="文字颜色" @mousedown="rememberSelection">
-            <span class="mail-color-letter">A</span>
-            <span class="mail-color-bar" :style="{ background: lastTextColor }"></span>
-            <input
-              type="color"
-              :value="lastTextColor"
+          <!-- 文字颜色 / 突出显示：与 Outlook 一样弹一排标准色，而不是系统取色器。
+               直接点主按钮用最近一次的颜色，点箭头才展开色板。 -->
+          <div class="mail-color-control" @mousedown.stop>
+            <button
+              class="mail-fmt-btn mail-color-main"
+              title="应用最近用过的文字颜色"
               aria-label="文字颜色"
-              @change="onTextColor($event.target.value)"
-            />
-          </label>
-          <label class="mail-fmt-btn mail-color-btn" title="突出显示" @mousedown="rememberSelection">
-            <span class="mail-hilite-letter" :style="{ background: lastHiliteColor }">A</span>
-            <span class="mail-color-bar" :style="{ background: lastHiliteColor }"></span>
-            <input
-              type="color"
-              :value="lastHiliteColor"
-              aria-label="突出显示颜色"
-              @change="onHiliteColor($event.target.value)"
-            />
-          </label>
+              @mousedown.prevent="rememberSelection(); applyTextColor(lastTextColor)"
+            >
+              <span class="mail-color-letter">A</span>
+              <span class="mail-color-bar" :style="{ background: lastTextColor }"></span>
+            </button>
+            <button
+              class="mail-color-toggle"
+              title="选择文字颜色"
+              aria-label="选择文字颜色"
+              :class="{ 'is-on': openPalette === 'text' }"
+              @mousedown.prevent="togglePalette('text')"
+            >
+              ▾
+            </button>
+            <div v-if="openPalette === 'text'" class="mail-palette" @mousedown.prevent>
+              <div v-if="recentTextColors.length" class="mail-palette-block">
+                <div class="mail-palette-label">最近使用</div>
+                <div class="mail-palette-row">
+                  <button
+                    v-for="color in recentTextColors"
+                    :key="'rt-' + color"
+                    class="mail-swatch"
+                    :style="{ background: color }"
+                    :title="color"
+                    @click="applyTextColor(color)"
+                  ></button>
+                </div>
+              </div>
+              <div class="mail-palette-block">
+                <div class="mail-palette-label">标准色</div>
+                <div v-for="(row, index) in STANDARD_COLORS" :key="'sr-' + index" class="mail-palette-row">
+                  <button
+                    v-for="color in row"
+                    :key="color"
+                    class="mail-swatch"
+                    :style="{ background: color }"
+                    :title="color"
+                    @click="applyTextColor(color)"
+                  ></button>
+                </div>
+              </div>
+              <div class="mail-palette-actions">
+                <button class="mail-btn" @click="clearTextColor">自动（清除颜色）</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="mail-color-control" @mousedown.stop>
+            <button
+              class="mail-fmt-btn mail-color-main"
+              title="应用最近用过的突出显示颜色"
+              aria-label="突出显示"
+              @mousedown.prevent="rememberSelection(); applyHiliteColor(lastHiliteColor)"
+            >
+              <span class="mail-hilite-letter" :style="{ background: lastHiliteColor }">A</span>
+              <span class="mail-color-bar" :style="{ background: lastHiliteColor }"></span>
+            </button>
+            <button
+              class="mail-color-toggle"
+              title="选择突出显示颜色"
+              aria-label="选择突出显示颜色"
+              :class="{ 'is-on': openPalette === 'hilite' }"
+              @mousedown.prevent="togglePalette('hilite')"
+            >
+              ▾
+            </button>
+            <div v-if="openPalette === 'hilite'" class="mail-palette" @mousedown.prevent>
+              <div v-if="recentHiliteColors.length" class="mail-palette-block">
+                <div class="mail-palette-label">最近使用</div>
+                <div class="mail-palette-row">
+                  <button
+                    v-for="color in recentHiliteColors"
+                    :key="'rh-' + color"
+                    class="mail-swatch"
+                    :style="{ background: color }"
+                    :title="color"
+                    @click="applyHiliteColor(color)"
+                  ></button>
+                </div>
+              </div>
+              <div class="mail-palette-block">
+                <div class="mail-palette-label">标准色</div>
+                <div v-for="(row, index) in HIGHLIGHT_COLORS" :key="'hr-' + index" class="mail-palette-row">
+                  <button
+                    v-for="color in row"
+                    :key="color"
+                    class="mail-swatch"
+                    :style="{ background: color }"
+                    :title="color"
+                    @click="applyHiliteColor(color)"
+                  ></button>
+                </div>
+              </div>
+              <div class="mail-palette-actions">
+                <button class="mail-btn" @click="clearHilite">无颜色</button>
+              </div>
+            </div>
+          </div>
 
           <span class="mail-fmt-sep"></span>
           <button
@@ -328,6 +413,57 @@
           >
             <MailIcon name="code" :size="15" />
           </button>
+          <!-- 表格：插入的是真 <table>（带表现属性），不是 Markdown 管道语法——
+               后者在 Outlook / 企业邮箱里会原样显示成一堆竖线。 -->
+          <div class="mail-color-control" @mousedown.stop>
+            <button
+              class="mail-fmt-btn"
+              title="插入表格"
+              aria-label="插入表格"
+              :class="{ 'is-on': openPalette === 'table' }"
+              @mousedown.prevent="rememberSelection(); togglePalette('table')"
+            >
+              <MailIcon name="table" :size="15" />
+            </button>
+            <div v-if="openPalette === 'table'" class="mail-palette is-grid" @mousedown.prevent>
+              <div class="mail-palette-label">插入表格：{{ tableRows }} 行 × {{ tableCols }} 列</div>
+              <div class="mail-table-grid">
+                <button
+                  v-for="cell in 5 * 5"
+                  :key="'tg-' + cell"
+                  class="mail-table-cell"
+                  :class="{
+                    'is-on':
+                      (cell - 1) % 5 < tableCols && Math.floor((cell - 1) / 5) < tableRows,
+                  }"
+                  :title="`${Math.floor((cell - 1) / 5) + 1} 行 × ${((cell - 1) % 5) + 1} 列`"
+                  @mouseenter="hoverTable(Math.floor((cell - 1) / 5) + 1, ((cell - 1) % 5) + 1)"
+                  @click="insertTable(Math.floor((cell - 1) / 5) + 1, ((cell - 1) % 5) + 1)"
+                ></button>
+              </div>
+              <div class="mail-hint" style="margin: 6px 0 0">表头会带底色，收件端都能正常显示。</div>
+            </div>
+          </div>
+          <!-- 查找替换：编辑器里的 Ctrl+F 会打开系统对话框，这里自己做一个
+               不离开正文、能连续替换的面板。 -->
+          <button
+            class="mail-fmt-btn"
+            title="查找与替换 (Ctrl+F)"
+            aria-label="查找与替换"
+            :class="{ 'is-on': findOpen }"
+            @mousedown.prevent="toggleFind"
+          >
+            <MailIcon name="search" :size="15" />
+          </button>
+          <!-- Markdown：把写好的 Markdown 一次性转成邮件可显示的 HTML。 -->
+          <button
+            class="mail-fmt-btn"
+            title="把正文里的 Markdown 转成富文本（表格会转成真表格）"
+            aria-label="把正文里的 Markdown 转成富文本"
+            @mousedown.prevent="convertMarkdown"
+          >
+            <span class="mail-md-mark">M↓</span>
+          </button>
           <button
             class="mail-fmt-btn"
             title="清除格式"
@@ -382,8 +518,8 @@
         </button>
         <button
           class="mail-fmt-btn"
-          title="把图片插进正文（内联显示，不当作附件）"
-          aria-label="插入内联图片"
+          title="插入图片（直接显示在正文里，不当作附件）"
+          aria-label="插入图片"
           @click="pickInlineImages"
         >
           <MailIcon name="image" :size="15" />
@@ -471,6 +607,8 @@
           class="mail-compose-editor"
           contenteditable="true"
           data-placeholder="写点什么…"
+          @contextmenu="onEditorContextMenu"
+          @mouseup="onEditorMouseUp"
           @input="onEditorInput"
           @paste="onPaste"
           @keydown.ctrl.b.prevent="format('bold')"
@@ -478,6 +616,126 @@
           @keydown.ctrl.u.prevent="format('underline')"
           @keydown.ctrl.enter.prevent="send(false)"
         ></div>
+    <!-- 查找替换面板：贴在正文右上角，不遮挡正在编辑的内容。 -->
+    <div v-if="findOpen" class="mail-find-panel" @mousedown.stop @keydown.esc.stop="closeFind">
+      <div class="mail-find-row">
+        <input
+          ref="findInput"
+          v-model="findText"
+          class="mail-input"
+          placeholder="查找…"
+          @input="runFind"
+          @keydown.enter.prevent="findNext"
+        />
+        <span class="mail-find-count">{{ findStatus }}</span>
+      </div>
+      <div class="mail-find-row">
+        <input
+          v-model="replaceText"
+          class="mail-input"
+          placeholder="替换为…"
+          @keydown.enter.prevent="replaceOne"
+        />
+      </div>
+      <div class="mail-find-actions">
+        <button class="mail-btn" :disabled="!findText" @click="findNext">下一个</button>
+        <button class="mail-btn" :disabled="!findText" @click="replaceOne">替换</button>
+        <button class="mail-btn is-primary" :disabled="!findText" @click="replaceAll">
+          全部替换
+        </button>
+        <button class="mail-btn" @click="closeFind">关闭</button>
+      </div>
+    </div>
+
+    <!-- 编辑器右键菜单：在表格里右键时给出行列 / 样式操作，在普通正文里右键给出
+         剪切复制粘贴。菜单项按 Outlook 的习惯分组，危险操作（删除行/列）不标红，
+         因为它们可撤销（编辑器自身的历史）。 -->
+    <div
+      v-if="editorMenu"
+      class="mail-editor-menu"
+      :style="{ left: `${editorMenu.x}px`, top: `${editorMenu.y}px` }"
+      @mousedown.stop
+      @click.stop
+    >
+      <template v-if="editorMenu.table">
+        <div class="mail-editor-menu-head">
+          表格 {{ editorMenu.rows }} × {{ editorMenu.cols }}（第 {{ editorMenu.row + 1 }} 行，第
+          {{ editorMenu.col + 1 }} 列）
+        </div>
+        <button class="mail-editor-menu-item" @click="tableAction('rowAbove')">在上方插入行</button>
+        <button class="mail-editor-menu-item" @click="tableAction('rowBelow')">在下方插入行</button>
+        <button class="mail-editor-menu-item" @click="tableAction('rowDelete')">删除这一行</button>
+        <div class="mail-editor-menu-sep"></div>
+        <button class="mail-editor-menu-item" @click="tableAction('colLeft')">在左侧插入列</button>
+        <button class="mail-editor-menu-item" @click="tableAction('colRight')">在右侧插入列</button>
+        <button class="mail-editor-menu-item" @click="tableAction('colDelete')">删除这一列</button>
+        <div class="mail-editor-menu-sep"></div>
+        <div class="mail-editor-menu-head">表格样式</div>
+        <button
+          v-for="style in TABLE_STYLES"
+          :key="style.key"
+          class="mail-editor-menu-item"
+          @click="tableAction('style', style.key)"
+        >
+          {{ style.label }}
+        </button>
+        <div class="mail-editor-menu-sep"></div>
+        <button class="mail-editor-menu-item" @click="tableAction('cellAlignLeft')">单元格左对齐</button>
+        <button class="mail-editor-menu-item" @click="tableAction('cellAlignCenter')">单元格居中</button>
+        <button class="mail-editor-menu-item" @click="tableAction('cellAlignRight')">单元格右对齐</button>
+        <div class="mail-editor-menu-sep"></div>
+        <div class="mail-editor-menu-head">单元格格式</div>
+        <div class="mail-editor-menu-swatches">
+          <button
+            v-for="color in CELL_FILLS"
+            :key="'fill-' + color"
+            class="mail-editor-menu-swatch"
+            :style="{ background: color }"
+            :title="`填充 ${color}`"
+            @click="tableAction('cellFill', color)"
+          ></button>
+          <button
+            class="mail-editor-menu-swatch is-none"
+            title="无填充"
+            @click="tableAction('cellFill', '')"
+          >
+            ×
+          </button>
+        </div>
+        <div class="mail-editor-menu-swatches">
+          <button
+            v-for="color in TEXT_COLORS"
+            :key="'fg-' + color"
+            class="mail-editor-menu-swatch"
+            :style="{ background: color }"
+            :title="`文字 ${color}`"
+            @click="tableAction('cellColor', color)"
+          ></button>
+        </div>
+        <div class="mail-editor-menu-row-actions">
+          <button
+            v-for="size in CELL_FONT_SIZES"
+            :key="'fs-' + size"
+            class="mail-editor-menu-chip"
+            :title="`字号 ${size}px`"
+            @click="tableAction('cellFontSize', size)"
+          >
+            {{ size }}
+          </button>
+        </div>
+        <button class="mail-editor-menu-item" @click="tableAction('cellBold')">单元格加粗</button>
+        <div class="mail-editor-menu-sep"></div>
+        <button class="mail-editor-menu-item" @click="tableAction('tableDelete')">删除整个表格</button>
+      </template>
+      <template v-else>
+        <button class="mail-editor-menu-item" @click="editorCommand('cut')">剪切</button>
+        <button class="mail-editor-menu-item" @click="editorCommand('copy')">复制</button>
+        <button class="mail-editor-menu-item" @click="editorCommand('paste')">粘贴</button>
+        <div class="mail-editor-menu-sep"></div>
+        <button class="mail-editor-menu-item" @click="editorCommand('selectAll')">全选</button>
+      </template>
+    </div>
+
       </div>
 
       <div v-if="draft.attachments.length || (draft.inlineImages || []).length" class="mail-attach-list">
@@ -498,15 +756,39 @@
           v-for="img in draft.inlineImages || []"
           :key="img.contentId"
           class="mail-attachment is-inline"
-          :title="`移除内联图片 ${img.name || img.path}`"
+          :title="`移除图片 ${img.name || img.path}`"
           @click="removeInlineImage(img.contentId)"
         >
           <span>🖼</span>
-          <span class="mail-attachment-name">{{ img.name || '内联图片' }}</span>
+          <span class="mail-attachment-name">{{ img.name || '插入的图片' }}</span>
           <span class="mail-attachment-size">×</span>
         </button>
       </div>
     </div>
+
+    <!-- 划词翻译：与阅读区 / 电子书同一个面板。 -->
+    <GuaxiSelectionTranslatePanel
+      v-if="selectionTranslate.visible.value"
+      :pos="selectionTranslate.pos.value"
+      :raw="selectionTranslate.raw.value"
+      :result="selectionTranslate.result.value"
+      :error="selectionTranslate.error.value"
+      :busy="selectionTranslate.busy.value"
+      :pinned="selectionTranslate.pinned.value"
+      :items="selectionTranslate.items.value"
+      :from-lang="selectionTranslate.fromLang.value"
+      :to-lang="selectionTranslate.toLang.value"
+      :lang-options="selectionTranslate.langOptions"
+      :word-meta="selectionTranslate.wordMeta.value"
+      @translate="selectionTranslate.onTranslate()"
+      @copy="selectionTranslate.onCopy()"
+      @swap-langs="selectionTranslate.onSwapLangs()"
+      @toggle-pin="selectionTranslate.onTogglePin()"
+      @update:pos="(v) => { selectionTranslate.pos.value = v }"
+      @update:from-lang="(v) => { selectionTranslate.fromLang.value = v }"
+      @update:to-lang="(v) => { selectionTranslate.toLang.value = v }"
+      @close="selectionTranslate.close()"
+    />
   </div>
 </template>
 
@@ -520,6 +802,20 @@ import { useContactsStore, expandGroupMembers, groupRecipientToken, parseGroupTo
 import AddressInput from './AddressInput.vue'
 import AddressPicker from './AddressPicker.vue'
 import MailIcon from './MailIcon.vue'
+import {
+  HIGHLIGHT_COLORS,
+  STANDARD_COLORS,
+  pushRecent,
+} from './palette'
+import { buildTableHtml, markdownToEmailHtml } from './composeTable'
+import { useMailSelectionTranslate } from './useMailSelectionTranslate'
+import {
+  TABLE_STYLES,
+  cellPosition,
+  collectRows,
+  createCellHtml,
+  insertionRowAfterInsert,
+} from './tableActions'
 import { createLogger } from '../../../../utils/logger'
 
 const logger = createLogger('MailComposer')
@@ -540,6 +836,7 @@ const emit = defineEmits([
   'send',
   'schedule',
   'save-draft',
+  'save-to-mailbox',
   'close',
   'apply-template',
   'check-attachments',
@@ -640,6 +937,55 @@ const formatState = reactive({
 const lastTextColor = ref('#1a5fd0')
 const lastHiliteColor = ref('#fff3a3')
 
+/** 当前展开的面板：'text' | 'hilite' | 'table' | ''。 */
+const openPalette = ref('')
+const recentTextColors = ref([])
+const recentHiliteColors = ref([])
+/** 表格选择器的当前行列（鼠标悬停时跟着变）。 */
+const tableRows = ref(3)
+const tableCols = ref(3)
+
+function togglePalette(name) {
+  openPalette.value = openPalette.value === name ? '' : name
+  if (openPalette.value === 'text') rememberSelection()
+  if (openPalette.value === 'hilite') rememberSelection()
+}
+
+function closePalette() {
+  openPalette.value = ''
+}
+
+function onPaletteEscape(event) {
+  if (event.key === 'Escape' && openPalette.value) {
+    event.stopPropagation()
+    closePalette()
+  }
+}
+
+/** 点空白 / 按 Esc 收起色板。 */
+function onPaletteOutside(event) {
+  if (!openPalette.value) return
+  if (event.target?.closest?.('.mail-color-control')) return
+  closePalette()
+  // 右键菜单也一起收：两条浮层同时开着会互相压住。
+  closeEditorMenu()
+}
+
+function hoverTable(rows, cols) {
+  tableRows.value = rows
+  tableCols.value = cols
+}
+
+/** 应用文字颜色：保留光标位置，颜色记进「最近使用」。 */
+function applyTextColor(color) {
+  closePalette()
+  if (!color) return
+  lastTextColor.value = color
+  recentTextColors.value = pushRecent(recentTextColors.value, color)
+  restoreSelection()
+  format('foreColor', color)
+}
+
 /** 工具栏控件抢焦点前的选区：下拉 / 取色器关闭后要能接着改刚才选中的文字。 */
 let savedRange = null
 function rememberSelection() {
@@ -723,6 +1069,8 @@ onMounted(async () => {
   contacts.init().catch(() => {})
   // 字体列表是「打开写信窗口才需要」的重操作（要扫系统字体库），发出去不等待。
   loadSystemFonts()
+  document.addEventListener('mousedown', onPaletteOutside)
+  document.addEventListener('keydown', onPaletteEscape)
   document.addEventListener('selectionchange', refreshFormatState)
   if (!editorRef.value) return
   // 直接把已有 HTML 灌进 contenteditable：用 innerHTML 而不是 v-html，
@@ -811,6 +1159,368 @@ function disposeSourceEditor() {
   sourceEditor = null
 }
 
+// ---------------- 查找与替换 ----------------
+
+const findOpen = ref(false)
+const findText = ref('')
+const replaceText = ref('')
+const findInput = ref(null)
+/** `当前 / 总数`，给用户一个「还剩几处」的直观反馈。 */
+const findStatus = ref('')
+/** 匹配到的文本节点区间（从后往前替换，避免偏移失效）。 */
+let findMatches = []
+
+function toggleFind() {
+  if (findOpen.value) {
+    closeFind()
+    return
+  }
+  findOpen.value = true
+  // 带上编辑器里选中的词，省得用户再打一遍
+  const selected = window.getSelection()?.toString?.() || ''
+  if (selected && selected.length < 80) findText.value = selected
+  nextTick(() => {
+    findInput.value?.focus()
+    findInput.value?.select()
+    runFind()
+  })
+}
+
+function closeFind() {
+  findOpen.value = false
+  findStatus.value = ''
+  findMatches = []
+  clearFindHighlight()
+  editorRef.value?.focus()
+}
+
+/** 在编辑器的文本节点里找出全部匹配（不跨节点，够用且不会破坏 DOM）。 */
+function collectMatches() {
+  const editor = editorRef.value
+  const needle = findText.value
+  findMatches = []
+  if (!editor || !needle) return
+  const walker = document.createTreeWalker(editor, NodeFilter.SHOW_TEXT)
+  let node = walker.nextNode()
+  while (node) {
+    const hay = node.nodeValue || ''
+    let index = hay.indexOf(needle)
+    while (index >= 0) {
+      findMatches.push({ node, start: index, end: index + needle.length })
+      index = hay.indexOf(needle, index + needle.length)
+    }
+    node = walker.nextNode()
+  }
+}
+
+function runFind() {
+  collectMatches()
+  findStatus.value = findText.value
+    ? findMatches.length
+      ? `${findMatches.length} 处`
+      : '无匹配'
+    : ''
+}
+
+/** 跳到下一处并把选区落在它上面。 */
+function findNext() {
+  if (!findText.value) return
+  collectMatches()
+  if (!findMatches.length) {
+    findStatus.value = '无匹配'
+    return
+  }
+  const first = findMatches[0]
+  const range = document.createRange()
+  range.setStart(first.node, first.start)
+  range.setEnd(first.node, first.end)
+  const selection = window.getSelection()
+  selection.removeAllRanges()
+  selection.addRange(range)
+  // 滚到可见位置
+  const rect = range.getBoundingClientRect()
+  const editor = editorRef.value
+  if (editor) {
+    const box = editor.getBoundingClientRect()
+    if (rect.bottom > box.bottom - 40 || rect.top < box.top + 40) {
+      editor.scrollIntoView({ block: 'nearest' })
+    }
+  }
+}
+
+/** 替换当前这一处（即选区处的匹配），然后自动跳到下一处。 */
+function replaceOne() {
+  if (!findText.value) return
+  const editor = editorRef.value
+  if (!editor) return
+  const selection = window.getSelection()
+  if (selection && selection.rangeCount && selection.toString() === findText.value) {
+    document.execCommand('insertText', false, replaceText.value)
+    onEditorInput()
+  }
+  runFind()
+  findNext()
+}
+
+/**
+ * 全部替换。
+ *
+ * 从后往前替换每个匹配：这样前面节点的偏移不会被后面的替换打乱。
+ * 用的是「文本节点直接赋值」而不是 execCommand——批量替换时 execCommand
+ * 会破坏编辑器里已有的选区与撤销栈。
+ */
+function replaceAll() {
+  if (!findText.value) return
+  collectMatches()
+  if (!findMatches.length) {
+    findStatus.value = '无匹配'
+    return
+  }
+  const count = findMatches.length
+  for (let i = findMatches.length - 1; i >= 0; i -= 1) {
+    const { node, start, end } = findMatches[i]
+    const hay = node.nodeValue || ''
+    node.nodeValue = hay.slice(0, start) + replaceText.value + hay.slice(end)
+  }
+  onEditorInput()
+  findStatus.value = `已替换 ${count} 处`
+  findMatches = []
+}
+
+function clearFindHighlight() {
+  const selection = window.getSelection()
+  if (selection) selection.removeAllRanges()
+}
+
+// ---------------- 划词翻译 ----------------
+
+/**
+ * 划词翻译的容器是「正文编辑区」：在工具栏 / 地址栏上拖选不该触发译文。
+ */
+const selectionTranslate = useMailSelectionTranslate(() => editorRef.value)
+
+/** 鼠标松开时，若选区在正文里就翻译。 */
+function onEditorMouseUp(event) {
+  // 拖拽选区的过程中不弹；只有真的选中了文字才翻译。
+  if (event?.button !== 0) return
+  const selection = window.getSelection()
+  const text = selection?.toString?.() || ''
+  if (!text.trim()) return
+  selectionTranslate.handleMouseUp(event)
+}
+
+// ---------------- 编辑器右键菜单 ----------------
+
+/** 单元格可选的填充色 / 文字色 / 字号（右键菜单里的快捷项）。 */
+const CELL_FILLS = ['#f2f2f2', '#ddebf7', '#e2efda', '#fff2cc', '#fce4d6', '#ededed']
+const TEXT_COLORS = ['#000000', '#44546a', '#1a5fd0', '#c00000', '#548235', '#ffffff']
+const CELL_FONT_SIZES = [11, 12, 13, 14, 16]
+
+/** 当前打开着的右键菜单：`{ x, y, cell, table, row, col, rows, cols }`。 */
+const editorMenu = ref(null)
+
+function onEditorContextMenu(event) {
+  const editor = editorRef.value
+  if (!editor) return
+  const target = event.target
+  const cell = target?.closest?.('td, th')
+  const table = target?.closest?.('table')
+  // 表格里的右键由我们接管（行列操作）；其他位置走浏览器的原生命令。
+  event.preventDefault()
+  const rect = editor.getBoundingClientRect()
+  const menuWidth = 200
+  const x = Math.min(event.clientX - rect.left, rect.width - menuWidth - 4)
+  const y = event.clientY - rect.top
+  if (!table || !cell) {
+    editorMenu.value = { x: Math.max(4, x), y: Math.max(0, y), table: false }
+    setTimeout(() => document.addEventListener('mousedown', closeEditorMenu, { once: true }), 0)
+    return
+  }
+  // 记住光标在表格里的位置：后续操作用它定位，而不是依赖「当前选区」——
+  // 右键之后浏览器可能把选区挪到别处。
+  const pos = cellPosition(table, cell)
+  editorMenu.value = {
+    x: Math.max(4, x),
+    y: Math.max(0, y),
+    table: true,
+    cell,
+    tableEl: table,
+    ...pos,
+  }
+  setTimeout(() => document.addEventListener('mousedown', closeEditorMenu, { once: true }), 0)
+}
+
+function closeEditorMenu() {
+  editorMenu.value = null
+  document.removeEventListener('mousedown', closeEditorMenu)
+}
+
+/** 普通编辑命令（剪切 / 复制 / 粘贴 / 全选）。 */
+function editorCommand(command) {
+  closeEditorMenu()
+  editorRef.value?.focus()
+  try {
+    document.execCommand(command, false, null)
+  } catch (error) {
+    logger.warn(`编辑器命令 ${command} 失败`, error)
+  }
+}
+
+/**
+ * 表格操作。所有改动都直接操作 DOM 再同步回草稿——
+ * `execCommand` 没有行列增删能力，只能自己拆/拼节点。
+ */
+function tableAction(action, payload) {
+  const menu = editorMenu.value
+  closeEditorMenu()
+  if (!menu?.tableEl) return
+  const table = menu.tableEl
+  const rows = collectRows(table)
+
+  const rebuildRow = (source, tag) => {
+    const row = document.createElement('tr')
+    const cols = Math.max(...rows.map((r) => r.cells.length), 1)
+    for (let i = 0; i < cols; i += 1) {
+      row.insertAdjacentHTML('beforeend', createCellHtml(tag))
+    }
+    // 复制被点击那一行的对齐方式，新行看起来才和周围一致
+    const template = source?.cells?.[0]
+    if (template?.style?.textAlign) {
+      for (const cell of row.children) cell.style.textAlign = template.style.textAlign
+    }
+    return row
+  }
+
+  switch (action) {
+    case 'rowAbove':
+    case 'rowBelow': {
+      const anchor = table.rows[menu.row]
+      if (!anchor) return
+      const targetIndex = insertionRowAfterInsert(rows, menu.row, action === 'rowAbove' ? 'above' : 'below')
+      const tag = rows[menu.row]?.isHeader ? 'td' : 'td'
+      const newRow = rebuildRow(anchor, tag)
+      const reference = table.rows[targetIndex] || null
+      anchor.parentNode.insertBefore(newRow, action === 'rowAbove' && targetIndex === menu.row ? anchor : reference)
+      break
+    }
+    case 'rowDelete': {
+      const row = table.rows[menu.row]
+      // 最后一行不允许删：留下一张空表格比删掉整个表格更让人困惑
+      if (!row || table.rows.length <= 1) return
+      row.remove()
+      break
+    }
+    case 'colLeft':
+    case 'colRight': {
+      const insertAt = action === 'colLeft' ? menu.col : menu.col + 1
+      for (const row of [...table.rows]) {
+        const cells = [...row.children].filter((el) => /^(TD|TH)$/i.test(el.tagName))
+        const tag = cells[0]?.tagName?.toLowerCase() === 'th' ? 'th' : 'td'
+        const cell = document.createElement(tag)
+        cell.innerHTML = '<br>'
+        const reference = cells[insertAt] || null
+        row.insertBefore(cell, reference)
+      }
+      break
+    }
+    case 'colDelete': {
+      // 最后一列不允许删，理由同上
+      if ((rows[menu.col]?.cells?.length || 0) <= 1 || (rows[0]?.cells?.length || 0) <= 1) return
+      for (const row of [...table.rows]) {
+        const cells = [...row.children].filter((el) => /^(TD|TH)$/i.test(el.tagName))
+        cells[menu.col]?.remove()
+      }
+      break
+    }
+    case 'style': {
+      const preset = TABLE_STYLES.find((item) => item.key === payload)
+      if (!preset) return
+      applyTableStyle(table, preset)
+      break
+    }
+    case 'cellAlignLeft':
+    case 'cellAlignCenter':
+    case 'cellAlignRight': {
+      const value = action.replace('cellAlign', '').toLowerCase()
+      const cell = menu.cell
+      if (cell) cell.style.textAlign = value
+      break
+    }
+    case 'cellFill': {
+      const cell = menu.cell
+      if (!cell) return
+      if (payload) {
+        // bgcolor 是 Outlook 唯一稳定支持的底色写法；style 只是给别的客户端兜底。
+        cell.setAttribute('bgcolor', payload)
+        cell.style.backgroundColor = payload
+      } else {
+        cell.removeAttribute('bgcolor')
+        cell.style.backgroundColor = ''
+      }
+      break
+    }
+    case 'cellColor': {
+      const cell = menu.cell
+      if (!cell) return
+      // 写成 font 标签包一层，比 style 在更多老客户端里生效。
+      cell.style.color = payload
+      break
+    }
+    case 'cellFontSize': {
+      const cell = menu.cell
+      if (!cell) return
+      cell.style.fontSize = `${payload}px`
+      break
+    }
+    case 'cellBold': {
+      const cell = menu.cell
+      if (!cell) return
+      cell.style.fontWeight = cell.style.fontWeight === 'bold' ? '' : 'bold'
+      break
+    }
+    case 'tableDelete': {
+      table.remove()
+      break
+    }
+    default:
+      return
+  }
+  onEditorInput()
+}
+
+/**
+ * 套用表格样式。
+ *
+ * 只用**邮件客户端普遍认的写法**：边框走 `style`（各客户端都支持），
+ * 表头底色走 `bgcolor` 表现属性（Outlook 的 Word 引擎只认这个）。
+ */
+function applyTableStyle(table, preset) {
+  const border = preset.borderStyle || 'none'
+  table.setAttribute('border', border === 'none' ? '0' : '1')
+  table.setAttribute('cellpadding', '6')
+  table.setAttribute('cellspacing', '0')
+  table.style.borderCollapse = 'collapse'
+  for (const cell of table.querySelectorAll('td, th')) {
+    cell.style.border = border
+  }
+  // 表头底色
+  for (const th of table.querySelectorAll('th')) {
+    if (preset.headerBg) th.setAttribute('bgcolor', preset.headerBg)
+    else th.removeAttribute('bgcolor')
+    th.style.color = preset.key === 'header' ? '#ffffff' : ''
+  }
+  const headRow = table.querySelector('thead tr') || table.rows[0]
+  if (headRow) {
+    if (preset.headerBg) headRow.setAttribute('bgcolor', preset.headerBg)
+    else headRow.removeAttribute('bgcolor')
+  }
+  // 隔行变色：偶数行加一个很浅的底色（写 bgcolor，客户端才认）
+  for (const [index, row] of [...table.rows].entries()) {
+    if (preset.zebra && index > 0 && index % 2 === 1) row.setAttribute('bgcolor', '#f9f9f9')
+    else if (preset.zebra) row.removeAttribute('bgcolor')
+  }
+}
+
 function onEditorInput() {
   const html = serializeEditorHtml()
   if (html === lastHtml) return
@@ -867,6 +1577,19 @@ function format(command, value = null) {
   refreshFormatState()
 }
 
+/** 去掉突出显示。 */
+function clearHilite() {
+  closePalette()
+  restoreSelection()
+  try {
+    document.execCommand('styleWithCSS', false, true)
+    document.execCommand('hiliteColor', false, 'transparent')
+  } catch (error) {
+    logger.warn('清除高亮失败', error)
+  }
+  onEditorInput()
+}
+
 function onFontFamily(event) {
   const family = event.target.value
   // 不清空下拉：字体是「当前状态」而不是一次性动作，清空后用户看不到自己选了什么。
@@ -900,13 +1623,52 @@ function applyFontSize(size) {
   refreshFormatState()
 }
 
-function onTextColor(color) {
-  lastTextColor.value = color
-  format('foreColor', color)
+/** 清除文字颜色（回到正文默认色）。 */
+function clearTextColor() {
+  closePalette()
+  restoreSelection()
+  format('removeFormat')
 }
 
-function onHiliteColor(color) {
+/** 插入表格：直接写成真 <table>，任何客户端都能显示。 */
+function insertTable(rows = tableRows.value, cols = tableCols.value) {
+  closePalette()
+  const range = currentRange()
+  insertHtmlAt(range || null, buildTableHtml({ rows, cols }))
+  onEditorInput()
+}
+
+/**
+ * 把正文里的 Markdown 转成富文本。
+ *
+ * 只在「源码模式」或正文本身像 Markdown 时才做——用户直接用工具栏排版时，
+ * 正文已经是 HTML 了，再跑一遍转换只会破坏排版。
+ */
+function convertMarkdown() {
+  closePalette()
+  const editor = editorRef.value
+  if (!editor) return
+  const source = editor.innerText || ''
+  if (!source.trim()) return
+  const looksLikeMarkdown =
+    /(^|\n)\s*(#{1,6}\s|[-*+]\s|\d+[.)]\s|>|```)/.test(source) ||
+    /\|.*\|/.test(source) ||
+    /\*\*[^*]+\*\*/.test(source)
+  if (!looksLikeMarkdown) {
+    window.alert('正文里没有检测到 Markdown 语法（标题、列表、粗体、表格等）。')
+    return
+  }
+  const html = markdownToEmailHtml(source)
+  editor.innerHTML = html
+  onEditorInput()
+}
+
+/** 应用突出显示颜色。 */
+function applyHiliteColor(color) {
+  closePalette()
+  if (!color) return
   lastHiliteColor.value = color
+  recentHiliteColors.value = pushRecent(recentHiliteColors.value, color)
   restoreSelection()
   try {
     document.execCommand('styleWithCSS', false, true)
@@ -994,7 +1756,11 @@ function onPaste(event) {
       }
       insertHtmlAt(range, parts.join(''))
       onEditorInput()
-      nextTick(resolveCidImages)
+      nextTick(() => {
+        resolveCidImages()
+        // 图片异步落盘 / 换 src 之后选区可能又被撑开，这里统一收回末尾。
+        collapseSelectionToEnd()
+      })
     })
     return
   }
@@ -1066,7 +1832,14 @@ async function materializePastedImage(dataUrl, index) {
   return { contentId, path, name }
 }
 
-/** 把 HTML 插到记下的光标处，末尾补一个换行并把光标放过去。 */
+/**
+ * 把 HTML 插到记下的光标处。
+ *
+ * 末尾的 `<br>` 是必需的：图片是块级元素，后面没有换行时光标只能停在图片本身，
+ * 接着打字会落进图片节点里。但 `<br>` 之后还要把选区折叠到编辑区的最末，
+ * 否则 WebView 会把「刚插入的整段」保持在选中态——用户看到的就是图片下面
+ * 那条蓝色高亮线（选中区域的边界）。
+ */
 function insertHtmlAt(range, html) {
   if (!html) return
   const selection = window.getSelection()
@@ -1076,7 +1849,12 @@ function insertHtmlAt(range, html) {
   }
   document.execCommand('insertHTML', false, `${html}<br>`)
   collapseSelectionToEnd()
-  editorRef.value?.focus()
+  // 再折叠一次：execCommand 之后 WebView 有时会把插入内容重新选上（异步的），
+  // 下一帧再清一次才能稳定落成「光标在末尾、没有选区」。
+  nextTick(() => {
+    collapseSelectionToEnd()
+    editorRef.value?.focus()
+  })
 }
 
 /** 只保留白色名单里的标签；class/id/style 全部丢弃。 */
@@ -1393,7 +2171,20 @@ const draftId = ref(props.draft.id || `draft-${Date.now()}-${Math.random().toStr
 let autosaveTimer = null
 const lastSavedAt = ref(0)
 
-async function stashNow() {
+/** 草稿箱里那一份的 uid / folder：自动保存复用同一份，不会每次新建。 */
+const mailboxDraft = reactive({ uid: null, folder: '' })
+
+/**
+ * 立即保存一次。
+ *
+ * 两条通道一起写：
+ * 1. `mail_stash_draft`：本地快速暂存（崩溃后能恢复，不依赖网络）；
+ * 2. `mail_save_draft`：真正写进草稿箱（用户在别的客户端也能看到）。
+ *
+ * 为什么两条都要：暂存是"本机能恢复"，草稿箱是"用户看得见"。只做前者，
+ * 崩溃重启后用户找不到那封写了一半的信；只做后者，断网时会一直失败。
+ */
+async function stashNow({ toMailbox = true } = {}) {
   const hasContent =
     props.draft.subject.trim() ||
     (props.draft.html || '').trim() ||
@@ -1401,28 +2192,67 @@ async function stashNow() {
     props.draft.to.length ||
     props.draft.text.trim()
   if (!hasContent) return null
+  const html = editorRef.value && !sourceMode.value ? serializeEditorHtml() : htmlSource.value
+  const payload = { ...props.draft, id: draftId.value, html }
+
   try {
-    const payload = {
-      ...props.draft,
-      id: draftId.value,
-      // 编辑区里的最新内容优先：用户可能还没触发 input 事件。
-      html: editorRef.value && !sourceMode.value ? serializeEditorHtml() : htmlSource.value,
-    }
     await invoke('mail_stash_draft', { draft: payload })
     lastSavedAt.value = Date.now()
-    return draftId.value
   } catch (error) {
     logger.warn('自动暂存失败', error)
-    return null
   }
+
+  if (toMailbox) {
+    try {
+      // 先删掉上一份草稿再写新的：IMAP 草稿没有"覆盖"语义，直接 append 会越存越多。
+      if (mailboxDraft.uid && mailboxDraft.folder) {
+        await invoke('mail_discard_draft', {
+          accountId: props.draft.accountId,
+          folder: mailboxDraft.folder,
+          uid: mailboxDraft.uid,
+        })
+        mailboxDraft.uid = null
+        mailboxDraft.folder = ''
+      }
+      // 读回新草稿 uid：交给父组件在保存成功后回填（见 emit('saved-draft')）。
+      emit('save-to-mailbox', {
+        accountId: props.draft.accountId,
+        to: props.draft.to,
+        cc: props.draft.cc,
+        bcc: props.draft.bcc,
+        subject: props.draft.subject,
+        text: props.draft.text,
+        html: props.draft.htmlMode ? html : null,
+        inReplyTo: props.draft.inReplyTo,
+        references: props.draft.references,
+        attachments: (props.draft.attachments || []).map((a) => a.path),
+        inlineImages: (props.draft.inlineImages || []).map((img) => ({
+          contentId: img.contentId,
+          path: img.path,
+          filename: img.name || '',
+        })),
+        cryptoMode: props.draft.cryptoMode || '',
+      })
+      lastSavedAt.value = Date.now()
+    } catch (error) {
+      logger.warn('自动保存草稿箱失败', error)
+    }
+  }
+  return draftId.value
+}
+
+/** 父组件写进草稿箱后回传 uid，下一轮自动保存先删旧的再写。 */
+function rememberMailboxDraft(uid, folder) {
+  mailboxDraft.uid = uid || null
+  mailboxDraft.folder = folder || ''
 }
 
 function startAutosave() {
   stopAutosave()
-  // 20 秒一次：太频繁会不断写盘，太稀疏又会在崩溃时丢太多内容。
+  // 15 秒一次：用户要求"千万不能因为意外丢失"，而写草稿箱的代价只是一次本地 append。
   autosaveTimer = setInterval(() => {
     stashNow()
-  }, 20_000)
+  }, 15_000)
 }
 
 function stopAutosave() {
@@ -1435,14 +2265,17 @@ function stopAutosave() {
 onMounted(startAutosave)
 
 onBeforeUnmount(() => {
+  document.removeEventListener('mousedown', onPaletteOutside)
+  document.removeEventListener('keydown', onPaletteEscape)
   document.removeEventListener('selectionchange', refreshFormatState)
   disposeSourceEditor()
   stopAutosave()
-  // 关闭时立刻存一次：这一步才是"不会丢"的保证，定时器只是兜底。
+  // 关闭时立刻存一次：这一步才是「不会丢」的保证，定时器只是兜底。
+  // 注意不能 await：组件已经在卸载，异步结果没人接；请求本身会照常发出去。
   stashNow()
 })
 
-defineExpose({ appendBodyText, addPaths, stashNow })
+defineExpose({ appendBodyText, addPaths, stashNow, rememberMailboxDraft })
 
 function removeAttachment(path) {
   const next = props.draft.attachments.filter((a) => a.path !== path)

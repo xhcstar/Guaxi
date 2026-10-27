@@ -56,6 +56,8 @@ pub mod searcher;
 pub mod diffcompare;
 /// 承载差异对比界面的独立窗口，以及主窗口交接过来的对比请求。
 pub mod diff_compare_window;
+/// 独立的写信窗口：回复 / 转发不再挡住整个应用页。
+pub mod mail_compose_window;
 pub mod knowledgebase;
 pub mod kbmeta;
 pub mod kgraph;

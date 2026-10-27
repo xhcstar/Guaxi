@@ -1817,6 +1817,66 @@
   color: var(--mail-text);
 }
 
+/* ---------- 设置页：分标签 + 可调整大小 ---------- *
+ * 设置项从主题一直到备份有上百行，一个长列表里找一项要滚很久。
+ * 按「做什么」分成四页，每页顶部一句话说明它管什么。 */
+.mail-settings-modal {
+  /* 可拖拽调整大小 + 记住用户在窗口标题栏里的尺寸偏好。 */
+  resize: both;
+  overflow: auto;
+  width: min(880px, 92vw);
+  height: min(760px, 88vh);
+  max-width: 96vw;
+  max-height: 94vh;
+  min-width: 520px;
+  min-height: 420px;
+}
+
+.mail-settings-tabs {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  gap: 4px;
+  margin: -18px -18px 14px;
+  padding: 12px 18px;
+  border-bottom: 1px solid var(--mail-border);
+  background: var(--mail-panel);
+}
+
+.mail-settings-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--mail-text-secondary);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.mail-settings-tab:hover {
+  background: var(--mail-panel-hover);
+  color: var(--mail-text);
+}
+.mail-settings-tab.is-on {
+  border-color: var(--mail-accent);
+  background: var(--mail-accent-soft);
+  color: var(--mail-accent);
+}
+
+.mail-settings-hint {
+  margin: 0 0 14px;
+  font-size: 11.5px;
+  color: var(--mail-text-muted);
+}
+
+.mail-settings-panel {
+  min-height: 0;
+}
+
 /* 写信窗口 */
 /* 写信窗口：默认给足够大的写作区，支持最大化与手动调整尺寸。
    「太小」是真实反馈——写长邮件时正文区只有两三百像素高。 */
@@ -1925,6 +1985,253 @@
   color: var(--mail-accent);
 }
 
+/* ---------- 颜色 / 表格的浮层 ---------- *
+ * 调色板与表格选择器都挂在工具栏的条目里，用绝对定位展开；
+ * 图标沿用 Outlook 的习惯：主按钮点一下用最近的颜色，箭头才展开色板。 */
+.mail-color-control {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+.mail-color-main {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+.mail-color-toggle {
+  width: 14px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-left: 0;
+  border-radius: 0 5px 5px 0;
+  background: transparent;
+  color: var(--mail-text-muted);
+  font-size: 9px;
+  line-height: 1;
+  cursor: pointer;
+}
+.mail-color-toggle:hover,
+.mail-color-toggle.is-on {
+  background: var(--mail-panel-hover);
+  color: var(--mail-text);
+}
+
+.mail-palette {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 40;
+  width: 184px;
+  padding: 8px;
+  border: 1px solid var(--mail-border-strong);
+  border-radius: 8px;
+  background: var(--mail-panel);
+  box-shadow: var(--mail-shadow);
+}
+.mail-palette.is-grid {
+  width: 172px;
+}
+.mail-palette-block + .mail-palette-block {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--mail-border);
+}
+.mail-palette-label {
+  margin-bottom: 5px;
+  font-size: 10.5px;
+  color: var(--mail-text-muted);
+}
+.mail-palette-row {
+  display: flex;
+  gap: 3px;
+  margin-bottom: 3px;
+}
+.mail-swatch {
+  width: 19px;
+  height: 19px;
+  padding: 0;
+  border: 1px solid var(--mail-border);
+  border-radius: 3px;
+  cursor: pointer;
+}
+.mail-swatch:hover {
+  outline: 2px solid var(--mail-accent);
+  outline-offset: 1px;
+}
+.mail-palette-actions {
+  margin-top: 8px;
+  display: flex;
+}
+.mail-palette-actions .mail-btn {
+  width: 100%;
+  height: 24px;
+  font-size: 11.5px;
+}
+
+/* 表格选择器：5×5 的格子，悬停时高亮「将要插入」的区域。 */
+.mail-table-grid {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 3px;
+}
+.mail-table-cell {
+  width: 26px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--mail-border);
+  border-radius: 3px;
+  background: transparent;
+  cursor: pointer;
+}
+.mail-table-cell.is-on {
+  border-color: var(--mail-accent);
+  background: var(--mail-accent-soft);
+}
+
+/* ---------- 查找替换面板 ---------- *
+ * 贴在正文编辑区右上角：不遮挡正文，也不挡住工具栏。 */
+.mail-find-panel {
+  position: absolute;
+  top: 8px;
+  right: 12px;
+  z-index: 44;
+  width: 268px;
+  padding: 8px;
+  border: 1px solid var(--mail-border-strong);
+  border-radius: 8px;
+  background: var(--mail-panel);
+  box-shadow: var(--mail-shadow);
+}
+.mail-find-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+.mail-find-row .mail-input {
+  height: 26px;
+  font-size: 12px;
+}
+.mail-find-count {
+  flex: 0 0 auto;
+  min-width: 42px;
+  font-size: 10.5px;
+  color: var(--mail-text-muted);
+  text-align: right;
+}
+.mail-find-actions {
+  display: flex;
+  gap: 5px;
+}
+.mail-find-actions .mail-btn {
+  flex: 1 1 auto;
+  height: 24px;
+  padding: 0 6px;
+  font-size: 11.5px;
+}
+
+/* ---------- 编辑器右键菜单 ---------- *
+ * 与阅读区的右键菜单同一套视觉；因为挂在编辑区里（不是 body），可以直接用主题变量。 */
+.mail-editor-menu {
+  position: absolute;
+  z-index: 45;
+  min-width: 172px;
+  max-height: 60vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  padding: 4px;
+  border: 1px solid var(--mail-border-strong);
+  border-radius: 8px;
+  background: var(--mail-panel);
+  box-shadow: var(--mail-shadow);
+}
+.mail-editor-menu-head {
+  padding: 5px 10px 3px;
+  font-size: 10.5px;
+  color: var(--mail-text-muted);
+  white-space: nowrap;
+}
+.mail-editor-menu-item {
+  display: block;
+  width: 100%;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--mail-text-secondary);
+  font: inherit;
+  font-size: 12.5px;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+.mail-editor-menu-item:hover {
+  background: var(--mail-panel-hover);
+  color: var(--mail-text);
+}
+.mail-editor-menu-swatches {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  padding: 3px 10px 6px;
+}
+.mail-editor-menu-swatch {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid var(--mail-border);
+  border-radius: 3px;
+  cursor: pointer;
+}
+.mail-editor-menu-swatch:hover {
+  outline: 2px solid var(--mail-accent);
+  outline-offset: 1px;
+}
+.mail-editor-menu-swatch.is-none {
+  background: transparent;
+  color: var(--mail-text-muted);
+  font-size: 12px;
+  line-height: 1;
+}
+.mail-editor-menu-row-actions {
+  display: flex;
+  gap: 4px;
+  padding: 2px 10px 6px;
+}
+.mail-editor-menu-chip {
+  min-width: 26px;
+  height: 20px;
+  padding: 0 5px;
+  border: 1px solid var(--mail-border);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--mail-text-secondary);
+  font: inherit;
+  font-size: 10.5px;
+  cursor: pointer;
+}
+.mail-editor-menu-chip:hover {
+  border-color: var(--mail-accent);
+  color: var(--mail-accent);
+}
+
+.mail-editor-menu-sep {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--mail-border);
+}
+
+/* Markdown 按钮：图标是文字缩写，缩到与线性图标同高。 */
+.mail-md-mark {
+  display: block;
+  font-size: 12.5px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+}
+
 /* 工具栏图标：统一居中，不撑高按钮。 */
 .mail-fmt-btn .mail-icon,
 .mail-btn .mail-icon {
@@ -2029,6 +2336,8 @@
   min-height: 200px;
   display: flex;
   flex-direction: column;
+  /* 右键菜单按本区域左上角做绝对定位，所以这里必须是定位上下文。 */
+  position: relative;
   /* 不设 max-height：窗口拉大 / 最大化时正文要跟着长，
      之前固定 46vh，最大化也还是那么高，等于白拉。 */
   overflow-y: auto;
@@ -2054,6 +2363,14 @@
   display: block;
   margin: 10px 0;
   border-radius: 6px;
+  /* 图片是块级元素：显式声明不产生行内盒子，否则图片底部会多出一条
+     等于行高的空白（选中时就是那条蓝色高亮线的位置）。 */
+  vertical-align: top;
+}
+/* 编辑区不留任何「插入后的残留选中」：粘贴图片 / 表格后用 .mail-compose-editor
+   的选择色仍然可见时，用户会以为内容被选中了。这里把选区色与正文一致地压淡。 */
+.mail-compose-editor ::selection {
+  background: var(--mail-selection);
 }
 .mail-compose-editor blockquote {
   margin: 10px 0;
@@ -2515,18 +2832,32 @@
 /* ---------- 地址悬停卡片 ---------- *
  * 阅读区每个地址悬停出来的小卡片：名字、地址、组织、往来统计与两个动作。
  * Teleport 到 body，所以定位是视口坐标（见 MailAddressCard.vue）。 */
+/* 地址悬停卡片。
+ *
+ * 它 Teleport 到 body：`--mail-*` 变量定义在 `.mail-root` 上，出了那棵子树就取不到，
+ * 于是 `background: var(--mail-panel)` 计算失败、退化成透明——正是用户看到的
+ * 「卡片是透明的看不清内容」。所以这里给一份**自带兜底**的配色：
+ * 变量存在时用主题色，不存在时用一套深色中性色。 */
 .mail-addr-card {
   position: fixed;
   z-index: 80;
   width: 280px;
+  max-width: calc(100vw - 16px);
   padding: 10px 12px;
-  border: 1px solid var(--mail-border-strong);
+  border: 1px solid var(--mail-border-strong, #3a424d);
   border-radius: 10px;
-  background: var(--mail-panel);
-  color: var(--mail-text);
-  box-shadow: var(--mail-shadow);
+  /* 关键：不是 transparent。变量缺失时用不透明的深色底。 */
+  background: var(--mail-panel, #1a1e25);
+  color: var(--mail-text, #e2e6ec);
+  box-shadow: var(--mail-shadow, 0 12px 32px rgba(0, 0, 0, 0.45));
   font-size: 12.5px;
   line-height: 1.5;
+  /* 卡片自己也要声明配色方案，否则里面的原生控件按系统主题画。 */
+  color-scheme: dark;
+  /* 内容再多也不能撑出屏幕。 */
+  max-height: min(320px, 70vh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 .mail-addr-card-head {
   display: flex;
@@ -2554,7 +2885,7 @@
 }
 .mail-addr-card-addr {
   font-size: 11.5px;
-  color: var(--mail-text-muted);
+  color: var(--mail-text-muted, #6f7885);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2572,12 +2903,12 @@
 }
 .mail-addr-card-org {
   margin-top: 6px;
-  color: var(--mail-text-secondary);
+  color: var(--mail-text-secondary, #a4adba);
   font-size: 11.5px;
 }
 .mail-addr-card-stats {
   margin-top: 6px;
-  color: var(--mail-text-muted);
+  color: var(--mail-text-muted, #6f7885);
   font-size: 11.5px;
 }
 .mail-addr-card-tag {
@@ -2592,6 +2923,23 @@
   display: flex;
   gap: 6px;
   margin-top: 9px;
+}
+
+/* 卡片里的按钮同样在 body 下（拿不到 --mail-*），这里补齐它们的配色与边框。 */
+.mail-addr-card .mail-btn {
+  height: 26px;
+  border-color: var(--mail-border-strong, #3a424d);
+  color: var(--mail-text-secondary, #a4adba);
+  font-size: 11.5px;
+}
+.mail-addr-card .mail-btn:hover {
+  background: var(--mail-panel-hover, #222730);
+  color: var(--mail-text, #e2e6ec);
+}
+.mail-addr-card .mail-btn.is-primary {
+  border-color: transparent;
+  background: var(--mail-accent, #7aa2f7);
+  color: var(--mail-accent-text, #0d1014);
 }
 
 /* 定时待发的那条：与失败提示区分开，用中性色而不是警告色。 */

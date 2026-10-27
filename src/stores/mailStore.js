@@ -1575,6 +1575,26 @@ export const useMailStore = defineStore('mail', {
       await this.reloadUnread()
     },
 
+    /**
+     * 编辑器定时自动保存：只写草稿箱，不关闭编辑器、不弹提示。
+     *
+     * 与 `saveDraft()` 的区别：后者是「保存草稿并关窗」的用户动作，
+     * 会清空 composing；这里每 15 秒跑一次，必须保持编辑器原样。
+     * 也没有"先删旧草稿"：IMAP 草稿没有覆盖语义，删了再写一旦失败就丢内容；
+     * 旧的那份留在草稿箱里，用户下次打开时会看到多封同名草稿——
+     * 这比丢内容好得多，且由 `_dedupeDrafts` 在下一次打开时合并。
+     */
+    async autoSaveDraft(request) {
+      if (!request) return null
+      const saved = await invoke('mail_save_draft', { request })
+      const accountId = request.accountId
+      if (accountId) {
+        // 静默刷新草稿箱计数，让侧栏立刻能看到「草稿 +1」。
+        this.loadFolders(accountId).catch(() => {})
+      }
+      return saved
+    },
+
     async loadOutbox() {
       try {
         this.outbox = (await invoke('mail_list_outbox')) || []

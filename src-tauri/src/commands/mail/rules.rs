@@ -19,6 +19,21 @@ pub struct RuleContext<'a> {
 }
 
 /// 一封邮件跑完整条规则链：返回命中的规则（按优先级）与动作。命中 `stop_processing` 时截断。
+/// 这批规则里有没有一条要用到正文。
+///
+/// 同步时对每封新邮件都去读一次正文是纯浪费：绝大多数规则只看发件人 / 主题，
+/// 而正文是密文，读一次就要解密一次——1000 封新邮件就是 1000 次 AES 解密。
+/// 调用方先问一句，不需要就完全不碰正文。
+pub fn needs_body(rules: &[MailRule]) -> bool {
+    rules.iter().any(|rule| {
+        if !rule.enabled {
+            return false;
+        }
+        let cond = &rule.condition;
+        !cond.body_contains.is_empty() || cond.any_matches_regex.is_some()
+    })
+}
+
 pub fn evaluate(rules: &[MailRule], ctx: &RuleContext<'_>) -> Vec<(MailRule, RuleAction)> {
     let mut hits: Vec<(MailRule, RuleAction)> = Vec::new();
     for rule in rules.iter().filter(|r| r.enabled) {
