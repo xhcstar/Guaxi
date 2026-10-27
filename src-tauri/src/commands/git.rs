@@ -383,6 +383,14 @@ pub async fn get_git_status(path: String) -> Result<Vec<GitChange>, String> {
                 continue;
             }
 
+            // 未跟踪目录（libgit2 不会递归进嵌套仓库）会以带结尾斜杠的条目出现。
+            // 它不是可 diff 的文件：读内容会拿到 Windows 的 ERROR_ACCESS_DENIED，
+            // 暂存也只会把它变成一个 gitlink，所以直接不进变更列表。
+            if rel_path.ends_with('/') || rel_path.ends_with('\\') {
+                debug!("Skipping directory entry in git status: {}", rel_path);
+                continue;
+            }
+
             // new_path：条目对外展示/操作用的路径；对重命名而言是“移动后的新路径”。
             // orig_path：仅重命名时存在，指向“移动前的旧路径”，供前端读取原始内容做差异。
             let mut append_change =
@@ -3194,7 +3202,24 @@ pub async fn get_git_file_diff(
             let modified = match std::fs::read_to_string(&full_path) {
                 Ok(v) => v,
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
-                Err(e) => return Err(format!("Failed to read file: {}", e)),
+                // 目录条目（嵌套仓库、子模块）在 Windows 上读会返回 ERROR_ACCESS_DENIED
+                // (os error 5)。这里没有可展示的文件内容，按空串处理，
+                // 别让整个 diff 视图变成一条"拒绝访问"报错。
+                Err(e) if full_path.is_dir() => {
+                    warn!(
+                        "Skipping directory path in git panel diff: path={}, err={}",
+                        full_path.display(),
+                        e
+                    );
+                    String::new()
+                }
+                Err(e) => {
+                    return Err(format!(
+                        "Failed to read file {}: {}",
+                        full_path.display(),
+                        e
+                    ))
+                }
             };
             (original, modified)
         };

@@ -2709,11 +2709,13 @@ const startChangesDrag = (event) => {
 const startCommitsDrag = (event) => {
   panelsHeight.value = panelsContainer.value?.offsetHeight || 0
   updatePanelHeaderHeights()
+  // 分隔条上方是「已暂存」、下方是「提交历史」，所以往上拖必须让下方变大：
+  // topKey 必须是 staged。写成 commits 会让偏移量符号反过来，拖上去反而往下走。
   startSectionResize(event, {
-    topKey: 'commits',
-    bottomKey: 'staged',
-    topMin: MIN_COMMITS_HEIGHT,
-    bottomMin: Math.max(stagedHeaderHeight.value, 32),
+    topKey: 'staged',
+    bottomKey: 'commits',
+    topMin: Math.max(stagedHeaderHeight.value, 32),
+    bottomMin: MIN_COMMITS_HEIGHT,
     reason: 'commits-divider',
     onStart: () => { isDraggingCommits.value = true },
     onFinish: () => { isDraggingCommits.value = false },
@@ -4860,8 +4862,10 @@ onUnmounted(() => {
   border-top: 1px solid var(--divider-color);
 }
 
+/* 与 JS 的 MIN_COMMITS_HEIGHT 保持一致：硬编码更大的值会让拖到下限后
+   分隔条停住、但相邻分区还在继续变高，面板总高就溢出容器。 */
 .commits-section {
-  min-height: 140px;
+  min-height: 96px;
 }
 
 .changes-section .n-collapse,
