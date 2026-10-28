@@ -49,13 +49,24 @@
           :disabled="!canMutate"
           @select="openCreate"
         >
-          <button type="button" class="rrm-btn" :disabled="!canMutate">
+          <button
+            type="button"
+            class="rrm-btn"
+            :title="canMutate ? '新建文件夹或文件' : '尚未配置资源库目录'"
+            :disabled="!canMutate"
+          >
             <Icon :icon="folderPlusIcon" width="15" height="15" />
             <span>新建</span>
             <Icon :icon="chevronDownIcon" width="13" height="13" class="rrm-btn-caret" />
           </button>
         </n-dropdown>
-        <button type="button" class="rrm-btn" :disabled="!canMutate" @click="importFiles">
+        <button
+          type="button"
+          class="rrm-btn"
+          :title="canMutate ? '从本机导入文件到当前目录' : '尚未配置资源库目录'"
+          :disabled="!canMutate"
+          @click="importFiles"
+        >
           <Icon :icon="uploadIcon" width="15" height="15" />
           <span>导入</span>
         </button>
@@ -75,7 +86,7 @@
         <button type="button" class="rrm-icon-btn" title="测试同步连接" aria-label="测试同步连接" :disabled="busy" @click="testConnection">
           <Icon :icon="plugIcon" width="16" height="16" />
         </button>
-        <button type="button" class="rrm-btn is-primary" :disabled="busy" @click="syncNow">
+        <button type="button" class="rrm-btn is-primary" title="立即同步资源库" :disabled="busy" @click="syncNow">
           <Icon :icon="syncIcon" width="15" height="15" />
           <span>同步</span>
         </button>
@@ -259,6 +270,7 @@
                 :class="{ 'is-open': expanded.has(row.node.path) }"
                 role="button"
                 tabindex="-1"
+                :title="expanded.has(row.node.path) ? '收起文件夹' : '展开文件夹'"
                 :aria-label="expanded.has(row.node.path) ? '收起' : '展开'"
                 @click.stop="toggleExpand(row.node)"
               >

@@ -12,6 +12,17 @@
   >
     <!-- ───────────── 顶栏 ───────────── -->
     <header class="tm-header">
+      <button
+        type="button"
+        class="tm-icon-btn is-pane-toggle"
+        :title="browserCollapsed ? '显示模板列表（Ctrl+B）' : '收起模板列表（Ctrl+B）'"
+        :aria-label="browserCollapsed ? '显示模板列表' : '收起模板列表'"
+        :aria-expanded="!browserCollapsed"
+        @click="toggleBrowser"
+      >
+        <Icon :icon="browserCollapsed ? panelLeftOpenIcon : panelLeftCloseIcon" width="16" height="16" />
+      </button>
+
       <div class="tm-brand">
         <span class="tm-brand-mark" aria-hidden="true">
           <Icon :icon="libraryIcon" width="17" height="17" />
@@ -47,11 +58,11 @@
       </div>
 
       <div class="tm-header-actions">
-        <button type="button" class="tm-btn" :disabled="busy" @click="openDraft">
+        <button type="button" class="tm-btn" title="新建空白模板" :disabled="busy" @click="openDraft">
           <Icon :icon="plusIcon" width="15" height="15" />
           <span>新建</span>
         </button>
-        <button type="button" class="tm-btn" :disabled="busy" @click="importFromFile">
+        <button type="button" class="tm-btn" title="从 Markdown 文件导入模板" :disabled="busy" @click="importFromFile">
           <Icon :icon="fileUpIcon" width="15" height="15" />
           <span>导入</span>
         </button>
@@ -65,25 +76,18 @@
         >
           <Icon :icon="refreshIcon" width="16" height="16" />
         </button>
-        <button
-          type="button"
-          class="tm-icon-btn"
-          :title="browserCollapsed ? '显示模板列表' : '收起模板列表'"
-          :aria-label="browserCollapsed ? '显示模板列表' : '收起模板列表'"
-          @click="toggleBrowser"
-        >
-          <Icon :icon="browserCollapsed ? panelLeftOpenIcon : panelLeftCloseIcon" width="16" height="16" />
-        </button>
-        <button
-          type="button"
-          class="tm-icon-btn"
-          :title="inspectorCollapsed ? '显示预览面板' : '收起预览面板'"
-          :aria-label="inspectorCollapsed ? '显示预览面板' : '收起预览面板'"
-          @click="toggleInspector"
-        >
-          <Icon :icon="inspectorCollapsed ? panelOpenIcon : panelCloseIcon" width="16" height="16" />
-        </button>
       </div>
+
+      <button
+        type="button"
+        class="tm-icon-btn is-pane-toggle"
+        :title="inspectorCollapsed ? '显示预览面板（Ctrl+Alt+P）' : '收起预览面板（Ctrl+Alt+P）'"
+        :aria-label="inspectorCollapsed ? '显示预览面板' : '收起预览面板'"
+        :aria-expanded="!inspectorCollapsed"
+        @click="toggleInspector"
+      >
+        <Icon :icon="inspectorCollapsed ? panelOpenIcon : panelCloseIcon" width="16" height="16" />
+      </button>
     </header>
 
     <!-- ───────────── 工具栏 ───────────── -->
@@ -1866,9 +1870,22 @@ const isEditorFocused = () => {
 
 const onKeydown = (event) => {
   if (importModal.show || deleteModal.show || leaveModal.show) return
-  if ((event.ctrlKey || event.metaKey) && String(event.key).toLowerCase() === 's') {
+  const mod = event.ctrlKey || event.metaKey
+  const key = String(event.key).toLowerCase()
+  if (mod && key === 's') {
     event.preventDefault()
     if (draft.name) void saveDraft()
+    return
+  }
+  // 两侧面板的开关在编辑器里也要生效，所以放在 typing 判断之前。
+  if (mod && event.altKey && key === 'p') {
+    event.preventDefault()
+    toggleInspector()
+    return
+  }
+  if (mod && !event.altKey && !event.shiftKey && key === 'b') {
+    event.preventDefault()
+    toggleBrowser()
     return
   }
 
@@ -2296,6 +2313,11 @@ watch(hasDraft, async (open) => {
 .tm-icon-btn.is-small {
   width: 26px;
   height: 26px;
+}
+
+/* 左右面板开关固定贴在顶栏两端，不跟着右侧按钮组一起被挤走。 */
+.tm-icon-btn.is-pane-toggle {
+  flex: 0 0 auto;
 }
 
 .tm-icon-btn.is-busy {
