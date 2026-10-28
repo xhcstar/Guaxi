@@ -1,204 +1,269 @@
 <template>
   <div class="mail-modal-backdrop" @click.self="$emit('close')">
-    <div class="mail-modal is-wide" role="dialog" aria-label="收信规则">
+    <div class="mail-modal is-wide mail-rules-modal" role="dialog" aria-label="收信规则">
       <div class="mail-modal-head">
         <h2 class="mail-modal-title">收信规则</h2>
         <button class="mail-modal-close" @click="$emit('close')">×</button>
       </div>
 
-      <div class="mail-modal-body">
-        <p class="mail-hint" style="margin-top: 0">
-          规则在本地同步到新邮件后执行。没有指定文件夹的规则只作用于收件箱。
-          想让规则在服务器上生效（关掉客户端也跑），在「外观与设置 → 服务器端规则」里上传。
-        </p>
+      <!-- 两个模块分成两页：发件人名单是「一条规则都不用写」的快速拉黑 / 放行，
+           收信规则是条件 + 动作。以前挤在同一列里，加地址的按钮看起来像在给规则加条件。 -->
+      <div class="mail-rules-tabs" role="tablist">
+        <button
+          v-for="tab in TABS"
+          :key="tab.key"
+          class="mail-rules-tab"
+          :class="{ 'is-on': activeTab === tab.key }"
+          role="tab"
+          :aria-selected="activeTab === tab.key"
+          @click="switchTab(tab.key)"
+        >
+          <MailIcon :name="tab.icon" :size="14" />
+          {{ tab.label }}
+          <span v-if="tabCount(tab.key)" class="mail-rules-tab-count">{{ tabCount(tab.key) }}</span>
+        </button>
+      </div>
 
-        <!-- 收发件人名单：比规则更简单的「一键拉黑 / 放行」，判定顺序也更靠前 -->
-        <div class="mail-section-divider"></div>
-        <div class="mail-flabel" style="margin-bottom: 6px">发件人名单（优先于规则）</div>
-        <p class="mail-hint" style="margin: 0 0 8px">
-          黑名单里的发件人直接进垃圾箱；白名单里的发件人跳过所有规则。
-          支持 <code>@域名</code>、完整地址、<code>*</code> 通配符，或直接写一段子串。
-        </p>
-        <div v-for="item in senderRules" :key="item.id" class="mail-rule">
-          <span class="mail-chip" :class="item.kind === 'block' ? 'is-on' : ''">
-            {{ item.kind === 'block' ? '黑名单' : '白名单' }}
-          </span>
-          <div class="mail-rule-main">
-            <div class="mail-rule-name">{{ item.pattern }}</div>
-            <div v-if="item.note" class="mail-rule-desc">{{ item.note }}</div>
-          </div>
-          <button class="mail-btn is-danger" @click="$emit('delete-sender-rule', item.id)">删除</button>
-        </div>
-        <div class="mail-field-row" style="align-items: flex-end">
-          <div class="mail-field">
-            <label class="mail-flabel">类型</label>
-            <select v-model="senderDraft.kind" class="mail-input">
-              <option value="block">黑名单（直接进垃圾箱）</option>
-              <option value="allow">白名单（跳过规则）</option>
-            </select>
-          </div>
-          <div class="mail-field">
-            <label class="mail-flabel">地址 / 域名 / 通配符</label>
-            <input
-              v-model="senderDraft.pattern"
-              class="mail-input"
-              placeholder="@spam.example 或 noreply-*@x.com"
-              @keyup.enter="addSenderRule"
-            />
-          </div>
-          <button class="mail-btn" style="margin-bottom: 2px" @click="addSenderRule">添加</button>
-        </div>
+      <div ref="panelRef" class="mail-modal-body">
+        <!-- ============ 收信规则 ============ -->
+        <section v-show="activeTab === 'rules'" class="mail-rules-panel">
+          <p class="mail-hint" style="margin-top: 0">
+            规则在本地同步到新邮件后执行。没有指定文件夹的规则只作用于收件箱。
+            想让规则在服务器上生效（关掉客户端也跑），在「外观与设置 → 服务器端规则」里上传。
+          </p>
 
-        <div class="mail-section-divider"></div>
-        <div class="mail-flabel" style="margin-bottom: 8px">收信规则</div>
-
-        <div v-for="rule in orderedRules" :key="rule.id" class="mail-rule">
-          <label class="mail-check" style="margin: 2px 0 0">
-            <input
-              type="checkbox"
-              :checked="rule.enabled"
-              @change="toggleRule(rule, $event.target.checked)"
-            />
-          </label>
-          <div class="mail-rule-main">
-            <div class="mail-rule-name">{{ rule.name || '未命名规则' }}</div>
-            <div class="mail-rule-desc">{{ describeRule(rule) }}</div>
-          </div>
-          <button class="mail-btn" @click="editRule(rule)">编辑</button>
-          <button class="mail-btn is-danger" @click="removeRule(rule)">删除</button>
-        </div>
-
-        <div v-if="!rules.length" class="mail-hint" style="margin-bottom: 12px">
-          还没有规则。新建一条，把「来自某个发件人」或「主题包含某个词」的邮件自动归档、打标签或标为已读。
-        </div>
-
-        <button class="mail-btn is-primary" @click="startNew">＋ 新建规则</button>
-
-        <!-- 编辑器 -->
-        <div v-if="editing" class="mail-rule-editor">
-          <h3 class="mail-modal-title" style="font-size: 13px; margin: 18px 0 12px">
-            {{ draftIndex >= 0 ? '编辑规则' : '新建规则' }}
-          </h3>
-
-          <div class="mail-field-row">
-            <div class="mail-field">
-              <label class="mail-flabel">规则名称</label>
-              <input v-model="draft.name" class="mail-input" placeholder="例如：财务报表自动归档" />
+          <div v-for="rule in orderedRules" :key="rule.id" class="mail-rule">
+            <label class="mail-check" style="margin: 2px 0 0">
+              <input
+                type="checkbox"
+                :checked="rule.enabled"
+                @change="toggleRule(rule, $event.target.checked)"
+              />
+            </label>
+            <div class="mail-rule-main">
+              <div class="mail-rule-name">{{ rule.name || '未命名规则' }}</div>
+              <div class="mail-rule-desc">{{ describeRule(rule) }}</div>
             </div>
-            <div class="mail-field">
-              <label class="mail-flabel">优先级（数字小的先执行）</label>
-              <input v-model.number="draft.priority" class="mail-input" type="number" />
-            </div>
+            <button class="mail-btn" @click="editRule(rule)">编辑</button>
+            <button class="mail-btn is-danger" @click="removeRule(rule)">删除</button>
           </div>
 
-          <div class="mail-flabel" style="margin-bottom: 6px">满足以下条件（全部满足）</div>
-          <div class="mail-field-row">
-            <div class="mail-field">
-              <label class="mail-flabel">发件人包含</label>
-              <div class="mail-rule-input-row">
-                <input v-model="cond.from" class="mail-input" placeholder="用逗号分隔多个" />
-                <button
-                  class="mail-btn mail-rule-pick-btn"
-                  :class="{ 'is-on': pickerTarget === 'from' }"
-                  title="从通讯录选择发件人"
-                  @click="togglePicker('from')"
-                >
-                  通讯录
-                </button>
+          <div v-if="!rules.length" class="mail-hint" style="margin-bottom: 12px">
+            还没有规则。新建一条，把「来自某个发件人」或「主题包含某个词」的邮件自动归档、打标签或标为已读。
+          </div>
+
+          <button class="mail-btn is-primary" @click="startNew">＋ 新建规则</button>
+
+          <!-- 编辑器 -->
+          <div v-if="editing" class="mail-rule-editor">
+            <h3 class="mail-modal-title" style="font-size: 13px; margin: 18px 0 12px">
+              {{ draftIndex >= 0 ? '编辑规则' : '新建规则' }}
+            </h3>
+
+            <div class="mail-field-row">
+              <div class="mail-field">
+                <label class="mail-flabel">规则名称</label>
+                <input v-model="draft.name" class="mail-input" placeholder="例如：财务报表自动归档" />
+              </div>
+              <div class="mail-field">
+                <label class="mail-flabel">优先级（数字小的先执行）</label>
+                <input v-model.number="draft.priority" class="mail-input" type="number" />
+              </div>
+            </div>
+
+            <div class="mail-flabel" style="margin-bottom: 6px">满足以下条件（全部满足）</div>
+            <div class="mail-field-row">
+              <div class="mail-field">
+                <label class="mail-flabel">
+                  发件人包含
+                  <span v-if="tokenCount('from')" class="mail-rule-count">{{ tokenCount('from') }} 个</span>
+                </label>
+                <div class="mail-rule-input-row">
+                  <textarea
+                    v-model="cond.from"
+                    class="mail-input mail-rule-grow"
+                    rows="1"
+                    :title="cond.from"
+                    placeholder="用逗号分隔多个"
+                    @input="autoGrow"
+                  ></textarea>
+                  <button
+                    class="mail-btn mail-rule-pick-btn"
+                    :class="{ 'is-on': pickerTarget === 'from' }"
+                    title="从通讯录选择发件人"
+                    @click="togglePicker('from')"
+                  >
+                    通讯录
+                  </button>
+                </div>
+              </div>
+              <div class="mail-field">
+                <label class="mail-flabel">
+                  收件人包含
+                  <span v-if="tokenCount('to')" class="mail-rule-count">{{ tokenCount('to') }} 个</span>
+                </label>
+                <div class="mail-rule-input-row">
+                  <textarea
+                    v-model="cond.to"
+                    class="mail-input mail-rule-grow"
+                    rows="1"
+                    :title="cond.to"
+                    placeholder="用逗号分隔多个"
+                    @input="autoGrow"
+                  ></textarea>
+                  <button
+                    class="mail-btn mail-rule-pick-btn"
+                    :class="{ 'is-on': pickerTarget === 'to' }"
+                    title="从通讯录选择收件人"
+                    @click="togglePicker('to')"
+                  >
+                    通讯录
+                  </button>
+                </div>
+              </div>
+            </div>
+            <!-- 内联展开而不是浮层：弹层正文自带滚动容器，浮层会被裁掉一截。 -->
+            <div v-if="pickerTarget" class="mail-rule-picker">
+              <div class="mail-rule-picker-head">
+                选择{{ pickerTarget === 'from' ? '发件人' : '收件人' }}（可多选，选完继续追加）
+              </div>
+              <AddressPicker
+                :exclude="splitList(pickerTarget === 'from' ? cond.from : cond.to)"
+                keep-open
+                @pick="onPickAddress"
+                @pick-group="onPickGroup"
+                @close="pickerTarget = ''"
+              />
+            </div>
+            <div class="mail-field-row">
+              <div class="mail-field">
+                <label class="mail-flabel">主题包含</label>
+                <textarea
+                  v-model="cond.subject"
+                  class="mail-input mail-rule-grow"
+                  rows="1"
+                  placeholder="用逗号分隔多个"
+                  @input="autoGrow"
+                ></textarea>
+              </div>
+              <div class="mail-field">
+                <label class="mail-flabel">主题不包含</label>
+                <textarea
+                  v-model="cond.subjectNot"
+                  class="mail-input mail-rule-grow"
+                  rows="1"
+                  placeholder="排除这类邮件"
+                  @input="autoGrow"
+                ></textarea>
               </div>
             </div>
             <div class="mail-field">
-              <label class="mail-flabel">收件人包含</label>
-              <div class="mail-rule-input-row">
-                <input v-model="cond.to" class="mail-input" placeholder="用逗号分隔多个" />
-                <button
-                  class="mail-btn mail-rule-pick-btn"
-                  :class="{ 'is-on': pickerTarget === 'to' }"
-                  title="从通讯录选择收件人"
-                  @click="togglePicker('to')"
-                >
-                  通讯录
-                </button>
+              <label class="mail-flabel">正文包含</label>
+              <input v-model="cond.body" class="mail-input" placeholder="匹配正文内容" />
+            </div>
+            <div class="mail-field-row">
+              <div class="mail-field">
+                <label class="mail-flabel">高级正则（主题 / 正文 / 发件人任一匹配）</label>
+                <input v-model="cond.regex" class="mail-input" placeholder="例如 ^\\[发票\\]" spellcheck="false" />
+              </div>
+              <div class="mail-field">
+                <label class="mail-flabel">生效文件夹</label>
+                <select v-model="cond.folder" class="mail-input">
+                  <option value="inbox">仅收件箱</option>
+                  <option value="">所有文件夹</option>
+                </select>
               </div>
             </div>
-          </div>
-          <!-- 内联展开而不是浮层：弹层正文自带滚动容器，浮层会被裁掉一截。 -->
-          <div v-if="pickerTarget" class="mail-rule-picker">
-            <div class="mail-rule-picker-head">
-              选择{{ pickerTarget === 'from' ? '发件人' : '收件人' }}（可多选，选完继续追加）
-            </div>
-            <AddressPicker
-              :exclude="splitList(pickerTarget === 'from' ? cond.from : cond.to)"
-              keep-open
-              @pick="onPickAddress"
-              @pick-group="onPickGroup"
-              @close="pickerTarget = ''"
-            />
-          </div>
-          <div class="mail-field-row">
-            <div class="mail-field">
-              <label class="mail-flabel">主题包含</label>
-              <input v-model="cond.subject" class="mail-input" placeholder="用逗号分隔多个" />
-            </div>
-            <div class="mail-field">
-              <label class="mail-flabel">主题不包含</label>
-              <input v-model="cond.subjectNot" class="mail-input" placeholder="排除这类邮件" />
-            </div>
-          </div>
-          <div class="mail-field">
-            <label class="mail-flabel">正文包含</label>
-            <input v-model="cond.body" class="mail-input" placeholder="匹配正文内容" />
-          </div>
-          <div class="mail-field-row">
-            <div class="mail-field">
-              <label class="mail-flabel">高级正则（主题 / 正文 / 发件人任一匹配）</label>
-              <input v-model="cond.regex" class="mail-input" placeholder="例如 ^\\[发票\\]" spellcheck="false" />
-            </div>
-            <div class="mail-field">
-              <label class="mail-flabel">生效文件夹</label>
-              <select v-model="cond.folder" class="mail-input">
-                <option value="inbox">仅收件箱</option>
-                <option value="">所有文件夹</option>
-              </select>
-            </div>
-          </div>
-          <label class="mail-check">
-            <input v-model="cond.attachmentOnly" type="checkbox" />
-            只处理带附件的邮件
-          </label>
+            <label class="mail-check">
+              <input v-model="cond.attachmentOnly" type="checkbox" />
+              只处理带附件的邮件
+            </label>
 
-          <div class="mail-flabel" style="margin: 14px 0 6px">执行以下动作</div>
-          <div class="mail-field-row">
-            <div class="mail-field">
-              <label class="mail-flabel">移到文件夹</label>
-              <select v-model="act.moveTo" class="mail-input">
-                <option value="">不移动</option>
-                <option v-for="folder in folderOptions" :key="folder.name" :value="folder.name">
-                  {{ folder.displayName }}
-                </option>
-              </select>
+            <div class="mail-flabel" style="margin: 14px 0 6px">执行以下动作</div>
+            <div class="mail-field-row">
+              <div class="mail-field">
+                <label class="mail-flabel">
+                  移到文件夹
+                  <span class="mail-rule-scope" :title="accountLabel">· {{ accountLabel }}</span>
+                </label>
+                <!-- 悬浮的文件夹树（对齐 Outlook 的「规则和通知」）：能挑已有文件夹、
+                     能就地新建，全部在面板里完成，不再弹系统对话框。 -->
+                <MailFolderPicker
+                  v-model="act.moveTo"
+                  :folders="targetFolders"
+                  :account-label="accountLabel"
+                  :create-folder="createFolderFn"
+                  placeholder="不移动"
+                  title="选择要移动到的文件夹（可以在面板里新建）"
+                  @refresh="refreshFolders"
+                />
+              </div>
+              <div class="mail-field">
+                <label class="mail-flabel">添加分类标签</label>
+                <input v-model="act.labels" class="mail-input" placeholder="用逗号分隔" />
+              </div>
             </div>
             <div class="mail-field">
-              <label class="mail-flabel">添加分类标签</label>
-              <input v-model="act.labels" class="mail-input" placeholder="用逗号分隔" />
+              <label class="mail-flabel">转发到</label>
+              <input v-model="act.forwardTo" class="mail-input" placeholder="可选，多个用逗号分隔" />
+            </div>
+            <div style="display: flex; gap: 16px; flex-wrap: wrap">
+              <label class="mail-check"><input v-model="act.markRead" type="checkbox" />标为已读</label>
+              <label class="mail-check"><input v-model="act.star" type="checkbox" />加星标</label>
+              <label class="mail-check"><input v-model="act.delete" type="checkbox" />移入垃圾箱</label>
+              <label class="mail-check"><input v-model="draft.stopProcessing" type="checkbox" />命中后停止后续规则</label>
+            </div>
+
+            <div style="display: flex; gap: 8px; margin-top: 12px">
+              <button class="mail-btn is-primary" @click="saveDraft">保存规则</button>
+              <button class="mail-btn" @click="editing = false">取消</button>
             </div>
           </div>
-          <div class="mail-field">
-            <label class="mail-flabel">转发到</label>
-            <input v-model="act.forwardTo" class="mail-input" placeholder="可选，多个用逗号分隔" />
-          </div>
-          <div style="display: flex; gap: 16px; flex-wrap: wrap">
-            <label class="mail-check"><input v-model="act.markRead" type="checkbox" />标为已读</label>
-            <label class="mail-check"><input v-model="act.star" type="checkbox" />加星标</label>
-            <label class="mail-check"><input v-model="act.delete" type="checkbox" />移入垃圾箱</label>
-            <label class="mail-check"><input v-model="draft.stopProcessing" type="checkbox" />命中后停止后续规则</label>
+        </section>
+
+        <!-- ============ 发件人名单 ============ -->
+        <section v-show="activeTab === 'senders'" class="mail-rules-panel">
+          <p class="mail-hint" style="margin-top: 0">
+            黑名单里的发件人直接进垃圾箱；白名单里的发件人跳过所有规则。
+            支持 <code>@域名</code>、完整地址、<code>*</code> 通配符，或直接写一段子串。
+            这里的判定优先于下面的收信规则。
+          </p>
+
+          <div v-for="item in senderRules" :key="item.id" class="mail-rule">
+            <span class="mail-chip" :class="item.kind === 'block' ? 'is-on' : ''">
+              {{ item.kind === 'block' ? '黑名单' : '白名单' }}
+            </span>
+            <div class="mail-rule-main">
+              <div class="mail-rule-name">{{ item.pattern }}</div>
+              <div v-if="item.note" class="mail-rule-desc">{{ item.note }}</div>
+            </div>
+            <button class="mail-btn is-danger" @click="$emit('delete-sender-rule', item.id)">删除</button>
           </div>
 
-          <div style="display: flex; gap: 8px; margin-top: 12px">
-            <button class="mail-btn is-primary" @click="saveDraft">保存规则</button>
-            <button class="mail-btn" @click="editing = false">取消</button>
+          <div v-if="!senderRules.length" class="mail-hint" style="margin-bottom: 12px">
+            名单还是空的。拦掉某个发件人，或者给重要的人开白名单。
           </div>
-        </div>
+
+          <div class="mail-field-row" style="align-items: flex-end">
+            <div class="mail-field">
+              <label class="mail-flabel">类型</label>
+              <select v-model="senderDraft.kind" class="mail-input">
+                <option value="block">黑名单（直接进垃圾箱）</option>
+                <option value="allow">白名单（跳过规则）</option>
+              </select>
+            </div>
+            <div class="mail-field">
+              <label class="mail-flabel">地址 / 域名 / 通配符</label>
+              <input
+                v-model="senderDraft.pattern"
+                class="mail-input"
+                placeholder="@spam.example 或 noreply-*@x.com"
+                @keyup.enter="addSenderRule"
+              />
+            </div>
+            <button class="mail-btn" style="margin-bottom: 2px" @click="addSenderRule">添加</button>
+          </div>
+        </section>
       </div>
 
       <div class="mail-modal-foot">
@@ -213,8 +278,10 @@
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import AddressPicker from './AddressPicker.vue'
+import MailIcon from './MailIcon.vue'
+import MailFolderPicker from './MailFolderPicker.vue'
 import { useContactsStore, expandGroupMembers } from '../../../../stores/contactsStore'
 
 const props = defineProps({
@@ -225,6 +292,10 @@ const props = defineProps({
   // 收/发件人名单（黑名单 / 白名单）。以前模板里用了却没声明，
   // 渲染时读 `item.kind` 直接抛 TypeError，整个弹层（连同上层的设置页）都白屏。
   senderRules: { type: Array, default: () => [] },
+  /** 新建文件夹（规则里选「不存在的文件夹」时用）。返回 `{ name }` 或 null。 */
+  createFolderFn: { type: Function, default: null },
+  /** 从服务器刷新文件夹表：列表要能随其它客户端新建的文件夹更新。 */
+  refreshFoldersFn: { type: Function, default: null },
 })
 const emit = defineEmits([
   'close',
@@ -233,6 +304,26 @@ const emit = defineEmits([
   'save-sender-rule',
   'delete-sender-rule',
 ])
+
+const TABS = [
+  { key: 'rules', label: '收信规则', icon: 'filter' },
+  { key: 'senders', label: '发件人名单', icon: 'shield' },
+]
+const activeTab = ref('rules')
+const panelRef = ref(null)
+
+function tabCount(key) {
+  return key === 'rules' ? props.rules.length : props.senderRules.length
+}
+
+function switchTab(key) {
+  activeTab.value = key
+  // 换页后把滚动位置收回顶部，否则新页一进来就停在中间。
+  nextTick(() => {
+    if (panelRef.value) panelRef.value.scrollTop = 0
+    resizeGrowables()
+  })
+}
 
 /** 新增一条发件人名单的草稿。提交后清空，方便连着录入几条。 */
 const senderDraft = reactive({ kind: 'block', pattern: '' })
@@ -293,6 +384,39 @@ function togglePicker(target) {
   pickerTarget.value = pickerTarget.value === target ? '' : target
 }
 
+// ---------------- 多值输入框：内容多了向下长，而不是把后面的内容截断 ----------------
+
+/**
+ * 地址 / 主题这类「逗号分隔的多个值」用单行输入框时，从通讯录加几个人就被截断，
+ * 用户看不到自己到底加了谁。这里用 textarea 让它向下长（最多 5 行），
+ * 超出后自身滚动——膨胀只影响这一格的高度，不会把整个弹层撑开。
+ */
+function autoGrow(event) {
+  const el = event?.target
+  if (!el || el.tagName !== 'TEXTAREA') return
+  el.style.height = 'auto'
+  el.style.height = `${Math.min(el.scrollHeight + 2, 96)}px`
+}
+
+function resizeGrowables() {
+  const root = panelRef.value
+  if (!root) return
+  root.querySelectorAll('textarea.mail-rule-grow').forEach((el) => {
+    el.style.height = 'auto'
+    el.style.height = `${Math.min(el.scrollHeight + 2, 96)}px`
+  })
+}
+
+/**
+ * 输入框里已有几个值。
+ *
+ * 框最多长到 5 行，从通讯录连着加二十个人时看不到底——标签上先报个数，
+ * 悬停输入框还能看到完整清单（textarea 的 title）。
+ */
+function tokenCount(field) {
+  return splitList(cond[field]).length
+}
+
 /** 把选中的地址追加进「发件人 / 收件人包含」，去重后仍用逗号分隔。 */
 function appendAddresses(target, addresses) {
   const field = target === 'from' ? 'from' : 'to'
@@ -303,6 +427,8 @@ function appendAddresses(target, addresses) {
   if (!additions.length) return
   const base = String(cond[field] || '').trim().replace(/[,;，；]\s*$/, '')
   cond[field] = base ? `${base}, ${additions.join(', ')}` : additions.join(', ')
+  // 追加后立刻长高：用户马上能看到新加进去的地址。
+  nextTick(resizeGrowables)
 }
 
 function onPickAddress(address) {
@@ -325,17 +451,45 @@ function onDocMouseDown(event) {
   pickerTarget.value = ''
 }
 
-onMounted(() => document.addEventListener('mousedown', onDocMouseDown))
+onMounted(() => {
+  document.addEventListener('mousedown', onDocMouseDown)
+  nextTick(resizeGrowables)
+})
 onBeforeUnmount(() => document.removeEventListener('mousedown', onDocMouseDown))
 
 const orderedRules = computed(() =>
   [...props.rules].sort((a, b) => (a.priority ?? 0) - (b.priority ?? 0)),
 )
 
-const folderOptions = computed(() => {
-  const accountId = props.activeAccountId || props.accounts[0]?.id
-  return props.foldersByAccount[accountId] || []
+// ---------------- 目标文件夹 ----------------
+
+/** 规则用哪个账户的文件夹：优先当前账户，聚合视图下退回第一个账户。 */
+const ruleAccountId = computed(() => props.activeAccountId || props.accounts[0]?.id || '')
+const accountLabel = computed(() => {
+  const account = props.accounts.find((a) => a.id === ruleAccountId.value)
+  return account?.email || '未选择账户'
 })
+
+/**
+ * 「移到文件夹」的候选：**只列当前账户**的文件夹。
+ *
+ * 以前这里取的是 `accounts[0]`（不是当前账户），多账户时会把别的账户的文件夹
+ * 摆进来，选中后规则移动自然失败。聚合视图（没有当前账户）下也不该跨账户混列，
+ * 所以退回第一个账户并明确标注账户名。
+ * 排序与层级交给 MailFolderPicker（它按角色与名字排，并把带分隔符的名字组成树）。
+ */
+const targetFolders = computed(() => {
+  const list = props.foldersByAccount[ruleAccountId.value] || []
+  return list
+    .filter((folder) => folder.selectable !== false)
+    // 发件箱是本地队列，不是可归档的目的地。
+    .filter((folder) => folder.role !== 'outbox')
+})
+
+/** 列表随文件夹表实时变化：面板打开时再问一次服务器，别让用户以为建了却不存在。 */
+function refreshFolders() {
+  props.refreshFoldersFn?.()
+}
 
 function splitList(text) {
   return String(text || '')
@@ -395,6 +549,8 @@ function startNew() {
   })
   draftIndex.value = -1
   editing.value = true
+  refreshFolders()
+  nextTick(resizeGrowables)
 }
 
 function editRule(rule) {
@@ -422,6 +578,8 @@ function editRule(rule) {
   })
   draftIndex.value = props.rules.findIndex((r) => r.id === rule.id)
   editing.value = true
+  refreshFolders()
+  nextTick(resizeGrowables)
 }
 
 function saveDraft() {
@@ -469,6 +627,56 @@ function removeRule(rule) {
 </script>
 
 <style scoped>
+/* 两个模块的切页：与「外观与设置」同一套样式，但不再 sticky——
+   弹层正文本身就是滚动容器，贴顶的页签会把下面的说明文字压住。 */
+.mail-rules-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 10px 18px 0;
+  border-bottom: 1px solid var(--mail-border);
+}
+
+.mail-rules-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: -1px;
+  padding: 7px 12px;
+  border: 1px solid transparent;
+  border-bottom: 0;
+  border-radius: 8px 8px 0 0;
+  background: transparent;
+  color: var(--mail-text-secondary);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.mail-rules-tab:hover {
+  background: var(--mail-panel-hover);
+  color: var(--mail-text);
+}
+.mail-rules-tab.is-on {
+  border-color: var(--mail-border);
+  background: var(--mail-panel);
+  color: var(--mail-text);
+  font-weight: 600;
+}
+.mail-rules-tab-count {
+  min-width: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--mail-bg-sunken);
+  color: var(--mail-text-muted);
+  font-size: 10.5px;
+  font-weight: 500;
+  line-height: 16px;
+  text-align: center;
+}
+
+.mail-rules-panel {
+  min-height: 0;
+}
+
 .mail-rule-editor {
   margin-top: 10px;
   padding: 14px;
@@ -490,6 +698,36 @@ function removeRule(rule) {
 .mail-rule-pick-btn {
   flex: 0 0 auto;
   height: 31px;
+}
+
+/* 多值输入框：内容多了往下长（上限 5 行），之后自身滚动。
+   不用单行 input——从通讯录加几个人就被横向截断，用户看不到加了谁。 */
+.mail-rule-grow {
+  min-height: 31px;
+  max-height: 96px;
+  padding: 7px 9px;
+  line-height: 1.45;
+  resize: none;
+  overflow-y: auto;
+}
+
+/* 「移到文件夹」旁边标出用的是哪个账户的文件夹：多账户时这一栏容易误读。 */
+.mail-rule-scope {
+  margin-left: 4px;
+  color: var(--mail-text-muted);
+  font-size: 11px;
+  font-weight: 400;
+}
+
+/* 条件里已经填了几个值：框最多长到 5 行，靠这个计数知道后面还有没有。 */
+.mail-rule-count {
+  margin-left: 4px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--mail-bg-sunken);
+  color: var(--mail-text-muted);
+  font-size: 10.5px;
+  font-weight: 500;
 }
 
 /* 通讯录面板：内联在条件行下方，标题写清楚这次是往哪一栏里加人。 */

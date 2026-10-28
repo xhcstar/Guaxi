@@ -753,6 +753,16 @@
   font-size: 13.5px;
   color: var(--mail-text);
 }
+/* 搜索命中：列表行与正文共用同一个标记（Outlook 也是把关键词直接标在原位，
+   而不是把整行刷成高亮）。用主题里的星标色做半透明底，明暗两套主题都清楚。 */
+.mail-hl {
+  padding: 0 1px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--mail-star) 42%, transparent);
+  color: inherit;
+  font-weight: inherit;
+}
+
 .mail-row-snippet {
   grid-column: 3;
   grid-row: 3;
@@ -1870,15 +1880,18 @@
   min-height: 420px;
 }
 
+/* 设置页的页签与说明：在滚动容器之外，正文滚动时不会盖住说明文字。 */
+.mail-settings-head {
+  flex: 0 0 auto;
+  padding: 0 18px;
+  border-bottom: 1px solid var(--mail-border);
+}
+
 .mail-settings-tabs {
-  position: sticky;
-  top: 0;
-  z-index: 1;
   display: flex;
   gap: 4px;
-  margin: -18px -18px 14px;
+  margin: 0 -18px;
   padding: 12px 18px;
-  border-bottom: 1px solid var(--mail-border);
   background: var(--mail-panel);
 }
 
@@ -1906,7 +1919,7 @@
 }
 
 .mail-settings-hint {
-  margin: 0 0 14px;
+  margin: 10px 0;
   font-size: 11.5px;
   color: var(--mail-text-muted);
 }
@@ -2503,8 +2516,14 @@
   color: var(--mail-text-muted);
 }
 .mail-compose-editor img {
+  /* 只保底不撑破版心：display / margin 这类会改变排版位置的东西交给下面
+     只作用于「我们自己插入的图片」的规则，引用原文里的图片保持发件人的排法。 */
   max-width: 100%;
   height: auto;
+  vertical-align: top;
+}
+/* 我们自己插入的图片（data-guaxi-img）：块级 + 上下留白，方便选中与调宽。 */
+.mail-compose-editor img[data-guaxi-img] {
   display: block;
   margin: 10px 0;
   border-radius: 6px;
@@ -2515,30 +2534,32 @@
 /* 插入的表格在编辑区里按当前主题显示。
    HTML 里保留 bgcolor / border 这些表现属性（收件端不认我们的样式表），
    但表现属性优先级低于样式表，所以屏幕上的表头、格线、文字都能跟着主题走：
-   暗色下不会出现「浅色表头配浅色文字、黑线配黑底」。 */
-.mail-compose-editor table {
+   暗色下不会出现「浅色表头配浅色文字、黑线配黑底」。
+   这些样式只作用于 `data-guaxi-table`（我们插入的表格）：引用原文里的表格
+   是发件人排的版，套上 100% 宽 / 强制格线会让整块内容相对 Outlook 偏移。 */
+.mail-compose-editor table[data-guaxi-table] {
   border-collapse: collapse;
   width: 100%;
   font-size: 13px;
   color: var(--mail-text);
 }
-.mail-compose-editor th,
-.mail-compose-editor td {
+.mail-compose-editor table[data-guaxi-table] th,
+.mail-compose-editor table[data-guaxi-table] td {
   border: 1px solid var(--mail-border-strong);
   padding: 6px 10px;
   text-align: left;
   vertical-align: top;
 }
-.mail-compose-editor thead th,
-.mail-compose-editor thead td {
+.mail-compose-editor table[data-guaxi-table] thead th,
+.mail-compose-editor table[data-guaxi-table] thead td {
   /* 表头行：先抹掉 HTML 里的 bgcolor="#f2f2f2"（表现属性优先级低于样式表），
      再用不透明底色，否则半透明色会和那块浅灰叠在一起。 */
   background: var(--mail-bg-sunken);
   color: var(--mail-text);
   font-weight: 600;
 }
-.mail-compose-editor tr[bgcolor],
-.mail-compose-editor th[bgcolor] {
+.mail-compose-editor table[data-guaxi-table] tr[bgcolor],
+.mail-compose-editor table[data-guaxi-table] th[bgcolor] {
   background: transparent;
 }
 /* 编辑区不留任何「插入后的残留选中」：粘贴图片 / 表格后用 .mail-compose-editor

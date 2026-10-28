@@ -1666,6 +1666,66 @@ fn escape_like(s: &str) -> String {
         .replace('_', "\\_")
 }
 
+/// 一个词的 LIKE 片段（多列之间 OR），同时给出对应的参数。
+///
+/// 用户不会手抄完整邮箱：`张三`、`zhangsan`、`zhang`、`zhangsan@x.com` 都应该命中。
+/// FTS 的 `from_addr` 列只有地址、且按 token 匹配，中文名与「地址前缀」都会落空，
+/// 所以发件人 / 收件人 / 主题改用 LIKE 子串（多词之间是 AND，每词在任一列出现即可）。
+/// 代价是全表扫描，但这几列都很短、本地邮件量在万到十万级，实测可接受；
+/// 正文仍然走 FTS（正文可能有几十 MB，LIKE 才是真的慢）。
+fn like_terms(cols: &[&str], text: &str) -> (Vec<String>, Vec<String>) {
+    let mut fragments = Vec::new();
+    let mut patterns = Vec::new();
+    for term in text.split_whitespace() {
+        let pattern = format!("%{}%", escape_like(term));
+        let ors = cols
+            .iter()
+            .map(|col| format!("{col} LIKE ? ESCAPE '\\'"))
+            .collect::<Vec<_>>()
+            .join(" OR ");
+        fragments.push(format!("({ors})"));
+        for _ in cols {
+            patterns.push(pattern.clone());
+        }
+    }
+    (fragments, patterns)
+}
+
+/// 「主搜索词 或 通讯录展开出来的地址」：任一组命中即可，组内多个词仍是 AND。
+fn push_like_with_alternatives(
+    sql: &mut String,
+    args: &mut Vec<Box<dyn rusqlite::ToSql>>,
+    cols: &[&str],
+    text: &str,
+    alternatives: &[String],
+) {
+    if cols.is_empty() {
+        return;
+    }
+    let mut groups: Vec<String> = Vec::new();
+    let mut patterns: Vec<String> = Vec::new();
+    let (fragments, terms) = like_terms(cols, text);
+    if !fragments.is_empty() {
+        groups.push(fragments.join(" AND "));
+        patterns.extend(terms);
+    }
+    for alt in alternatives {
+        let (fragments, terms) = like_terms(cols, alt.trim());
+        if fragments.is_empty() {
+            continue;
+        }
+        groups.push(fragments.join(" AND "));
+        patterns.extend(terms);
+    }
+    if groups.is_empty() {
+        return;
+    }
+    sql.push_str(&format!(" AND ({})", groups.join(" OR ")));
+    for pattern in patterns {
+        args.push(Box::new(pattern));
+    }
+}
+
 /// FTS5 查询串：用户输入先用 jieba 切词（与写入侧同一套分词），
 /// 每个词加双引号（避免 `AND`/`OR`/`*` 被当成语法），词间 AND。
 /// 最后一个纯 ASCII 词加 `*`，让 `invo` 能命中 `invoice`。
@@ -1695,7 +1755,16 @@ fn fts_query(text: &str) -> String {
 pub fn search(query: &SearchQuery) -> Result<Vec<MessageSummary>, String> {
     let limit = query.limit.unwrap_or(200).min(2000);
     let offset = query.offset.unwrap_or(0);
-    let use_fts = fts_available() && !query.text.trim().is_empty();
+    let field = query.field.as_deref().unwrap_or("all");
+    let text = query.text.trim();
+    // 发件人 / 收件人 / 主题按子串匹配（见 push_field_like），其余走 FTS。
+    let field_like = match field {
+        "from" => Some(&["m.from_addr", "m.from_name"][..]),
+        "to" => Some(&["m.to_json", "m.cc_json"][..]),
+        "subject" => Some(&["m.subject"][..]),
+        _ => None,
+    };
+    let use_fts = fts_available() && !text.is_empty() && field_like.is_none();
 
     let mut sql = String::from("SELECT ");
     for (i, col) in MSG_COLS.split(',').map(|s| s.trim()).enumerate() {
@@ -1799,23 +1868,49 @@ pub fn search(query: &SearchQuery) -> Result<Vec<MessageSummary>, String> {
     }
 
     if use_fts {
+        // FTS 命中词，外加「通讯录里同名联系人对应的邮箱地址」——
+        // 前端把候选地址放在 textAlternatives 里传进来（见 mailStore.loadMessages）。
         let expr = fts_query(&query.text);
+        let mut groups: Vec<String> = Vec::new();
+        let mut patterns: Vec<String> = Vec::new();
         if !expr.is_empty() {
             // MATCH 的左操作数必须是**表名或列名本身，不能用别名**：
             // 写成 `f MATCH ?` 会直接报 `no such column: f`，而前端把错误当
             // 「检索失败」静默回退成普通列表——表现就是「输入了但结果没变」。
             // 这是实际踩到的 bug，不是理论问题。
-            let target = match query.field.as_deref().unwrap_or("all") {
-                "subject" => "messages_fts.subject",
-                "from" => "messages_fts.from_addr",
-                "to" => "messages_fts.to_text",
+            let target = match field {
                 "body" => "messages_fts.body",
                 _ => "messages_fts",
             };
-            sql.push_str(&format!(" AND {target} MATCH ?"));
-            args.push(Box::new(expr));
+            groups.push(format!("{target} MATCH ?"));
+            patterns.push(expr);
         }
-    } else if !query.text.trim().is_empty() {
+        if field != "body" {
+            let alt_cols = ["m.subject", "m.from_addr", "m.from_name", "m.to_json"];
+            let mut alt_groups: Vec<String> = Vec::new();
+            let mut alt_patterns: Vec<String> = Vec::new();
+            for alt in &query.text_alternatives {
+                let (fragments, terms) = like_terms(&alt_cols, alt.trim());
+                if fragments.is_empty() {
+                    continue;
+                }
+                alt_groups.push(fragments.join(" AND "));
+                alt_patterns.extend(terms);
+            }
+            if !alt_groups.is_empty() {
+                groups.push(format!("({})", alt_groups.join(" OR ")));
+                patterns.extend(alt_patterns);
+            }
+        }
+        if !groups.is_empty() {
+            sql.push_str(&format!(" AND ({})", groups.join(" OR ")));
+            for pattern in patterns {
+                args.push(Box::new(pattern));
+            }
+        }
+    } else if let Some(cols) = field_like {
+        push_like_with_alternatives(&mut sql, &mut args, cols, text, &query.text_alternatives);
+    } else if !text.is_empty() {
         let pat = format!("%{}%", escape_like(query.text.trim()));
         sql.push_str(
             " AND (m.subject LIKE ? ESCAPE '\\' OR m.from_addr LIKE ? ESCAPE '\\' \

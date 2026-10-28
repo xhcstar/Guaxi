@@ -138,6 +138,7 @@
           <MailRowContent
             :row="item.row"
             :checked="isChecked(item.row)"
+            :highlight="highlightTokens"
             @toggle="(v) => $emit('toggle-select', item.row, v)"
             @star="(v) => $emit('toggle-star', item.row, v)"
             @delete="$emit('delete', item.row)"
@@ -168,6 +169,7 @@
           <MailRowContent
             :row="row"
             :checked="isChecked(row)"
+            :highlight="highlightTokens"
             @toggle="(v) => $emit('toggle-select', row, v)"
             @star="(v) => $emit('toggle-star', row, v)"
             @delete="$emit('delete', row)"
@@ -187,6 +189,7 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import MailRowContent from './MailRowContent.vue'
+import { searchTokens } from './highlight'
 
 const emit = defineEmits([
   'open',
@@ -245,6 +248,8 @@ const props = defineProps({
 const visible = computed(() => props.messages || [])
 /** 已加载邮件里的未读数：和左侧「未读」角标对照着看，避免总数/未读数被误读成同一个指标。 */
 const unreadCount = computed(() => visible.value.filter((m) => !m.seen).length)
+/** 搜索命中词的切分结果：列表行与正文共用同一套规则（见 highlight.js）。 */
+const highlightTokens = computed(() => searchTokens(props.searchQuery))
 
 // ---------------- 虚拟滚动 ----------------
 

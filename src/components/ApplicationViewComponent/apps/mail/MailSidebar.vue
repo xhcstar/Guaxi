@@ -45,9 +45,15 @@
           v-for="entry in standardFolders"
           :key="entry.key"
           class="mail-folder"
-          :class="{ 'is-active': isFolderActive(entry) }"
+          :class="{
+            'is-active': isFolderActive(entry),
+            'is-drop-target': entry.folder && dropTarget === entry.folder.name,
+          }"
           @click="selectStandard(entry)"
           @contextmenu.prevent="entry.folder && openFolderMenu(entry.folder, $event)"
+          @dragover="onDragOver(entry.folder, $event)"
+          @dragleave="onDragLeave(entry.folder)"
+          @drop.prevent="onDrop(entry.folder)"
         >
           <span class="mail-folder-icon">{{ entry.icon }}</span>
           <span class="mail-folder-name">{{ entry.label }}</span>
@@ -108,9 +114,15 @@
           v-for="folder in primaryCustomFolders"
           :key="folder.name"
           class="mail-folder"
-          :class="{ 'is-active': scope === 'folder' && activeFolder === folder.name }"
+          :class="{
+            'is-active': scope === 'folder' && activeFolder === folder.name,
+            'is-drop-target': dropTarget === folder.name,
+          }"
           @click="$emit('select-folder', folder.name)"
           @contextmenu.prevent="openFolderMenu(folder, $event)"
+          @dragover="onDragOver(folder, $event)"
+          @dragleave="onDragLeave(folder)"
+          @drop.prevent="onDrop(folder)"
         >
           <span class="mail-folder-icon">▢</span>
           <span class="mail-folder-name" :title="folder.displayName">{{ folder.displayName }}</span>
@@ -245,17 +257,27 @@ const folderMenu = ref(null)
 /** 拖拽悬停中的文件夹（用于高亮可放区域）。 */
 const dropTarget = ref('')
 
-function onDragOver(folder) {
+/** 只接受邮件列表拖过来的行：拖文件 / 文字到侧栏不该高亮成「可以放下」。 */
+function canAcceptDrop(event) {
+  const types = event?.dataTransfer?.types
+  if (!types) return false
+  return Array.from(types).includes('text/x-guaxi-mail')
+}
+
+function onDragOver(folder, event) {
+  if (!folder || !canAcceptDrop(event)) return
+  event.preventDefault()
+  if (event.dataTransfer) event.dataTransfer.dropEffect = 'move'
   dropTarget.value = folder.name
 }
 
 function onDragLeave(folder) {
-  if (dropTarget.value === folder.name) dropTarget.value = ''
+  if (folder && dropTarget.value === folder.name) dropTarget.value = ''
 }
 
 function onDrop(folder) {
   dropTarget.value = ''
-  emit('drop-on-folder', folder.name)
+  if (folder) emit('drop-on-folder', folder.name)
 }
 
 async function startCreateFolder() {
@@ -469,6 +491,13 @@ function folderIcon(role) {
   font-size: 12px;
 }
 .mail-account.is-add:hover {
+  color: var(--mail-accent);
+}
+/* 拖到文件夹上时的落点提示：和选中态区分开（选中是实心底，这里是虚线框）。 */
+.mail-folder.is-drop-target {
+  outline: 1.5px dashed var(--mail-accent);
+  outline-offset: -2px;
+  background: var(--mail-accent-soft);
   color: var(--mail-accent);
 }
 </style>

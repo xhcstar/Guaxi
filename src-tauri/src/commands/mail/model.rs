@@ -430,6 +430,10 @@ pub struct SearchQuery {
     /// 全文 / 主题 / 发件人 / 收件人 / 正文的组合关键词。
     #[serde(default)]
     pub text: String,
+    /// 与 `text` 并列的**备选词**（OR 关系）：前端把通讯录里同名联系人对应的邮箱地址
+    /// 放进来，这样搜「张三」也能命中那些信头只写了地址、没写姓名的邮件。
+    #[serde(default)]
+    pub text_alternatives: Vec<String>,
     /// 搜索字段：`all` | `subject` | `from` | `to` | `body`。
     #[serde(default)]
     pub field: Option<String>,

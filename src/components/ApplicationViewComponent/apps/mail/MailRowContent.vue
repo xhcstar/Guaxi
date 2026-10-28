@@ -5,7 +5,7 @@
   <span class="mail-avatar" :style="avatarStyle">{{ avatarLetter }}</span>
 
   <div class="mail-row-line">
-    <span class="mail-row-from">{{ fromLabel }}</span>
+    <span class="mail-row-from"><Segments :parts="fromSegments" /></span>
     <span class="mail-row-date">{{ dateLabel }}</span>
   </div>
 
@@ -15,7 +15,7 @@
       :data-thread-count="row.threadCount > 1 ? row.threadCount : null"
       :title="row.subject || '（无主题）'"
     >
-      {{ row.subject || '（无主题）' }}
+      <Segments :parts="subjectSegments" />
     </span>
     <span class="mail-row-markers">
       <span v-for="label in labels" :key="label" class="mail-label">{{ label }}</span>
@@ -31,7 +31,7 @@
     </span>
   </div>
 
-  <div class="mail-row-snippet">{{ row.snippet || '（无正文预览）' }}</div>
+  <div class="mail-row-snippet"><Segments :parts="snippetSegments" /></div>
 
   <!-- 行内删除：悬停出现，省得每次都先选中再右键/点工具栏。 -->
   <span class="mail-row-actions">
@@ -53,10 +53,14 @@
 import { computed } from 'vue'
 import { avatarSeed } from './theme'
 import MailIcon from './MailIcon.vue'
+import { segments } from './highlight'
+import Segments from './MailHighlightSegments.vue'
 
 const props = defineProps({
   row: { type: Object, required: true },
   checked: { type: Boolean, default: false },
+  /** 搜索关键词（已切词）：命中的文字单独标出来，与 Outlook 的搜索结果一致。 */
+  highlight: { type: Array, default: () => [] },
 })
 
 defineEmits(['toggle', 'star', 'delete'])
@@ -77,6 +81,15 @@ const labels = computed(() =>
     .map((s) => s.trim())
     .filter(Boolean)
     .slice(0, 2),
+)
+
+// 高亮只做「切段」：渲染交给 MailHighlightSegments，避免每行都写一遍 v-for。
+const fromSegments = computed(() => segments(fromLabel.value, props.highlight))
+const subjectSegments = computed(() =>
+  segments(props.row.subject || '（无主题）', props.highlight),
+)
+const snippetSegments = computed(() =>
+  segments(props.row.snippet || '（无正文预览）', props.highlight),
 )
 
 const dateLabel = computed(() => {

@@ -1664,20 +1664,41 @@ const CELL_FONT_SIZES = [11, 12, 13, 14, 16]
 /** 当前打开着的右键菜单：`{ x, y, cell, table, row, col, rows, cols }`。 */
 const editorMenu = ref(null)
 
+/**
+ * 编辑器右键菜单的定位。
+ *
+ * 菜单是 `.mail-compose-body` 里的绝对定位元素，所以坐标必须相对**这个滚动容器**
+ * 计算（而不是相对编辑区）：以前拿编辑区的 rect 去减，结果菜单永远比光标
+ * 偏掉编辑区的内边距与上方字段栏那一段，看起来像「右键把内容顶歪了」。
+ */
+function contextMenuPosition(event) {
+  const anchor = editorRef.value?.offsetParent || editorRef.value
+  if (!anchor) return { x: 4, y: 4 }
+  const rect = anchor.getBoundingClientRect()
+  const menuWidth = 210
+  const menuHeight = 320
+  // 视口内的相对位置，先夹进容器可见区域，再加上滚动量换算成内容坐标。
+  let left = event.clientX - rect.left
+  let top = event.clientY - rect.top
+  left = Math.min(Math.max(4, left), Math.max(4, rect.width - menuWidth - 4))
+  if (top + menuHeight > rect.height) top = Math.max(4, rect.height - menuHeight)
+  return {
+    x: Math.round(left + (anchor.scrollLeft || 0)),
+    y: Math.round(top + (anchor.scrollTop || 0)),
+  }
+}
+
 function onEditorContextMenu(event) {
   const editor = editorRef.value
   if (!editor) return
   const target = event.target
   const cell = target?.closest?.('td, th')
   const table = target?.closest?.('table')
-  // 表格里的右键由我们接管（行列操作）；其他位置走浏览器的原生命令。
+  // 表格里的右键由我们接管（行列操作）；其他位置也由我们接管，保证菜单跟着光标。
   event.preventDefault()
-  const rect = editor.getBoundingClientRect()
-  const menuWidth = 200
-  const x = Math.min(event.clientX - rect.left, rect.width - menuWidth - 4)
-  const y = event.clientY - rect.top
+  const spot = contextMenuPosition(event)
   if (!table || !cell) {
-    editorMenu.value = { x: Math.max(4, x), y: Math.max(0, y), table: false }
+    editorMenu.value = { ...spot, table: false }
     setTimeout(() => document.addEventListener('mousedown', closeEditorMenu, { once: true }), 0)
     return
   }
@@ -1685,8 +1706,7 @@ function onEditorContextMenu(event) {
   // 右键之后浏览器可能把选区挪到别处。
   const pos = cellPosition(table, cell)
   editorMenu.value = {
-    x: Math.max(4, x),
-    y: Math.max(0, y),
+    ...spot,
     table: true,
     cell,
     tableEl: table,
@@ -2155,10 +2175,10 @@ function onPaste(event) {
         if (inline) {
           added.push(inline)
           parts.push(
-            `<img src="cid:${inline.contentId}" data-cid="${inline.contentId}" alt="粘贴的图片" />`,
+            `<img data-guaxi-img="1" src="cid:${inline.contentId}" data-cid="${inline.contentId}" alt="粘贴的图片" />`,
           )
         } else {
-          parts.push(`<img src="${url}" alt="粘贴的图片" />`)
+          parts.push(`<img data-guaxi-img="1" src="${url}" alt="粘贴的图片" />`)
         }
       }
       if (added.length) {
@@ -2428,7 +2448,7 @@ function addInlineImages(paths) {
     document.execCommand(
       'insertHTML',
       false,
-      `<img src="cid:${contentId}" alt="${escapeHtml(name)}" />`,
+      `<img data-guaxi-img="1" src="cid:${contentId}" alt="${escapeHtml(name)}" />`,
     )
   }
   emit('update', { inlineImages: next })

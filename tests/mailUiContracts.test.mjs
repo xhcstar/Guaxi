@@ -167,7 +167,17 @@ test('写信编辑区：不叠焦点环，插入的表格跟随主题', () => {
     '正文编辑区不应再叠全局焦点环',
   )
   assert.ok(
-    /\.mail-compose-editor thead th,[\s\S]{0,160}background:\s*var\(--mail-bg-sunken\)/.test(css),
+    /table\[data-guaxi-table\] thead th,[\s\S]{0,200}background:\s*var\(--mail-bg-sunken\)/.test(css),
     '表头底色应按主题覆盖邮件里的浅色 bgcolor',
+  )
+  // 这些样式只能落在「我们插入的表格 / 图片」上：引用原文里的表格是发件人排的版，
+  // 套上 100% 宽与强制格线会让整块内容相对 Outlook 偏移（真实反馈过）。
+  assert.ok(
+    /\.mail-compose-editor table\[data-guaxi-table\] \{[\s\S]{0,200}width:\s*100%/.test(css),
+    '表格宽度只作用于插入的表格',
+  )
+  assert.ok(
+    !/\.mail-compose-editor table \{/.test(css),
+    '不应对编辑区里所有表格（含引用原文）统一套样式',
   )
 })

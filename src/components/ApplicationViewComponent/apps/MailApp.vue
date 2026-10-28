@@ -179,6 +179,7 @@
           :settings="settings"
           :theme-mode="store.theme?.mode || 'dark'"
           :mono-font="settings.monoFont"
+          :search-query="store.searchQuery"
           @reply="(m, opts) => onReply(m, false, opts || {})"
           @reply-all="(m) => onReply(m, true)"
           @forward="onForward"
@@ -290,7 +291,10 @@
       :rules="store.rules"
       :accounts="store.accounts"
       :folders-by-account="store.foldersByAccount"
+      :active-account-id="store.activeAccountId"
       :sender-rules="store.senderRules"
+      :create-folder-fn="onCreateFolderFromRules"
+      :refresh-folders-fn="onRefreshFoldersFromRules"
       @close="showRules = false"
       @save="store.saveRule"
       @delete="store.deleteRule"
@@ -444,6 +448,7 @@ import { useMailStore } from '../../../stores/mailStore'
 import { groupRecipientToken } from '../../../stores/contactsStore'
 import { createLogger } from '../../../utils/logger'
 import { avatarSeed, densityMetrics, monoFontStack, readingFontStack, themeToStyle } from './mail/theme'
+import { flattenQuoteHtml } from './mail/quoteCards'
 import { SHORTCUT_LIST, useMailShortcuts } from './mail/useMailShortcuts'
 import MailToolbar from './mail/MailToolbar.vue'
 import MailSidebar from './mail/MailSidebar.vue'
@@ -805,8 +810,23 @@ async function onCreateFolder(name) {
   }
 }
 
-async function onDeleteFolder(folder) {
-  if (folder.role !== 'custom') {
+/**
+ * 规则弹层里「移到文件夹」旁边的「＋」：建完立刻能选中，不必关掉弹层去侧栏建。
+ * 返回给弹层用于回填选中项；失败时抛错让弹层提示。
+ */
+async function onCreateFolderFromRules(name) {
+  const created = await store.createFolder(name)
+  notify(`已创建「${name}」`)
+  return created
+}
+
+/** 规则弹层打开 / 下拉聚焦时刷新一次文件夹表：其它客户端新建的目录要能立刻看到。 */
+function onRefreshFoldersFromRules() {
+  if (!store.activeAccountId) return
+  store.loadFolders(store.activeAccountId, { refresh: true }).catch(() => {})
+}
+
+async function onDeleteFolder(folder) {  if (folder.role !== 'custom') {
     notify('系统文件夹不能删除', true)
     return
   }
@@ -1051,6 +1071,12 @@ function onForward(detail, { newWindow = false } = {}) {
     ccJson: '[]',
     messageId: null,
   })
+  // 转发要带上原文：以前只改了主题，编辑器里是空的，用户得自己复制粘贴。
+  if (store.composing) {
+    const quote = buildQuote(detail)
+    store.composing.text = `\n\n${quote.text}`
+    store.composing.html = `<br><br>${quote.html}`
+  }
   if (newWindow) {
     composeOpensInWindow.value = true
     openComposeInWindow(composeIdFor('forward', detail))
@@ -1110,7 +1136,10 @@ function buildQuote(detail) {
     '</div>' +
     `<blockquote class="mail-quote-body" data-guaxi-quote-body="1" style="margin:0;padding:0 16px 14px;border:0;background:transparent;color:inherit">${quotedBody}</blockquote>` +
     '</div>'
-  return { text: textBody, html: htmlBody }
+  // 拍平后返回：被引用的这封邮件自己也可能带着历史卡片（回信套回信），
+  // 直接包进新卡片就会叠成两三层、越往里缩得越深。拍平 = 新卡片里只留
+  // 「这一封自己的正文」，更早的历史作为兄弟卡片依次排在下面。
+  return { text: textBody, html: flattenQuoteHtml(htmlBody) }
 }
 
 function escapeHtml(text) {
@@ -1379,7 +1408,11 @@ const moveTargets = computed(() => {
 let draggingRows = []
 
 function onDragStart(row) {
-  draggingRows = store.selectedRows().length ? store.selectedRows() : [row]
+  // 拖的是已勾选的行 → 整批一起走；拖的是未勾选的行 → 只走这一封
+  // （与列表里放进 dataTransfer 的那份 payload 保持一致）。
+  const key = store.keyOf(row)
+  const selected = store.selectedKeys.includes(key) ? store.selectedRows() : []
+  draggingRows = selected.length ? selected : [row]
 }
 
 function onDragEnd() {
@@ -1398,17 +1431,38 @@ async function onBatch(action, target) {
   }
 }
 
-/** 拖到侧栏文件夹上：把正在拖的那批邮件移过去。 */
+/**
+ * 拖到侧栏文件夹上：把正在拖的那批邮件移过去。
+ *
+ * 目标是「已删除」时按删除处理（走 delete 而不是普通 move，服务端才会打上
+ * 删除标记、会话也按删除规则处理）；「垃圾邮件」同理。
+ * 侧栏只显示当前账户的文件夹，所以跨账户拖拽（只在「全部邮件」聚合视图里可能出现）
+ * 要把不属于这个账户的行剔除，并如实告诉用户。
+ */
 async function onDropOnFolder(folderName) {
   const source = store.selectedRows()
   const rows = draggingRows.length ? draggingRows : source
   draggingRows = []
   if (!rows.length) return
+  const accountId = rows[0].accountId
+  const folder = (store.foldersByAccount[accountId] || []).find((f) => f.name === folderName)
+  const targets = rows.filter((row) => row.accountId === accountId)
+  const skipped = rows.length - targets.length
+  if (!targets.length) return
   // 拖到源文件夹本身没有意义。
-  if (rows.every((r) => r.folder === folderName)) return
+  if (targets.every((row) => row.folder === folderName)) return
   try {
-    await store.runBatch('move', folderName, rows)
-    notify(`已移动 ${rows.length} 封到该文件夹`)
+    if (folder?.role === 'trash') {
+      await store.runBatch('delete', null, targets)
+      notify(`已删除 ${targets.length} 封`)
+    } else if (folder?.role === 'junk') {
+      await store.runBatch('junk', null, targets)
+      notify(`已移到垃圾邮件（${targets.length} 封）`)
+    } else {
+      await store.runBatch('move', folderName, targets)
+      notify(`已移动 ${targets.length} 封到该文件夹`)
+    }
+    if (skipped) notify(`另有 ${skipped} 封属于其它账户，没有移动`, true)
   } catch (error) {
     notify(String(error?.message || error), true)
   }

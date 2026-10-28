@@ -8,9 +8,11 @@
         <button class="mail-modal-close" @click="$emit('close')">×</button>
       </div>
 
-      <div class="mail-modal-body">
-        <!-- 设置分组：过去是一个几百行的长列表，找一项要滚很久。
-             按「做什么」分成四页，每页一句话说明它管什么；窗口本身也可以拖着调整大小。 -->
+      <!-- 设置分组：过去是一个几百行的长列表，找一项要滚很久。
+           按「做什么」分成四页，每页一句话说明它管什么；窗口本身也可以拖着调整大小。
+           页签与说明放在滚动容器**外面**：贴顶的页签压在正文上滚动时会把说明文字
+           遮掉一半（真实反馈过的「文字被上面的元素盖住」）。 -->
+      <div class="mail-settings-head">
         <nav class="mail-settings-tabs" role="tablist">
           <button
             v-for="tab in SETTINGS_TABS"
@@ -28,7 +30,9 @@
         </nav>
 
         <p class="mail-settings-hint">{{ activeTabHint }}</p>
+      </div>
 
+      <div class="mail-modal-body">
         <section v-show="activeTab === 'appearance'" class="mail-settings-panel">
         <!-- 主题 -->
         <div class="mail-flabel" style="margin-bottom: 8px">主题</div>

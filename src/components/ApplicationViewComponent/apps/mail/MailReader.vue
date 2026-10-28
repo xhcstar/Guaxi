@@ -340,6 +340,8 @@ import { applyBodyTheme } from './colors'
 import { useMailReaderTools } from './useMailReaderTools'
 import MailAddressCard from './MailAddressCard.vue'
 import { useMailSelectionTranslate } from './useMailSelectionTranslate'
+import { clearHighlight, highlightHtml, searchTokens } from './highlight'
+import { collectQuoteCards, flattenQuoteCards } from './quoteCards'
 
 // 翻译面板是邮件页里唯一依赖 naive-ui 的组件：只在真正划词时加载。
 const GuaxiSelectionTranslatePanel = defineAsyncComponent(
@@ -358,6 +360,8 @@ const props = defineProps({
   monoFont: { type: String, default: '' },
   /** 列表收起时「返回列表」没有目标，换成「收起邮件」。 */
   closeLabel: { type: String, default: '返回列表' },
+  /** 列表里的搜索词：正文命中的文字就地高亮（Outlook 同一套做法）。 */
+  searchQuery: { type: String, default: '' },
 })
 defineEmits([
   'reply',
@@ -498,17 +502,47 @@ const renderedHtml = computed(() => {
   return upgradeQuoteCards(prepared)
 })
 
-// 正文 DOM 更新后（换信、显示图片、切主题）重新映射一次颜色。
+/**
+ * 正文里命中的搜索词就地高亮。
+ *
+ * 只在有搜索词时动手；每次重跑先摘掉上一次的 <mark>，所以换信、改关键词、
+ * 切换主题都不会留残影。与颜色映射一样放在每次 patch 之后补一遍——
+ * v-html 会重置 innerHTML，watch 里做的那次会被冲掉。
+ */
+const highlightTokens = computed(() => searchTokens(props.searchQuery))
+
+function applySearchHighlight() {
+  const root = scrollRef.value
+  if (!root) return
+  if (!highlightTokens.value.length) {
+    clearHighlight(root)
+    return
+  }
+  for (const body of root.querySelectorAll('.mail-body')) {
+    highlightHtml(body, highlightTokens.value)
+  }
+}
+
+// 正文 DOM 更新后（换信、显示图片、切主题、换搜索词）重新映射一次颜色并高亮。
 watch(
-  [renderedHtml, () => props.themeMode, () => props.thread, imagesAllowed],
-  () => applyThemeColors(),
+  [renderedHtml, () => props.themeMode, () => props.thread, imagesAllowed, highlightTokens],
+  () => {
+    applyThemeColors()
+    applySearchHighlight()
+  },
   { flush: 'post' },
 )
-onMounted(() => applyThemeColors())
-// Vue 在每次组件更新时都会无条件重设 v-html 的 innerHTML；颜色映射写在 DOM 上，
+onMounted(() => {
+  applyThemeColors()
+  applySearchHighlight()
+})
+// Vue 在每次组件更新时都会无条件重设 v-html 的 innerHTML；颜色映射与高亮写在 DOM 上，
 // 会被下一次更新（标记已读、工具栏状态变化等）整个冲掉。只在 watch 里跑不够，
-// 这里在每次 patch 之后补一遍。映射是幂等的，重复执行不会越改越暗。
-onUpdated(() => applyThemeColors())
+// 这里在每次 patch 之后补一遍。两者都是幂等的，重复执行不会越改越暗 / 越包越深。
+onUpdated(() => {
+  applyThemeColors()
+  applySearchHighlight()
+})
 
 /** 点面板以外的地方收起译文（「固定」时不收，用户要它留着对照看）。 */
 function onTranslateOutside(event) {
@@ -591,16 +625,10 @@ function upgradeQuoteCards(html, { dropQuotes = false } = {}) {
   if (!html || !html.includes('blockquote')) return html
   try {
     const doc = new DOMParser().parseFromString(html, 'text/html')
-    const cards = [...doc.querySelectorAll('div')].filter((div) => {
-      if (div.dataset.guaxiQuoteCard) return true
-      const style = div.getAttribute('style') || ''
-      if (!/border-radius\s*:\s*(10|14)px/i.test(style)) return false
-      const head = div.firstElementChild
-      if (!head || head.tagName !== 'DIV' || !div.querySelector('blockquote')) return false
-      // 只升级「像历史邮件头」的圆角块（含邮箱地址或时间），避免误伤普通内容卡片。
-      const text = head.textContent || ''
-      return /@|写道|wrote/i.test(text) || /\d{1,2}:\d{2}/.test(text)
-    })
+    // 先把嵌套的卡片提到同一层：回信套回信时每一层都把上一层的历史整块包进自己里，
+    // 卡片就会一层叠一层、越往里缩得越深（用户反馈「按时间从上到下列出即可」）。
+    flattenQuoteCards(doc.body)
+    const cards = collectQuoteCards(doc.body)
     // 会话视图：历史邮件已经是上方的独立卡片，正文里的引用块直接去掉，避免重复。
     if (dropQuotes) {
       for (const card of cards) card.remove()

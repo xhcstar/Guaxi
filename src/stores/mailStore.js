@@ -557,6 +557,8 @@ export const useMailStore = defineStore('mail', {
         // 只读本地库：服务器创建成功后后端已经补了本地行，不必再 LIST 一次。
         await this.loadFolders(accountId)
         await this.reloadUnread()
+        // 返回落库后的那条：调用方（规则弹层的「移到文件夹」）要立刻选中它。
+        return (this.foldersByAccount[accountId] || []).find((f) => f.name === clean) || null
       } catch (error) {
         if (!existing) {
           this.foldersByAccount = {
@@ -578,6 +580,28 @@ export const useMailStore = defineStore('mail', {
         this.unread = Object.fromEntries((unread || []).map(([id, n]) => [id, n]))
       } catch (error) {
         logger.warn('刷新未读数失败', error)
+      }
+    },
+
+    /**
+     * 搜索词的「同义地址」：通讯录里叫这个名字的人，邮箱地址是什么。
+     *
+     * 用户搜「张三」时，很多邮件的信头只有 `zhangsan@x.com`、没写姓名——
+     * 只按文本匹配就会漏。这里把通讯录命中的地址一起交给后端做 OR。
+     * 正文搜索不需要（地址出现在正文里没有意义）。
+     */
+    async searchAlternativesFor(text) {
+      const term = String(text || '').trim()
+      if (!term || this.searchField === 'body') return []
+      try {
+        const hits = (await invoke('mail_contact_suggest', { prefix: term })) || []
+        const emails = hits
+          .map((hit) => String(hit?.email || '').trim().toLowerCase())
+          .filter(Boolean)
+        return [...new Set(emails)].slice(0, 8)
+      } catch {
+        // 通讯录查询失败不该挡住搜索本身。
+        return []
       }
     },
 
@@ -607,6 +631,7 @@ export const useMailStore = defineStore('mail', {
         hasAttachment: this.searchFilters.hasAttachment ? true : null,
         limit: pageSize + 1,
         offset,
+        textAlternatives: await this.searchAlternativesFor(this.searchQuery.trim()),
       }
 
       try {

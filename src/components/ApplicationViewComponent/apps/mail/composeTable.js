@@ -30,7 +30,10 @@ export function buildTableHtml({ rows = TABLE_ROWS, cols = TABLE_COLS } = {}) {
     `<tr>${Array.from({ length: safeCols }, () => '<td><br></td>').join('')}</tr>`,
   ).join('')
   return (
-    '<table border="1" cellpadding="6" cellspacing="0" ' +
+    // `data-guaxi-table` 是编辑器自己的标记：只有我们插入的表格才套用写信区的
+    // 表格样式（100% 宽、格线、表头底色）。引用原文里的表格必须保持发件人的排版，
+    // 否则一打开回复就能看到表格 / 图片整体偏移（Outlook 里不会）。
+    '<table data-guaxi-table="1" border="1" cellpadding="6" cellspacing="0" ' +
     'style="border-collapse:collapse;width:100%;font-size:13px">' +
     `<thead><tr bgcolor="#f2f2f2">${head}</tr></thead>` +
     `<tbody>${body}</tbody>` +
