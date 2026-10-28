@@ -171,6 +171,32 @@
         </button>
       </span>
 
+      <!--
+        阅读位置：上一处 / 下一处。
+        与「上一节 / 下一节」是两件事：前者是你读过的地方，后者是书的目录结构。
+        所以用前进/后退的箭头，而不是再加两个章节箭头。
+      -->
+      <span class="gdr-ebook__nav" role="group" aria-label="阅读位置">
+        <button
+          class="guaxi-doc-reader__icon-btn"
+          title="上一阅读位置（Alt+←）"
+          aria-label="上一阅读位置"
+          :disabled="!canReadBack"
+          @click="ebookReadingHistory.back()"
+        >
+          <Icon :icon="undoIcon" width="15" height="15" />
+        </button>
+        <button
+          class="guaxi-doc-reader__icon-btn"
+          title="下一阅读位置（Alt+→）"
+          aria-label="下一阅读位置"
+          :disabled="!canReadForward"
+          @click="ebookReadingHistory.forward()"
+        >
+          <Icon :icon="redoIcon" width="15" height="15" />
+        </button>
+      </span>
+
       <span class="guaxi-doc-reader__divider" />
 
       <button
@@ -531,6 +557,8 @@ import tocIcon from '@iconify-icons/lucide/list-tree'
 import closeIcon from '@iconify-icons/lucide/x'
 import arrowUpIcon from '@iconify-icons/lucide/arrow-up'
 import arrowDownIcon from '@iconify-icons/lucide/arrow-down'
+import undoIcon from '@iconify-icons/lucide/undo-2'
+import redoIcon from '@iconify-icons/lucide/redo-2'
 import volumeIcon from '@iconify-icons/lucide/volume-2'
 import stopIcon from '@iconify-icons/lucide/square'
 import minusIcon from '@iconify-icons/lucide/minus'
@@ -544,6 +572,7 @@ import wandIcon from '@iconify-icons/lucide/wand-2'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { createLogger } from '../../../utils/logger'
 import { useRightSiderStore } from '../../../stores/rightSiderStore'
+import { useReadingHistory } from '../../../composables/useReadingHistory'
 import { useReaderReadAloud } from '../../../composables/useReaderReadAloud'
 import { useSelectionTranslate } from '../../../composables/useSelectionTranslate'
 import { useSelectionReadAloud } from '../../../composables/useSelectionReadAloud'
@@ -785,6 +814,7 @@ const goToHit = async (n) => {
   const hit = searchHits.value[n]
   if (!hit) return
   if (hit.sectionIndex !== activeIndex.value) {
+    ebookReadingHistory.markJump()
     activeIndex.value = hit.sectionIndex
     await nextTick()
     await waitForFrame()
@@ -1017,6 +1047,8 @@ const buildFrameDoc = () => {
 const goSection = (index) => {
   const next = Math.max(0, Math.min(sections.value.length - 1, index))
   if (next === activeIndex.value) return
+  // 目录 / 前后节 / 键盘翻节都从这里出发：先把离开的位置记进历史。
+  ebookReadingHistory.markJump()
   activeIndex.value = next
 }
 
@@ -1292,6 +1324,8 @@ const onFrameScroll = () => {
     saveStateTimer = null
     void persistState()
     updateProgressLabel()
+    // 读数停稳才提交阅读位置：一路滚动不该每一步都进历史。
+    commitEbookPosition()
   }, 600)
 }
 
@@ -1341,6 +1375,50 @@ const updateProgressLabel = () => {
   progressLabel.value = `${Math.round(overall * 100)}%`
 }
 
+// ───────────────────────── 阅读位置（上一处 / 下一处）─────────────────────────
+// 电子书的位置是「章节 + 章节内比例」：章节切换是离散的，章节内滚动是连续的，
+// 两者都要记，否则从第 3 章跳回第 1 章就只剩「第 1 章开头」这一个粒度。
+const ebookReadingHistory = useReadingHistory({
+  getPosition: () => ({ sectionIndex: activeIndex.value, ratio: currentScrollRatio() }),
+  applyPosition: (position) => {
+    const idx = Math.max(
+      0,
+      Math.min(sections.value.length - 1, Number(position.sectionIndex) || 0)
+    )
+    const ratio = Math.max(0, Math.min(1, Number(position.ratio) || 0))
+    if (idx !== activeIndex.value) {
+      // 跨章：等新文档挂载后由 onFrameLoad 消费这个比例（见 applyPendingRestore）。
+      pendingRestoreRatio = ratio
+      activeIndex.value = idx
+      return
+    }
+    const el = frameRef.value?.contentDocument?.documentElement
+    if (!el) return
+    const max = el.scrollHeight - el.clientHeight
+    if (max > 0) el.scrollTop = ratio * max
+    updateProgressLabel()
+  },
+  isFar: (a, b) => {
+    if (a.sectionIndex !== b.sectionIndex) return true
+    const el = frameRef.value?.contentDocument?.documentElement
+    if (!el) return false
+    const max = el.scrollHeight - el.clientHeight
+    const vh = el.clientHeight || 600
+    return Math.abs((a.ratio - b.ratio) * max) >= Math.max(80, vh * 0.5)
+  },
+  isActive: () => (ebookRoot.value?.clientHeight || 0) > 0,
+  getContainer: () => ebookRoot.value,
+})
+const canReadBack = ebookReadingHistory.canBack
+const canReadForward = ebookReadingHistory.canForward
+
+// 跨章恢复期间（pendingRestoreRatio 还没被 iframe 消费）会有一次「新文档 scrollTop=0」的
+// 滚动事件；那时提交会把刚跳到的位置误记成历史，所以等落位完成再允许提交。
+const commitEbookPosition = () => {
+  if (pendingRestoreRatio != null) return
+  ebookReadingHistory.commit()
+}
+
 // ───────────────────────── 书签 ─────────────────────────
 
 const addBookmarkAtCurrent = async () => {
@@ -1363,6 +1441,7 @@ const addBookmarkAtCurrent = async () => {
 
 const jumpToBookmark = (bm) => {
   if (bm.sectionIndex !== activeIndex.value) {
+    ebookReadingHistory.markJump()
     pendingRestoreRatio = bm.scrollRatio
     activeIndex.value = bm.sectionIndex
   } else {
@@ -1650,6 +1729,8 @@ const applyAnnotationHighlights = () => {
 }
 
 const jumpToAnnotation = (an) => {
+  if (an.sectionIndex === activeIndex.value) return
+  ebookReadingHistory.markJump()
   activeIndex.value = an.sectionIndex
 }
 
@@ -1773,9 +1854,13 @@ const onKeydown = (event) => {
     return
   }
   if (event.key === 'ArrowLeft') {
+    // Alt+← / Alt+→ 是「上一/下一阅读位置」，由 useReadingHistory 在 window 捕获阶段处理；
+    // 这里不能再把它当成翻节，否则一次按键会做两件事。
+    if (event.altKey) return
     event.preventDefault()
     goSection(activeIndex.value - 1)
   } else if (event.key === 'ArrowRight') {
+    if (event.altKey) return
     event.preventDefault()
     goSection(activeIndex.value + 1)
   }
@@ -1992,6 +2077,8 @@ watch(zoom, () => {
 watch(
   () => props.path,
   () => {
+    // 换书：上一本的阅读位置在这里没有意义。
+    ebookReadingHistory.reset()
     void loadBook()
   }
 )

@@ -55,10 +55,18 @@
           </div>
           <span class="ctl-sep" />
           <div class="ctl-group">
-            <button title="上一阅读位置 (Alt+←)" :disabled="!readingBackStack.length" @click="goReadingBack">
+            <button
+              title="上一阅读位置 (Alt+←)"
+              :disabled="!viewerCanReadBack"
+              @click="viewerReadBack"
+            >
               <n-icon :component="ChevronBackOutline" />
             </button>
-            <button title="下一阅读位置 (Alt+→)" :disabled="!readingForwardStack.length" @click="goReadingForward">
+            <button
+              title="下一阅读位置 (Alt+→)"
+              :disabled="!viewerCanReadForward"
+              @click="viewerReadForward"
+            >
               <n-icon :component="ChevronForwardOutline" />
             </button>
           </div>
@@ -69,10 +77,6 @@
             </button>
             <button class="rotate-right" @click="viewerRotateRight" title="向右旋转90度 (Ctrl+])">
               <Icon :icon="RotateCwIcon" width="16" height="16" />
-            </button>
-            <button class="pan-toggle" :class="{ active: viewerPanActive }" @click="viewerTogglePan"
-              title="锁定拖动平移 (H)。平时在页面空白处直接拖动即可平移，无需开启">
-              <n-icon :component="HandRightOutline" />
             </button>
             <button class="fit-width" @click="viewerFitWidth" title="适合宽度 (Ctrl+0)">
               <n-icon :component="ExpandOutline" />
@@ -640,7 +644,6 @@ import {
   ArrowRedoOutline,
   ChevronBackOutline,
   ChevronForwardOutline,
-  HandRightOutline,
   PauseOutline,
   PlayOutline,
   StopCircleOutline,
@@ -820,11 +823,10 @@ const handleReaderShortcuts = (e) => {
     // 旋转 Ctrl+[ / Ctrl+]
     if (ctrl && e.key === '[') { e.preventDefault(); viewerRotateLeft(); return }
     if (ctrl && e.key === ']') { e.preventDefault(); viewerRotateRight(); return }
-    // 平移：空格改为"按住临时平移"，由 GuaxiPdfViewer 自己在 window 上接管
-    // （它要按可见性判断，并且需要 keyup 收尾），这里不再抢占空格。
-    // 阅读位置 Alt+← / Alt+→
-    if (e.altKey && e.key === 'ArrowLeft') { e.preventDefault(); goReadingBack(); return }
-    if (e.altKey && e.key === 'ArrowRight') { e.preventDefault(); goReadingForward(); return }
+    // 平移：空格临时平移由 GuaxiPdfViewer 自己在 window 上接管（它要按可见性判断，
+    // 并且需要 keyup 收尾），这里不再抢占空格。
+    // 阅读位置 Alt+← / Alt+→ 也由 viewer 统一处理（useReadingHistory 在 window 捕获阶段接管），
+    // 宿主不再维护第二份历史栈。
   }
 
   if (ctrl && (e.key === 'n' || e.key === 'N')) {
@@ -1120,29 +1122,32 @@ const newViewerFeatures = {
   reverseJump: false,
   export: false,
   rebuild: false,
+  // 阅读位置：工具栏按钮由本组件外置的工具栏负责，Alt+← / Alt+→ 由 viewer 统一接管。
+  readingHistory: true,
   // 工具栏外置：隐藏 viewer 自带工具栏，改由本组件顶部公用工具栏驱动。
   toolbar: false,
 }
 
-// viewer 缩放/旋转/平移状态：直接读取 viewer 暴露的内部 ref（响应式），供工具栏显示/高亮。
+// viewer 缩放/旋转状态：直接读取 viewer 暴露的内部 ref（响应式），供工具栏显示/高亮。
 // viewerStateTick 在每次操作后自增，强制这些 computed 重新求值（兼容键盘路径直接调 viewer）。
 const viewerStateTick = ref(0)
 const bindViewerState = () => { viewerStateTick.value++ }
-const viewerPanActive = computed(() => {
-  void viewerStateTick.value
-  return !!pdfViewer.value?.state?.panMode?.value || !!pdfViewer.value?.state?.spaceHeld?.value
-})
 const viewerZoomPercent = computed(() => {
   void viewerStateTick.value
   return Math.round((pdfViewer.value?.state?.zoom?.value || 1) * 100)
 })
+// 阅读位置历史由 viewer 自己记账：这里只读它的 canBack / canForward 控制置灰。
+// 直接读 ref（不加 tick）—— history 是 view-state 之外的独立状态，栈变化时 computed 会自己重算。
+const viewerCanReadBack = computed(() => !!pdfViewer.value?.state?.canReadBack?.value)
+const viewerCanReadForward = computed(() => !!pdfViewer.value?.state?.canReadForward?.value)
 // 顶部工具栏操作：全部转发给 viewer 暴露的方法，并刷新镜像。
 const viewerZoomIn = () => { pdfViewer.value?.zoomIn(); bindViewerState() }
 const viewerZoomOut = () => { pdfViewer.value?.zoomOut(); bindViewerState() }
 const viewerFitWidth = () => { pdfViewer.value?.fitWidth(); bindViewerState() }
 const viewerRotateLeft = () => { pdfViewer.value?.rotateLeft(); bindViewerState() }
 const viewerRotateRight = () => { pdfViewer.value?.rotateRight(); bindViewerState() }
-const viewerTogglePan = () => { pdfViewer.value?.togglePan(); bindViewerState() }
+const viewerReadBack = () => { pdfViewer.value?.goReadingBack?.() }
+const viewerReadForward = () => { pdfViewer.value?.goReadingForward?.() }
 
 const onViewerReady = ({ totalPages: tp } = {}) => {
   if (tp) totalPages.value = tp
@@ -1158,11 +1163,6 @@ const onViewerReady = ({ totalPages: tp } = {}) => {
 const onViewerPageChange = (n) => {
   const p = Number(n) || 1
   if (p === currentPage.value) return
-  // 逐页连续滚动(delta=1)不记历史；大跳转(拖动滚动条/搜索定位/viewer 自带页码框)记入阅读历史，
-  // 这样"上一/下一阅读位置"在实际使用中可用（此前仅宿主 goToPage 记录，几乎从不触发）。
-  if (!suppressReadingPush && Math.abs(p - currentPage.value) > 1) {
-    pushReadingPosition(currentPage.value)
-  }
   currentPage.value = p
   jumpPage.value = p
   scheduleLoadMarkdownPage(p)
@@ -1181,42 +1181,10 @@ const scheduleLoadMarkdownPage = (pageNum) => {
   }, MD_LOAD_DEBOUNCE_MS)
 }
 
-// ─────────── 阅读位置历史（上一/下一阅读位置）───────────
-// 仅记录"跳转式"的页面变化（翻页/大纲/搜索/书签），用于 Alt+← / Alt+→ 在历史间往返。
-const readingBackStack = ref([])
-const readingForwardStack = ref([])
-let suppressReadingPush = false
-const pushReadingPosition = (page) => {
-  if (suppressReadingPush) return
-  const p = Number(page) || 0
-  if (p < 1) return
-  const top = readingBackStack.value[readingBackStack.value.length - 1]
-  if (top === p) return
-  readingBackStack.value.push(p)
-  if (readingBackStack.value.length > 100) readingBackStack.value.shift()
-  readingForwardStack.value = []
-}
-const gotoReadingPage = (p) => {
-  suppressReadingPush = true
-  if (useNewPdfViewer.value) pdfViewer.value?.goToPage(p)
-  else goToPage(p)
-  currentPage.value = p
-  jumpPage.value = p
-  loadMarkdownPage(p)
-  nextTick(() => { suppressReadingPush = false })
-}
-const goReadingBack = () => {
-  if (!readingBackStack.value.length) { message.info('没有更早的阅读位置'); return }
-  const target = readingBackStack.value.pop()
-  readingForwardStack.value.push(currentPage.value)
-  gotoReadingPage(target)
-}
-const goReadingForward = () => {
-  if (!readingForwardStack.value.length) { message.info('没有更后的阅读位置'); return }
-  const target = readingForwardStack.value.pop()
-  readingBackStack.value.push(currentPage.value)
-  gotoReadingPage(target)
-}
+// ─────────── 阅读位置历史 ───────────
+// 已迁进 GuaxiPdfViewer：位置、滚动几何、Alt+← / Alt+→ 与置灰状态都由 viewer 自己维护，
+// 宿主再存一份只会和它各走一路（此前栈几乎永远是空的，按钮与快捷键都没反应）。
+// 本组件只保留工具栏按钮的转发（见 viewerReadBack / viewerReadForward）。
 const onViewerOutline = (list) => {
   // 后端 pdf_outline 返回 {title, page, level}，而 GuaxiOutline 的 n-tree 用 text 作标签、
   // 用 line 做跳转键。这里做字段映射，否则大纲有树形和图标却没有文字。
@@ -5002,7 +4970,6 @@ const nextPage = () => {
 const goToPage = (page) => {
   const pageNum = typeof page === 'number' ? page : jumpPage.value;
   const targetPage = Math.max(1, Math.min(pageNum, totalPages.value));
-  if (targetPage !== currentPage.value) pushReadingPosition(currentPage.value);
   currentPage.value = targetPage;
   jumpPage.value = targetPage;
   loadPdfPage(targetPage);

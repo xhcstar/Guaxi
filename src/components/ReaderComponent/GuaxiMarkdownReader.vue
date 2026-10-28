@@ -20,6 +20,21 @@
       </div>
 
       <div class="right-controls">
+        <!--
+          阅读位置：上一处 / 下一处。与翻页不同，它回的是「你刚读到哪儿」，
+          快捷键 Alt+← / Alt+→，与 PDF / 电子书阅读器一致。
+        -->
+        <div class="ctl-group">
+          <button title="上一阅读位置 (Alt+←)" :disabled="!canReadBack" @click="pagedReadingHistory.back()">
+            <n-icon :component="ChevronBackOutline" />
+          </button>
+          <button title="下一阅读位置 (Alt+→)" :disabled="!canReadForward" @click="pagedReadingHistory.forward()">
+            <n-icon :component="ChevronForwardOutline" />
+          </button>
+        </div>
+
+        <span class="ctl-sep" />
+
         <button class="fit-width" @click="fitToWidth" title="将页面调整为适合宽度">
           <n-icon :component="ExpandOutline" />
         </button>
@@ -367,6 +382,8 @@ import GuaxiSelectionTranslatePanel from '../HomeViewComponent/GuaxiSelectionTra
 import {
   ArrowBackOutline,
   ArrowForwardOutline,
+  ChevronBackOutline,
+  ChevronForwardOutline,
   RefreshCircleOutline,
   ExpandOutline,
   TrashOutline,
@@ -392,6 +409,7 @@ import {
 } from '@vicons/ionicons5'
 import { useReaderReadAloud } from '../../composables/useReaderReadAloud'
 import { useSelectionReadAloud } from '../../composables/useSelectionReadAloud'
+import { useReadingHistory } from '../../composables/useReadingHistory'
 
 const logger = createLogger('GuaxiMarkdownReader')
 // 组件属性定义
@@ -482,13 +500,53 @@ const handleAnyScroll = (e) => {
     }
     markReaderScrollbarActive(t)
     lastScrollTarget.value = t
+    if (t === markdownPanel.value) scheduleReadingHistoryCommit()
   }
+}
+
+// ───────────────────────── 阅读位置（上一处 / 下一处）─────────────────────────
+// 双栏阅读器的正文是「一整条滚动内容 + 按视口高度分页」，所以位置记滚动像素即可；
+// 阈值按视口高度取半屏，读者停在新的一屏才记一条，微小滚动不污染历史。
+// Alt+← / Alt+→ 由 useReadingHistory 在 window 捕获阶段接管（不会再被下面的
+// 方向键滚动拦走，因为那个分支会跳过 altKey）。
+const pagedReadingHistory = useReadingHistory({
+  getPosition: () => {
+    const panel = markdownPanel.value
+    return panel ? { top: panel.scrollTop } : null
+  },
+  applyPosition: (position) => {
+    const panel = markdownPanel.value
+    if (!panel) return
+    panel.scrollTop = Math.max(0, Number(position.top) || 0)
+  },
+  isFar: (a, b) => {
+    const vh = markdownPanel.value?.clientHeight || 600
+    return Math.abs(a.top - b.top) >= Math.max(80, vh * 0.5)
+  },
+  isActive: () => (markdownPanel.value?.clientHeight || 0) > 0,
+  getContainer: () => markdownPanel.value,
+})
+
+// 模板里直接引用（顶层 ref 会自动解包），按钮置灰跟着栈变化。
+const canReadBack = pagedReadingHistory.canBack
+const canReadForward = pagedReadingHistory.canForward
+
+let readingHistoryTimer = null
+const scheduleReadingHistoryCommit = () => {
+  if (readingHistoryTimer) clearTimeout(readingHistoryTimer)
+  readingHistoryTimer = setTimeout(() => {
+    readingHistoryTimer = null
+    pagedReadingHistory.commit()
+  }, 500)
 }
 
 const handleReaderShortcuts = (e) => {
   if (isEditableElement(e.target)) return
 
-  if (e.key === 'ArrowUp' || e.key === 'ArrowDown' || e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+  if (
+    !e.altKey &&
+    (e.key === 'ArrowUp' || e.key === 'ArrowDown' || e.key === 'ArrowLeft' || e.key === 'ArrowRight')
+  ) {
     const target = lastScrollTarget.value
     if (target && isScrollableElement(target)) {
       const step = e.shiftKey ? 160 : 40
@@ -2772,6 +2830,8 @@ const nextPage = () => {
 const goToPage = (page) => {
   const pageNum = typeof page === 'number' ? page : jumpPage.value;
   const targetPage = Math.max(1, Math.min(pageNum, totalPages.value));
+  // 翻页 / 目录 / 书签 / 章节跳转都会走到这里：先把离开的位置记进历史。
+  pagedReadingHistory.markJump();
   currentPage.value = targetPage;
   jumpPage.value = targetPage;
 
@@ -3312,6 +3372,8 @@ watch(() => props.filePath, async (newPath) => {
     currentPage.value = 1;
     loadMarkdownPage(1);
     notesContent.value = '';
+    // 换文件：上一份文档的阅读位置对这份没有意义。
+    pagedReadingHistory.reset();
   }
 });
 

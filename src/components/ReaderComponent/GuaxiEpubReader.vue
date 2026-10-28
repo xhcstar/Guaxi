@@ -20,6 +20,21 @@
       </div>
 
       <div class="right-controls">
+        <!--
+          阅读位置：上一处 / 下一处。与翻页不同，它回的是「你刚读到哪儿」，
+          快捷键 Alt+← / Alt+→，与 PDF / 电子书阅读器一致。
+        -->
+        <div class="ctl-group">
+          <button title="上一阅读位置 (Alt+←)" :disabled="!canReadBack" @click="pagedReadingHistory.back()">
+            <n-icon :component="ChevronBackOutline" />
+          </button>
+          <button title="下一阅读位置 (Alt+→)" :disabled="!canReadForward" @click="pagedReadingHistory.forward()">
+            <n-icon :component="ChevronForwardOutline" />
+          </button>
+        </div>
+
+        <span class="ctl-sep" />
+
         <button class="fit-width" @click="fitToWidth" title="将页面调整为适合宽度">
           <n-icon :component="ExpandOutline" />
         </button>
@@ -371,6 +386,8 @@ import GuaxiSelectionTranslatePanel from '../HomeViewComponent/GuaxiSelectionTra
 import {
   ArrowBackOutline,
   ArrowForwardOutline,
+  ChevronBackOutline,
+  ChevronForwardOutline,
   RefreshCircleOutline,
   ExpandOutline,
   TrashOutline,
@@ -396,6 +413,7 @@ import {
 } from '@vicons/ionicons5'
 import { useReaderReadAloud } from '../../composables/useReaderReadAloud'
 import { useSelectionReadAloud } from '../../composables/useSelectionReadAloud'
+import { useReadingHistory } from '../../composables/useReadingHistory'
 
 const logger = createLogger('GuaxiEpubReader')
 // 组件属性定义
@@ -489,13 +507,60 @@ const handleAnyScroll = (e) => {
     }
     markReaderScrollbarActive(t)
     lastScrollTarget.value = t
+    if (t === markdownPanel.value) scheduleReadingHistoryCommit()
   }
+}
+
+// ───────────────────────── 阅读位置（上一处 / 下一处）─────────────────────────
+// 电子书的位置是「章节/页 + 右侧正文的滚动像素」：epub.js 翻页是离散的，
+// 单记滚动像素会在跨章返回时落到错的页上。
+const pagedReadingHistory = useReadingHistory({
+  getPosition: () => {
+    const panel = markdownPanel.value
+    return { page: currentPage.value, top: panel ? panel.scrollTop : 0 }
+  },
+  applyPosition: (position) => {
+    const page = Math.max(1, Number(position.page) || 1)
+    const top = Math.max(0, Number(position.top) || 0)
+    const panel = markdownPanel.value
+    if (page !== currentPage.value) {
+      // 跨页要等 rendition 展示完再落滚动位置。
+      Promise.resolve(goToPage(page)).then(() => {
+        nextTick(() => { if (panel) panel.scrollTop = top })
+      })
+      return
+    }
+    if (panel) panel.scrollTop = top
+  },
+  isFar: (a, b) => {
+    if (a.page !== b.page) return true
+    const vh = markdownPanel.value?.clientHeight || 600
+    return Math.abs(a.top - b.top) >= Math.max(80, vh * 0.5)
+  },
+  isActive: () => (markdownPanel.value?.clientHeight || 0) > 0,
+  getContainer: () => markdownPanel.value,
+})
+
+// 模板里直接引用（顶层 ref 会自动解包），按钮置灰跟着栈变化。
+const canReadBack = pagedReadingHistory.canBack
+const canReadForward = pagedReadingHistory.canForward
+
+let readingHistoryTimer = null
+const scheduleReadingHistoryCommit = () => {
+  if (readingHistoryTimer) clearTimeout(readingHistoryTimer)
+  readingHistoryTimer = setTimeout(() => {
+    readingHistoryTimer = null
+    pagedReadingHistory.commit()
+  }, 500)
 }
 
 const handleReaderShortcuts = (e) => {
   if (isEditableElement(e.target)) return
 
-  if (e.key === 'ArrowUp' || e.key === 'ArrowDown' || e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+  if (
+    !e.altKey &&
+    (e.key === 'ArrowUp' || e.key === 'ArrowDown' || e.key === 'ArrowLeft' || e.key === 'ArrowRight')
+  ) {
     const target = lastScrollTarget.value
     if (target && isScrollableElement(target)) {
       const step = e.shiftKey ? 160 : 40
@@ -3077,6 +3142,8 @@ const goToPage = async (page) => {
 
   if (!epubInstance.value || targetPage === currentPage.value) return;
 
+  // 章节/页跳转：先把离开的位置记进历史。
+  pagedReadingHistory.markJump();
   try {
     await epubInstance.value.rendition.display(targetPage);
     currentPage.value = targetPage;
@@ -3518,6 +3585,8 @@ onMounted(async () => {
     if (!isHydrated.value) return;
     markCompletedIfNeeded();
     persistReaderState();
+    // 翻页（键盘 / 目录 / 书签）也是一次位置变化：没有滚动事件可依赖，直接提交。
+    pagedReadingHistory.commit();
   });
 
   watch(bookmarks, () => {
@@ -3590,6 +3659,8 @@ watch(() => props.filePath, async (newPath) => {
     currentPage.value = 1;
     loadMarkdownPage(1);
     notesContent.value = '';
+    // 换文件：上一份文档的阅读位置对这份没有意义。
+    pagedReadingHistory.reset();
   }
 });
 

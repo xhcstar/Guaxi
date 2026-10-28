@@ -46,7 +46,7 @@
           :title="act.title"
           :aria-label="act.title"
           :disabled="act.disabled"
-          @click="$emit(act.key)"
+          @click="onHostAction(act.key)"
         >
           <component :is="act.icon" />
         </button>
@@ -177,23 +177,16 @@
         现在它们就在工具栏末尾，与其它图标同等对待；放不下时由工具栏自身的横向滚动兜底
         （它本来就不换行）。
       -->
-      <div class="gpv__cluster" aria-label="旋转与平移">
+      <!--
+        旋转保留，手型工具不再需要：纸面本身在任何非文字位置按下就能拖动平移，
+        按住空格还能临时平移；专门挂一个「锁定平移」按钮，等于让读者为一次拖拽多点一步。
+      -->
+      <div class="gpv__cluster" aria-label="旋转">
         <button type="button" class="gpv__btn gpv__btn--icon" title="向左旋转 90°（[）" aria-label="向左旋转" @click="rotateLeft('toolbar')">
           <Icon :icon="RotateCcwIcon" width="16" height="16" />
         </button>
         <button type="button" class="gpv__btn gpv__btn--icon" title="向右旋转 90°（]）" aria-label="向右旋转" @click="rotateRight('toolbar')">
           <Icon :icon="RotateCwIcon" width="16" height="16" />
-        </button>
-        <button
-          type="button"
-          class="gpv__btn gpv__btn--icon"
-          :class="{ 'gpv__btn--active': panMode }"
-          :aria-pressed="panMode"
-          :title="panMode ? '解锁拖动平移（H）' : '锁定拖动平移（H）'"
-          aria-label="锁定拖动平移"
-          @click="togglePanMode('toolbar')"
-        >
-          <HandRightOutline />
         </button>
       </div>
 
@@ -216,10 +209,9 @@
     <div
       class="gpv__body guaxi-reader-scrollbar"
       ref="bodyRef"
-      :class="{ 'gpv__body--pan': panEffective, 'gpv__body--panning': isPanning }"
+      :class="{ 'gpv__body--pan': spaceHeld, 'gpv__body--panning': isPanning }"
       @scroll="onScroll"
       @mousedown="onBodyMouseDown"
-      @wheel="onWheel"
     >
       <div v-if="errorText" class="gpv__error">
         <div class="gpv__error-title">构建失败</div>
@@ -342,7 +334,6 @@ import {
   ChevronForwardOutline,
   DownloadOutline,
   ExpandOutline,
-  HandRightOutline,
   RefreshOutline,
   RemoveOutline,
   SearchOutline,
@@ -351,6 +342,7 @@ import { Icon } from '@iconify/vue'
 import RotateCcwIcon from '@iconify-icons/lucide/rotate-ccw'
 import RotateCwIcon from '@iconify-icons/lucide/rotate-cw'
 import { createLogger } from '../../utils/logger'
+import { useReadingHistory } from '../../composables/useReadingHistory'
 import { markReaderScrollbarActive } from '../ReaderComponent/readerScrollbar'
 import usePdfiumDocument from './usePdfiumDocument'
 
@@ -396,8 +388,6 @@ const emit = defineEmits([
   // 宿主动作组（见 hostActions）
   'undo-highlight',
   'redo-highlight',
-  'go-reading-back',
-  'go-reading-forward',
 ])
 
 const MIN_ZOOM = 0.4
@@ -626,10 +616,12 @@ const engineKind = computed(() => {
 /**
  * 工具栏左侧的宿主动作组。
  *
- * 为什么做成「宿主声明、viewer 只负责画和转发」：
- * 撤销/重做高亮的历史栈、以及「上一/下一阅读位置」的访问栈，都活在宿主里
- *（只有宿主知道一次高亮是怎么加进去的、哪些跳转算"阅读位置"）。viewer 若自己存一份，
- * 就会和宿主的状态各走一路。所以这里只接收按钮描述、把点击 emit 回去。
+ * 撤销/重做高亮的历史栈在宿主手里（只有宿主知道一次高亮是怎么加进去的），
+ * 所以这两个按钮由宿主声明、viewer 只负责画和转发。
+ *
+ * 「上一/下一阅读位置」则相反：位置、滚动几何、Alt+← / Alt+→ 全在 viewer 内部，
+ * 宿主既拿不到也维护不了同一份数据，因此这一组直接由 viewer 自己记账、自己执行，
+ * 宿主要做的只是 features.readingHistory = true 打开这两颗按钮。
  *
  * 保持顺序稳定（撤销→重做→上一处→下一处），读者靠位置记，不靠读标题。
  */
@@ -658,17 +650,29 @@ const hostActions = computed(() => {
       key: 'go-reading-back',
       title: '上一阅读位置（Alt+←）',
       icon: ChevronBackOutline,
-      disabled: f.canGoReadingBack === false,
+      disabled: !readingHistory.canBack.value,
     })
     list.push({
       key: 'go-reading-forward',
       title: '下一阅读位置（Alt+→）',
       icon: ChevronForwardOutline,
-      disabled: f.canGoReadingForward === false,
+      disabled: !readingHistory.canForward.value,
     })
   }
   return list
 })
+
+const onHostAction = (key) => {
+  if (key === 'go-reading-back') {
+    readingHistory.back()
+    return
+  }
+  if (key === 'go-reading-forward') {
+    readingHistory.forward()
+    return
+  }
+  emit(key)
+}
 
 // ───────────────────────── 缩放锚点 ─────────────────────────
 // 缩放不能总以内容左上角为原点：那样每放大一档，正在看的那一行就往下跑出视口，
@@ -971,10 +975,6 @@ const onViewerKeydown = (ev) => {
     rotateRight('keyboard')
     return
   }
-  if (!ctrlOrMeta && lowerKey === 'h') {
-    handled('toggle-pan')
-    togglePanMode('keyboard')
-  }
 }
 
 // ───────────────────────── 打开 / 重建 ─────────────────────────
@@ -986,6 +986,8 @@ const load = async (fp, keep) => {
   if (!keep) {
     // 换了文档：回到宿主指定的默认自适应策略（上一个文档里的手动缩放不跨文档保留）。
     activeFitMode.value = props.fitMode === 'width' || props.fitMode === 'page' ? props.fitMode : ''
+    // 上一本文档的阅读位置对当前文档没有意义。
+    readingHistory.reset()
   }
   emit('ready', { totalPages: totalPages.value })
   await nextTick()
@@ -1068,6 +1070,7 @@ const onScroll = () => {
       updateVisible()
     })
   }
+  scheduleReadingCommit()
   scheduleRenderVisible()
 }
 
@@ -1124,6 +1127,82 @@ const updateVisible = () => {
     currentPage.value = firstVisible
     emit('page-change', firstVisible)
   }
+}
+
+// ─────────────────── 阅读位置（上一处 / 下一处）───────────────────
+// 位置用「页码 + 页内 pt」表示，而不是像素：缩放会改变同一内容的像素坐标，
+// 但 (页, 页内 pt) 在任何缩放档位下都指向同一行字。
+// 记录时机见 useReadingHistory：滚动停稳后自动提交，跳转前用 markJump 记下离开的位置。
+const readingPositionNow = () => {
+  const el = bodyRef.value
+  const geo = pageGeometry.value
+  if (!el || !geo.length) return null
+  // 取「视口顶边所在的那一页」而不是当前主导页：主导页可能是半屏之外的那一张，
+  // 按它记位置会在恢复时把视口向下/向上错开将近一页。
+  const top = el.scrollTop
+  let idx = 0
+  let lo = 0
+  let hi = geo.length - 1
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1
+    if (geo[mid].top <= top) {
+      idx = mid
+      lo = mid + 1
+    } else {
+      hi = mid - 1
+    }
+  }
+  const item = geo[idx]
+  return {
+    page: item.num,
+    yPt: Math.max(0, (top - item.top) / (zoom.value || 1)),
+  }
+}
+
+const positionTopPx = (position) => {
+  const geo = pageGeometry.value
+  const item = geo[Math.min(Math.max(1, position.page), geo.length) - 1]
+  if (!item) return 0
+  return item.top + position.yPt * (zoom.value || 1)
+}
+
+const applyReadingPosition = (position) => {
+  const el = bodyRef.value
+  const geo = pageGeometry.value
+  if (!el || !geo.length) return
+  const page = Math.min(Math.max(1, position.page), geo.length)
+  currentPage.value = page
+  syncPageInput()
+  const item = geo[page - 1]
+  el.scrollTop = Math.max(0, item.top + position.yPt * (zoom.value || 1))
+  recomputeWindow()
+  updateVisible()
+  scheduleRenderVisible()
+}
+
+const readingHistory = useReadingHistory({
+  getPosition: readingPositionNow,
+  applyPosition: applyReadingPosition,
+  // 「差一段」按视口高度衡量：停在新的一屏才算新位置，微小滚动不污染历史。
+  isFar: (a, b) => {
+    const vh = bodyRef.value?.clientHeight || 600
+    return Math.abs(positionTopPx(a) - positionTopPx(b)) >= Math.max(80, vh * 0.5)
+  },
+  // 只有开启了「阅读位置」的宿主才响应 Alt+← / Alt+→：LaTeX 预览嵌在编辑器里，
+  // 那组键属于编辑器自己的定位快捷键，不能在这里被抢走。
+  isActive: () =>
+    !!props.features.readingHistory && !!hasPdf.value && (bodyRef.value?.clientHeight || 0) > 0,
+  getContainer: () => rootRef.value,
+})
+
+const READING_COMMIT_DEBOUNCE_MS = 500
+let readingCommitTimer = null
+const scheduleReadingCommit = () => {
+  if (readingCommitTimer) clearTimeout(readingCommitTimer)
+  readingCommitTimer = setTimeout(() => {
+    readingCommitTimer = null
+    readingHistory.commit()
+  }, READING_COMMIT_DEBOUNCE_MS)
 }
 
 // 重活：对当前可见（默认含上下一屏缓冲）的页做栅格化/文本/高亮；远离可见区的已渲染页释放图片。
@@ -1188,24 +1267,21 @@ const renderVisible = ({ bufferFactor = 1 } = {}) => {
   }
 }
 
-// ─────────────────── 拖动平移（空白拖 / 空格 / 中键，带轻惯性）───────────────────
-// 交互对齐主流阅读器：不必先去点工具栏。默认就是抓手——在页面空白（行间空隙、页边、
-// 图区）按下即拖动平移；在文字上按下仍然是划词选择；按住空格可临时强制平移（松手还原）；
-// 中键拖动始终平移；工具栏 ✋ 用来"锁死"平移模式，连文字上也能拖。
-const panMode = ref(false)
+// ─────────────────── 拖动平移（空白拖 / 空格 / 中键）───────────────────
+// 交互对齐主流阅读器：不必先去点工具栏。在页面空白（行间空隙、页边、图区）按下即拖动平移；
+// 在文字上按下仍然是划词选择（划词是划线高亮/翻译的入口，不能被拖动顶掉）；
+// 按住空格可临时强制平移（松手还原）；中键拖动始终平移。
+// 不再提供「锁定平移」工具：它只为在文字上拖动而存在，而文字上拖动的常规语义是选字。
+//
+// 松开鼠标就停：不做惯性滑动。读者用「按住—拖动—松开」来精确停在某一段，
+// 松手后纸面继续滑行反而要再拉回来一次。
 const spaceHeld = ref(false)
 const isPanning = ref(false)
-const panEffective = computed(() => panMode.value || spaceHeld.value)
 let panState = null
-let panRaf = 0
 const nowMs = () => (typeof performance !== 'undefined' ? performance.now() : 0)
-// 拖动惯性的速度上限（px/ms）：见 onPanMove 里的说明。
-const MAX_PAN_VELOCITY = 6
-
-const togglePanMode = (reason = 'manual') => {
-  panMode.value = !panMode.value
-  logger.info('PDF拖动平移模式切换', { reason, enabled: panMode.value })
-}
+// 刚结束一次拖动的时间戳：拖动结束时落在链接/高亮上的 click 不应被当成「点开了它」。
+let panEndedAt = 0
+const PAN_CLICK_SUPPRESS_MS = 250
 
 // 只有落在透明文本层的文字段上才算"要划词"；行间空隙/页边/图片区都归为可拖动，
 // 这样与 Acrobat、Chrome 内置阅读器的取舍一致（那边也是拖文字选中、拖空白平移）。
@@ -1231,20 +1307,17 @@ const onBodyMouseDown = (ev) => {
   if (!el) return
   // 滚动条任何时候都让给浏览器拖。
   if (ev.button === 0 && isOnScrollbar(el, ev)) return
-  // 锁定平移 / 空格临时平移 = 明确要求平移，这时连文字上也要能拖；
-  // 其余情况左键落在文字上就是划词，不抢。
-  const locked = panMode.value || spaceHeld.value
-  if (ev.button === 0 && !locked && isOnSelectableText(ev)) return
+  // 空格临时平移 = 明确要求平移，这时连文字上也要能拖；其余情况左键落在文字上就是划词，不抢。
+  if (ev.button === 0 && !spaceHeld.value && isOnSelectableText(ev)) return
   // 右键留给上下文菜单；中键与左键进入平移。
   if (ev.button !== 0 && ev.button !== 1) return
-  if (panRaf) { cancelAnimationFrame(panRaf); panRaf = 0 }
   ev.preventDefault()
   isPanning.value = true
-  const t = nowMs()
   panState = {
     x: ev.clientX, y: ev.clientY,
     left: el.scrollLeft, top: el.scrollTop,
-    lastX: ev.clientX, lastY: ev.clientY, vx: 0, vy: 0, t,
+    // 只有真的拖动过才算「刚拖完」：单纯点一下链接/高亮也要能触发它们的 click。
+    moved: false,
   }
   window.addEventListener('mousemove', onPanMove, true)
   window.addEventListener('mouseup', onPanUp, true)
@@ -1252,20 +1325,9 @@ const onBodyMouseDown = (ev) => {
 const onPanMove = (ev) => {
   const el = bodyRef.value
   if (!panState || !el) return
+  if (Math.abs(ev.clientX - panState.x) + Math.abs(ev.clientY - panState.y) > 3) panState.moved = true
   el.scrollLeft = panState.left - (ev.clientX - panState.x)
   el.scrollTop = panState.top - (ev.clientY - panState.y)
-  const now = nowMs()
-  const dt = now - panState.t
-  if (dt > 0) {
-    // 速度要封顶：dt 极小时（合成事件、卡顿后补发的一帧）算出来的速度能到上千 px/ms，
-    // 惯性循环会把几百页的文档一帧甩到底。真实鼠标最猛的甩动也在 10px/ms 以内，取 6 封顶。
-    const clamp = (v) => Math.max(-MAX_PAN_VELOCITY, Math.min(MAX_PAN_VELOCITY, v))
-    panState.vx = clamp((ev.clientX - panState.lastX) / dt)
-    panState.vy = clamp((ev.clientY - panState.lastY) / dt)
-    panState.lastX = ev.clientX
-    panState.lastY = ev.clientY
-    panState.t = now
-  }
 }
 const onPanUp = () => {
   window.removeEventListener('mousemove', onPanMove, true)
@@ -1273,31 +1335,9 @@ const onPanUp = () => {
   isPanning.value = false
   const st = panState
   panState = null
-  if (st && (Math.abs(st.vx) > 0.05 || Math.abs(st.vy) > 0.05)) startPanInertia(st.vx, st.vy)
-  else scheduleRenderVisible()
-}
-const startPanInertia = (vx, vy) => {
-  const el = bodyRef.value
-  if (!el) return
-  let curVx = vx
-  let curVy = vy
-  let last = nowMs()
-  const stepFn = () => {
-    const now = nowMs()
-    const dt = now - last
-    last = now
-    el.scrollLeft -= curVx * dt
-    el.scrollTop -= curVy * dt
-    curVx *= 0.94
-    curVy *= 0.94
-    if (Math.abs(curVx) > 0.02 || Math.abs(curVy) > 0.02) {
-      panRaf = requestAnimationFrame(stepFn)
-    } else {
-      panRaf = 0
-      scheduleRenderVisible()
-    }
-  }
-  panRaf = requestAnimationFrame(stepFn)
+  // 只有真的拖动过才抑制随后的 click；单纯点一下不抑制。
+  if (st?.moved) panEndedAt = nowMs()
+  scheduleRenderVisible()
 }
 
 // 空格临时平移：监听挂在 window 上（不必先点中阅读器才生效，和主流阅读器一致），
@@ -1397,10 +1437,12 @@ const linkStyle = (lk) => {
  * 内部跳转直接 goToPage；外部网址交给系统浏览器 —— 不能在 webview 里直接导航，
  * 那会把整个阅读器变成那个网页，读者除了关窗口没有退路（EPUB 阅读器同样处理）。
  *
- * 拖动平移模式下不触发：那时用户是在拖纸面，不该顺带点开链接。
+ * 拖动平移期间/刚结束时也不触发：那时用户是在拖纸面，不该顺带点开链接。
  */
 const onLinkClick = async (lk, pageNum, ev) => {
-  if (!lk || panEffective.value) return
+  if (!lk || spaceHeld.value || isPanning.value) return
+  // 从按下到松开指针移动过（刚完成拖动）时，落点上的 click 不是点击意图。
+  if (nowMs() - panEndedAt < PAN_CLICK_SUPPRESS_MS) return
   if (lk.uri) {
     ev?.preventDefault?.()
     try {
@@ -1428,6 +1470,8 @@ const hlStyle = (rc, color) => {
   }
 }
 const onHighlightClick = (hl, pageNum, ev) => {
+  // 刚拖完纸面：落在高亮上的 click 是拖动的副产品，不是「选中这条批注」。
+  if (isPanning.value || nowMs() - panEndedAt < PAN_CLICK_SUPPRESS_MS) return
   emit('highlight-click', {
     annotId: hl.annot_id,
     page: pageNum,
@@ -1684,7 +1728,8 @@ const screenToPagePt = (page, pageEl, clientX, clientY) => {
 
 const handlePageClick = async (pageNum, ev) => {
   if (!props.features.reverseJump) return
-  if (panMode.value) return
+  // 拖动判定交给 onBodyMouseUp 的位移检查：这里不能看 isPanning —— 纸面上的按下
+  // 一律会先进入平移状态，而「没有位移」的按下仍然是点击。
   const node = pageEls.get(pageNum)
   if (!node) return
   const page = pages[pageNum - 1]
@@ -1805,6 +1850,8 @@ const scrollToPagePoint = (pageNum, yPt) => {
   if (!el) return
   const item = pageGeometry.value[pageNum - 1]
   if (!item) return
+  // 跳转前把「离开的位置」记进阅读历史：搜索命中、大纲、外链都走这里。
+  readingHistory.markJump()
   const target = item.top + yPt * cssScale.value - el.clientHeight * 0.35
   recomputeWindow()
   smoothScrollTo(el, target, 'page-point')
@@ -1874,6 +1921,9 @@ const goToPage = (n, { align = 'top' } = {}) => {
   // 首页顶边就是容器的 padding（12px），减去 offset 会得到 4px 这种「没滚到底」的值，
   // 视觉上留一截空白。直接贴顶更符合「跳到第一页」的预期。
   const top = num === 1 ? 0 : Math.max(0, item.top - offset)
+
+  // 翻页 / 页码输入 / 目录跳转都从这里发出：先把离开的位置记进历史再滚。
+  readingHistory.markJump()
 
   // 滚过去之后窗口会重算并挂载目标页；这里先把「当前页」定下来，
   // 避免滚动动画期间页码指示器还停在旧值。
@@ -2141,10 +2191,25 @@ defineExpose({
   rotateLeft,
   rotateRight,
   rotateTo,
-  togglePan: () => { panMode.value = !panMode.value },
-  setPanMode: (v) => { panMode.value = !!v },
   setSpacePan: (v) => { spaceHeld.value = !!v },
-  state: { zoom, rotation, panMode, spaceHeld, isPanning, currentPage, pageInputValue, totalPages, searchHits, searchActiveIdx, searchQuery },
+  // 阅读位置前后：宿主外置工具栏（GuaxiConvertPDFReader）也走这两个入口，
+  // 栈与快捷键都在 viewer 里，宿主不再自己维护一份。
+  goReadingBack: readingHistory.back,
+  goReadingForward: readingHistory.forward,
+  state: {
+    zoom,
+    rotation,
+    spaceHeld,
+    isPanning,
+    currentPage,
+    pageInputValue,
+    totalPages,
+    searchHits,
+    searchActiveIdx,
+    searchQuery,
+    canReadBack: readingHistory.canBack,
+    canReadForward: readingHistory.canForward,
+  },
 })
 
 // ───────────────────────── watchers ─────────────────────────
@@ -2169,6 +2234,10 @@ watch(() => props.path, (p) => {
 
 onMounted(() => {
   nextTick(() => scheduleLayoutRender('mounted'))
+  // Ctrl/⌘ + 滚轮：必须用非 passive 的原生监听才能 preventDefault 掉 WebView2 的整页缩放。
+  // Vue 的 @wheel 走 addEventListener 默认值，但宿主页面里任何一处替换成 passive 都会静默失效；
+  // 这里显式 { passive: false }，保证「缩放的是 PDF 而不是整个窗口」。
+  bodyRef.value?.addEventListener('wheel', onWheel, { passive: false })
   if (typeof ResizeObserver !== 'undefined') {
     // 尺寸变化既要刷新布局，也要按自适应策略重算缩放（非自适应模式下 scheduleAutoFit 直接跳过）。
     resizeObserver = new ResizeObserver(() => {
@@ -2196,9 +2265,10 @@ onBeforeUnmount(() => {
   if (zoomRenderTimer) clearTimeout(zoomRenderTimer)
   if (autoFitTimer) clearTimeout(autoFitTimer)
   if (searchTimer) clearTimeout(searchTimer)
+  if (readingCommitTimer) clearTimeout(readingCommitTimer)
   if (scrollRaf) cancelAnimationFrame(scrollRaf)
   if (resizeRenderRaf) cancelAnimationFrame(resizeRenderRaf)
-  if (panRaf) cancelAnimationFrame(panRaf)
+  bodyRef.value?.removeEventListener('wheel', onWheel, { passive: false })
   if (resizeObserver) {
     resizeObserver.disconnect()
     resizeObserver = null
@@ -2480,6 +2550,11 @@ onBeforeUnmount(() => {
 .gpv__btn--icon svg {
   display: block;
   flex: 0 0 auto;
+  /* 图标必须显式定尺寸：@vicons 组件输出的是只有 viewBox 的 <svg>，
+     在 flex 按钮里会按 300×150 的默认尺寸撑开 —— 同一排里手型/搜索这些
+     「直出 svg」的图标因此比手写的翻页箭头大一圈。统一成 16px。 */
+  width: 16px;
+  height: 16px;
   opacity: 0.85;
 }
 .gpv__btn--icon:hover:not(:disabled) svg { opacity: 1; }
@@ -2509,14 +2584,18 @@ onBeforeUnmount(() => {
 }
 /* 纸外的画布：拖空白即平移，用抓手告诉用户这里可以拖。 */
 .gpv__pages { cursor: grab; }
-.gpv__page { cursor: default; }
+/* 纸面同样可拖动（行间空隙、页边、图片区），光标就给抓手；
+   文字段自己声明 cursor: text，链接/高亮声明 pointer，三者互不干扰。
+   没有手型工具之后，这一条是「这里能拖」的唯一视觉提示。 */
+.gpv__page { cursor: grab; }
 /* PDF 里的链接：可点击（跳到内部目标或打开外部网址）。 */
 .gpv__link { cursor: pointer; }
-/* 锁定平移 / 空格临时平移：连文字上也能拖，因此禁止选中，文字段也换手型 */
+/* 按住空格临时平移：连文字上也能拖，因此禁止选中，文字段也换手型 */
 .gpv__body--pan { user-select: none; }
 .gpv__body--pan .gpv__text-seg { user-select: none; cursor: grab; }
 /* 拖动进行中（含中键、空白直接拖）：全区域统一攥拳光标 */
 .gpv__body--panning,
+.gpv__body--panning .gpv__page,
 .gpv__body--panning .gpv__text-seg { cursor: grabbing; }
 /* 非内容区不该显示抓手：错误日志要能选字复制，空态只是提示 */
 .gpv__error,

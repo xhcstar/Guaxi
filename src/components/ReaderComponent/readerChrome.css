@@ -306,3 +306,16 @@
   background: rgba(255, 180, 80, 0.75);
   box-shadow: 0 0 0 2px rgba(255, 180, 80, 0.35);
 }
+
+/* ── 工具栏图标尺寸统一 ─────────────────────────────────────────
+ * 同一条工具栏里混用两种写法：`<n-icon>`（1em，跟着按钮 font-size 走）和
+ * `<Icon width="16">`（写死 16px）。字号一改、图标源一换，同一排里就会一大一小。
+ * 这里把两者的渲染尺寸都钉在 16px，按钮外观只看位置不看来源。 */
+.guaxi-reader-controls .right-controls button > svg,
+.guaxi-reader-controls .right-controls button .n-icon,
+.guaxi-reader-controls .page-navigation button > svg,
+.guaxi-reader-controls .page-navigation button .n-icon {
+  width: 16px;
+  height: 16px;
+  font-size: 16px;
+}

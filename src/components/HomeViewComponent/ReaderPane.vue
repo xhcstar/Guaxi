@@ -162,12 +162,12 @@
         fit-mode="width"
         :features="pdfFeatures"
         @outline="onOutline"
+        @ready="onPdfReady"
         @page-change="onPdfPageChange"
+        @scroll="scheduleSavePdfPosition"
         @highlight-click="onPdfHighlightClick"
         @undo-highlight="undoPdfHighlight"
         @redo-highlight="redoPdfHighlight"
-        @go-reading-back="goReadingBack"
-        @go-reading-forward="goReadingForward"
       >
         <!--
           侧栏开关：交给 PDF 阅读器的工具栏托管。
@@ -472,11 +472,8 @@ defineEmits(['force-editor', 'convert-to-markdown'])
 
 // PDF 阅读器在「打开一份现成 PDF」时不需要 LaTeX 双向定位/重建/导出，
 // 但搜索、分页、大纲、高亮批注都是有用的，全部打开。
-// 撤销/重做与阅读位置：与 GuaxiConvertPDFReader 里那套工具栏对齐，
-// 独立阅读器同样能反悔一次高亮、跳回上一处阅读位置。
-//
-// 注意：下面的栈必须在本 computed 首次求值前就已初始化 —— computed 是惰性的，
-// 真正读取发生在渲染时，那时 setup 已跑完，所以这里引用后面的声明是安全的。
+// 撤销/重做与阅读位置：撤销/重做的历史栈在宿主（谁加的高亮谁负责反悔）；
+// 「上一/下一阅读位置」的栈在 GuaxiPdfViewer 里，这里只负责把按钮打开。
 const pdfFeatures = computed(() => ({
   toolbar: true,
   search: true,
@@ -491,8 +488,6 @@ const pdfFeatures = computed(() => ({
   readingHistory: true,
   canUndoHighlight: highlightUndoStack.value.length > 0,
   canRedoHighlight: highlightRedoStack.value.length > 0,
-  canGoReadingBack: readingBackStack.value.length > 0,
-  canGoReadingForward: readingForwardStack.value.length > 0,
 }))
 
 // ───────────────────────── 高亮撤销/重做 ─────────────────────────
@@ -580,45 +575,54 @@ const redoPdfHighlight = async () => {
   }
 }
 
-// ───────────────────────── 阅读位置前后 ─────────────────────────
-// 只记录「跳转式」的页码变化（大纲、批注、页码输入）；连续滚动的逐页变化不记，
-// 否则按一次「上一处」只会退回紧挨着的上一页，等于没用。
-const readingBackStack = ref([])
-const readingForwardStack = ref([])
-let suppressReadingPush = false
-let lastPageForHistory = 1
+// ───────────────────────── 阅读位置持久化 ─────────────────────────
+// 上一处/下一处的栈在 GuaxiPdfViewer 内部（它才知道滚动几何与缩放锚点）。
+// 这里只负责「重开同一个文件回到上次位置」：按路径存一份滚动比例。
+//
+// 为什么存比例而不是页码：同一份 PDF 在不同窗口宽度、不同缩放档位下页码对不上，
+// 比例对得上，而且同页内的段落位置也能一并恢复。
+const PDF_POS_PREFIX = 'guaxi_reader_pdf_pos_v1:'
+const pdfPositionKey = computed(() => `${PDF_POS_PREFIX}${String(props.path || '').replace(/\\/g, '/')}`)
 
-const pushReadingPosition = (page) => {
-  if (suppressReadingPush) return
-  const p = Number(page) || 0
-  if (p < 1) return
-  if (readingBackStack.value[readingBackStack.value.length - 1] === p) return
-  readingBackStack.value.push(p)
-  if (readingBackStack.value.length > 100) readingBackStack.value.shift()
-  readingForwardStack.value = []
+let savePdfPositionTimer = null
+
+const savePdfPositionNow = () => {
+  if (props.target?.reader !== 'pdf') return
+  // scrollRatio() 量不到时返回 null（面板被隐藏 / 尚未布局），不能把 0 当成真实读数存下去。
+  const ratio = pdfViewerRef.value?.scrollRatio?.()
+  if (ratio == null) return
+  try {
+    localStorage.setItem(
+      pdfPositionKey.value,
+      JSON.stringify({ ratio: +Number(ratio).toFixed(5), page: pdfCurrentPage.value })
+    )
+  } catch (error) {
+    logger.debug('[ReaderPane] save pdf position failed', { error: String(error?.message || error) })
+  }
 }
 
-const gotoReadingPage = (page) => {
-  const p = Number(page) || 1
-  suppressReadingPush = true
-  pdfViewerRef.value?.goToPage?.(p)
-  nextTick(() => {
-    suppressReadingPush = false
-  })
+const scheduleSavePdfPosition = () => {
+  if (savePdfPositionTimer) clearTimeout(savePdfPositionTimer)
+  savePdfPositionTimer = setTimeout(() => {
+    savePdfPositionTimer = null
+    savePdfPositionNow()
+  }, 600)
 }
 
-const goReadingBack = () => {
-  const target = readingBackStack.value.pop()
-  if (!target) return
-  readingForwardStack.value.push(pdfCurrentPage.value)
-  gotoReadingPage(target)
-}
-
-const goReadingForward = () => {
-  const target = readingForwardStack.value.pop()
-  if (!target) return
-  readingBackStack.value.push(pdfCurrentPage.value)
-  gotoReadingPage(target)
+const onPdfReady = () => {
+  try {
+    const raw = localStorage.getItem(pdfPositionKey.value)
+    if (!raw) return
+    const saved = JSON.parse(raw)
+    const ratio = Number(saved?.ratio)
+    if (!Number.isFinite(ratio) || ratio <= 0) return
+    // 文档刚就绪时页数组与可滚动高度还在建立，restoreScrollStable 会跨帧重试到布局稳定。
+    nextTick(() => {
+      pdfViewerRef.value?.restoreScrollStable?.(ratio)
+    })
+  } catch (error) {
+    logger.debug('[ReaderPane] restore pdf position skipped', { error: String(error?.message || error) })
+  }
 }
 
 const sizeLabel = computed(() => {
@@ -665,14 +669,9 @@ const onOutline = (raw) => {
 /** 大纲项高亮跟随当前页：取最后一个起始页不晚于当前页的条目。 */
 const onPdfPageChange = (page) => {
   const num = Number(page) || 0
-  const prev = lastPageForHistory || 1
-  // 只有「大跳」才记入阅读位置：连续滚动会逐页触发，那样按一次「上一处」
-  // 只会退回紧挨着的上一页，等于没有历史。与 GuaxiConvertPDFReader 的判据一致。
-  if (!suppressReadingPush && num > 0 && Math.abs(num - prev) > 1) {
-    pushReadingPosition(prev)
-  }
-  lastPageForHistory = num || 1
   pdfCurrentPage.value = num || 1
+  // 翻页也要存一次位置：读者可能停在新的一页就直接关窗，等不到滚动防抖。
+  scheduleSavePdfPosition()
   let idx = -1
   outlineItems.value.forEach((item, i) => {
     if (item.page && item.page <= num) idx = i
@@ -1135,6 +1134,12 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  // 关窗/切标签前把最后位置写回，否则「读到一半关掉」会丢掉这一段。
+  savePdfPositionNow()
+  if (savePdfPositionTimer) {
+    clearTimeout(savePdfPositionTimer)
+    savePdfPositionTimer = null
+  }
   window.removeEventListener('mouseup', schedulePdfSelectionSync)
   window.removeEventListener('keyup', schedulePdfSelectionSync)
   document.removeEventListener('selectionchange', schedulePdfSelectionSync)
