@@ -1016,10 +1016,22 @@ async function save(closeAfter = true) {
   }
 }
 
+/**
+ * 删除账户：先确认删账户本身，再单独问一次「本机邮件怎么办」。
+ *
+ * 两件事必须分开问：删账户是不可逆的（口令、授权令牌都会一起删），
+ * 而「本机缓存的邮件」是一个独立的取舍——有人换设备前想先把邮件留在本机，
+ * 也有人要求彻底清干净、不留任何痕迹（正文、附件缓存、草稿一起删）。
+ */
 function remove(account) {
-  if (!window.confirm(`删除账户 ${account.email}？本地缓存的邮件也会一并清掉（服务器上的不受影响）。`)) {
+  if (!window.confirm(`删除账户 ${account.email}？\n\n服务器上的邮件不会受影响，但本机需要重新添加账户才能再收信。`)) {
     return
   }
-  emit('deleted', account.id)
+  const deleteLocalMail = window.confirm(
+    '是否同时删除本机已缓存的邮件？\n\n' +
+      '「确定」= 一并彻底删除本机的邮件正文、附件缓存与相关草稿（不可恢复）。\n' +
+      '「取消」= 只移除账户，本机邮件数据保留。',
+  )
+  emit('deleted', account.id, deleteLocalMail)
 }
 </script>

@@ -146,6 +146,7 @@ export const SHORTCUT_LIST = [
   { keys: 'E', label: '归档' },
   { keys: 'Delete', label: '删除' },
   { keys: '/', label: '聚焦搜索框' },
+  { keys: 'Alt + 划词', label: '划词翻译（正文与写信正文都可用）' },
   { keys: 'Esc', label: '关闭阅读 / 弹层' },
   { keys: '?', label: '显示快捷键帮助' },
 ]

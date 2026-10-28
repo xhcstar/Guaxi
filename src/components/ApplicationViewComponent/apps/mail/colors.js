@@ -188,10 +188,24 @@ export function mapBackgroundColor(value, mode = 'dark') {
     }
     return neutralAt(target, PAPER_HUE, color.a)
   }
-  // 纯黑块：提亮到纸面略深的位置，避免深色纸面上出现一个「洞」。
-  // 阈值压得很低，是因为映射出来的表面本身就在 0.022 上下——重跑时必须原样返回。
-  if (lum < 0.008) {
-    return neutralAt(0.012, PAPER_HUE, Math.min(1, color.a + 0.5))
+  // 深色块（纯黑代码块、接近 #111 的深底）：在深色纸面上它就是一块「黑洞」。
+  // 把它抬到纸面上方一档的表面，和浅色卡片落在同一个层级——保留色相，
+  // 于是「深色 banner + 白字」读起来仍是一块面板，而不是屏幕上挖出来的洞。
+  // 阈值取 0.022（纸面本身）：映射结果在 0.030 以上，重跑时不会被再改一次。
+  if (lum < 0.022) {
+    const target = 0.03 + (lum / 0.022) * 0.008
+    if (s >= 0.2) {
+      // 彩色深底（深蓝标题条、深绿按钮）：保住色相，只把明度抬上来。
+      let best = null
+      for (let l = 0.06; l <= 0.45; l += 0.005) {
+        const candidate = hslToRgb(h, Math.min(s, 0.55) * 0.75, l)
+        if (!best || Math.abs(luminance(candidate) - target) < Math.abs(luminance(best) - target)) {
+          best = candidate
+        }
+      }
+      return formatColor(best, color.a)
+    }
+    return neutralAt(target, PAPER_HUE, Math.min(1, color.a))
   }
   return null
 }
@@ -442,19 +456,31 @@ function parseBorders(text, count) {
  * 两趟：先背景、后文字。文字要判断「压着什么底色」，必须在背景改完之后再看。
  * 只处理 `style` / `color` / `bgcolor` 这类**写死**的颜色；继承来的颜色由纸面自己管。
  */
-export function applyBodyTheme(root, mode = 'dark') {
+export function applyBodyTheme(root, mode = 'dark', { selector = '.mail-body' } = {}) {
   if (!root) return
-  const bodies = [...root.querySelectorAll('.mail-body')]
+  const bodies = [...(root.querySelectorAll?.(selector) || [])]
   if (!bodies.length) return
-  const dark = mode === 'dark'
-  const paperLum = luminance(DARK_PAPER)
-
   const targets = []
   for (const body of bodies) targets.push(body, ...body.querySelectorAll('*'))
+  applyBodyThemeToElements(targets, mode)
+}
+
+/**
+ * 对一批元素按主题重上色（`mode === 'light'` 表示「只还原成邮件原值」）。
+ *
+ * 阅读区传的是 `.mail-body` 子树；写信编辑器传的是引用卡片子树——
+ * 引用历史是「按浅色纸面设计」的排版，直接放进深色编辑器会出现
+ * 白底浅字的整块（正是新窗口里看起来和阅读区完全不一样的原因）。
+ * 映射只在 DOM 上做，序列化草稿前会用 `mode: 'light'` 还原成原值。
+ */
+export function applyBodyThemeToElements(targets, mode = 'dark') {
+  if (!targets?.length) return
+  const dark = mode === 'dark'
+  const paperLum = luminance(DARK_PAPER)
+  const elements = targets.filter((el) => el?.hasAttribute)
 
   // 先把所有元素还原成原值：既保证重复应用稳定，也让切回亮色时不留痕。
-  for (const el of targets) {
-    if (!el.hasAttribute) continue
+  for (const el of elements) {
     restore(
       el,
       ORIG.bg,
@@ -488,8 +514,8 @@ export function applyBodyTheme(root, mode = 'dark') {
   }
   // 边框的还原必须放在 `if (!dark) return` 之前：切回亮色时也要把文档里写死的
   // 原边框放回去，否则深色的映射结果会一直留在 DOM 上。
-  for (const el of targets) {
-    if (!el.style || !el.hasAttribute) continue
+  for (const el of elements) {
+    if (!el.style) continue
     const saved = el.getAttribute(ORIG.border)
     if (saved === null || saved === undefined) continue
     el.removeAttribute(ORIG.border)
@@ -502,8 +528,8 @@ export function applyBodyTheme(root, mode = 'dark') {
   }
   if (!dark) return
 
-  for (const el of targets) {
-    if (!el.style || !el.hasAttribute) continue
+  for (const el of elements) {
+    if (!el.style) continue
     const own = declared(el)
     const originals = own.borders.map((value) => value || '')
     if (!originals.some(Boolean)) continue
@@ -521,8 +547,8 @@ export function applyBodyTheme(root, mode = 'dark') {
     })
   }
 
-  for (const el of targets) {
-    if (!el.style || !el.hasAttribute) continue
+  for (const el of elements) {
+    if (!el.style) continue
     // 原值优先：还原后 el.style 可能已经是空串，但原值仍是「邮件里写的那个」。
     const own = declared(el)
     const bgOriginal = el.getAttribute(ORIG.bgAttr) || own.bgcolorAttr
@@ -552,8 +578,8 @@ export function applyBodyTheme(root, mode = 'dark') {
     }
   }
 
-  for (const el of targets) {
-    if (!el.style || !el.hasAttribute) continue
+  for (const el of elements) {
+    if (!el.style) continue
     const own = declared(el)
     const colorOriginal = el.getAttribute(ORIG.fg) || el.getAttribute(ORIG.fgAttr) || own.color
     if (!colorOriginal) continue

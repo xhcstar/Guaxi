@@ -576,6 +576,152 @@
         </select>
       </div>
 
+      <!-- 选中正文里的图片 / 光标停在表格里时才出现的第二行工具：
+           图片给宽度与左右位置，表格给行列增删、样式预设与单元格内容工具。
+           它们和主工具栏同宽、同一个位置，不跟着选区飘——浮层一飘就会挡住正文。 -->
+      <div v-if="!sourceMode && selectedImage" class="mail-compose-subbar">
+        <span class="mail-subbar-label">图片</span>
+        <button
+          v-for="preset in IMAGE_WIDTHS"
+          :key="'iw-' + preset"
+          class="mail-chip"
+          :title="`图片宽度 ${preset}%`"
+          @mousedown.prevent="setImageWidth(preset)"
+        >
+          {{ preset }}%
+        </button>
+        <label class="mail-subbar-slider" title="拖动调整图片宽度">
+          <input
+            v-model.number="imageWidthPercent"
+            type="range"
+            min="10"
+            max="100"
+            step="5"
+            @input="applyImageSlider"
+            @change="commitImageWidth"
+          />
+          <span>{{ imageWidthPercent }}%</span>
+        </label>
+        <span class="mail-fmt-sep"></span>
+        <button
+          v-for="align in IMAGE_ALIGNMENTS"
+          :key="'ia-' + align.key"
+          class="mail-fmt-btn"
+          :class="{ 'is-on': imageAlign === align.key }"
+          :title="align.title"
+          :aria-label="align.title"
+          @mousedown.prevent="alignImage(align.key)"
+        >
+          <MailIcon :name="align.icon" :size="15" />
+        </button>
+        <button
+          class="mail-btn is-danger"
+          title="从正文里删除这张图片"
+          @mousedown.prevent
+          @click="removeSelectedImage"
+        >
+          删除图片
+        </button>
+      </div>
+
+      <div v-if="!sourceMode && tableTools" class="mail-compose-subbar">
+        <span class="mail-subbar-label">表格 {{ tableTools.rows }}×{{ tableTools.cols }}</span>
+        <button
+          v-for="item in TABLE_ROW_ACTIONS"
+          :key="'tr-' + item.action"
+          class="mail-chip"
+          :title="item.title"
+          @mousedown.prevent
+          @click="tableBarAction(item.action)"
+        >
+          {{ item.label }}
+        </button>
+        <span class="mail-fmt-sep"></span>
+        <button
+          v-for="style in TABLE_STYLES"
+          :key="'ts-' + style.key"
+          class="mail-chip"
+          :title="`表格样式：${style.label}`"
+          @mousedown.prevent
+          @click="tableBarAction('style', style.key)"
+        >
+          {{ style.label }}
+        </button>
+        <span class="mail-fmt-sep"></span>
+        <button
+          v-for="preset in TABLE_WIDTHS"
+          :key="'tw-' + preset.value"
+          class="mail-chip"
+          :title="preset.title"
+          @mousedown.prevent
+          @click="tableBarAction('tableWidth', preset.value)"
+        >
+          {{ preset.label }}
+        </button>
+        <span class="mail-fmt-sep"></span>
+        <button
+          v-for="align in TABLE_ALIGNMENTS"
+          :key="'ta-' + align.key"
+          class="mail-fmt-btn"
+          :title="align.title"
+          :aria-label="align.title"
+          @mousedown.prevent
+          @click="tableBarAction('tableAlign', align.key)"
+        >
+          <MailIcon :name="align.icon" :size="15" />
+        </button>
+        <span class="mail-fmt-sep"></span>
+        <span class="mail-subbar-label">单元格</span>
+        <button
+          v-for="align in CELL_ALIGNMENTS"
+          :key="'ca-' + align.key"
+          class="mail-fmt-btn"
+          :title="align.title"
+          :aria-label="align.title"
+          @mousedown.prevent
+          @click="tableBarAction(align.action)"
+        >
+          <MailIcon :name="align.icon" :size="15" />
+        </button>
+        <button
+          v-for="size in CELL_FONT_SIZES"
+          :key="'cf-' + size"
+          class="mail-chip"
+          :title="`单元格字号 ${size}px`"
+          @mousedown.prevent
+          @click="tableBarAction('cellFontSize', size)"
+        >
+          {{ size }}
+        </button>
+        <button
+          class="mail-chip"
+          title="单元格加粗"
+          @mousedown.prevent
+          @click="tableBarAction('cellBold')"
+        >
+          B
+        </button>
+        <span class="mail-subbar-swatches">
+          <button
+            v-for="color in CELL_FILLS"
+            :key="'cb-' + color"
+            class="mail-editor-menu-swatch"
+            :style="{ background: color }"
+            :title="`单元格填充 ${color}`"
+            @mousedown.prevent
+            @click="tableBarAction('cellFill', color)"
+          ></button>
+        </span>
+        <button
+          class="mail-btn is-danger"
+          title="删除整个表格"
+          @mousedown.prevent
+          @click="tableBarAction('tableDelete')"
+        >
+          删除表格
+        </button>
+      </div>
+
       <!-- 定时发送：预设几个常用时间，也可以选具体日期时间。 -->
       <div v-if="scheduleOpen" class="mail-schedule-panel">
         <div class="mail-schedule-presets">
@@ -624,6 +770,7 @@
           data-placeholder="写点什么…"
           @contextmenu="onEditorContextMenu"
           @mouseup="onEditorMouseUp"
+          @click="onEditorClick"
           @input="onEditorInput"
           @paste="onPaste"
           @keydown.ctrl.b.prevent="format('bold')"
@@ -823,6 +970,7 @@ import {
   pushRecent,
 } from './palette'
 import { buildTableHtml, markdownToEmailHtml } from './composeTable'
+import { applyBodyThemeToElements } from './colors'
 import { useMailSelectionTranslate } from './useMailSelectionTranslate'
 import {
   TABLE_STYLES,
@@ -854,13 +1002,20 @@ const props = defineProps({
   embedded: { type: Boolean, default: false },
   /** 阅读区内联模式：卡片长在正文上方，不铺满整个应用。 */
   inline: { type: Boolean, default: false },
+  /**
+   * 写进服务器草稿箱（编辑器自己的 15 秒自动保存走这里）。
+   *
+   * 必须是函数 prop：编辑器要把「刚才那份草稿的 uid」记下来，下一次保存先删旧的
+   * 再写新的——否则每 15 秒就在草稿箱里多一封同名草稿，用户看到一堆
+   * 只带引用原文的「空壳」，会以为自己的正文没被保存。
+   */
+  saveMailboxDraft: { type: Function, default: null },
 })
 const emit = defineEmits([
   'update',
   'send',
   'schedule',
   'save-draft',
-  'save-to-mailbox',
   'close',
   'apply-template',
   'check-attachments',
@@ -1041,6 +1196,8 @@ function restoreSelection() {
 function refreshFormatState() {
   const editor = editorRef.value
   const selection = window.getSelection()
+  // 表格工具行跟着光标走：光标进出表格时它要跟着出现 / 收起。
+  refreshTableTools()
   if (!editor || !selection?.rangeCount || !editor.contains(selection.anchorNode)) return
   // 选区一变就记下来：否则先加粗 A、再选中 B 点斜体时，会拿旧的 A 去应用格式。
   savedRange = selection.getRangeAt(0).cloneRange()
@@ -1094,6 +1251,7 @@ onMounted(async () => {
   // 字体列表是「打开写信窗口才需要」的重操作（要扫系统字体库），发出去不等待。
   loadSystemFonts()
   document.addEventListener('mousedown', onPaletteOutside)
+  document.addEventListener('mousedown', onTranslateOutside)
   document.addEventListener('keydown', onPaletteEscape)
   document.addEventListener('selectionchange', refreshFormatState)
   if (!editorRef.value) return
@@ -1101,7 +1259,9 @@ onMounted(async () => {
   // 避免 Vue 与浏览器的编辑结果互相覆盖（contenteditable 里的 DOM 是浏览器在管）。
   editorRef.value.innerHTML = props.draft.html || ''
   lastHtml = props.draft.html || ''
+  initialMailboxSignature = mailboxSignature(lastHtml)
   resolveCidImages()
+  scheduleQuoteTheme()
   await nextTick()
   editorRef.value.focus()
 })
@@ -1116,6 +1276,7 @@ watch(sourceMode, async (on) => {
       editorRef.value.innerHTML = htmlSource.value
       lastHtml = htmlSource.value
       resolveCidImages()
+      scheduleQuoteTheme()
     }
   } else {
     htmlSource.value = serializeEditorHtml() || props.draft.html || ''
@@ -1130,6 +1291,8 @@ watch(
   (mode) => {
     monacoNs?.editor.setTheme(mode === 'light' ? 'vs' : 'vs-dark')
     sourceEditor?.layout()
+    // 引用历史的配色也要跟着换：切到亮色时把映射结果还原成邮件原值。
+    scheduleQuoteTheme()
   },
 )
 
@@ -1323,14 +1486,172 @@ function clearFindHighlight() {
  */
 const selectionTranslate = useMailSelectionTranslate(() => editorRef.value)
 
-/** 鼠标松开时，若选区在正文里就翻译。 */
+/**
+ * 鼠标松开时只把事件交给共享的划词逻辑：触发条件是「Alt + 划词」
+ * （见 useMailSelectionTranslate）。普通拖选不弹面板，否则每松一次鼠标就译一次。
+ */
 function onEditorMouseUp(event) {
-  // 拖拽选区的过程中不弹；只有真的选中了文字才翻译。
-  if (event?.button !== 0) return
-  const selection = window.getSelection()
-  const text = selection?.toString?.() || ''
-  if (!text.trim()) return
   selectionTranslate.handleMouseUp(event)
+}
+
+/** 点正文以外的地方收起译文（固定时保留，用户要它留着对照看）。 */
+function onTranslateOutside(event) {
+  selectionTranslate.handleDocumentMouseDown(event)
+}
+
+// ---------------- 图片 / 表格的可见工具 ----------------
+//
+// 「插进去就动不了」是最常见的一条反馈：图片只能删、表格只能靠右键（很多人不知道
+// 右键）。这里把两类操作做成工具栏下方的第二行——点了图片、或光标停在表格里就出现。
+
+/** 正文里被点选的图片；工具条的宽度 / 对齐 / 删除都作用于它。 */
+const selectedImage = ref(null)
+const imageWidthPercent = ref(100)
+/** 图片当前的对齐方式（工具条按钮的按下态）。DOM 上写的样式不会自动触发重算。 */
+const imageAlign = ref('left')
+const IMAGE_WIDTHS = [25, 50, 75, 100]
+const IMAGE_ALIGNMENTS = [
+  { key: 'left', icon: 'alignLeft', title: '图片靠左' },
+  { key: 'center', icon: 'alignCenter', title: '图片居中' },
+  { key: 'right', icon: 'alignRight', title: '图片靠右' },
+]
+
+function onEditorClick(event) {
+  const img = event.target?.closest?.('img')
+  if (img && editorRef.value?.contains(img)) {
+    selectedImage.value = img
+    imageWidthPercent.value = imageWidthPercentOf(img)
+    imageAlign.value = alignOf(img)
+    return
+  }
+  selectedImage.value = null
+}
+
+/** 图片当前的对齐：左右 auto 外边距的三种组合，其余按靠左处理。 */
+function alignOf(img) {
+  if (img.style.marginLeft === 'auto' && img.style.marginRight === 'auto') return 'center'
+  if (img.style.marginLeft === 'auto') return 'right'
+  return 'left'
+}
+
+/** 图片当前宽度（百分比）：优先读内联宽度，其次按编辑区宽度折算。 */
+function imageWidthPercentOf(img) {
+  const declared = String(img.style?.width || img.getAttribute('width') || '')
+  const percent = declared.match(/^([\d.]+)%$/)
+  if (percent) return Math.max(10, Math.min(100, Math.round(Number(percent[1]))))
+  const box = editorRef.value?.clientWidth || 0
+  const width = img.getBoundingClientRect?.().width || 0
+  if (box && width) {
+    return Math.max(10, Math.min(100, Math.round((width / box) * 100)))
+  }
+  return 100
+}
+
+/**
+ * 宽度写成百分比：收件端窗口再宽再窄，版式都不会被撑破。
+ *
+ * `commit = false` 用于拖动滑块的过程：只改屏幕上的宽度，松手（change）时才
+ * 同步回草稿——拖一次会触发几十个 input，每个都序列化整篇正文会明显卡顿。
+ */
+function setImageWidth(percent, { commit = true } = {}) {
+  const img = selectedImage.value
+  if (!img) return
+  const value = Math.max(10, Math.min(100, Number(percent) || 100))
+  img.style.width = `${value}%`
+  img.style.height = 'auto'
+  img.removeAttribute('width')
+  img.removeAttribute('height')
+  imageWidthPercent.value = value
+  if (commit) onEditorInput()
+}
+
+function applyImageSlider() {
+  if (selectedImage.value) setImageWidth(imageWidthPercent.value, { commit: false })
+}
+
+function commitImageWidth() {
+  if (selectedImage.value) onEditorInput()
+}
+
+/** 图片的「位置」：块级图片用左右 auto 外边距实现，表现属性之外客户端也认。 */
+function alignImage(where) {
+  const img = selectedImage.value
+  if (!img) return
+  img.style.display = 'block'
+  img.style.marginLeft = where === 'right' || where === 'center' ? 'auto' : '0'
+  img.style.marginRight = where === 'left' || where === 'center' ? 'auto' : '0'
+  imageAlign.value = where
+  onEditorInput()
+}
+
+/** 删图：正文里的 <img> 与「内联图片」登记要一起摘掉，否则会发出一个没人引用的附件。 */
+function removeSelectedImage() {
+  const img = selectedImage.value
+  if (!img) return
+  const src = img.getAttribute('src') || ''
+  const cid = img.dataset?.cid || (/^cid:/i.test(src) ? src.slice(4) : '')
+  img.remove()
+  selectedImage.value = null
+  if (cid) removeInlineImage(cid)
+  else onEditorInput()
+}
+
+/** 光标所在的表格；不在表格里就是 null（工具行随之收起）。 */
+const tableTools = ref(null)
+
+const TABLE_ROW_ACTIONS = [
+  { action: 'rowAbove', label: '上方插入行', title: '在当前行上方插入一行' },
+  { action: 'rowBelow', label: '下方插入行', title: '在当前行下方插入一行' },
+  { action: 'rowDelete', label: '删除行', title: '删除光标所在这一行' },
+  { action: 'colLeft', label: '左侧插入列', title: '在当前列左侧插入一列' },
+  { action: 'colRight', label: '右侧插入列', title: '在当前列右侧插入一列' },
+  { action: 'colDelete', label: '删除列', title: '删除光标所在这一列' },
+]
+const TABLE_WIDTHS = [
+  { value: '100', label: '整行', title: '表格占满正文宽度' },
+  { value: '75', label: '75%', title: '表格宽度 75%' },
+  { value: '50', label: '50%', title: '表格宽度 50%' },
+  { value: 'auto', label: '按内容', title: '表格宽度由内容决定' },
+]
+const TABLE_ALIGNMENTS = [
+  { key: 'left', icon: 'alignLeft', title: '表格靠左' },
+  { key: 'center', icon: 'alignCenter', title: '表格居中' },
+  { key: 'right', icon: 'alignRight', title: '表格靠右' },
+]
+const CELL_ALIGNMENTS = [
+  { key: 'left', action: 'cellAlignLeft', icon: 'alignLeft', title: '单元格内容靠左' },
+  { key: 'center', action: 'cellAlignCenter', icon: 'alignCenter', title: '单元格内容居中' },
+  { key: 'right', action: 'cellAlignRight', icon: 'alignRight', title: '单元格内容靠右' },
+]
+
+function refreshTableTools() {
+  const editor = editorRef.value
+  const selection = window.getSelection()
+  if (!editor || !selection?.rangeCount) {
+    tableTools.value = null
+    return
+  }
+  const anchor = selection.anchorNode
+  const node = anchor?.nodeType === 1 ? anchor : anchor?.parentElement
+  if (!node || !editor.contains(node)) {
+    tableTools.value = null
+    return
+  }
+  const cell = node.closest?.('td, th')
+  const table = cell?.closest?.('table')
+  if (!table || !editor.contains(table)) {
+    tableTools.value = null
+    return
+  }
+  const pos = cellPosition(table, cell)
+  tableTools.value = pos ? { table: true, cell, tableEl: table, ...pos } : null
+}
+
+/** 工具行里的表格动作：作用于「光标当前所在的表格」，不用先右键。 */
+function tableBarAction(action, payload) {
+  if (!tableTools.value) return
+  tableAction(action, payload, tableTools.value)
+  nextTick(refreshTableTools)
 }
 
 // ---------------- 编辑器右键菜单 ----------------
@@ -1393,9 +1714,12 @@ function editorCommand(command) {
 /**
  * 表格操作。所有改动都直接操作 DOM 再同步回草稿——
  * `execCommand` 没有行列增删能力，只能自己拆/拼节点。
+ *
+ * `context` 由右键菜单或工具栏给出：`{ tableEl, cell, row, col }`。
+ * 两处共用同一套实现，避免「右键能做的事工具栏做不了」这种分裂。
  */
-function tableAction(action, payload) {
-  const menu = editorMenu.value
+function tableAction(action, payload, context = null) {
+  const menu = context || editorMenu.value
   closeEditorMenu()
   if (!menu?.tableEl) return
   const table = menu.tableEl
@@ -1460,6 +1784,19 @@ function tableAction(action, payload) {
       const preset = TABLE_STYLES.find((item) => item.key === payload)
       if (!preset) return
       applyTableStyle(table, preset)
+      break
+    }
+    case 'tableWidth': {
+      // 自动布局的表格在收件端最稳：宽度按百分比给，别写死像素。
+      table.style.width = payload === 'auto' ? 'auto' : `${Number(payload) || 100}%`
+      table.removeAttribute('width')
+      break
+    }
+    case 'tableAlign': {
+      // 居中 / 靠右靠外边距推开；align 属性是给老客户端（Outlook）的兜底。
+      table.style.marginLeft = payload === 'right' || payload === 'center' ? 'auto' : '0'
+      table.style.marginRight = payload === 'left' || payload === 'center' ? 'auto' : '0'
+      table.setAttribute('align', payload)
       break
     }
     case 'cellAlignLeft':
@@ -1553,11 +1890,43 @@ function onEditorInput() {
 }
 
 /**
+ * 引用历史「按当前主题」重上色。
+ *
+ * 引用原文是发件人按浅色纸面写的（白色卡片 + 深色文字），直接塞进深色编辑器里
+ * 就是一大块白底浅字——这就是新窗口里的引用看起来和阅读区完全不一样的原因。
+ * 阅读区靠 colors.js 逐元素映射解决同一件事，这里对引用卡片做同样的映射；
+ * 序列化草稿时再还原成原值，收件端看到的仍会是他发来的那份配色。
+ */
+function quoteThemeTargets(root) {
+  if (!root?.querySelectorAll) return []
+  const cards = [...root.querySelectorAll('[data-guaxi-quote-card]')]
+  const out = []
+  for (const card of cards) out.push(card, ...card.querySelectorAll('*'))
+  return out
+}
+
+let quoteThemeQueued = false
+
+/**
+ * 合并这一轮的多处调用（输入、粘贴、切主题都可能同时触发），
+ * 每帧最多跑一次——映射要逐元素读计算样式，没有必要每次按键都跑两遍。
+ */
+function scheduleQuoteTheme() {
+  if (quoteThemeQueued) return
+  quoteThemeQueued = true
+  requestAnimationFrame(() => {
+    quoteThemeQueued = false
+    const targets = quoteThemeTargets(editorRef.value)
+    if (!targets.length) return
+    applyBodyThemeToElements(targets, props.themeMode === 'light' ? 'light' : 'dark')
+  })
+}
+
+/**
  * 编辑器里的 `cid:` 图片没法直接显示：用 asset URL 映射到本地临时文件，
  * 并把原始 cid 记在 `data-cid` 上；序列化时再换回 `cid:`（发信/存草稿要用）。
  */
-function resolveCidImages() {
-  if (!editorRef.value) return
+function resolveCidImages() {  if (!editorRef.value) return
   const images = props.draft.inlineImages || []
   if (!images.length) return
   const map = new Map(
@@ -1578,6 +1947,10 @@ function resolveCidImages() {
 function serializeEditorHtml() {
   if (!editorRef.value) return ''
   const clone = editorRef.value.cloneNode(true)
+  // 引用卡片的配色映射只为本机编辑区服务（见 scheduleQuoteTheme）：
+  // 交给草稿 / 发送之前先还原成邮件原值，不能把深色主题的映射结果发出去。
+  const themed = quoteThemeTargets(clone)
+  if (themed.length) applyBodyThemeToElements(themed, 'light')
   clone.querySelectorAll('img[data-cid]').forEach((img) => {
     img.setAttribute('src', `cid:${img.dataset.cid}`)
     img.removeAttribute('data-cid')
@@ -1657,9 +2030,22 @@ function clearTextColor() {
 /** 插入表格：直接写成真 <table>，任何客户端都能显示。 */
 function insertTable(rows = tableRows.value, cols = tableCols.value) {
   closePalette()
-  const range = currentRange()
-  insertHtmlAt(range || null, buildTableHtml({ rows, cols }))
+  const editor = editorRef.value
+  const tableCount = editor ? editor.querySelectorAll('table').length : 0
+  insertHtmlAt(currentRange() || null, buildTableHtml({ rows, cols }))
   onEditorInput()
+  // 插完把光标放进新表的第一个单元格（并选中占位文字）：
+  // 接着就能直接打字，表格工具行也会立刻出现——不用先自己点进表格。
+  const tables = editor ? editor.querySelectorAll('table') : []
+  const table = tables[Math.min(tableCount, tables.length - 1)]
+  const cell = table?.querySelector('th, td')
+  if (!cell) return
+  const selection = window.getSelection()
+  const range = document.createRange()
+  range.selectNodeContents(cell)
+  selection?.removeAllRanges()
+  selection?.addRange(range)
+  editorRef.value?.focus()
 }
 
 /**
@@ -2046,7 +2432,16 @@ function addInlineImages(paths) {
     )
   }
   emit('update', { inlineImages: next })
-  nextTick(resolveCidImages)
+  nextTick(() => {
+    resolveCidImages()
+    // 刚插进去的图直接进入「选中」状态：图片工具行随之出现，宽度与位置马上可调。
+    const images = editorRef.value?.querySelectorAll('img')
+    const last = images?.[images.length - 1]
+    if (!last) return
+    selectedImage.value = last
+    imageWidthPercent.value = imageWidthPercentOf(last)
+    imageAlign.value = alignOf(last)
+  })
   onEditorInput()
 }
 
@@ -2076,6 +2471,7 @@ function onTemplateChange(event) {
   if (editorRef.value && template.html) {
     editorRef.value.innerHTML = template.html
     lastHtml = template.html
+    scheduleQuoteTheme()
   }
 }
 
@@ -2207,39 +2603,68 @@ const mailboxDraft = reactive({ uid: null, folder: '' })
  *
  * 为什么两条都要：暂存是"本机能恢复"，草稿箱是"用户看得见"。只做前者，
  * 崩溃重启后用户找不到那封写了一半的信；只做后者，断网时会一直失败。
+ *
+ * 草稿箱里的那一份是**替换**而不是追加：记住上一份的 uid，写新的成功后再删旧的。
+ * 以前每次心跳都 append 一封新的，草稿箱里很快堆出一串同名草稿——最新一份
+ * 还来不及带上正文，用户打开看到的就是「只有引用的历史邮件」。
  */
+let stashInflight = false
+/** 上一份写进草稿箱的内容签名：内容没变就不再删一封、写一封。 */
+let lastMailboxSignature = ''
+/** 打开编辑器时的内容签名：用户一个字都没动过就不该在草稿箱里造一封「空壳」。 */
+let initialMailboxSignature = ''
+/**
+ * 写草稿箱的最小间隔。
+ *
+ * 本地暂存每 15 秒一次（几乎零成本），写服务器草稿箱要登录 IMAP + APPEND + 同步，
+ * 删旧稿还要再来一次——每 15 秒跑两轮会把弱网环境拖垮。30 秒一次既够「意外中断
+ * 不丢」，也不会让后台一直占着连接。
+ */
+const MAILBOX_AUTOSAVE_MS = 30_000
+let lastMailboxAt = 0
+
+function mailboxSignature(html) {
+  return [
+    html || '',
+    props.draft.subject || '',
+    (props.draft.to || []).join(','),
+    (props.draft.cc || []).join(','),
+    (props.draft.bcc || []).join(','),
+  ].join('\u0000')
+}
+
 async function stashNow({ toMailbox = true } = {}) {
   const hasContent =
-    props.draft.subject.trim() ||
+    (props.draft.subject || '').trim() ||
     (props.draft.html || '').trim() ||
     (sourceMode.value && htmlSource.value.trim()) ||
-    props.draft.to.length ||
-    props.draft.text.trim()
+    (props.draft.to || []).length ||
+    (props.draft.text || '').trim() ||
+    (props.draft.attachments || []).length ||
+    (props.draft.inlineImages || []).length
   if (!hasContent) return null
+  if (stashInflight) return null
   const html = editorRef.value && !sourceMode.value ? serializeEditorHtml() : htmlSource.value
   const payload = { ...props.draft, id: draftId.value, html }
-
+  stashInflight = true
   try {
-    await invoke('mail_stash_draft', { draft: payload })
-    lastSavedAt.value = Date.now()
-  } catch (error) {
-    logger.warn('自动暂存失败', error)
-  }
-
-  if (toMailbox) {
     try {
-      // 先删掉上一份草稿再写新的：IMAP 草稿没有"覆盖"语义，直接 append 会越存越多。
-      if (mailboxDraft.uid && mailboxDraft.folder) {
-        await invoke('mail_discard_draft', {
-          accountId: props.draft.accountId,
-          folder: mailboxDraft.folder,
-          uid: mailboxDraft.uid,
-        })
-        mailboxDraft.uid = null
-        mailboxDraft.folder = ''
-      }
-      // 读回新草稿 uid：交给父组件在保存成功后回填（见 emit('saved-draft')）。
-      emit('save-to-mailbox', {
+      await invoke('mail_stash_draft', { draft: payload })
+      lastSavedAt.value = Date.now()
+    } catch (error) {
+      logger.warn('自动暂存失败', error)
+    }
+
+    if (!toMailbox || !props.saveMailboxDraft) return draftId.value
+    const signature = mailboxSignature(html)
+    // 没动过、或者和上一次写的完全一样：都不必再碰草稿箱。
+    if (signature === lastMailboxSignature || signature === initialMailboxSignature) {
+      return draftId.value
+    }
+    if (Date.now() - lastMailboxAt < MAILBOX_AUTOSAVE_MS) return draftId.value
+    try {
+      const previous = mailboxDraft.uid ? { uid: mailboxDraft.uid, folder: mailboxDraft.folder } : null
+      const saved = await props.saveMailboxDraft({
         accountId: props.draft.accountId,
         to: props.draft.to,
         cc: props.draft.cc,
@@ -2257,10 +2682,32 @@ async function stashNow({ toMailbox = true } = {}) {
         })),
         cryptoMode: props.draft.cryptoMode || '',
       })
+      if (saved?.uid) {
+        mailboxDraft.uid = saved.uid
+        mailboxDraft.folder = saved.folder || mailboxDraft.folder
+      }
+      // 新草稿写成功之后才删旧的那份：中途失败也不会把内容弄丢。
+      if (previous?.uid && previous.folder && previous.uid !== mailboxDraft.uid) {
+        await invoke('mail_discard_draft', {
+          accountId: props.draft.accountId,
+          folder: previous.folder,
+          uid: previous.uid,
+        }).catch(() => {})
+      }
+      // 关窗 / 发送路径也要知道这份自动草稿，才能在落最终草稿时把它替换掉。
+      if (props.draft) {
+        props.draft.mailboxDraft = mailboxDraft.uid
+          ? { uid: mailboxDraft.uid, folder: mailboxDraft.folder }
+          : null
+      }
+      lastMailboxSignature = signature
+      lastMailboxAt = Date.now()
       lastSavedAt.value = Date.now()
     } catch (error) {
       logger.warn('自动保存草稿箱失败', error)
     }
+  } finally {
+    stashInflight = false
   }
   return draftId.value
 }
@@ -2278,7 +2725,6 @@ function startAutosave() {
     stashNow()
   }, 15_000)
 }
-
 function stopAutosave() {
   if (autosaveTimer) {
     clearInterval(autosaveTimer)
@@ -2290,13 +2736,14 @@ onMounted(startAutosave)
 
 onBeforeUnmount(() => {
   document.removeEventListener('mousedown', onPaletteOutside)
+  document.removeEventListener('mousedown', onTranslateOutside)
   document.removeEventListener('keydown', onPaletteEscape)
   document.removeEventListener('selectionchange', refreshFormatState)
   disposeSourceEditor()
   stopAutosave()
-  // 关闭时立刻存一次：这一步才是「不会丢」的保证，定时器只是兜底。
-  // 注意不能 await：组件已经在卸载，异步结果没人接；请求本身会照常发出去。
-  stashNow()
+  // 关闭时立刻存一次本地暂存（不写草稿箱）：真正写进草稿箱由父级在
+  // closeCompose / closeWindow 里做，这里再写一次只会在草稿箱里多出一份重复草稿。
+  stashNow({ toMailbox: false })
 })
 
 defineExpose({ appendBodyText, addPaths, stashNow, rememberMailboxDraft })

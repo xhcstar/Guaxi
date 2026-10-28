@@ -302,15 +302,67 @@ fn ensure_standard_folders(account: &Account) {
     }
 }
 
+/// 删除账户。
+///
+/// `delete_local_mail` 由用户在确认框里选：true = 连本机缓存的邮件一起删干净
+/// （正文、检索索引、附件缓存、该账户的本地草稿文件），false = 只移除账户。
 #[command]
-pub async fn mail_delete_account(app: AppHandle, account_id: String) -> Result<(), String> {
+pub async fn mail_delete_account(
+    app: AppHandle,
+    account_id: String,
+    delete_local_mail: Option<bool>,
+) -> Result<(), String> {
     ensure_init(&app)?;
-    store::delete_account(&account_id)?;
+    let wipe = delete_local_mail.unwrap_or(true);
+    store::delete_account(&account_id, wipe)?;
     delete_secret(&account_id);
     // 本地加密密钥也要一起删：留着会在系统凭据库里堆孤儿条目，
     // 而且下次用同一个账户 id 恢复数据时会因密钥不匹配而解不开。
     crypto::delete_key(&account_id);
+    if wipe {
+        purge_local_artifacts(&app, &account_id);
+    }
     Ok(())
+}
+
+/// 删掉账户在磁盘上的残余：附件缓存目录与本地暂存的草稿文件。
+///
+/// 数据库里的邮件行已经删了，但附件缓存（`attachments/<account_id>/`）和
+/// 编辑器暂存的 JSON 草稿还在——「删干净」得把这两处也一起清掉。
+fn purge_local_artifacts(app: &AppHandle, account_id: &str) {
+    let Ok(root) = store::data_root(app) else {
+        return;
+    };
+    let safe_id = sanitize_filename(account_id);
+    let attach_dir = root.join("attachments").join(&safe_id);
+    if attach_dir.exists() {
+        if let Err(error) = std::fs::remove_dir_all(&attach_dir) {
+            warn!(error = %error, "mail: 清理附件缓存失败");
+        }
+    }
+    let drafts_dir = root.join("drafts");
+    let Ok(entries) = std::fs::read_dir(&drafts_dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("json") {
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
+            continue;
+        };
+        let owner = value
+            .get("draft")
+            .and_then(|d| d.get("accountId"))
+            .and_then(|v| v.as_str());
+        if owner == Some(account_id) {
+            let _ = std::fs::remove_file(&path);
+        }
+    }
 }
 
 #[command]
@@ -2286,7 +2338,7 @@ fn refresh_folder_totals(account_id: &str, folder: &str) {
 }
 
 /// POP3 账户的草稿：落到本地 `Drafts` 文件夹，与「已发送」副本同一套写库路径。
-fn save_draft_locally(account: &Account, mut request: SendRequest) -> Result<(), String> {
+fn save_draft_locally(account: &Account, mut request: SendRequest) -> Result<u32, String> {
     // 收件人里可能有通讯组芯片（`组名 <group:ID>`）：正文头要展开成真实地址，
     // 但本地草稿的列表行只关心主题与时间，展开结果不影响它。
     let mut expanded = contacts::store::expand_recipient_lists(&[
@@ -2359,13 +2411,20 @@ pub async fn mail_flush_outbox(app: AppHandle) -> Result<serde_json::Value, Stri
 }
 
 /// 保存草稿到服务器「草稿箱」。
+///
+/// 返回 `{ folder, uid }`：编辑器靠它把同一份草稿的上一版删掉再写，
+/// 否则自动保存（每 15 秒一次）会在草稿箱里堆出一串同名草稿。
 #[command]
-pub async fn mail_save_draft(app: AppHandle, request: SendRequest) -> Result<(), String> {
+pub async fn mail_save_draft(
+    app: AppHandle,
+    request: SendRequest,
+) -> Result<serde_json::Value, String> {
     ensure_init(&app)?;
     let account = load_account(&request.account_id)?;
     // POP3 没有服务器端的草稿箱：草稿只落本地库的 Drafts，不发 IMAP APPEND。
     if pop3_sync::is_pop3(&account) {
-        return save_draft_locally(&account, request);
+        let uid = save_draft_locally(&account, request)?;
+        return Ok(serde_json::json!({ "folder": "Drafts", "uid": uid }));
     }
     let password = account_password(&account)?;
     // 草稿和正式发送一样要展开通讯组：IMAP 草稿箱里的地址必须是真实邮箱。
@@ -2424,7 +2483,12 @@ pub async fn mail_save_draft(app: AppHandle, request: SendRequest) -> Result<(),
         )
     })
     .await;
-    Ok(())
+    // 刚 append 的那封就是草稿箱里 UID 最大的那封：交给前端做「替换而不是追加」。
+    // 同步没拉到（网络抖动 / 服务器延迟）时返回 null，前端会退回「下一轮再删」，
+    // 宁可留一封重复草稿，也不要误删用户的正文。
+    let new_uid = store::last_uid(&account.id, &drafts)?;
+    let uid = if new_uid > last_uid { Some(new_uid) } else { None };
+    Ok(serde_json::json!({ "folder": drafts, "uid": uid }))
 }
 
 // ---------------------------------------------------------------------------

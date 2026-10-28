@@ -128,11 +128,9 @@ function fileStem(text) {
     .slice(0, 80)
 }
 
-/** 发送（或定时 / 延迟发送）。返回 `{ sent }` / `{ queued }`。 */
-export async function sendDraft({ useOutbox = false, scheduledAt = 0 } = {}) {
-  const draft = composeDraft.value
-  if (!draft) return null
-  const request = {
+/** 把窗口里的 draft 转成后端 `mail_send` / `mail_save_draft` 的请求体。 */
+function draftRequest(draft, { saveToSent = true } = {}) {
+  return {
     accountId: draft.accountId,
     to: draft.to,
     cc: draft.cc,
@@ -149,19 +147,32 @@ export async function sendDraft({ useOutbox = false, scheduledAt = 0 } = {}) {
       filename: img.name || '',
     })),
     cryptoMode: draft.cryptoMode || '',
-    saveToSent: true,
+    saveToSent,
   }
+}
+
+/** 发送（或定时 / 延迟发送）。返回 `{ sent }` / `{ queued }`。 */
+export async function sendDraft({ useOutbox = false, scheduledAt = 0 } = {}) {
+  const draft = composeDraft.value
+  if (!draft) return null
+  const request = draftRequest(draft, { saveToSent: true })
   if (scheduledAt || (useOutbox && Number(settings.value?.undoSendSeconds) > 0)) {
     const sendAt = scheduledAt ? Math.floor(Number(scheduledAt) / 1000) : null
     const item = await invoke('mail_queue_send', { request, sendAt })
-    await discardSourceDraft(draft)
+    await discardDraftsOf(draft)
     composeDraft.value = null
     return { queued: item, scheduled: Boolean(scheduledAt) }
   }
   await invoke('mail_send', { request })
-  await discardSourceDraft(draft)
+  await discardDraftsOf(draft)
   composeDraft.value = null
   return { sent: true }
+}
+
+/** 编辑器定时自动保存：真正写进草稿箱（用户在别的客户端也能看到这封半成品）。 */
+export async function saveDraftToMailbox(request) {
+  if (!request) return null
+  return invoke('mail_save_draft', { request })
 }
 
 /** 存草稿。返回 true 表示确实写入了（没有内容时不写）。 */
@@ -173,44 +184,44 @@ export async function saveDraft() {
     (draft.html || '').trim() ||
     (draft.text || '').trim() ||
     draft.to?.length ||
-    draft.attachments?.length
+    draft.attachments?.length ||
+    draft.inlineImages?.length
   if (!hasContent) return false
   await invoke('mail_save_draft', {
-    request: {
-      accountId: draft.accountId,
-      to: draft.to,
-      cc: draft.cc,
-      bcc: draft.bcc,
-      subject: draft.subject,
-      text: draft.text,
-      html: draft.htmlMode ? draft.html : null,
-      inReplyTo: draft.inReplyTo,
-      references: draft.references,
-      attachments: (draft.attachments || []).map((a) => a.path),
-      inlineImages: (draft.inlineImages || []).map((img) => ({
-        contentId: img.contentId,
-        path: img.path,
-        filename: img.name || '',
-      })),
-      cryptoMode: draft.cryptoMode || '',
-      saveToSent: false,
-    },
+    request: draftRequest(draft, { saveToSent: false }),
   })
-  await discardSourceDraft(draft)
+  await discardDraftsOf(draft)
   return true
 }
 
-/** 续写自草稿：写回 / 发送之后旧草稿就没用了。 */
-async function discardSourceDraft(draft) {
-  if (!draft?.draftUid || !draft?.draftFolder) return
-  try {
-    await invoke('mail_discard_draft', {
-      accountId: draft.accountId,
-      folder: draft.draftFolder,
-      uid: draft.draftUid,
-    })
-  } catch (err) {
-    logger.warn('删除源草稿失败', err)
+/**
+ * 写回 / 发送成功后，把这条内容在草稿箱里的旧样子清掉。
+ *
+ * 两个来源：
+ * - `draftUid` / `draftFolder`：这封是从草稿箱续写的，原稿不能留；
+ * - `mailboxDraft`：编辑器自动保存的那份，留着就会和最终版本重复。
+ */
+async function discardDraftsOf(draft) {
+  if (!draft) return
+  const targets = []
+  if (draft.draftUid && draft.draftFolder) {
+    targets.push({ folder: draft.draftFolder, uid: draft.draftUid })
+  }
+  const auto = draft.mailboxDraft
+  if (auto?.uid && auto?.folder) {
+    targets.push({ folder: auto.folder, uid: auto.uid })
+    draft.mailboxDraft = null
+  }
+  for (const target of targets) {
+    try {
+      await invoke('mail_discard_draft', {
+        accountId: draft.accountId,
+        folder: target.folder,
+        uid: target.uid,
+      })
+    } catch (err) {
+      logger.warn('删除草稿失败', err)
+    }
   }
 }
 

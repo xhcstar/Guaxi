@@ -7,8 +7,9 @@
  * 这里只做两件邮件特有的适配：
  * 1. **定位**：面板相对「阅读区 / 编辑区」定位，而不是相对视口，
  *    否则窗口滚动后浮动面板会飘到与选区无关的位置；
- * 2. **触发时机**：只对「非空选区 + 鼠标松开」响应，并且避免与右键菜单、
- *    表格拖拽冲突。
+ * 2. **触发时机**：只对「Alt + 划词」响应（与文字选择、摘录、表格拖选区分开）。
+ *    早期版本对所有非空选区都弹面板，结果是每松开一次鼠标就翻一次，
+ *    点面板上的「关闭」也会被紧接着的 mouseup 重新弹出来——看起来像关不掉、也拖不动。
  */
 import { computed, ref } from 'vue'
 import { useSelectionTranslate } from '../../../../composables/useSelectionTranslate'
@@ -75,13 +76,22 @@ export function useMailSelectionTranslate(getContainer) {
   }
 
   /**
-   * 内容区的 mouseup 处理器：有选区就翻译，没有就收起。
+   * 内容区的 mouseup 处理器：**按住 Alt 划词**才翻译。
    *
-   * 只在「鼠标松开」时触发，避免拖动选择的过程中反复弹面板。
+   * 普通拖选留给复制 / 摘录 / 表格选择——只要不是 Alt+划词，这里什么都不做，
+   * 面板也就不会被「松鼠标」这个动作反复弹出来（关掉之后又被弹回来，
+   * 拖到别处又被拉回选区，都是同一个原因）。按住 Alt 时面板正在拖动也一样：
+   * 拖动过程中鼠标松开会经过本函数，但此时没有新的选区，不会重译。
    */
   function handleMouseUp(event) {
     // 右键 / 中键不触发
     if (event?.button !== 0) return
+    // 面板自己的点击（关闭 / 拖动 / 选语言）不参与取词。
+    if (event?.target?.closest?.('.guaxi-selection-translate-panel')) return
+    if (!event?.altKey) return
+    // 只认容器内的划词：工具栏、地址栏、列表上的选择不该翻译。
+    const container = typeof getContainer === 'function' ? getContainer() : getContainer
+    if (container && event.target instanceof Node && !container.contains(event.target)) return
     const selection = window.getSelection()
     const text = selection?.toString?.() || ''
     if (!text.trim() || text.trim().length < 1) {

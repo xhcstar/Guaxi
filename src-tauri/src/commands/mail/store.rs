@@ -661,28 +661,41 @@ pub fn touch_oauth_expires(id: &str, expires: i64) -> Result<(), String> {
     .map_err(|e| e.to_string())
 }
 
-pub fn delete_account(id: &str) -> Result<(), String> {
+/// 删除账户。
+///
+/// `delete_local_mail = true` 时连同本机缓存的邮件、正文、文件夹一起删掉
+/// （用户选择「不留任何痕迹」）；为 false 时只移除账户本身，
+/// 邮件数据留在库里——用户换回这台机器、或者只是暂时不想要这个账户时不会被误删。
+///
+/// 待发队列 / 离线队列里的条目无论如何都删：账户没了，这些操作永远投不出去。
+pub fn delete_account(id: &str, delete_local_mail: bool) -> Result<(), String> {
     let mut conn = open()?;
     let tx = conn.transaction().map_err(|e| e.to_string())?;
     tx.execute("DELETE FROM accounts WHERE id = ?1", params![id])
         .ok();
-    tx.execute("DELETE FROM folders WHERE account_id = ?1", params![id])
+    tx.execute("DELETE FROM outbox WHERE account_id = ?1", params![id])
         .ok();
-    if fts_available_conn(&tx) {
-        tx.execute(
-            "DELETE FROM messages_fts WHERE rowid IN
-             (SELECT rowid FROM messages WHERE account_id = ?1)",
-            params![id],
-        )
-        .ok();
+    if delete_local_mail {
+        // 检索索引必须先删：它是 messages 的外部内容表，跟着主表一起清。
+        if fts_available_conn(&tx) {
+            tx.execute(
+                "DELETE FROM messages_fts WHERE rowid IN
+                 (SELECT rowid FROM messages WHERE account_id = ?1)",
+                params![id],
+            )
+            .ok();
+        }
+        tx.execute("DELETE FROM messages WHERE account_id = ?1", params![id])
+            .ok();
+        tx.execute("DELETE FROM message_bodies WHERE account_id = ?1", params![id])
+            .ok();
+        tx.execute("DELETE FROM pop3_uids WHERE account_id = ?1", params![id])
+            .ok();
+        tx.execute("DELETE FROM folders WHERE account_id = ?1", params![id])
+            .ok();
     }
-    tx.execute("DELETE FROM messages WHERE account_id = ?1", params![id])
-        .ok();
-    tx.execute("DELETE FROM message_bodies WHERE account_id = ?1", params![id])
-        .ok();
-    tx.execute("DELETE FROM pop3_uids WHERE account_id = ?1", params![id])
-        .ok();
     tx.commit().map_err(|e| e.to_string())?;
+    let _ = super::offline::delete_account_queue(id);
     Ok(())
 }
 

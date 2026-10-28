@@ -326,3 +326,67 @@ test('近白灰底（#f5f5f7 / #fafafa）在暗色下透出纸面，不再叠成
   assert.equal(white.style.backgroundColor, 'transparent', '#ffffff 应透出纸面')
   assert.notEqual(beige.style.backgroundColor, 'transparent', '有色浅底仍要映射成表面')
 })
+
+test('写信区：引用卡片用同一套映射，序列化前能还原成邮件原值', async () => {
+  const { applyBodyThemeToElements } = await import(
+    '../src/components/ApplicationViewComponent/apps/mail/colors.js'
+  )
+  // 引用原文是发件人按浅色纸面写的：白卡片 + 深色字。放进深色编辑器里就是
+  // 一整块白底浅字（新窗口看起来和阅读区完全不一样）。
+  const makeEl = (style) => {
+    const attrs = new Map()
+    const store = { ...style }
+    return {
+      style: {
+        get backgroundColor() {
+          return store.backgroundColor || ''
+        },
+        set backgroundColor(v) {
+          store.backgroundColor = v
+        },
+        get backgroundImage() {
+          return store.backgroundImage || ''
+        },
+        set backgroundImage(v) {
+          store.backgroundImage = v
+        },
+        get color() {
+          return store.color || ''
+        },
+        set color(v) {
+          store.color = v
+        },
+        removeProperty(name) {
+          if (name === 'background-color') delete store.backgroundColor
+          if (name === 'background-image') delete store.backgroundImage
+          if (name === 'color') delete store.color
+        },
+      },
+      hasAttribute: (k) => attrs.has(k),
+      getAttribute: (k) => (attrs.has(k) ? attrs.get(k) : null),
+      setAttribute: (k, v) => attrs.set(k, String(v)),
+      removeAttribute: (k) => attrs.delete(k),
+      classList: { contains: () => false },
+      parentElement: null,
+    }
+  }
+  const card = makeEl({ backgroundColor: 'rgba(127, 127, 127, 0.07)' })
+  const whiteBody = makeEl({ backgroundColor: '#ffffff' })
+  const darkText = makeEl({ color: '#222222' })
+  const elements = [card, whiteBody, darkText]
+  globalThis.getComputedStyle = (el) => ({
+    backgroundColor: el.style.backgroundColor || 'rgba(0, 0, 0, 0)',
+    backgroundImage: 'none',
+    color: '',
+  })
+
+  applyBodyThemeToElements(elements, 'dark')
+  assert.equal(whiteBody.style.backgroundColor, 'transparent', '白底要透出深色编辑区')
+  assert.ok(luminance(parseCssColor(darkText.style.color)) > 0.5, '深色字要提亮')
+
+  // 序列化草稿 / 发送前必须还原：收件端看到的还是原邮件的配色。
+  applyBodyThemeToElements(elements, 'light')
+  assert.equal(whiteBody.style.backgroundColor, '#ffffff')
+  assert.equal(darkText.style.color, '#222222')
+  assert.equal(card.style.backgroundColor, 'rgba(127, 127, 127, 0.07)')
+})

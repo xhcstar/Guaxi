@@ -301,16 +301,27 @@ export const useMailStore = defineStore('mail', {
       return saved
     },
 
-    async deleteAccount(id) {
-      await invoke('mail_delete_account', { accountId: id })
+    /**
+     * 删除账户。
+     *
+     * `deleteLocalMail` 由用户在确认框里选：勾上就连本机缓存的邮件 / 正文 /
+     * 附件缓存 / 草稿一起清掉（「不留任何痕迹」），否则只移除账户本身。
+     */
+    async deleteAccount(id, { deleteLocalMail = true } = {}) {
+      await invoke('mail_delete_account', { accountId: id, deleteLocalMail })
+      const wasActive = this.activeAccountId === id
       this.accounts = this.accounts.filter((a) => a.id !== id)
       delete this.foldersByAccount[id]
       delete this.unread[id]
-      if (this.activeAccountId === id) {
+      // 这一页的列表里可能混着该账户的行：先摘掉，再把当前账户的信重新拉一次。
+      this.messages = this.messages.filter((m) => m.accountId !== id)
+      if (wasActive) {
         this.activeAccountId = this.accounts[0]?.id || null
-        this.messages = []
         this.detail = null
+        this.thread = []
         this.selected = null
+        this.messages = []
+        await this.loadMessages({ silent: true }).catch(() => {})
       }
     },
 
@@ -1471,6 +1482,8 @@ export const useMailStore = defineStore('mail', {
             saveToSent: true,
           },
         })
+        // 最终草稿已经写进草稿箱：编辑器自动保存的那份就没用了。
+        await this._discardMailboxDraft(draft)
         await this.loadFolders(draft.accountId).catch(() => {})
         await this.reloadUnread()
       } catch (error) {
@@ -1516,6 +1529,7 @@ export const useMailStore = defineStore('mail', {
         const item = await invoke('mail_queue_send', { request, sendAt })
         this.outbox.push(item)
         await this._discardSourceDraft(this.composing)
+        await this._discardMailboxDraft(this.composing)
         this.composing = null
         await this.refreshConnection().catch(() => {})
         await this.loadOutbox().catch(() => {})
@@ -1525,8 +1539,10 @@ export const useMailStore = defineStore('mail', {
       const sourceDraft = this.composing
       await invoke('mail_send', { request })
       this.composing = null
-      // 续写自草稿：发出去之后旧草稿就没用了，删掉它。
+      // 续写自草稿 / 自动保存过草稿：发出去之后那两份就没用了，删掉，
+      // 否则草稿箱里会留着一封「已经发过的信」。
       await this._discardSourceDraft(sourceDraft)
+      await this._discardMailboxDraft(sourceDraft)
       return { sent: true }
     },
 
@@ -1542,6 +1558,28 @@ export const useMailStore = defineStore('mail', {
         })
       } catch (error) {
         logger.warn('删除旧草稿失败', error)
+      }
+    },
+
+    /**
+     * 删掉编辑器自动保存的那份草稿。
+     *
+     * 编辑器每 15 秒把当前内容写进草稿箱（`draft.mailboxDraft`）；关闭 / 发送时
+     * 又会写一份最终版本，所以这份「自动草稿」要一起清掉，否则每次写信都会在
+     * 草稿箱里留下两封一模一样的信。
+     */
+    async _discardMailboxDraft(draft) {
+      const saved = draft?.mailboxDraft
+      if (!saved?.uid || !saved?.folder) return
+      draft.mailboxDraft = null
+      try {
+        await invoke('mail_discard_draft', {
+          accountId: draft.accountId,
+          folder: saved.folder,
+          uid: saved.uid,
+        })
+      } catch (error) {
+        logger.warn('删除自动保存的草稿失败', error)
       }
     },
 
@@ -1570,6 +1608,7 @@ export const useMailStore = defineStore('mail', {
       await invoke('mail_save_draft', { request })
       // 先存新的再删旧的：顺序反过来，一旦新草稿保存失败就会把原稿也弄丢。
       await this._discardSourceDraft(sourceDraft)
+      await this._discardMailboxDraft(sourceDraft)
       this.composing = null
       await this.loadFolders(request.accountId).catch(() => {})
       await this.reloadUnread()
@@ -1580,9 +1619,9 @@ export const useMailStore = defineStore('mail', {
      *
      * 与 `saveDraft()` 的区别：后者是「保存草稿并关窗」的用户动作，
      * 会清空 composing；这里每 15 秒跑一次，必须保持编辑器原样。
-     * 也没有"先删旧草稿"：IMAP 草稿没有覆盖语义，删了再写一旦失败就丢内容；
-     * 旧的那份留在草稿箱里，用户下次打开时会看到多封同名草稿——
-     * 这比丢内容好得多，且由 `_dedupeDrafts` 在下一次打开时合并。
+     *
+     * 返回 `{ folder, uid }`（后端给出）：编辑器记着它，下一次自动保存先把上一份
+     * 删掉再写，草稿箱里始终只有一封「当前进度」。
      */
     async autoSaveDraft(request) {
       if (!request) return null
@@ -1713,6 +1752,8 @@ function buildCompose(mode, source, account, settings) {
     references: null,
     showCc: false,
     showBcc: false,
+    // 编辑器自动保存进草稿箱的那一份（uid + folder）：关闭 / 发送时把它替换掉。
+    mailboxDraft: null,
   }
   if (!source) return base
 

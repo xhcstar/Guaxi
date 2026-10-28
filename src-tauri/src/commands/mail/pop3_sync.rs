@@ -310,17 +310,20 @@ fn refresh_inbox_counts(account: &Account) -> Result<(), String> {
 }
 
 /// 保存草稿到本地 `Drafts`。POP3 没有服务器端草稿箱（也没有 APPEND）。
-pub fn save_draft_copy(account: &Account, raw: &[u8]) -> Result<(), String> {
+pub fn save_draft_copy(account: &Account, raw: &[u8]) -> Result<u32, String> {
     save_copy_to(account, "Drafts", raw, false)
 }
 
 /// 把一份原始报文写成本地文件夹里的一封邮件。发件箱暂存、已发送副本、草稿共用。
+///
+/// 返回写进本地库的 uid：编辑器靠它把「同一份草稿的上一版」替换掉，
+/// 不再每 15 秒往草稿箱里追加一封。
 pub fn save_copy_to(
     account: &Account,
     folder: &str,
     raw: &[u8],
     outgoing: bool,
-) -> Result<(), String> {
+) -> Result<u32, String> {
     let parsed = mime::parse(raw, true).ok_or("无法解析刚保存的报文")?;
     // 文件夹可能还没入库（新账户第一次往发件箱里放东西）：先补一条再写邮件。
     if !store::list_folders(&account.id)?.iter().any(|f| f.name == folder) {
@@ -381,12 +384,12 @@ pub fn save_copy_to(
     // 本地生成的邮件（已发送 / 草稿 / 发件箱）没有服务器可以回查，原文就在这里，
     // 顺手缓存：打开附件、另存 .eml 都不必再走网络（本地邮件本来也没有网络路径）。
     store::cache_raw_body(&account.id, folder, uid, raw).ok();
-    Ok(())
+    Ok(uid)
 }
 
 /// 发信成功后保存「已发送」副本。POP3 没有服务器端的已发送文件夹，
 /// 这一份只能落在本地库的 `Sent` 下。
-pub fn save_sent_copy(account: &Account, raw: &[u8]) -> Result<(), String> {
+pub fn save_sent_copy(account: &Account, raw: &[u8]) -> Result<u32, String> {
     save_copy_to(account, "Sent", raw, true)
 }
 

@@ -170,6 +170,17 @@ pub fn remove(id: &str) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+/// 删除账户时一并清掉它的离线操作：账户没了，这些操作再也投不出去。
+pub fn delete_account_queue(account_id: &str) -> Result<usize, String> {
+    init_table()?;
+    let conn = conn()?;
+    conn.execute(
+        "DELETE FROM offline_queue WHERE account_id=?1",
+        params![account_id],
+    )
+    .map_err(|e| e.to_string())
+}
+
 
 pub fn count(account_id: &str) -> Result<i64, String> {
     init_table()?;

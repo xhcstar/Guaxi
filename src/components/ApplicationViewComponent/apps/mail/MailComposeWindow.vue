@@ -16,6 +16,7 @@
       :undo-seconds="Number(settings.undoSendSeconds) || 0"
       :templates="templates"
       :attachment-checks="attachmentChecks"
+      :save-mailbox-draft="saveDraftToMailbox"
       embedded
       @update="patchDraft"
       @send="onSend"
@@ -41,6 +42,7 @@ import {
   loading,
   patchDraft,
   saveDraft,
+  saveDraftToMailbox,
   sendDraft,
   settings as windowSettings,
   templates as windowTemplates,

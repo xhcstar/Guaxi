@@ -211,11 +211,11 @@
                 :undo-seconds="settings.undoSendSeconds"
                 :templates="store.templates"
                 :attachment-checks="attachmentChecks"
+                :save-mailbox-draft="onAutoSaveToMailbox"
                 @update="(patch) => Object.assign(store.composing, patch)"
                 @send="onSend"
                 @schedule="onScheduleSend"
                 @save-draft="onSaveDraft"
-                @save-to-mailbox="onAutoSaveToMailbox"
                 @apply-template="(tpl) => store.applyTemplate(tpl)"
                 @check-attachments="onCheckAttachments"
                 @close="store.closeCompose"
@@ -247,11 +247,11 @@
       :undo-seconds="settings.undoSendSeconds"
       :templates="store.templates"
       :attachment-checks="attachmentChecks"
+      :save-mailbox-draft="onAutoSaveToMailbox"
       @update="(patch) => Object.assign(store.composing, patch)"
       @send="onSend"
       @schedule="onScheduleSend"
       @save-draft="onSaveDraft"
-      @save-to-mailbox="onAutoSaveToMailbox"
       @apply-template="(tpl) => store.applyTemplate(tpl)"
       @check-attachments="onCheckAttachments"
       @close="store.closeCompose"
@@ -442,6 +442,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { useMailStore } from '../../../stores/mailStore'
 import { groupRecipientToken } from '../../../stores/contactsStore'
+import { createLogger } from '../../../utils/logger'
 import { avatarSeed, densityMetrics, monoFontStack, readingFontStack, themeToStyle } from './mail/theme'
 import { SHORTCUT_LIST, useMailShortcuts } from './mail/useMailShortcuts'
 import MailToolbar from './mail/MailToolbar.vue'
@@ -455,6 +456,7 @@ import ContactsDialog from './mail/ContactsDialog.vue'
 import MailSettingsDrawer from './mail/MailSettingsDrawer.vue'
 
 const store = useMailStore()
+const logger = createLogger('MailApp')
 
 const showAccounts = ref(false)
 const showRules = ref(false)
@@ -946,12 +948,40 @@ async function onOpenMessage(row) {
   if (settings.value.listCollapsed) {
     store.saveSettings({ listCollapsed: false }).catch(() => {})
   }
+  // 草稿：点开就是继续写。以前点开的是只读预览，用户没法改完再发，
+  // 只能自己再新建一封把内容抄一遍。
+  if (isDraftRow(row)) {
+    await resumeDraft(row)
+    return
+  }
   // 聚合行：整个会话按封展开成独立卡片，而不是只打开最新一封再靠正文里的引用块。
   if (row?.threadUids?.length > 1) {
     await store.openThread(row)
     return
   }
   await store.openMessage(row)
+}
+
+/** 这一行是不是草稿箱里的草稿（按账户的文件夹角色判断，不依赖报文里的 Draft 标记）。 */
+function isDraftRow(row) {
+  if (!row?.accountId) return false
+  const folders = store.foldersByAccount[row.accountId] || []
+  return folders.some((folder) => folder.name === row.folder && folder.role === 'drafts')
+}
+
+/** 续写草稿：取回正文与收件人，交给独立写信窗口（与「写邮件」一致）。 */
+async function resumeDraft(row) {
+  await store.resumeDraft(row)
+  if (!store.composing) {
+    notify(store.lastError || '没能读取这封草稿，请检查账户连接', true)
+    return
+  }
+  composeOpensInWindow.value = true
+  openComposeInWindow(composeIdFor('resume', row))
+    .catch(() => {})
+    .finally(() => {
+      composeOpensInWindow.value = false
+    })
 }
 
 /** 点开会话聚合行时，先展开整个会话。 */
@@ -1559,16 +1589,21 @@ async function sendNow() {
  *
  * 与「保存草稿」按钮的区别是**不弹提示**——它每 15 秒跑一次，弹提示会刷屏。
  * 失败也只记日志：下一轮还会重试，断了提示反而打扰正在写信的人。
+ *
+ * 返回值是后端给出的 `{ folder, uid }`：编辑器记下它，下一次保存才能把上一份
+ * 替换掉而不是再追加一封。这里不能依赖 `store.composing`——关闭编辑器的瞬间
+ * 它已经是 null 了，而最后那次保存仍然要能落库。
  */
 let autoSaveInflight = false
 
 async function onAutoSaveToMailbox(request) {
-  if (!store.composing || autoSaveInflight) return
+  if (!request || autoSaveInflight) return null
   autoSaveInflight = true
   try {
-    await store.autoSaveDraft(request)
+    return await store.autoSaveDraft(request)
   } catch (error) {
     logger.warn('自动保存草稿失败', error)
+    return null
   } finally {
     autoSaveInflight = false
   }
@@ -1615,9 +1650,9 @@ async function onSaveAccount(account, secret, { closeAfter = true, oauthPending 
   }
 }
 
-async function onAccountDeleted(id) {
-  await store.deleteAccount(id)
-  notify('账户已删除')
+async function onAccountDeleted(id, deleteLocalMail = true) {
+  await store.deleteAccount(id, { deleteLocalMail })
+  notify(deleteLocalMail ? '账户已删除，本机邮件已一并清空' : '账户已删除，本机邮件仍保留')
 }
 
 async function onTestAccount(account, secret) {

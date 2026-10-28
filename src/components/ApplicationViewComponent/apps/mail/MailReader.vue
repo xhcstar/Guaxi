@@ -204,7 +204,7 @@
       <div
         ref="scrollRef"
         class="mail-reader-scroll"
-        @mouseup="selectionTranslate.handleMouseUp($event)"
+        @mouseup="onReaderMouseUp"
       >
         <!-- 内联回复卡片：占满一屏正文高度，原文/历史卡片在它下面，滚动查看。 -->
         <slot name="inline-composer" />
@@ -466,6 +466,17 @@ const scrollRef = ref(null)
  * 列表 / 工具栏上的划选不该触发翻译。
  */
 const selectionTranslate = useMailSelectionTranslate(() => scrollRef.value)
+
+/**
+ * 阅读区的 Alt+划词翻译。
+ *
+ * 内联回复卡片就在这个滚动容器里，而它有自己的取词范围：这里放行，
+ * 否则同一次划词会同时弹出两个翻译面板。
+ */
+function onReaderMouseUp(event) {
+  if (event.target?.closest?.('.mail-inline-composer')) return
+  selectionTranslate.handleMouseUp(event)
+}
 
 /**
  * 暗色纸面上，邮件里写死的颜色要逐元素映射（浅底→深表面、深字→浅字）。
