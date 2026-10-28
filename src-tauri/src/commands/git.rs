@@ -650,10 +650,13 @@ pub async fn get_git_status(path: String) -> Result<Vec<GitChange>, String> {
                             lines_modified = all.into_iter().collect();
 
                             // 设计说明：开启 ignore_whitespace_eol 后，纯 CRLF/LF 差异的文件会得到空的行级
-                            // 差异。纯修改（M）此时直接跳过，避免出现假修改标记；但纯移动（R，内容未变）
-                            // 仍是有意义的一条变更，必须保留，不能因为行级为空就丢弃。
+                            // 差异。纯修改（M）此时直接跳过，避免出现假修改标记；但二进制文件同样没有
+                            // 行级差异，却必须在列表里显示，否则修改过的图片/压缩包会凭空消失。
                             if status == "M" && lines_modified.is_empty() {
-                                return Ok(());
+                                let abs = repo_root.join(Path::new(new_path));
+                                if !is_binary_file(&abs) {
+                                    return Ok(());
+                                }
                             }
                         } else if status == "A" {
                             lines_added = a;
@@ -3325,6 +3328,9 @@ pub struct GitFileDiffPayload {
     modified: String,
     language: String,
     hunks: Vec<GitDiffHunk>,
+    // 二进制文件不做文本 diff，前端据此展示占位提示而不是报错。
+    #[serde(default)]
+    binary: bool,
 }
 
 fn git_index_tree(repo: &Repository) -> Result<Tree<'_>, String> {
@@ -3340,11 +3346,43 @@ fn git_index_tree(repo: &Repository) -> Result<Tree<'_>, String> {
 
 /// 直接从索引的 stage 0 条目读内容。
 /// 合并冲突时整个索引不能写成 tree，但只要目标文件本身已解决，stage 0 仍然可用。
-fn read_index_file_content(repo: &Repository, file_path: &Path) -> Option<String> {
+fn read_index_file_content(repo: &Repository, file_path: &Path) -> Option<(String, bool)> {
     let index = repo.index().ok()?;
     let entry = index.get_path(file_path, 0)?;
     let blob = repo.find_blob(entry.id).ok()?;
-    String::from_utf8(blob.content().to_vec()).ok()
+    Some(decode_text_bytes(blob.content().to_vec()))
+}
+
+fn decode_text_bytes(bytes: Vec<u8>) -> (String, bool) {
+    if bytes.contains(&0) {
+        return (String::new(), true);
+    }
+    match String::from_utf8(bytes) {
+        Ok(text) => (text, false),
+        Err(_) => (String::new(), true),
+    }
+}
+
+/// 只看前 8KB，避免为了判断类型把整段视频/压缩包读进内存。
+/// 末尾被截断的多字节字符不算二进制（error_len() 为 None）。
+fn is_binary_file(path: &Path) -> bool {
+    use std::io::Read;
+
+    let Ok(mut file) = std::fs::File::open(path) else {
+        return false;
+    };
+    let mut buffer = [0u8; 8000];
+    let Ok(read) = file.read(&mut buffer) else {
+        return false;
+    };
+    let slice = &buffer[..read];
+    if slice.contains(&0) {
+        return true;
+    }
+    match std::str::from_utf8(slice) {
+        Ok(_) => false,
+        Err(error) => error.error_len().is_some(),
+    }
 }
 
 /// 从某个 tree（HEAD / 索引）里读出单文件内容。文件不存在时返回空串——
@@ -3353,17 +3391,16 @@ fn read_blob_at_tree(
     repo: &Repository,
     tree: &Tree<'_>,
     file_path: &Path,
-) -> Result<String, String> {
+) -> Result<(String, bool), String> {
     let entry = match tree.get_path(file_path) {
         Ok(entry) => entry,
-        Err(e) if e.code() == git2::ErrorCode::NotFound => return Ok(String::new()),
+        Err(e) if e.code() == git2::ErrorCode::NotFound => return Ok((String::new(), false)),
         Err(e) => return Err(format!("Failed to get file in revision: {}", e)),
     };
     let blob = repo
         .find_blob(entry.id())
         .map_err(|e| format!("Failed to find blob: {}", e))?;
-    String::from_utf8(blob.content().to_vec())
-        .map_err(|e| format!("Failed to convert blob content to UTF-8: {}", e))
+    Ok(decode_text_bytes(blob.content().to_vec()))
 }
 
 /// 把 libgit2 的 diff 切成和 `git diff --unified=0` 同构的 hunk 列表。
@@ -3425,27 +3462,27 @@ pub async fn get_git_file_diff(
         let index_tree = git_index_tree(&repo).ok();
         let index = repo.index().ok();
 
-        let (original, modified) = if staged {
+        let (original, original_binary, modified, modified_binary) = if staged {
             // 已暂存：HEAD -> 索引
-            let original = match &head_tree {
+            let (original, original_binary) = match &head_tree {
                 Some(tree) => read_blob_at_tree(&repo, tree, original_target)?,
-                None => String::new(),
+                None => (String::new(), false),
             };
-            let modified = match &index_tree {
+            let (modified, modified_binary) = match &index_tree {
                 Some(tree) => read_blob_at_tree(&repo, tree, target)?,
-                None => read_index_file_content(&repo, target).unwrap_or_default(),
+                None => read_index_file_content(&repo, target).unwrap_or((String::new(), false)),
             };
-            (original, modified)
+            (original, original_binary, modified, modified_binary)
         } else {
             // 未暂存：索引 -> 工作区
-            let original = match &index_tree {
+            let (original, original_binary) = match &index_tree {
                 Some(tree) => read_blob_at_tree(&repo, tree, target)?,
-                None => read_index_file_content(&repo, target).unwrap_or_default(),
+                None => read_index_file_content(&repo, target).unwrap_or((String::new(), false)),
             };
             let full_path = repo_workdir_file_path(&repo, &path, target);
-            let modified = match std::fs::read_to_string(&full_path) {
-                Ok(v) => v,
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+            let (modified, modified_binary) = match std::fs::read(&full_path) {
+                Ok(bytes) => decode_text_bytes(bytes),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => (String::new(), false),
                 // 目录条目（嵌套仓库、子模块）在 Windows 上读会返回 ERROR_ACCESS_DENIED
                 // (os error 5)。这里没有可展示的文件内容，按空串处理，
                 // 别让整个 diff 视图变成一条"拒绝访问"报错。
@@ -3455,7 +3492,7 @@ pub async fn get_git_file_diff(
                         full_path.display(),
                         e
                     );
-                    String::new()
+                    (String::new(), false)
                 }
                 Err(e) => {
                     return Err(format!(
@@ -3465,8 +3502,9 @@ pub async fn get_git_file_diff(
                     ))
                 }
             };
-            (original, modified)
+            (original, original_binary, modified, modified_binary)
         };
+        let binary = original_binary || modified_binary;
 
         // hunk 直接由同一份 diff 切出来，不必再起 git 子进程。
         //
@@ -3518,6 +3556,7 @@ pub async fn get_git_file_diff(
             modified,
             language: language_hint_for_path(&normalized),
             hunks,
+            binary,
         })
     })
     .await
@@ -3819,8 +3858,8 @@ pub fn get_commit_file_diff(
                 let blob = repo
                     .find_blob(entry.id())
                     .map_err(|e| format!("无法找到blob: {}", e))?;
-                String::from_utf8(blob.content().to_vec())
-                    .map_err(|e| format!("文件内容解码失败: {}", e))
+                // 二进制文件没有文本差异；返回空串而不是报错，前端会按扩展名展示占位提示。
+                Ok(decode_text_bytes(blob.content().to_vec()).0)
             }
             None => Ok(String::new()), // 文件不存在返回空
         }

@@ -167,16 +167,28 @@
           </div>
         </div>
 
-        <!-- 提交区域：输入框在上，按钮拆成「提交 + 下拉」两段，行为对齐 VS Code。 -->
+        <!-- 提交区域：输入框在上，提交按钮拆成「提交 + 下拉」两段，行为对齐 VS Code。 -->
         <div class="commit-section">
-          <n-input
-            v-model:value="commitForm.message"
-            type="textarea"
-            placeholder="提交信息（Ctrl+Enter 提交）"
-            :autosize="{ minRows: 2, maxRows: 6 }"
-            class="commit-message-input"
-            @keydown="handleCommitKeydown"
-          />
+          <div class="commit-input-wrap">
+            <n-input
+              v-model:value="commitForm.message"
+              type="textarea"
+              :placeholder="commitPlaceholder"
+              :autosize="{ minRows: 2, maxRows: 6 }"
+              class="commit-message-input"
+              @keydown="handleCommitKeydown"
+            />
+            <n-dropdown
+              trigger="click"
+              placement="bottom-end"
+              :options="commitMenuOptions"
+              @select="handleCommitMenu"
+            >
+              <button class="commit-input-more" type="button" title="提交操作">
+                <Codicon name="ellipsis" />
+              </button>
+            </n-dropdown>
+          </div>
           <div class="commit-actions">
             <button
               class="commit-button"
@@ -184,12 +196,13 @@
               :disabled="!canCommit || gitLoading.commit"
               :title="conflictedFiles.length
                 ? '先解决合并冲突'
-                : (stagedFiles.length === 0 ? '先暂存要提交的文件' : '提交已暂存的更改（Ctrl+Enter）')"
+                : (!hasChanges
+                  ? '没有可提交的更改'
+                  : (stagedFiles.length === 0 ? '提交全部更改（Ctrl+Enter）' : '提交已暂存的更改（Ctrl+Enter）'))"
               @click="handleCommit()"
             >
               <Codicon name="check" />
               <span>{{ gitLoading.commit ? '提交中…' : '提交' }}</span>
-              <span v-if="stagedFiles.length" class="commit-button-count">{{ stagedFiles.length }}</span>
             </button>
             <n-dropdown
               trigger="click"
@@ -284,19 +297,6 @@
                       <button
                         class="section-icon-button"
                         type="button"
-                        :title="fileViewMode === 'tree' ? '切换为列表视图' : '切换为树形视图'"
-                        @click.stop="toggleFileViewMode"
-                      >
-                        <Codicon :name="fileViewMode === 'tree' ? 'list-flat' : 'list-tree'" />
-                      </button>
-                    </template>
-                    {{ fileViewMode === 'tree' ? '切换为列表视图' : '切换为树形视图' }}
-                  </n-tooltip>
-                  <n-tooltip trigger="hover">
-                    <template #trigger>
-                      <button
-                        class="section-icon-button"
-                        type="button"
                         @click.stop="handleStageAll"
                         :disabled="unstagedFiles.length === 0"
                       >
@@ -321,81 +321,59 @@
                 </div>
               </div>
               <div class="section-scroll">
-                <template v-for="row in unstagedRows" :key="row.key">
-                  <div
-                    v-if="row.type === 'folder'"
-                    class="git-folder-row"
-                    :style="{ paddingLeft: `${8 + row.depth * 12}px` }"
-                    @click="toggleFolder(row.path)"
-                  >
-                    <Codicon
-                      :name="isFolderCollapsed(row.path) ? 'chevron-right' : 'chevron-down'"
-                      class="git-folder-chevron"
-                    />
-                    <Codicon
-                      :name="isFolderCollapsed(row.path) ? 'folder' : 'folder-opened'"
-                      class="git-folder-icon"
-                    />
-                    <span class="git-folder-name">{{ row.name }}</span>
-                    <span class="git-folder-count">{{ row.count }}</span>
+                <div
+                  v-for="file in unstagedFiles"
+                  :key="file.path"
+                  class="git-file-row"
+                  @click="handleFileClick(file)"
+                >
+                  <div class="git-file-left">
+                    <Icon :icon="getFileIcon(file)" class="git-file-icon" />
+                    <n-tooltip trigger="hover">
+                      <template #trigger>
+                        <span class="git-file-label">
+                          <span class="git-file-name">{{ getFileBaseName(file.path) }}</span>
+                          <span v-if="getRenameHint(file)" class="git-file-rename">{{ getRenameHint(file) }}</span>
+                          <span v-else-if="getFileDirName(file.path)" class="git-file-dir">{{ getFileDirName(file.path) }}</span>
+                        </span>
+                      </template>
+                      {{ getFileDisplayTitle(file) }}
+                    </n-tooltip>
                   </div>
-                  <div
-                    v-else
-                    class="git-file-row"
-                    :style="{ paddingLeft: `${8 + row.depth * 12}px` }"
-                    @click="handleFileClick(row.file)"
-                  >
-                    <div class="git-file-left">
-                      <Icon :icon="getFileIcon(row.file)" class="git-file-icon" />
-                      <n-tooltip trigger="hover">
-                        <template #trigger>
-                          <span class="git-file-label">
-                            <span class="git-file-name">{{ getFileBaseName(row.file.path) }}</span>
-                            <span v-if="getRenameHint(row.file)" class="git-file-rename">{{ getRenameHint(row.file) }}</span>
-                            <span
-                              v-else-if="fileViewMode === 'list' && getFileDirName(row.file.path)"
-                              class="git-file-dir"
-                            >{{ getFileDirName(row.file.path) }}</span>
-                          </span>
-                        </template>
-                        {{ getFileDisplayTitle(row.file) }}
-                      </n-tooltip>
-                    </div>
-                    <div class="git-file-actions">
-                      <n-tooltip trigger="hover">
-                        <template #trigger>
-                          <button
-                            class="vscode-action-button"
-                            type="button"
-                            title="暂存"
-                            @click.stop="handleStageFile(row.file)"
-                            :disabled="isGitFileBusy(row.file.path)"
-                          >
-                            <Codicon name="add" />
-                          </button>
-                        </template>
-                        暂存
-                      </n-tooltip>
-                      <n-tooltip trigger="hover">
-                        <template #trigger>
-                          <button
-                            class="vscode-action-button"
-                            type="button"
-                            title="丢弃更改"
-                            @click.stop="handleDiscardFile(row.file)"
-                            :disabled="isGitFileBusy(row.file.path)"
-                          >
-                            <Codicon name="discard" />
-                          </button>
-                        </template>
-                        丢弃
-                      </n-tooltip>
-                    </div>
-                    <span class="git-file-status" :class="getStatusClass(row.file.status)">
-                      {{ getStatusLetter(row.file.status) }}
-                    </span>
+                  <div class="git-file-actions">
+                    <n-tooltip trigger="hover">
+                      <template #trigger>
+                        <button
+                          class="vscode-action-button"
+                          type="button"
+                          title="暂存"
+                          @click.stop="handleStageFile(file)"
+                          :disabled="isGitFileBusy(file.path)"
+                        >
+                          <Codicon name="add" />
+                        </button>
+                      </template>
+                      暂存
+                    </n-tooltip>
+                    <n-tooltip trigger="hover">
+                      <template #trigger>
+                        <button
+                          class="vscode-action-button"
+                          type="button"
+                          title="丢弃更改"
+                          @click.stop="handleDiscardFile(file)"
+                          :disabled="isGitFileBusy(file.path)"
+                        >
+                          <Codicon name="discard" />
+                        </button>
+                      </template>
+                      丢弃
+                    </n-tooltip>
                   </div>
-                </template>
+                  <span class="git-file-status" :class="getStatusClass(file.status)">
+                    {{ getStatusLetter(file.status) }}
+                  </span>
+                </div>
                 <div v-if="!unstagedFiles.length" class="git-list-empty">没有更改</div>
               </div>
             </div>
@@ -427,67 +405,45 @@
                 </div>
               </div>
               <div class="section-scroll">
-                <template v-for="row in stagedRows" :key="row.key">
-                  <div
-                    v-if="row.type === 'folder'"
-                    class="git-folder-row"
-                    :style="{ paddingLeft: `${8 + row.depth * 12}px` }"
-                    @click="toggleFolder(row.path)"
-                  >
-                    <Codicon
-                      :name="isFolderCollapsed(row.path) ? 'chevron-right' : 'chevron-down'"
-                      class="git-folder-chevron"
-                    />
-                    <Codicon
-                      :name="isFolderCollapsed(row.path) ? 'folder' : 'folder-opened'"
-                      class="git-folder-icon"
-                    />
-                    <span class="git-folder-name">{{ row.name }}</span>
-                    <span class="git-folder-count">{{ row.count }}</span>
+                <div
+                  v-for="file in stagedFiles"
+                  :key="file.path"
+                  class="git-file-row"
+                  @click="handleFileClick(file)"
+                >
+                  <div class="git-file-left">
+                    <Icon :icon="getFileIcon(file)" class="git-file-icon" />
+                    <n-tooltip trigger="hover">
+                      <template #trigger>
+                        <span class="git-file-label">
+                          <span class="git-file-name">{{ getFileBaseName(file.path) }}</span>
+                          <span v-if="getRenameHint(file)" class="git-file-rename">{{ getRenameHint(file) }}</span>
+                          <span v-else-if="getFileDirName(file.path)" class="git-file-dir">{{ getFileDirName(file.path) }}</span>
+                        </span>
+                      </template>
+                      {{ getFileDisplayTitle(file) }}
+                    </n-tooltip>
                   </div>
-                  <div
-                    v-else
-                    class="git-file-row"
-                    :style="{ paddingLeft: `${8 + row.depth * 12}px` }"
-                    @click="handleFileClick(row.file)"
-                  >
-                    <div class="git-file-left">
-                      <Icon :icon="getFileIcon(row.file)" class="git-file-icon" />
-                      <n-tooltip trigger="hover">
-                        <template #trigger>
-                          <span class="git-file-label">
-                            <span class="git-file-name">{{ getFileBaseName(row.file.path) }}</span>
-                            <span v-if="getRenameHint(row.file)" class="git-file-rename">{{ getRenameHint(row.file) }}</span>
-                            <span
-                              v-else-if="fileViewMode === 'list' && getFileDirName(row.file.path)"
-                              class="git-file-dir"
-                            >{{ getFileDirName(row.file.path) }}</span>
-                          </span>
-                        </template>
-                        {{ getFileDisplayTitle(row.file) }}
-                      </n-tooltip>
-                    </div>
-                    <div class="git-file-actions">
-                      <n-tooltip trigger="hover">
-                        <template #trigger>
-                          <button
-                            class="vscode-action-button"
-                            type="button"
-                            title="取消暂存"
-                            @click.stop="handleUnstageFile(row.file)"
-                            :disabled="isGitFileBusy(row.file.path)"
-                          >
-                            <Codicon name="remove" />
-                          </button>
-                        </template>
-                        取消暂存
-                      </n-tooltip>
-                    </div>
-                    <span class="git-file-status" :class="getStatusClass(row.file.status)">
-                      {{ getStatusLetter(row.file.status) }}
-                    </span>
+                  <div class="git-file-actions">
+                    <n-tooltip trigger="hover">
+                      <template #trigger>
+                        <button
+                          class="vscode-action-button"
+                          type="button"
+                          title="取消暂存"
+                          @click.stop="handleUnstageFile(file)"
+                          :disabled="isGitFileBusy(file.path)"
+                        >
+                          <Codicon name="remove" />
+                        </button>
+                      </template>
+                      取消暂存
+                    </n-tooltip>
                   </div>
-                </template>
+                  <span class="git-file-status" :class="getStatusClass(file.status)">
+                    {{ getStatusLetter(file.status) }}
+                  </span>
+                </div>
                 <div v-if="!stagedFiles.length" class="git-list-empty">没有已暂存的更改</div>
               </div>
             </div>
@@ -794,10 +750,9 @@
                 </template>
                 取消暂存
               </n-tooltip>
-              <n-tooltip trigger="hover">
+              <n-tooltip v-if="!selectedFile.staged" trigger="hover">
                 <template #trigger>
                   <button
-                    v-if="!selectedFile.staged"
                     class="vscode-action-button"
                     type="button"
                     title="丢弃更改"
@@ -842,9 +797,15 @@
       <!-- 文件差异或提交详情 -->
       <div class="content-viewer">
         <div v-if="selectedFile || selectedCommit" class="diff-viewer">
-          <div ref="diffEditorContainer" class="diff-editor-container"></div>
+          <div ref="diffEditorContainer" v-show="!diffBinary" class="diff-editor-container"></div>
+          <div v-if="diffBinary" class="binary-diff-notice">
+            <Codicon name="file-binary" class="binary-diff-icon" />
+            <div class="binary-diff-title">二进制文件</div>
+            <div class="binary-diff-desc">{{ selectedFile?.path }}</div>
+            <div class="binary-diff-hint">无法以文本形式显示差异；可以在外部应用中打开或直接暂存。</div>
+          </div>
           <div
-            v-if="selectedFile && !selectedCommit && diffHunkActionVisible"
+            v-if="selectedFile && !selectedCommit && !diffBinary && diffHunkActionVisible"
             class="diff-hunk-action"
             :style="{ top: `${diffHunkActionTop}px`, left: `${diffHunkActionLeft}px`, height: `${diffHunkActionHeight}px` }"
           >
@@ -1030,7 +991,6 @@ import {
   laneCenterX,
   LANE_WIDTH,
 } from './utils/gitCommitGraph'
-import { buildGitFileTreeRows } from './utils/gitFileTree'
 import { getFileTreeIcon } from './fileTreeIcons'
 import { ensureCodiconStyles } from '../../utils/codiconFont'
 import GitMergeEditor from './GitMergeEditor.vue'
@@ -1264,10 +1224,6 @@ const newBranchCheckout = ref(true)
 const showRenameBranchModal = ref(false)
 const renameBranchForm = ref({ oldName: '', newName: '' })
 
-// 文件列表视图：VS Code 默认按目录分组，这里也默认树形，可切回扁平列表。
-const fileViewMode = ref('tree')
-const collapsedFolders = ref(new Set())
-
 // 提交按钮右侧的下拉菜单 / 提交历史的右键菜单。
 const commitContextMenu = ref({ show: false, x: 0, y: 0, commit: null })
 const showTagModal = ref(false)
@@ -1304,6 +1260,8 @@ const diffLoading = ref({
   navigation: false,
   hunk: false
 });
+// 二进制文件没有可展示的文本差异，用独立状态渲染占位提示。
+const diffBinary = ref(false);
 
 const diffHunkActionTop = ref(8)
 const diffHunkActionLeft = ref(8)
@@ -1418,19 +1376,37 @@ const getExtraRefs = (commit) => {
 
 // ───── VS Code 风格的列表 / 菜单 ───────────────────────────────
 
-const unstagedRows = computed(() => buildGitFileTreeRows(unstagedFiles.value, {
-  collapsed: collapsedFolders.value,
-  mode: fileViewMode.value,
-  prefix: 'work',
-}))
-
-const stagedRows = computed(() => buildGitFileTreeRows(stagedFiles.value, {
-  collapsed: collapsedFolders.value,
-  mode: fileViewMode.value,
-  prefix: 'staged',
-}))
-
 const getFileIcon = (file) => getFileTreeIcon(getFileBaseName(file?.path), false)
+
+// 提交历史里的二进制文件需要按扩展名提前拦下：后端读 blob 时拿不到文本，
+// 前端也不应该把它交给 Monaco。
+const BINARY_FILE_EXTENSIONS = new Set([
+  'png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'ico', 'tif', 'tiff',
+  'pdf', 'zip', 'gz', 'tgz', 'bz2', 'xz', '7z', 'rar', 'tar',
+  'mp3', 'wav', 'ogg', 'flac', 'm4a', 'aac',
+  'mp4', 'mkv', 'mov', 'avi', 'webm', 'wmv',
+  'woff', 'woff2', 'ttf', 'otf', 'eot',
+  'exe', 'dll', 'so', 'dylib', 'bin', 'wasm',
+  'docx', 'xlsx', 'pptx', 'epub',
+])
+
+const isLikelyBinaryPath = (filePath) => {
+  const name = String(filePath || '').replace(/\\/g, '/').split('/').pop() || ''
+  const dot = name.lastIndexOf('.')
+  if (dot < 0) return false
+  return BINARY_FILE_EXTENSIONS.has(name.slice(dot + 1).toLowerCase())
+}
+
+const showBinaryDiffPlaceholder = () => {
+  diffBinary.value = true
+  diffHunkActionVisible.value = false
+  if (diffEditor) {
+    const oldModel = diffEditor.getModel()
+    diffEditor.setModel(null)
+    oldModel?.original?.dispose?.()
+    oldModel?.modified?.dispose?.()
+  }
+}
 
 const getStatusLetter = (status) => {
   const normalized = normalizeGitStatus(status)
@@ -1438,22 +1414,19 @@ const getStatusLetter = (status) => {
   return normalized || ''
 }
 
-const toggleFileViewMode = () => {
-  fileViewMode.value = fileViewMode.value === 'tree' ? 'list' : 'tree'
-}
+const hasChanges = computed(() => (
+  stagedFiles.value.length > 0 || unstagedFiles.value.length > 0
+))
 
-const isFolderCollapsed = (path) => collapsedFolders.value.has(path)
-const toggleFolder = (path) => {
-  const next = new Set(collapsedFolders.value)
-  if (next.has(path)) next.delete(path)
-  else next.add(path)
-  collapsedFolders.value = next
-}
-
+// 对齐 VS Code：没有暂存文件时，提交按钮仍然可用，提交时会先暂存全部更改。
 const canCommit = computed(() => (
   !!commitForm.value.message.trim()
-  && stagedFiles.value.length > 0
+  && hasChanges.value
   && conflictedFiles.value.length === 0
+))
+
+const commitPlaceholder = computed(() => (
+  `提交信息（Ctrl+Enter 提交到 “${currentBranch.value || 'HEAD'}”）`
 ))
 
 const syncPending = computed(() => syncState.value.behind > 0 || syncState.value.ahead > 0)
@@ -1485,13 +1458,17 @@ const commitMenuOptions = computed(() => [
   {
     label: '提交已暂存的更改',
     key: 'commit',
-    disabled: !canCommit.value,
+    disabled: !commitForm.value.message.trim()
+      || stagedFiles.value.length === 0
+      || conflictedFiles.value.length > 0,
     icon: () => h(Codicon, { name: 'check' }),
   },
   {
     label: '提交全部更改',
     key: 'commit-all',
-    disabled: !commitForm.value.message.trim() || conflictedFiles.value.length > 0,
+    disabled: !commitForm.value.message.trim()
+      || !hasChanges.value
+      || conflictedFiles.value.length > 0,
     icon: () => h(Codicon, { name: 'check-all' }),
   },
   {
@@ -2408,6 +2385,7 @@ const getStatusTagType = (status) => {
 // 修改 selectCommit 函数
 const selectCommit = async (commit) => {
   logger.info('Selecting commit', { commitId: commit.id })
+  diffBinary.value = false
   try {
     // 如果点击的是已展开的提交，则收起
     if (expandedCommit.value?.id === commit.id) {
@@ -2459,8 +2437,13 @@ const handleCommitFileClick = async (file) => {
     filePath: file.path,
     status: file.status
   })
+  diffBinary.value = false
   try {
     selectedFile.value = file  // 只更新selectedFile，保留selectedCommit
+    if (isLikelyBinaryPath(file.path)) {
+      showBinaryDiffPlaceholder()
+      return
+    }
     diffLoading.value.file = true
 
     if (!isEditorInitialized.value) {
@@ -4312,8 +4295,19 @@ const updateFileDiff = async (file) => {
     const context = createDiffContext(filePath, isStagedDiff)
     diffFileDiffRequestId = requestId
     diffActiveContext = context
+    diffBinary.value = false
     clearDiffHunkCaches('file-diff-request-start', context)
     diffHunkActionVisible.value = false
+
+    // 图片/视频等按扩展名直接拦下，避免为了判断类型把整个文件读进内核。
+    if (isLikelyBinaryPath(filePath)) {
+      showBinaryDiffPlaceholder()
+      frontendLogger.info('[Diff] Binary file selected by extension; text diff skipped', {
+        filePath,
+        context: context.key,
+      })
+      return
+    }
 
     // 设计说明：重命名/移动时，原始（左）侧必须读“移动前旧路径”的内容，
     // 修改（右）侧读“移动后新路径”的内容。否则旧路径在新版本里已不存在，
@@ -4352,6 +4346,17 @@ const updateFileDiff = async (file) => {
 
     const originalContent = String(payload?.original ?? '')
     const modifiedContent = String(payload?.modified ?? '')
+
+    // 二进制文件没有可比较的文本：清掉旧模型，交给模板里的占位提示。
+    if (payload?.binary) {
+      showBinaryDiffPlaceholder()
+      clearDiffHunkCaches('file-diff-binary', context)
+      frontendLogger.info('[Diff] Binary file selected; text diff skipped', {
+        filePath,
+        context: context.key,
+      })
+      return
+    }
 
     const countLines = (value) => String(value || '').split(/\r\n|\r|\n/).length
     frontendLogger.info('[Diff] Loaded file contents for Monaco diff', {
@@ -4777,14 +4782,22 @@ const handleCommit = async ({ all = false, amend = false, push = false } = {}) =
     })
     return
   }
+  if (!amend && !hasChanges.value) {
+    notification.warning({ title: '没有可提交的更改', duration: 2000 })
+    return
+  }
 
   gitLoading.value.commit = true
   try {
+    // 对齐 VS Code：没有暂存任何文件时，直接提交会把全部更改加进索引后再提交。
+    if (!amend && (all || stagedFiles.value.length === 0)) {
+      await invoke('stage_all', { path: props.workspacePath })
+    }
     await invoke('git_commit', {
       path: props.workspacePath,
       message,
       amend: amend || null,
-      all: all || null,
+      all: null,
     })
     commitForm.value.message = ''
     await refreshGitAfterOperation({
@@ -4942,8 +4955,9 @@ watch(selectedFile, (newVal) => {
     nextTick(() => {
       updateFileDiff(newVal)
     })
-  } else if (!newVal && diffEditor) {
-    disposeDiffEditorInstance('selected-file-cleared')
+  } else if (!newVal) {
+    diffBinary.value = false
+    if (diffEditor) disposeDiffEditorInstance('selected-file-cleared')
   }
 })
 
@@ -5971,6 +5985,10 @@ onUnmounted(() => {
 }
 
 /* 提交信息输入框：去掉 Naive 默认的底部外边距，间距交给这里的 flex gap 管。 */
+.commit-input-wrap {
+  position: relative;
+}
+
 .commit-message-input {
   display: block;
   margin-bottom: 6px;
@@ -5979,6 +5997,33 @@ onUnmounted(() => {
 .commit-message-input :deep(.n-input__textarea-el) {
   font-size: 12.5px;
   line-height: 1.6;
+  padding-right: 26px;
+}
+
+/* VS Code 把提交操作菜单收在输入框右上角的省略号里。 */
+.commit-input-more {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--text-color-secondary);
+  cursor: pointer;
+  opacity: 0.75;
+}
+
+.commit-input-more:hover {
+  background-color: var(--hover-color);
+  color: var(--text-color);
+  opacity: 1;
 }
 
 /* 提交按钮：VS Code 的观感——整宽、实心主色、左侧带一个对勾图标。
@@ -6464,6 +6509,43 @@ body.git-panel-resizing * {
   align-items: center;
   justify-content: center;
   height: 100%;
+}
+
+.binary-diff-notice {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 0;
+  padding: 24px;
+  text-align: center;
+}
+
+.binary-diff-icon {
+  font-size: 28px;
+  color: var(--text-color-secondary);
+}
+
+.binary-diff-title {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.binary-diff-desc {
+  max-width: 70%;
+  font-size: 12px;
+  color: var(--text-color-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.binary-diff-hint {
+  font-size: 12px;
+  color: var(--text-color-secondary);
+  opacity: 0.8;
 }
 
 /* 差异对比视图样式 */
@@ -6975,45 +7057,7 @@ body.git-panel-resizing * {
   color: #d29922;
 }
 
-/* ───── 树形列表 / 状态字母 ───── */
-
-.git-folder-row {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  min-height: 22px;
-  padding-right: 8px;
-  font-size: 12px;
-  color: var(--text-color-secondary);
-  cursor: pointer;
-  user-select: none;
-}
-
-.git-folder-row:hover {
-  background-color: var(--hover-color);
-}
-
-.git-folder-chevron {
-  font-size: 12px;
-  opacity: 0.85;
-}
-
-.git-folder-icon {
-  font-size: 14px;
-  color: color-mix(in srgb, #4a9eff 75%, var(--text-color-secondary));
-}
-
-.git-folder-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.git-folder-count {
-  margin-left: auto;
-  font-size: 10.5px;
-  opacity: 0.65;
-}
+/* ───── 文件列表 / 状态字母 ───── */
 
 .git-file-icon {
   width: 16px;
