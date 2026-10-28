@@ -14,6 +14,15 @@ const logger = createLogger('MailStore')
 /** 正在同步的文件夹（`accountId:folder`），避免切来切去时并发拉同一个文件夹。 */
 const inflightFolderSyncs = new Set()
 
+/**
+ * 每个账户最近一次文件夹请求的序号。
+ *
+ * 刷新要走一次服务器 LIST，比读本地慢；新建文件夹后再触发刷新时，**先发**的那次
+ * 可能后到，把刚建好的目录又盖回旧列表——侧栏就会「出现 → 消失 → 又出现」。
+ * 只让最后一次请求写 state。
+ */
+const foldersRequestSeq = new Map()
+
 /** 操作后的计数校正：合并短时间内的多次操作，避免每次都打一轮完整 STATUS。 */
 const folderRefreshTimers = new Map()
 
@@ -370,10 +379,14 @@ export const useMailStore = defineStore('mail', {
     // ---------------- 文件夹 ----------------
 
     async loadFolders(accountId, { refresh = false } = {}) {
+      const seq = (foldersRequestSeq.get(accountId) || 0) + 1
+      foldersRequestSeq.set(accountId, seq)
       try {
         const folders = refresh
           ? await invoke('mail_refresh_folders', { accountId })
           : await invoke('mail_list_folders', { accountId })
+        // 更晚发出的请求已经回来了：这一份是旧数据，丢掉，别把新列表盖回去。
+        if (foldersRequestSeq.get(accountId) !== seq) return
         this.foldersByAccount = { ...this.foldersByAccount, [accountId]: folders || [] }
         const inbox = (folders || []).find((f) => f.role === 'inbox')
         if (inbox && accountId === this.activeAccountId && !this.activeFolder) {

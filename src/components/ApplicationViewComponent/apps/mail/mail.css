@@ -2101,38 +2101,71 @@
   color: var(--mail-accent);
 }
 
-/* 第二行工具：点选图片 / 光标停在表格里时出现。
-   与主工具栏同宽同底色，读起来是「同一个工具区多了几个选项」，
-   而不是突然从正文里长出来的浮层（浮层会挡住正在编辑的那几行）。 */
-.mail-compose-subbar {
+/* 图片 / 表格的浮动工具条：贴着选中的目标浮出，只放最常用的几项，其余收进右键菜单。
+   fixed 挂在视口上——占版面会把正文顶下去（原来那条第二行就是这个毛病），
+   绝对定位在编辑区里又会被它的 overflow 裁掉。 */
+.mail-edit-bar {
+  position: fixed;
+  z-index: 62;
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
-  gap: 4px;
-  padding: 5px 18px;
-  border-bottom: 1px solid var(--mail-border);
-  background: var(--mail-bg-sunken);
+  gap: 3px;
+  padding: 4px 8px;
+  border: 1px solid var(--mail-border-strong);
+  border-radius: 999px;
+  background: var(--mail-panel);
+  box-shadow: var(--mail-shadow);
 }
-.mail-subbar-label {
-  font-size: 11.5px;
+.mail-edit-bar-label {
+  padding-right: 4px;
   color: var(--mail-text-muted);
-  margin-right: 2px;
+  font-size: 11.5px;
+  white-space: nowrap;
 }
-.mail-subbar-slider {
+.mail-edit-bar-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 26px;
+  height: 26px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--mail-text-primary);
+  font: inherit;
+  font-size: 11.5px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.mail-edit-bar-btn:hover {
+  background: var(--mail-panel-hover);
+}
+.mail-edit-bar-btn.is-on {
+  background: var(--mail-accent-soft);
+  color: var(--mail-accent);
+}
+.mail-edit-bar-btn.is-danger {
+  color: var(--mail-danger);
+}
+.mail-edit-bar-sep {
+  width: 1px;
+  height: 18px;
+  margin: 0 3px;
+  background: var(--mail-border);
+}
+.mail-edit-bar-slider {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-size: 11.5px;
+  padding: 0 4px;
   color: var(--mail-text-secondary);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
 }
-.mail-subbar-slider input[type='range'] {
-  width: 110px;
+.mail-edit-bar-slider input[type='range'] {
+  width: 96px;
   accent-color: var(--mail-accent);
-}
-.mail-subbar-swatches {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
 }
 
 /* ---------- 颜色 / 表格的浮层 ---------- *
@@ -2283,18 +2316,34 @@
 /* ---------- 编辑器右键菜单 ---------- *
  * 与阅读区的右键菜单同一套视觉；因为挂在编辑区里（不是 body），可以直接用主题变量。 */
 .mail-editor-menu {
-  position: absolute;
-  z-index: 45;
+  /* fixed + 视口坐标：编辑区是 overflow 滚动容器，绝对定位的菜单要么被裁掉，
+     要么只能自己开滚动条。表格分支排成两栏后整张菜单一屏放得下，两个问题都没有。 */
+  position: fixed;
+  z-index: 63;
+  display: flex;
+  flex-direction: column;
   min-width: 172px;
-  max-height: 60vh;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  scrollbar-width: thin;
   padding: 4px;
   border: 1px solid var(--mail-border-strong);
   border-radius: 8px;
   background: var(--mail-panel);
   box-shadow: var(--mail-shadow);
+}
+.mail-editor-menu.is-columns {
+  flex-direction: row;
+  align-items: stretch;
+  min-width: 384px;
+}
+.mail-editor-menu-col {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 0;
+  min-width: 0;
+}
+.mail-editor-menu.is-columns .mail-editor-menu-col + .mail-editor-menu-col {
+  margin-left: 4px;
+  padding-left: 4px;
+  border-left: 1px solid var(--mail-border);
 }
 .mail-editor-menu-head {
   padding: 5px 10px 3px;
@@ -2361,6 +2410,19 @@
   color: var(--mail-text-secondary);
   font: inherit;
   font-size: 10.5px;
+  cursor: pointer;
+}
+
+/* 字号下拉：和工具栏里的字号框同一套观感，放在菜单里不占一整行。 */
+.mail-editor-menu-select {
+  height: 22px;
+  padding: 0 4px;
+  border: 1px solid var(--mail-border);
+  border-radius: 4px;
+  background: var(--mail-bg-sunken);
+  color: var(--mail-text-secondary);
+  font: inherit;
+  font-size: 11px;
   cursor: pointer;
 }
 .mail-editor-menu-chip:hover {
@@ -2486,7 +2548,7 @@
   min-height: 200px;
   display: flex;
   flex-direction: column;
-  /* 右键菜单按本区域左上角做绝对定位，所以这里必须是定位上下文。 */
+  /* 浮条与右键菜单是 fixed 定位（按视口算），这里只需保持内容自己的排版上下文。 */
   position: relative;
   /* 不设 max-height：窗口拉大 / 最大化时正文要跟着长，
      之前固定 46vh，最大化也还是那么高，等于白拉。 */
@@ -2770,11 +2832,28 @@
   color: var(--mail-accent);
 }
 
-.mail-row[draggable='true'] {
+/* 鼠标事件实现的拖拽：光标状态与「拖拽影子」。 */
+.mail-row {
   cursor: grab;
 }
-.mail-row.is-dragging {
-  opacity: 0.5;
+body.mail-dragging,
+body.mail-dragging * {
+  cursor: grabbing !important;
+  user-select: none !important;
+}
+.mail-drag-ghost {
+  position: fixed;
+  z-index: 80;
+  padding: 4px 10px;
+  border: 1px solid var(--mail-accent);
+  border-radius: 999px;
+  background: var(--mail-panel);
+  color: var(--mail-accent);
+  font-size: 11.5px;
+  line-height: 18px;
+  white-space: nowrap;
+  box-shadow: var(--mail-shadow);
+  pointer-events: none;
 }
 
 /* ---------- 全文翻译面板 ---------- */

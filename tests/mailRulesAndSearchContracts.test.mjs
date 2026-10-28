@@ -95,10 +95,9 @@ test('搜索：命中词在列表行与正文里高亮', () => {
 })
 
 test('拖拽：邮件行可以直接放到左侧文件夹上（含删除 / 垃圾）', () => {
-  assert.ok(/@drop\.prevent="onDrop\(entry\.folder\)"/.test(sidebar), '标准文件夹要接受放置')
-  assert.ok(/@drop\.prevent="onDrop\(folder\)"/.test(sidebar), '自建文件夹要接受放置')
-  assert.ok(/text\/x-guaxi-mail/.test(sidebar) && /function canAcceptDrop/.test(sidebar), '只接受邮件行的拖拽')
-  assert.ok(/\.mail-folder\.is-drop-target/.test(sidebar), '悬停中的落点要有视觉反馈')
+  assert.ok(/data-drop-folder/.test(sidebar), '标准文件夹与自建文件夹都要带可命中标记')
+  assert.ok(/mailDrag\.hoverFolder === (entry\.folder|folder)\.name/.test(sidebar), '悬停中的落点要有高亮')
+  assert.ok(/\.mail-folder\.is-drop-target/.test(css), '高亮样式要存在')
   assert.ok(/folder\?\.role === 'trash'/.test(mailApp) && /runBatch\('delete'/.test(mailApp), '放到「已删除」按删除处理')
   assert.ok(/folder\?\.role === 'junk'/.test(mailApp), '放到「垃圾邮件」按垃圾处理')
 })
@@ -110,13 +109,28 @@ test('编辑器：表格 / 图片样式只作用于自己插入的内容', () =>
     '表格样式只命中带标记的表格',
   )
   assert.ok(/data-guaxi-img/.test(css), '图片的块级排版只作用于插入的图片')
-  // 右键菜单要落在光标处：坐标必须相对菜单真正的定位父级（滚动容器）。
+  // 右键菜单挂在视口上（fixed）：编辑区是 overflow 滚动容器，绝对定位的菜单
+  // 要么被裁掉半截，要么只能自己开滚动条——两条都是用户明确不要的。
+  const composer = read('src/components/ApplicationViewComponent/apps/mail/MailComposer.vue')
   assert.ok(
-    /function contextMenuPosition[\s\S]{0,700}offsetParent/.test(
-      read('src/components/ApplicationViewComponent/apps/mail/MailComposer.vue'),
-    ),
-    '右键菜单定位应以定位父级为基准',
+    /function clampEditorMenu[\s\S]{0,900}window\.innerWidth/.test(composer),
+    '菜单要按视口夹位置，不能溢出屏幕',
   )
+  assert.ok(
+    /\.mail-editor-menu \{[\s\S]{0,220}position: fixed/.test(css),
+    '菜单应 fixed 定位，不受编辑区滚动容器裁切',
+  )
+  const menuBlock = css.slice(css.indexOf('.mail-editor-menu {'), css.indexOf('.mail-editor-menu-head'))
+  assert.ok(
+    !/max-height|overflow-y/.test(menuBlock),
+    '菜单不该靠滚动条装内容：表格分支用两栏排版放全',
+  )
+  assert.ok(/\.mail-editor-menu\.is-columns/.test(css), '表格菜单应有两栏排版的样式')
+  assert.ok(
+    !/mail-compose-subbar/.test(composer) && !/mail-compose-subbar/.test(css),
+    '图片/表格不该再占一整条第二行工具栏',
+  )
+  assert.ok(/const editBar = ref\(null\)/.test(composer), '图片/表格改为贴着目标浮出小工具条')
 })
 
 const { searchTokens, segments } = await import(

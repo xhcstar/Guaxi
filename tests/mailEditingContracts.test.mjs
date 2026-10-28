@@ -69,7 +69,7 @@ test('图片：能调宽度、能改位置、能删', () => {
     '位置用左右外边距实现，收件端也认',
   )
   assert.ok(/function removeSelectedImage/.test(composer), '应能直接从正文删图')
-  assert.ok(css.includes('.mail-compose-subbar'), '工具行要有样式')
+  assert.ok(css.includes('.mail-edit-bar'), '浮条要有样式（原来的第二行工具栏已合并掉）')
 })
 
 test('表格：工具行给出行列、样式与单元格内容工具', () => {

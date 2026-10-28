@@ -57,15 +57,20 @@ test('规则：保存后可立即对已有邮件执行，并支持「所有文�
   assert.ok(/role == "\*"/.test(rulesRs) || /=== "\*"/.test(rulesRs), '后端要认 * 这个通配')
 })
 
-test('拖拽：从行内文字起拖也要算「移动邮件」', () => {
-  assert.ok(/document\.body\.classList\.add\('mail-dragging'\)/.test(listPane), '拖拽开始要打标记')
-  assert.ok(/document\.body\.classList\.remove\('mail-dragging'\)/.test(listPane), '拖拽结束要清标记')
-  assert.ok(/function onDragEnd/.test(listPane) && /@dragend="onDragEnd"/.test(listPane), 'dragend 要经过清理入口')
-  assert.ok(
-    /classList\.contains\('mail-dragging'\)/.test(sidebar),
-    '侧栏要按标记判断（自定义类型在拖文字时不会出现）',
-  )
-  assert.ok(/@dragenter="onDragEnter/.test(sidebar), 'dragenter 也要接受')
+test('拖拽：不依赖 webview 的原生拖放，用鼠标事件自己实现', () => {
+  // 前两轮分别修过 dataTransfer 类型与 body 标记，都没解决：Windows 上 Tauri 的
+  // webview 接管了原生拖放，页面里的 dragstart / drop 收不到。这里改成自己跟踪
+  // mousedown → mousemove → mouseup，落点用坐标命中测试。
+  assert.ok(/import \{ mailDrag, resetMailDrag \} from '\.\/mailDragState'/.test(listPane), '拖拽状态要走共享模块')
+  assert.ok(/const DRAG_THRESHOLD = 5/.test(listPane), '要有起拖阈值，避免手抖就挪邮件')
+  assert.ok(/function onRowMouseDown/.test(listPane) && /@mousedown="onRowMouseDown/.test(listPane), '按下时要记录起点')
+  assert.ok(/function onWindowMouseMove/.test(listPane), '要在窗口级跟踪移动')
+  assert.ok(/elementFromPoint/.test(listPane), '落点用坐标命中测试（不依赖任何拖放 API）')
+  assert.ok(/emit\('drop-on-folder', folder, rows\)/.test(listPane), '松手时把目标夹与这几封一起交上去')
+  assert.ok(!/dragstart=/.test(listPane), '不要再挂 HTML5 dragstart')
+  assert.ok(/data-drop-folder/.test(sidebar) && /mailDrag\.hoverFolder/.test(sidebar), '侧栏要按共享状态高亮落点')
+  assert.ok(/class="mail-drag-ghost"/.test(listPane), '拖动时要有跟着鼠标的影子')
+  assert.ok(/justDragged/.test(listPane), '拖完那一下不能顺手打开邮件')
 })
 
 test('顶栏：有打开本机 .eml 的入口', () => {

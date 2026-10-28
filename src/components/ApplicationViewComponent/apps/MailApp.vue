@@ -74,7 +74,6 @@
           @delete-folder="onDeleteFolder"
           @pin-folder="onPinFolder"
           @settings="showSettings = true"
-          @drop-on-folder="onDropOnFolder"
         />
 
         <!-- 栏边界：拖拽调宽；中间的小手柄点一下收起/展开。
@@ -146,8 +145,7 @@
           @select-all="store.selectAll"
           @clear-selection="store.clearSelection"
           @batch="onBatch"
-          @drag-start="onDragStart"
-          @drag-end="onDragEnd"
+          @drop-on-folder="onDropOnFolder"
           @load-more="store.loadMore"
           @delete="onDeleteRow"
         />
@@ -1530,19 +1528,7 @@ const moveTargets = computed(() => {
   return (store.foldersByAccount[accountId] || []).filter((f) => f.selectable)
 })
 
-let draggingRows = []
-
-function onDragStart(row) {
-  // 拖的是已勾选的行 → 整批一起走；拖的是未勾选的行 → 只走这一封
-  // （与列表里放进 dataTransfer 的那份 payload 保持一致）。
-  const key = store.keyOf(row)
-  const selected = store.selectedKeys.includes(key) ? store.selectedRows() : []
-  draggingRows = selected.length ? selected : [row]
-}
-
-function onDragEnd() {
-  draggingRows = []
-}
+/** 列表行拖拽的完成动作（拖拽本身在 MailListPane / mailDragState 里）。 */
 
 /** 列表动作条发出的批量命令。 */
 async function onBatch(action, target) {
@@ -1564,10 +1550,9 @@ async function onBatch(action, target) {
  * 侧栏只显示当前账户的文件夹，所以跨账户拖拽（只在「全部邮件」聚合视图里可能出现）
  * 要把不属于这个账户的行剔除，并如实告诉用户。
  */
-async function onDropOnFolder(folderName) {
-  const source = store.selectedRows()
-  const rows = draggingRows.length ? draggingRows : source
-  draggingRows = []
+async function onDropOnFolder(folderName, dropped = null) {
+  // 列表把「这一拖带的是哪几封」直接给过来；没有 rows 时退回当前勾选的集合。
+  const rows = dropped?.length ? dropped : store.selectedRows()
   if (!rows.length) return
   const accountId = rows[0].accountId
   const folder = (store.foldersByAccount[accountId] || []).find((f) => f.name === folderName)

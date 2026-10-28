@@ -713,9 +713,10 @@ pub fn touch_account_sync(id: &str, at: i64) -> Result<(), String> {
 
 /// 用服务器返回的文件夹表替换本地表。
 ///
-/// `user_created` 是用户本地的判断（「这个目录是不是我自己建的」），服务器不知道，
-/// 所以刷新时必须从旧行里继承，否则每同步一次用户的标记就丢一次。
-/// 发件箱这类纯本地文件夹不会出现在服务器的列表里，要原样保留。
+/// `user_created` 是用户本地的判断（「这个目录是不是我自己建的 / 我要求保留在侧栏」），
+/// 服务器不知道，所以刷新时必须从旧行里继承，否则每同步一次用户的标记就丢一次。
+/// 发件箱这类纯本地文件夹、以及服务器这次没返回的自建文件夹，都要原样保留——
+/// 新建后第一轮 LIST 还看不到它是常态，抹掉就等于用户的文件夹自己消失了。
 pub fn replace_folders(account_id: &str, folders: &[MailFolder]) -> Result<(), String> {
     let mut conn = open()?;
     let tx = conn.transaction().map_err(|e| e.to_string())?;
@@ -737,14 +738,17 @@ pub fn replace_folders(account_id: &str, folders: &[MailFolder]) -> Result<(), S
             kept.insert(row.0, (row.1, row.2));
         }
     }
-    // 纯本地的文件夹（发件箱）不在服务器列表里：先取出来，等服务器结果写完再放回去。
-    let mut local_only_rows: Vec<MailFolder> = Vec::new();
+    // 纯本地的文件夹（发件箱）和用户自己建的文件夹都可能不在服务器这次的 LIST 里：
+    // 先取出来，等服务器结果写完再放回去。以前只保 `local_only`，于是「刚在服务器上
+    // 建好、还没来得及被 LIST 出来」的那一轮刷新就把用户新建的目录抹掉了——
+    // 用户看到的就是「新建文件夹过一会儿自己消失了」。
+    let mut kept_rows: Vec<MailFolder> = Vec::new();
     {
         let mut stmt = tx
             .prepare(
                 "SELECT account_id, name, display_name, delimiter, role, unread, total,
                         uid_validity, uid_next, selectable, local_only, user_created
-                 FROM folders WHERE account_id=?1 AND local_only=1",
+                 FROM folders WHERE account_id=?1 AND (local_only=1 OR user_created=1)",
             )
             .map_err(|e| e.to_string())?;
         let rows = stmt
@@ -766,13 +770,20 @@ pub fn replace_folders(account_id: &str, folders: &[MailFolder]) -> Result<(), S
             })
             .map_err(|e| e.to_string())?;
         for row in rows.flatten() {
-            local_only_rows.push(row);
+            kept_rows.push(row);
         }
     }
 
     tx.execute("DELETE FROM folders WHERE account_id = ?1", params![account_id])
         .ok();
-    for f in folders.iter().chain(local_only_rows.iter()) {
+    // 服务器这次真的返回了的，以服务器的数据为准（未读数、UID 有效性都更新了）；
+    // 只有服务器没返回的才把本地那份原样放回去。
+    let server_names: std::collections::HashSet<&str> =
+        folders.iter().map(|f| f.name.as_str()).collect();
+    let revived = kept_rows
+        .iter()
+        .filter(|f| !server_names.contains(f.name.as_str()));
+    for f in folders.iter().chain(revived) {
         let inherited = kept.get(&f.name).copied().unwrap_or((false, false));
         // 服务器同步带下来的文件夹：沿用旧的 user_created；新出现的按「没有标记」处理，
         // 由侧栏决定只展示用户自己建的那些。
@@ -2539,3 +2550,4 @@ mod tests {
         assert_eq!(escape_like("50%_off"), "50\\%\\_off");
     }
 }
+

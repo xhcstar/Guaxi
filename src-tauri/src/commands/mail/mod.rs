@@ -1017,7 +1017,9 @@ async fn refresh_folders_inner(account: &Account) -> Result<Vec<MailFolder>, Str
         .await
         .map_err(|e| format!("刷新文件夹任务失败: {e}"))??;
     store::replace_folders(&account.id, &folders)?;
-    Ok(folders)
+    // 返回落库后的完整表，而不是服务器这一次的 LIST 结果：`replace_folders` 会保留
+    // 服务器没返回的自建文件夹，只回服务器那份的话，前端每次刷新都会把它们抹掉。
+    store::list_folders(&account.id)
 }
 
 async fn sync_one(account: &Account, folder: &str) -> Result<usize, String> {

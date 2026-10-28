@@ -576,152 +576,6 @@
         </select>
       </div>
 
-      <!-- 选中正文里的图片 / 光标停在表格里时才出现的第二行工具：
-           图片给宽度与左右位置，表格给行列增删、样式预设与单元格内容工具。
-           它们和主工具栏同宽、同一个位置，不跟着选区飘——浮层一飘就会挡住正文。 -->
-      <div v-if="!sourceMode && selectedImage" class="mail-compose-subbar">
-        <span class="mail-subbar-label">图片</span>
-        <button
-          v-for="preset in IMAGE_WIDTHS"
-          :key="'iw-' + preset"
-          class="mail-chip"
-          :title="`图片宽度 ${preset}%`"
-          @mousedown.prevent="setImageWidth(preset)"
-        >
-          {{ preset }}%
-        </button>
-        <label class="mail-subbar-slider" title="拖动调整图片宽度">
-          <input
-            v-model.number="imageWidthPercent"
-            type="range"
-            min="10"
-            max="100"
-            step="5"
-            @input="applyImageSlider"
-            @change="commitImageWidth"
-          />
-          <span>{{ imageWidthPercent }}%</span>
-        </label>
-        <span class="mail-fmt-sep"></span>
-        <button
-          v-for="align in IMAGE_ALIGNMENTS"
-          :key="'ia-' + align.key"
-          class="mail-fmt-btn"
-          :class="{ 'is-on': imageAlign === align.key }"
-          :title="align.title"
-          :aria-label="align.title"
-          @mousedown.prevent="alignImage(align.key)"
-        >
-          <MailIcon :name="align.icon" :size="15" />
-        </button>
-        <button
-          class="mail-btn is-danger"
-          title="从正文里删除这张图片"
-          @mousedown.prevent
-          @click="removeSelectedImage"
-        >
-          删除图片
-        </button>
-      </div>
-
-      <div v-if="!sourceMode && tableTools" class="mail-compose-subbar">
-        <span class="mail-subbar-label">表格 {{ tableTools.rows }}×{{ tableTools.cols }}</span>
-        <button
-          v-for="item in TABLE_ROW_ACTIONS"
-          :key="'tr-' + item.action"
-          class="mail-chip"
-          :title="item.title"
-          @mousedown.prevent
-          @click="tableBarAction(item.action)"
-        >
-          {{ item.label }}
-        </button>
-        <span class="mail-fmt-sep"></span>
-        <button
-          v-for="style in TABLE_STYLES"
-          :key="'ts-' + style.key"
-          class="mail-chip"
-          :title="`表格样式：${style.label}`"
-          @mousedown.prevent
-          @click="tableBarAction('style', style.key)"
-        >
-          {{ style.label }}
-        </button>
-        <span class="mail-fmt-sep"></span>
-        <button
-          v-for="preset in TABLE_WIDTHS"
-          :key="'tw-' + preset.value"
-          class="mail-chip"
-          :title="preset.title"
-          @mousedown.prevent
-          @click="tableBarAction('tableWidth', preset.value)"
-        >
-          {{ preset.label }}
-        </button>
-        <span class="mail-fmt-sep"></span>
-        <button
-          v-for="align in TABLE_ALIGNMENTS"
-          :key="'ta-' + align.key"
-          class="mail-fmt-btn"
-          :title="align.title"
-          :aria-label="align.title"
-          @mousedown.prevent
-          @click="tableBarAction('tableAlign', align.key)"
-        >
-          <MailIcon :name="align.icon" :size="15" />
-        </button>
-        <span class="mail-fmt-sep"></span>
-        <span class="mail-subbar-label">单元格</span>
-        <button
-          v-for="align in CELL_ALIGNMENTS"
-          :key="'ca-' + align.key"
-          class="mail-fmt-btn"
-          :title="align.title"
-          :aria-label="align.title"
-          @mousedown.prevent
-          @click="tableBarAction(align.action)"
-        >
-          <MailIcon :name="align.icon" :size="15" />
-        </button>
-        <button
-          v-for="size in CELL_FONT_SIZES"
-          :key="'cf-' + size"
-          class="mail-chip"
-          :title="`单元格字号 ${size}px`"
-          @mousedown.prevent
-          @click="tableBarAction('cellFontSize', size)"
-        >
-          {{ size }}
-        </button>
-        <button
-          class="mail-chip"
-          title="单元格加粗"
-          @mousedown.prevent
-          @click="tableBarAction('cellBold')"
-        >
-          B
-        </button>
-        <span class="mail-subbar-swatches">
-          <button
-            v-for="color in CELL_FILLS"
-            :key="'cb-' + color"
-            class="mail-editor-menu-swatch"
-            :style="{ background: color }"
-            :title="`单元格填充 ${color}`"
-            @mousedown.prevent
-            @click="tableBarAction('cellFill', color)"
-          ></button>
-        </span>
-        <button
-          class="mail-btn is-danger"
-          title="删除整个表格"
-          @mousedown.prevent
-          @click="tableBarAction('tableDelete')"
-        >
-          删除表格
-        </button>
-      </div>
-
       <!-- 定时发送：预设几个常用时间，也可以选具体日期时间。 -->
       <div v-if="scheduleOpen" class="mail-schedule-panel">
         <div class="mail-schedule-presets">
@@ -808,86 +662,220 @@
         <button class="mail-btn" @click="closeFind">关闭</button>
       </div>
     </div>
+    <!-- 浮条与右键菜单留在邮件根节点内部：主题变量（--mail-*）挂在那个根节点上，
+         传送到 body 之后 var() 全部落空，菜单就成了「透明的」，字也看不清。
+         两者都是 fixed 定位，只要没有带 transform 的祖先就不会被编辑区裁掉。 -->
+    <!-- 选中图片 / 光标停在表格里时，贴着目标上沿浮出的一条小工具：只放最常用的
+         几项，其余收进右键菜单（Outlook 就是这个分工）。fixed 定位挂在视口上，
+         不占版面、也不会被编辑区的滚动容器裁掉。 -->
+    <div
+      v-if="editBar"
+      ref="editBarRef"
+      class="mail-edit-bar"
+      :style="{ left: `${editBar.x}px`, top: `${editBar.y}px` }"
+      @mousedown.prevent.stop
+    >
+      <template v-if="editBar.target === 'image'">
+        <span class="mail-edit-bar-label">图片</span>
+        <label class="mail-edit-bar-slider" title="拖动调整图片宽度">
+          <input
+            v-model.number="imageWidthPercent"
+            type="range"
+            min="10"
+            max="100"
+            step="5"
+            @input="applyImageSlider"
+            @change="commitImageWidth"
+          />
+          <span>{{ imageWidthPercent }}%</span>
+        </label>
+        <button
+          v-for="align in IMAGE_ALIGNMENTS"
+          :key="'bia-' + align.key"
+          class="mail-edit-bar-btn"
+          :class="{ 'is-on': imageAlign === align.key }"
+          :title="align.title"
+          :aria-label="align.title"
+          @click="alignImage(align.key)"
+        >
+          <MailIcon :name="align.icon" :size="15" />
+        </button>
+      </template>
+      <template v-else>
+        <span class="mail-edit-bar-label">表格 {{ tableTools?.rows }}×{{ tableTools?.cols }}</span>
+        <button
+          v-for="item in TABLE_ROW_ACTIONS"
+          :key="'btr-' + item.action"
+          class="mail-edit-bar-btn"
+          :title="item.title"
+          @click="tableBarAction(item.action)"
+        >
+          {{ item.short }}
+        </button>
+      </template>
+      <span class="mail-edit-bar-sep"></span>
+      <button class="mail-edit-bar-btn" title="全部图片/表格操作" @click="openEditMenu">
+        更多
+      </button>
+      <button
+        class="mail-edit-bar-btn is-danger"
+        :title="editBar.target === 'image' ? '从正文里删除这张图片' : '删除整个表格'"
+        @click="removeEditTarget"
+      >
+        删除
+      </button>
+    </div>
 
-    <!-- 编辑器右键菜单：在表格里右键时给出行列 / 样式操作，在普通正文里右键给出
-         剪切复制粘贴。菜单项按 Outlook 的习惯分组，危险操作（删除行/列）不标红，
-         因为它们可撤销（编辑器自身的历史）。 -->
+    <!-- 编辑器右键菜单：Outlook 的习惯是「所有操作都在这张菜单里」，所以浮动条放不下的
+         全在这里。菜单用 fixed 挂在视口上：编辑区是 overflow 滚动容器，画在里面的菜单
+         要么被裁掉、要么得自己开滚动条——两栏排版让整张菜单一屏放得下，两个问题都没有。
+         表格分支左栏管行列与表格尺寸，右栏管样式与单元格格式。 -->
     <div
       v-if="editorMenu"
+      ref="editorMenuRef"
       class="mail-editor-menu"
+      :class="{ 'is-columns': editorMenu.table }"
       :style="{ left: `${editorMenu.x}px`, top: `${editorMenu.y}px` }"
       @mousedown.stop
       @click.stop
     >
       <template v-if="editorMenu.table">
-        <div class="mail-editor-menu-head">
-          表格 {{ editorMenu.rows }} × {{ editorMenu.cols }}（第 {{ editorMenu.row + 1 }} 行，第
-          {{ editorMenu.col + 1 }} 列）
+        <div class="mail-editor-menu-col">
+          <div class="mail-editor-menu-head">
+            表格 {{ editorMenu.rows }} × {{ editorMenu.cols }}（第 {{ editorMenu.row + 1 }} 行，第
+            {{ editorMenu.col + 1 }} 列）
+          </div>
+          <button class="mail-editor-menu-item" @click="tableAction('rowAbove')">在上方插入行</button>
+          <button class="mail-editor-menu-item" @click="tableAction('rowBelow')">在下方插入行</button>
+          <button class="mail-editor-menu-item" @click="tableAction('rowDelete')">删除这一行</button>
+          <button class="mail-editor-menu-item" @click="tableAction('colLeft')">在左侧插入列</button>
+          <button class="mail-editor-menu-item" @click="tableAction('colRight')">在右侧插入列</button>
+          <button class="mail-editor-menu-item" @click="tableAction('colDelete')">删除这一列</button>
+          <div class="mail-editor-menu-sep"></div>
+          <div class="mail-editor-menu-head">表格宽度与位置</div>
+          <div class="mail-editor-menu-row-actions">
+            <button
+              v-for="preset in TABLE_WIDTHS"
+              :key="'mw-' + preset.value"
+              class="mail-editor-menu-chip"
+              :title="preset.title"
+              @click="tableAction('tableWidth', preset.value)"
+            >
+              {{ preset.label }}
+            </button>
+            <button
+              v-for="align in TABLE_ALIGNMENTS"
+              :key="'ma-' + align.key"
+              class="mail-fmt-btn"
+              :title="align.title"
+              :aria-label="align.title"
+              @click="tableAction('tableAlign', align.key)"
+            >
+              <MailIcon :name="align.icon" :size="15" />
+            </button>
+          </div>
         </div>
-        <button class="mail-editor-menu-item" @click="tableAction('rowAbove')">在上方插入行</button>
-        <button class="mail-editor-menu-item" @click="tableAction('rowBelow')">在下方插入行</button>
-        <button class="mail-editor-menu-item" @click="tableAction('rowDelete')">删除这一行</button>
-        <div class="mail-editor-menu-sep"></div>
-        <button class="mail-editor-menu-item" @click="tableAction('colLeft')">在左侧插入列</button>
-        <button class="mail-editor-menu-item" @click="tableAction('colRight')">在右侧插入列</button>
-        <button class="mail-editor-menu-item" @click="tableAction('colDelete')">删除这一列</button>
-        <div class="mail-editor-menu-sep"></div>
-        <div class="mail-editor-menu-head">表格样式</div>
-        <button
-          v-for="style in TABLE_STYLES"
-          :key="style.key"
-          class="mail-editor-menu-item"
-          @click="tableAction('style', style.key)"
-        >
-          {{ style.label }}
-        </button>
-        <div class="mail-editor-menu-sep"></div>
-        <button class="mail-editor-menu-item" @click="tableAction('cellAlignLeft')">单元格左对齐</button>
-        <button class="mail-editor-menu-item" @click="tableAction('cellAlignCenter')">单元格居中</button>
-        <button class="mail-editor-menu-item" @click="tableAction('cellAlignRight')">单元格右对齐</button>
-        <div class="mail-editor-menu-sep"></div>
-        <div class="mail-editor-menu-head">单元格格式</div>
-        <div class="mail-editor-menu-swatches">
+        <div class="mail-editor-menu-col">
+          <div class="mail-editor-menu-head">表格样式</div>
           <button
-            v-for="color in CELL_FILLS"
-            :key="'fill-' + color"
-            class="mail-editor-menu-swatch"
-            :style="{ background: color }"
-            :title="`填充 ${color}`"
-            @click="tableAction('cellFill', color)"
-          ></button>
-          <button
-            class="mail-editor-menu-swatch is-none"
-            title="无填充"
-            @click="tableAction('cellFill', '')"
+            v-for="style in TABLE_STYLES"
+            :key="style.key"
+            class="mail-editor-menu-item"
+            @click="tableAction('style', style.key)"
           >
-            ×
+            {{ style.label }}
           </button>
+          <div class="mail-editor-menu-sep"></div>
+          <div class="mail-editor-menu-head">单元格格式</div>
+          <div class="mail-editor-menu-row-actions">
+            <button
+              v-for="align in CELL_ALIGNMENTS"
+              :key="'mca-' + align.action"
+              class="mail-fmt-btn"
+              :title="align.title"
+              :aria-label="align.title"
+              @click="tableAction(align.action)"
+            >
+              <MailIcon :name="align.icon" :size="15" />
+            </button>
+            <button class="mail-fmt-btn" title="单元格加粗" aria-label="单元格加粗" @click="tableAction('cellBold')">
+              <b>B</b>
+            </button>
+            <!-- 字号收进下拉：五个 chip 单独铺一行既占地方又和工具栏的字号框重复。 -->
+            <select
+              class="mail-editor-menu-select"
+              title="单元格字号"
+              aria-label="单元格字号"
+              @change="onCellFontSize"
+            >
+              <option value="">字号</option>
+              <option v-for="size in CELL_FONT_SIZES" :key="'fs-' + size" :value="size">
+                {{ size }} px
+              </option>
+            </select>
+          </div>
+          <div class="mail-editor-menu-swatches">
+            <button
+              v-for="color in CELL_FILLS"
+              :key="'fill-' + color"
+              class="mail-editor-menu-swatch"
+              :style="{ background: color }"
+              :title="`填充 ${color}`"
+              @click="tableAction('cellFill', color)"
+            ></button>
+            <button
+              class="mail-editor-menu-swatch is-none"
+              title="无填充"
+              @click="tableAction('cellFill', '')"
+            >
+              ×
+            </button>
+          </div>
+          <div class="mail-editor-menu-swatches">
+            <button
+              v-for="color in TEXT_COLORS"
+              :key="'fg-' + color"
+              class="mail-editor-menu-swatch"
+              :style="{ background: color }"
+              :title="`文字 ${color}`"
+              @click="tableAction('cellColor', color)"
+            ></button>
+          </div>
+          <div class="mail-editor-menu-sep"></div>
+          <button class="mail-editor-menu-item" @click="tableAction('tableDelete')">删除整个表格</button>
         </div>
-        <div class="mail-editor-menu-swatches">
+      </template>
+      <template v-else-if="editorMenu.image">
+        <div class="mail-editor-menu-head">图片</div>
+        <div class="mail-editor-menu-row-actions">
           <button
-            v-for="color in TEXT_COLORS"
-            :key="'fg-' + color"
-            class="mail-editor-menu-swatch"
-            :style="{ background: color }"
-            :title="`文字 ${color}`"
-            @click="tableAction('cellColor', color)"
-          ></button>
+            v-for="preset in IMAGE_WIDTHS"
+            :key="'miw-' + preset"
+            class="mail-editor-menu-chip"
+            :class="{ 'is-on': imageWidthPercent === preset }"
+            :title="`图片宽度 ${preset}%`"
+            @click="imageMenuAction('width', preset)"
+          >
+            {{ preset }}%
+          </button>
         </div>
         <div class="mail-editor-menu-row-actions">
           <button
-            v-for="size in CELL_FONT_SIZES"
-            :key="'fs-' + size"
-            class="mail-editor-menu-chip"
-            :title="`字号 ${size}px`"
-            @click="tableAction('cellFontSize', size)"
+            v-for="align in IMAGE_ALIGNMENTS"
+            :key="'mia-' + align.key"
+            class="mail-fmt-btn"
+            :class="{ 'is-on': imageAlign === align.key }"
+            :title="align.title"
+            :aria-label="align.title"
+            @click="imageMenuAction('align', align.key)"
           >
-            {{ size }}
+            <MailIcon :name="align.icon" :size="15" />
           </button>
         </div>
-        <button class="mail-editor-menu-item" @click="tableAction('cellBold')">单元格加粗</button>
         <div class="mail-editor-menu-sep"></div>
-        <button class="mail-editor-menu-item" @click="tableAction('tableDelete')">删除整个表格</button>
+        <button class="mail-editor-menu-item" @click="imageMenuAction('remove')">
+          从正文里删除这张图片
+        </button>
       </template>
       <template v-else>
         <button class="mail-editor-menu-item" @click="editorCommand('cut')">剪切</button>
@@ -1519,12 +1507,17 @@ const IMAGE_ALIGNMENTS = [
 function onEditorClick(event) {
   const img = event.target?.closest?.('img')
   if (img && editorRef.value?.contains(img)) {
-    selectedImage.value = img
-    imageWidthPercent.value = imageWidthPercentOf(img)
-    imageAlign.value = alignOf(img)
+    selectImage(img)
     return
   }
   selectedImage.value = null
+}
+
+/** 选中正文里的一张图片，并把工具条上的宽度 / 对齐读数同步成它当前的样子。 */
+function selectImage(img) {
+  selectedImage.value = img
+  imageWidthPercent.value = imageWidthPercentOf(img)
+  imageAlign.value = alignOf(img)
 }
 
 /** 图片当前的对齐：左右 auto 外边距的三种组合，其余按靠左处理。 */
@@ -1599,13 +1592,14 @@ function removeSelectedImage() {
 /** 光标所在的表格；不在表格里就是 null（工具行随之收起）。 */
 const tableTools = ref(null)
 
+// 浮动条放不下整张表格的全部操作，所以这里给一套短标签（长标签留给右键菜单）。
 const TABLE_ROW_ACTIONS = [
-  { action: 'rowAbove', label: '上方插入行', title: '在当前行上方插入一行' },
-  { action: 'rowBelow', label: '下方插入行', title: '在当前行下方插入一行' },
-  { action: 'rowDelete', label: '删除行', title: '删除光标所在这一行' },
-  { action: 'colLeft', label: '左侧插入列', title: '在当前列左侧插入一列' },
-  { action: 'colRight', label: '右侧插入列', title: '在当前列右侧插入一列' },
-  { action: 'colDelete', label: '删除列', title: '删除光标所在这一列' },
+  { action: 'rowAbove', short: '上插行', label: '上方插入行', title: '在当前行上方插入一行' },
+  { action: 'rowBelow', short: '下插行', label: '下方插入行', title: '在当前行下方插入一行' },
+  { action: 'rowDelete', short: '删行', label: '删除行', title: '删除光标所在这一行' },
+  { action: 'colLeft', short: '左插列', label: '左侧插入列', title: '在当前列左侧插入一列' },
+  { action: 'colRight', short: '右插列', label: '右侧插入列', title: '在当前列右侧插入一列' },
+  { action: 'colDelete', short: '删列', label: '删除列', title: '删除光标所在这一列' },
 ]
 const TABLE_WIDTHS = [
   { value: '100', label: '整行', title: '表格占满正文宽度' },
@@ -1654,6 +1648,132 @@ function tableBarAction(action, payload) {
   nextTick(refreshTableTools)
 }
 
+// ---------------- 图片 / 表格的浮动工具条 ----------------
+
+/**
+ * 贴着选中目标浮出的小工具条：`{ target, anchor, x, y }`。
+ *
+ * `anchor` 是目标元素当时的视口矩形（拆成普通数字存：DOMRect 塞进 ref 会被套上
+ * 响应式代理，取 `.width` 会以代理为 this 触发原型 getter，直接 Illegal invocation）。
+ * 存矩形而不是存元素，是为了滚动时能直接重算位置。
+ */
+const editBar = ref(null)
+const editBarRef = ref(null)
+
+/** 当前要挂浮条的对象：先图片（点选优先），否则光标所在的表格。都不在就返回 null。 */
+function editTargetSpot() {
+  const editor = editorRef.value
+  if (!editor || sourceMode.value) return null
+  const image = selectedImage.value
+  if (image && editor.contains(image)) {
+    return { target: 'image', anchor: viewportRect(image) }
+  }
+  const table = tableTools.value?.tableEl
+  if (table && editor.contains(table)) {
+    return { target: 'table', anchor: viewportRect(table) }
+  }
+  return null
+}
+
+function viewportRect(el) {
+  const box = el.getBoundingClientRect()
+  return {
+    left: box.left,
+    top: box.top,
+    width: box.width,
+    height: box.height,
+    bottom: box.bottom,
+  }
+}
+
+function refreshEditBar() {
+  const spot = editTargetSpot()
+  if (!spot) {
+    editBar.value = null
+    return
+  }
+  // 光标每动一下都会重算表格状态（selectionchange 很密），目标和位置都没变就别重排，
+  // 否则浮条会在每次按键时重新量一遍、看着像在抖。
+  const previous = editBar.value
+  if (previous && previous.target === spot.target && sameAnchor(previous.anchor, spot.anchor)) return
+  // 位置要等浮条渲染出来量了尺寸才知道，先按上沿占位，nextTick 里再校正。
+  editBar.value = { ...spot, x: Math.round(spot.anchor.left), y: Math.round(spot.anchor.top) }
+  nextTick(placeEditBar)
+}
+
+function sameAnchor(a, b) {
+  return (
+    !!a &&
+    !!b &&
+    a.left === b.left &&
+    a.top === b.top &&
+    a.width === b.width &&
+    a.height === b.height
+  )
+}
+
+/** 浮条默认贴在目标上方居中；上方放不下就翻到下方，左右都夹进视口，绝不溢出屏幕。 */
+function placeEditBar() {
+  const el = editBarRef.value
+  const bar = editBar.value
+  if (!el || !bar) return
+  const box = el.getBoundingClientRect()
+  const anchor = bar.anchor
+  const x = clamp(bar.anchor.left + anchor.width / 2 - box.width / 2, 8, window.innerWidth - box.width - 8)
+  let y = anchor.top - box.height - 6
+  if (y < 8) y = Math.min(anchor.bottom + 6, window.innerHeight - box.height - 8)
+  editBar.value = { ...bar, x: Math.round(clamp(x, 8, window.innerWidth - box.width - 8)), y: Math.round(Math.max(8, y)) }
+}
+
+function clamp(value, low, high) {
+  if (high < low) return low
+  return Math.max(low, Math.min(value, high))
+}
+
+/** 浮条上的「更多」：把整张右键菜单开到目标下面（同一个菜单，不另做一份）。 */
+function openEditMenu() {
+  const bar = editBar.value
+  if (!bar) return
+  const spot = { x: Math.round(bar.anchor.left), y: Math.round(bar.anchor.bottom + 4) }
+  if (bar.target === 'image') {
+    editorMenu.value = { ...spot, image: true }
+  } else {
+    const tools = tableTools.value
+    if (!tools) return
+    editorMenu.value = { ...spot, ...tools }
+  }
+  nextTick(clampEditorMenu)
+  armEditorMenuClose()
+}
+
+/** 浮条上的「删除」：图片连着内联图片登记一起摘，表格整张删掉。 */
+function removeEditTarget() {
+  if (editBar.value?.target === 'image') removeSelectedImage()
+  else tableBarAction('tableDelete')
+  editBar.value = null
+}
+
+watch([selectedImage, tableTools, sourceMode], refreshEditBar)
+
+// 浮条要跟着目标走：正文滚动、窗口改尺寸都得重算位置（一帧最多算一次）。
+let barReflowQueued = false
+function onEditBarReflow() {
+  if (!editBar.value || barReflowQueued) return
+  barReflowQueued = true
+  requestAnimationFrame(() => {
+    barReflowQueued = false
+    if (editBar.value) refreshEditBar()
+  })
+}
+onMounted(() => {
+  document.addEventListener('scroll', onEditBarReflow, true)
+  window.addEventListener('resize', onEditBarReflow)
+})
+onBeforeUnmount(() => {
+  document.removeEventListener('scroll', onEditBarReflow, true)
+  window.removeEventListener('resize', onEditBarReflow)
+})
+
 // ---------------- 编辑器右键菜单 ----------------
 
 /** 单元格可选的填充色 / 文字色 / 字号（右键菜单里的快捷项）。 */
@@ -1661,63 +1781,79 @@ const CELL_FILLS = ['#f2f2f2', '#ddebf7', '#e2efda', '#fff2cc', '#fce4d6', '#ede
 const TEXT_COLORS = ['#000000', '#44546a', '#1a5fd0', '#c00000', '#548235', '#ffffff']
 const CELL_FONT_SIZES = [11, 12, 13, 14, 16]
 
-/** 当前打开着的右键菜单：`{ x, y, cell, table, row, col, rows, cols }`。 */
+/** 当前打开着的右键菜单：`{ x, y, table, image, cell, tableEl, row, col, rows, cols }`。 */
 const editorMenu = ref(null)
+const editorMenuRef = ref(null)
 
 /**
- * 编辑器右键菜单的定位。
+ * 右键菜单的定位。
  *
- * 菜单是 `.mail-compose-body` 里的绝对定位元素，所以坐标必须相对**这个滚动容器**
- * 计算（而不是相对编辑区）：以前拿编辑区的 rect 去减，结果菜单永远比光标
- * 偏掉编辑区的内边距与上方字段栏那一段，看起来像「右键把内容顶歪了」。
+ * 菜单是 fixed 定位，坐标直接用视口坐标（= 右键处的 clientX/Y），所以不再需要
+ * 把编辑区的滚动量换算进去——以前它是 `.mail-compose-body` 里的绝对定位元素，
+ * 一旦菜单比编辑区剩余空间高就得开滚动条，或者被容器裁掉半截。
+ * 现在改成渲染完量一次真实尺寸，再夹进视口：放不下就翻到光标另一侧。
  */
-function contextMenuPosition(event) {
-  const anchor = editorRef.value?.offsetParent || editorRef.value
-  if (!anchor) return { x: 4, y: 4 }
-  const rect = anchor.getBoundingClientRect()
-  const menuWidth = 210
-  const menuHeight = 320
-  // 视口内的相对位置，先夹进容器可见区域，再加上滚动量换算成内容坐标。
-  let left = event.clientX - rect.left
-  let top = event.clientY - rect.top
-  left = Math.min(Math.max(4, left), Math.max(4, rect.width - menuWidth - 4))
-  if (top + menuHeight > rect.height) top = Math.max(4, rect.height - menuHeight)
-  return {
-    x: Math.round(left + (anchor.scrollLeft || 0)),
-    y: Math.round(top + (anchor.scrollTop || 0)),
+function clampEditorMenu() {
+  const el = editorMenuRef.value
+  const menu = editorMenu.value
+  if (!el || !menu) return
+  const box = el.getBoundingClientRect()
+  const x = clamp(menu.x, 8, Math.max(8, window.innerWidth - box.width - 8))
+  let y = menu.y
+  if (y + box.height > window.innerHeight - 8) {
+    // 下面放不下就往上翻；连上面也放不下，就贴着视口底边（此时两栏排版已经保证放得下）。
+    y = Math.max(8, window.innerHeight - box.height - 8)
   }
+  if (x === menu.x && Math.round(y) === Math.round(menu.y)) return
+  editorMenu.value = { ...menu, x: Math.round(x), y: Math.round(y) }
+}
+
+function armEditorMenuClose() {
+  setTimeout(() => document.addEventListener('mousedown', closeEditorMenu, { once: true }), 0)
 }
 
 function onEditorContextMenu(event) {
   const editor = editorRef.value
   if (!editor) return
-  const target = event.target
-  const cell = target?.closest?.('td, th')
-  const table = target?.closest?.('table')
-  // 表格里的右键由我们接管（行列操作）；其他位置也由我们接管，保证菜单跟着光标。
+  // 表格与图片的右键由我们接管（行列 / 宽度操作）；其余位置也接管，保证菜单跟着光标。
   event.preventDefault()
-  const spot = contextMenuPosition(event)
-  if (!table || !cell) {
+  const spot = { x: event.clientX, y: event.clientY }
+  const cell = event.target?.closest?.('td, th')
+  const table = event.target?.closest?.('table')
+  const img = event.target?.closest?.('img')
+  if (table && cell && editor.contains(table) && editor.contains(cell)) {
+    // 记住光标在表格里的位置：后续操作用它定位，而不是依赖「当前选区」——
+    // 右键之后浏览器可能把选区挪到别处。
+    const pos = cellPosition(table, cell)
+    tableTools.value = pos ? { table: true, cell, tableEl: table, ...pos } : null
+    editorMenu.value = { ...spot, table: true, cell, tableEl: table, ...pos }
+  } else if (img && editor.contains(img)) {
+    selectImage(img)
+    editorMenu.value = { ...spot, image: true }
+  } else {
     editorMenu.value = { ...spot, table: false }
-    setTimeout(() => document.addEventListener('mousedown', closeEditorMenu, { once: true }), 0)
-    return
   }
-  // 记住光标在表格里的位置：后续操作用它定位，而不是依赖「当前选区」——
-  // 右键之后浏览器可能把选区挪到别处。
-  const pos = cellPosition(table, cell)
-  editorMenu.value = {
-    ...spot,
-    table: true,
-    cell,
-    tableEl: table,
-    ...pos,
-  }
-  setTimeout(() => document.addEventListener('mousedown', closeEditorMenu, { once: true }), 0)
+  nextTick(clampEditorMenu)
+  armEditorMenuClose()
 }
 
 function closeEditorMenu() {
   editorMenu.value = null
   document.removeEventListener('mousedown', closeEditorMenu)
+}
+
+/** 图片右键菜单里的动作：与浮动条共用同一套实现，做完收起菜单。 */
+function imageMenuAction(kind, payload) {
+  if (kind === 'width') setImageWidth(payload)
+  else if (kind === 'align') alignImage(payload)
+  else removeSelectedImage()
+  closeEditorMenu()
+}
+
+/** 单元格字号下拉：选中即生效（tableAction 自己会收起菜单）。 */
+function onCellFontSize(event) {
+  const size = Number(event?.target?.value) || 0
+  if (size) tableAction('cellFontSize', size)
 }
 
 /** 普通编辑命令（剪切 / 复制 / 粘贴 / 全选）。 */

@@ -66,8 +66,11 @@ pub fn ensure_folders(account: &Account) -> Result<Vec<MailFolder>, String> {
             user_created: true,
         });
     }
+    // 以落库后的表为准返回：`replace_folders` 会把用户自己建的自定义夹也保留下来，
+    // 只把手上这七个固定夹返回给前端，侧栏就会在「刷新」和「读库」之间来回抖
+    // ——用户看到的正是「新建的文件夹一会儿消失、一会儿又出现」。
     store::replace_folders(&account.id, &folders)?;
-    Ok(folders)
+    store::list_folders(&account.id)
 }
 
 /// 同步收件箱：拉回新邮件，返回新增的列表行。

@@ -128,12 +128,10 @@
           }"
           role="listitem"
           tabindex="0"
-          :draggable="true"
           @click="onRowClick(item.row, $event)"
           @keydown.enter="$emit('open', item.row)"
           @contextmenu.prevent="onRowContextMenu(item.row, $event)"
-          @dragstart="onDragStart(item.row, $event)"
-          @dragend="onDragEnd"
+          @mousedown="onRowMouseDown(item.row, $event)"
         >
           <MailRowContent
             :row="item.row"
@@ -159,12 +157,10 @@
           }"
           role="listitem"
           tabindex="0"
-          :draggable="true"
           @click="onRowClick(row, $event)"
           @keydown.enter="$emit('open', row)"
           @contextmenu.prevent="onRowContextMenu(row, $event)"
-          @dragstart="onDragStart(row, $event)"
-          @dragend="onDragEnd"
+          @mousedown="onRowMouseDown(row, $event)"
         >
           <MailRowContent
             :row="row"
@@ -183,6 +179,15 @@
         </button>
       </div>
     </div>
+
+    <!-- 跟着鼠标走的拖拽影子：没有它，用户按下去只有侧栏高亮，看不出自己在拖什么。 -->
+    <div
+      v-if="mailDrag.active"
+      class="mail-drag-ghost"
+      :style="{ left: `${mailDrag.x + 14}px`, top: `${mailDrag.y + 12}px` }"
+    >
+      {{ mailDrag.rows.length }} 封邮件
+    </div>
   </section>
 </template>
 
@@ -190,6 +195,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import MailRowContent from './MailRowContent.vue'
 import { searchTokens } from './highlight'
+import { mailDrag, resetMailDrag } from './mailDragState'
 
 const emit = defineEmits([
   'open',
@@ -204,8 +210,7 @@ const emit = defineEmits([
   'select-all',
   'clear-selection',
   'batch',
-  'drag-start',
-  'drag-end',
+  'drop-on-folder',
   'load-more',
   'active-change',
   'delete',
@@ -280,6 +285,9 @@ function onScroll(event) {
 let resizeObserver = null
 
 onMounted(() => {
+  // 拖拽要跨出列表才能落到侧栏，所以监听整个窗口。
+  window.addEventListener('mousemove', onWindowMouseMove)
+  window.addEventListener('mouseup', onWindowMouseUp)
   if (!scrollRef.value) return
   viewportHeight.value = scrollRef.value.clientHeight || 600
   // ResizeObserver 比监听 window.resize 更准：侧栏折叠 / 拖拽调宽都会改变高度，
@@ -294,6 +302,10 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  window.removeEventListener('mousemove', onWindowMouseMove)
+  window.removeEventListener('mouseup', onWindowMouseUp)
+  document.body.classList.remove('mail-dragging')
+  resetMailDrag()
   resizeObserver?.disconnect()
 })
 
@@ -333,6 +345,11 @@ const isChecked = (row) => props.selectedKeys.includes(keyOf(row))
 
 /** 点行：按住 Ctrl/Cmd 或 Shift 时切换勾选，否则打开。与 Outlook 习惯一致。 */
 function onRowClick(row, event) {
+  // 拖拽松手后的那一下 click 不算点击。
+  if (justDragged) {
+    justDragged = false
+    return
+  }
   if (event.ctrlKey || event.metaKey || event.shiftKey || props.selectedKeys.length) {
     emit('toggle-select', row, !isChecked(row))
     return
@@ -346,21 +363,70 @@ function onRowContextMenu(row, event) {
   emit('contextmenu', { row, event })
 }
 
-function onDragStart(row, event) {
-  event.dataTransfer.effectAllowed = 'move'
-  // 拖动已选中的行时整批一起走；否则只走这一行。
-  const payload = isChecked(row) ? [...props.selectedKeys] : [keyOf(row)]
-  event.dataTransfer.setData('text/x-guaxi-mail', JSON.stringify(payload))
-  // 从行内的文字上起拖时，Chromium 拖的是「那段文字」而不是整行，
-  // dataTransfer 里就只有 text/plain —— 侧栏光靠自定义类型会认不出来。
-  // 拖拽期间在 body 上打个标记，落点处按「类型或标记」双条件判断。
-  document.body.classList.add('mail-dragging')
-  emit('drag-start', row)
+// ---------------- 拖拽到文件夹（鼠标事件实现） ----------------
+
+/** 起拖阈值：小于这个位移算点击，避免手一抖就把邮件挪走。 */
+const DRAG_THRESHOLD = 5
+/** 按下时的起点；超过阈值才真正进入拖拽。 */
+let pendingDrag = null
+/** 刚拖完的那一下不应该再触发「打开这封邮件」。 */
+let justDragged = false
+
+function onRowMouseDown(row, event) {
+  if (event.button !== 0) return
+  // 勾选框 / 星标 / 删除按钮上的按下是操作按钮，不是拖邮件。
+  if (event.target?.closest?.('button, input, a, select, textarea')) return
+  pendingDrag = { x: event.clientX, y: event.clientY, row }
 }
 
-function onDragEnd() {
+function beginDrag(event) {
+  const { row } = pendingDrag
+  pendingDrag = null
+  // 拖已勾选的行走整批，拖未勾选的行只走这一封。
+  const rows = isChecked(row) ? props.selectedKeys.map((key) => findRow(key)).filter(Boolean) : [row]
+  // 勾选的行可能已经翻出当前列表（不在 visible 里），兜底至少拖走按下的这一封。
+  if (!rows.length) rows.push(row)
+  mailDrag.active = true
+  mailDrag.rows = rows
+  document.body.classList.add('mail-dragging')
+  updateDragPoint(event)
+}
+
+function findRow(key) {
+  return visible.value.find((item) => keyOf(item) === key) || null
+}
+
+function updateDragPoint(event) {
+  mailDrag.x = event.clientX
+  mailDrag.y = event.clientY
+  // 落点直接按坐标找侧栏上带 data-drop-folder 的节点：不依赖任何拖放 API。
+  const hit = document.elementFromPoint(event.clientX, event.clientY)
+  const folder = hit?.closest?.('[data-drop-folder]')
+  mailDrag.hoverFolder = folder?.getAttribute('data-drop-folder') || ''
+}
+
+function onWindowMouseMove(event) {
+  if (!mailDrag.active) {
+    if (!pendingDrag) return
+    const dx = event.clientX - pendingDrag.x
+    const dy = event.clientY - pendingDrag.y
+    if (Math.hypot(dx, dy) >= DRAG_THRESHOLD) beginDrag(event)
+    return
+  }
+  updateDragPoint(event)
+}
+
+function onWindowMouseUp() {
+  pendingDrag = null
+  if (!mailDrag.active) return
+  const folder = mailDrag.hoverFolder
+  const rows = [...mailDrag.rows]
   document.body.classList.remove('mail-dragging')
-  emit('drag-end')
+  resetMailDrag()
+  // mouseup 之后紧跟一个 click：不吞掉的话，拖到空白处松手会顺手打开那封邮件。
+  justDragged = true
+  setTimeout(() => (justDragged = false), 0)
+  if (folder && rows.length) emit('drop-on-folder', folder, rows)
 }
 
 function onBatchMove(event) {
