@@ -1113,3 +1113,39 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+/* ── 阅读器滚动条（独立阅读器窗口）─────────────────────────────
+ * 阅读器窗口走 reader-main.js，不加载 App.vue 的全局样式，`.guaxi-reader-scrollbar`
+ * 在那里没有任何规则 —— 滚动条会退回系统默认的亮色长条，深色主题下尤其突兀。
+ * 这里按同一套语义补一份：静止透明、悬停/滚动显色，颜色取 guaxiBase.css 的主题变量。
+ * 同时保留标准属性与 -webkit- 伪元素，兼容新旧 WebView2 内核。 */
+.guaxi-reader-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+
+.guaxi-reader-scrollbar:hover,
+.guaxi-reader-scrollbar:focus-within,
+.guaxi-reader-scrollbar.is-reader-scrolling {
+  scrollbar-color: var(--sr-scrollbar-thumb, rgba(0, 0, 0, 0.32)) transparent;
+}
+
+.guaxi-reader-scrollbar::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.guaxi-reader-scrollbar::-webkit-scrollbar-track {
+  background-color: transparent;
+}
+
+.guaxi-reader-scrollbar::-webkit-scrollbar-thumb {
+  background-color: transparent;
+  border-radius: 999px;
+}
+
+.guaxi-reader-scrollbar:hover::-webkit-scrollbar-thumb,
+.guaxi-reader-scrollbar:focus-within::-webkit-scrollbar-thumb,
+.guaxi-reader-scrollbar.is-reader-scrolling::-webkit-scrollbar-thumb {
+  background-color: var(--sr-scrollbar-thumb, rgba(0, 0, 0, 0.32));
+}

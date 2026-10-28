@@ -61,7 +61,7 @@
           </button>
         </div>
 
-        <div v-if="pdfAside === 'outline'" class="gdr-pdf-aside__body">
+        <div v-if="pdfAside === 'outline'" class="gdr-pdf-aside__body guaxi-reader-scrollbar">
           <div v-if="!outlineItems.length" class="gdr-pdf-aside__empty">
             这份 PDF 没有内嵌目录。
           </div>
@@ -79,8 +79,8 @@
         </div>
 
         <!-- 译文：只翻当前页，结果按段并排给出原/译对照。 -->
-        <div v-else-if="pdfAside === 'translate'" class="gdr-pdf-aside__body">
-          <div class="gdr-xlate">
+        <div v-else-if="pdfAside === 'translate'" class="gdr-pdf-aside__body guaxi-reader-scrollbar">
+          <div class="gdr-xlate guaxi-reader-scrollbar">
             <div class="gdr-xlate__head">
               <span class="gdr-xlate__title">{{ typeof pageTranslateTarget === 'number' ? `第 ${pageTranslateTarget} 页` : pageTranslateTarget }}</span>
               <button
@@ -125,7 +125,7 @@
           </div>
         </div>
 
-        <div v-else class="gdr-pdf-aside__body">
+        <div v-else class="gdr-pdf-aside__body guaxi-reader-scrollbar">
           <div v-if="!pdfHighlights.length" class="gdr-pdf-aside__empty">
             还没有批注。在正文中选中文字后点工具栏的高亮按钮即可添加。
           </div>

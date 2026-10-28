@@ -1361,8 +1361,12 @@ const onSpaceUp = (ev) => {
   if (ev.key !== ' ' && ev.code !== 'Space') return
   spaceHeld.value = false
 }
-// 切走窗口时按键抬起事件收不到，这里兜底清掉，避免回来后一直是抓手。
-const releaseSpacePan = () => { spaceHeld.value = false }
+// 切走窗口时按键抬起 / 鼠标松开都可能收不到，这里兜底清掉，
+// 否则回来后光标会一直停在「抓住」或空格抓手状态。
+const releaseSpacePan = () => {
+  spaceHeld.value = false
+  if (isPanning.value) onPanUp()
+}
 
 // 加载字符层并测量 scaleX（让透明文本宽度对齐渲染图，原生选择高亮因此连续）。
 const ensureText = async (page) => {
@@ -2574,20 +2578,47 @@ onBeforeUnmount(() => {
   background-repeat: no-repeat;
   /* 滚动容器里的 scroll（而非 local）= 背景不随内容走，柔光始终自可视区顶部洒下 */
   background-attachment: scroll;
-  /* 光标按区域区分，不再全区域抓手：
-       · 纸面（.gpv__page）是「你在读的东西」—— 箭头，和浏览器看 PDF 一致；
-       · 纸外画布才是「可拖动平移」的区域 —— 抓手。
-     之前整个 body 一律 grab，打开文档第一眼就是个张开的手，而且链接、图片、
-     页码跳转这些「可点」的东西也跟着变成手型，用户分不出「能拖」和「能点」。
-     文字段自己声明 cursor: text，链接覆盖为 pointer，三者互不干扰。 */
   cursor: default;
 }
-/* 纸外的画布：拖空白即平移，用抓手告诉用户这里可以拖。 */
-.gpv__pages { cursor: grab; }
-/* 纸面同样可拖动（行间空隙、页边、图片区），光标就给抓手；
-   文字段自己声明 cursor: text，链接/高亮声明 pointer，三者互不干扰。
-   没有手型工具之后，这一条是「这里能拖」的唯一视觉提示。 */
-.gpv__page { cursor: grab; }
+
+/*
+ * 滚动条：跟随明暗主题，静止时透明，悬停 / 滚动时显色。
+ *
+ * 不能只依赖全局的 .guaxi-reader-scrollbar（App.vue）：独立阅读器窗口走
+ * reader-main.js，不加载 App.vue 的全局样式，滚动条会退回系统默认的亮色长条，
+ * 在深色主题下非常突兀。这里自带一份，颜色取 guaxiBase.css 的主题变量；
+ * 同时保留标准属性与 -webkit- 伪元素，兼容新旧 WebView2 内核。
+ */
+.gpv__body {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+.gpv__body:hover,
+.gpv__body:focus-within,
+.gpv__body.is-reader-scrolling {
+  scrollbar-color: var(--sr-scrollbar-thumb, rgba(0, 0, 0, 0.32)) transparent;
+}
+.gpv__body::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.gpv__body::-webkit-scrollbar-track {
+  background-color: transparent;
+}
+.gpv__body::-webkit-scrollbar-thumb {
+  background-color: transparent;
+  border-radius: 999px;
+}
+.gpv__body:hover::-webkit-scrollbar-thumb,
+.gpv__body:focus-within::-webkit-scrollbar-thumb,
+.gpv__body.is-reader-scrolling::-webkit-scrollbar-thumb {
+  background-color: var(--sr-scrollbar-thumb, rgba(0, 0, 0, 0.32));
+}
+/* 纸外的画布与纸面：静止时一律是普通箭头。
+   抓手只在「真的在拖」的瞬间出现 —— 常驻手型会让人以为随时在拖拽模式，
+   而阅读时绝大多数时间只是移动视线、点选文字。 */
+.gpv__pages { cursor: default; }
+.gpv__page { cursor: default; }
 /* PDF 里的链接：可点击（跳到内部目标或打开外部网址）。 */
 .gpv__link { cursor: pointer; }
 /* 按住空格临时平移：连文字上也能拖，因此禁止选中，文字段也换手型 */
@@ -2747,9 +2778,9 @@ onBeforeUnmount(() => {
   background: rgba(97, 175, 239, 0.12);
   box-shadow: 0 0 0 1px rgba(97, 175, 239, 0.35);
 }
-/* 锁定平移 / 空格临时平移时，链接跟随全局抓手：此时用户的意图是拖纸面，不是点链接。 */
-.gpv__body--pan .gpv__link,
-.gpv__body--panning .gpv__link { cursor: grab; }
+/* 按住空格 / 拖动中，链接跟随平移手势：此时用户的意图是拖纸面，不是点链接。 */
+.gpv__body--pan .gpv__link { cursor: grab; }
+.gpv__body--panning .gpv__link { cursor: grabbing; }
 
 /* 已保存的高亮批注覆盖层 */.gpv__hl-rect {
   position: absolute;
