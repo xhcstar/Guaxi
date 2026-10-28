@@ -68,6 +68,10 @@
       <button class="mail-icon-btn" title="收信规则" aria-label="收信规则" @click="$emit('rules')">
         <n-icon :component="FunnelOutline" />
       </button>
+      <!-- 「另存为 .eml」只有出口没有入口：存下来的文件想看还得换程序。 -->
+      <button class="mail-icon-btn" title="打开本机保存的 .eml 邮件" aria-label="打开 .eml 邮件" @click="$emit('open-eml')">
+        <n-icon :component="DescriptionOutline" />
+      </button>
       <button class="mail-icon-btn" title="账户" aria-label="账户" @click="$emit('accounts')">
         <n-icon :component="PersonCircleOutline" />
       </button>
@@ -80,6 +84,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { NIcon } from 'naive-ui'
 import {
   CreateOutline,
+  DescriptionOutline,
   FolderOpenOutline,
   FunnelOutline,
   MenuOutline,
@@ -107,6 +112,7 @@ defineEmits([
   'accounts',
   'rules',
   'contacts',
+  'open-eml',
   'toggle-sidebar',
   'replay-offline',
 ])

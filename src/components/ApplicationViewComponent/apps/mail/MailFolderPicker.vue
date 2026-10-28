@@ -91,6 +91,7 @@
         </button>
         <button class="mail-btn" @click="cancelCreate">取消</button>
       </div>
+      <p v-if="createError" class="mail-folder-create-error">{{ createError }}</p>
 
       <div class="mail-folder-actions">
         <button class="mail-btn is-primary" :disabled="!canConfirm" @click="confirm(draft)">
@@ -130,6 +131,8 @@ const draft = ref(props.modelValue || '')
 const creating = ref(false)
 const newName = ref('')
 const busy = ref(false)
+/** 建夹失败就地显示，不弹系统对话框（重名 / 服务器拒绝时用户要能直接改名重试）。 */
+const createError = ref('')
 const expanded = ref(new Set())
 
 const ROLE_LABELS = {
@@ -278,6 +281,7 @@ function close() {
   open.value = false
   creating.value = false
   newName.value = ''
+  createError.value = ''
 }
 
 function confirm(path) {
@@ -291,6 +295,7 @@ function confirm(path) {
 async function startCreate() {
   creating.value = true
   newName.value = ''
+  createError.value = ''
   await nextTick()
   createInputRef.value?.focus()
 }
@@ -298,12 +303,14 @@ async function startCreate() {
 function cancelCreate() {
   creating.value = false
   newName.value = ''
+  createError.value = ''
 }
 
 async function commitCreate() {
   const name = newName.value.trim()
   if (!name || busy.value) return
   busy.value = true
+  createError.value = ''
   try {
     const created = await props.createFolder?.(name)
     const path = created?.name || name
@@ -314,7 +321,7 @@ async function commitCreate() {
     close()
   } catch (error) {
     // 建不出来（重名 / 服务器拒绝）：留在面板里让用户改个名字，不要静默失败。
-    window.alert(String(error?.message || error))
+    createError.value = String(error?.message || error)
   } finally {
     busy.value = false
   }
@@ -511,6 +518,12 @@ watch(
 .mail-folder-create .mail-input {
   flex: 1 1 auto;
   min-width: 0;
+}
+.mail-folder-create-error {
+  margin: 0;
+  padding: 0 10px 8px;
+  color: var(--mail-danger);
+  font-size: 12px;
 }
 
 .mail-folder-actions {

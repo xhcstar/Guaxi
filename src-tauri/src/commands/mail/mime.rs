@@ -369,7 +369,31 @@ pub fn parse_mailbox(raw: &str) -> Result<Mailbox, String> {
 ///   这样收信端把图片当作正文的一部分显示，而不是一堆乱七八糟的附件；
 /// - 有普通附件：最外层 `multipart/mixed` 包住上面那个。
 pub fn build(request: &SendRequest, from: &MailAddress, signature: &str) -> Result<Vec<u8>, String> {
-    if request.to.is_empty() && request.cc.is_empty() && request.bcc.is_empty() {
+    build_inner(request, from, signature, true)
+}
+
+/// 组装**草稿**。
+///
+/// 草稿允许一个收件人都没有：用户经常先写正文、回头再想发给谁。
+/// 以前存草稿也走 `build`，于是「收件人为空」直接把自动保存打回，
+/// 用户看到的现象就是「关掉编辑器，草稿箱里什么都没有」。
+/// 正式发送仍然必须至少有一个收件人。
+pub fn build_draft(
+    request: &SendRequest,
+    from: &MailAddress,
+    signature: &str,
+) -> Result<Vec<u8>, String> {
+    build_inner(request, from, signature, false)
+}
+
+fn build_inner(
+    request: &SendRequest,
+    from: &MailAddress,
+    signature: &str,
+    require_recipients: bool,
+) -> Result<Vec<u8>, String> {
+    if require_recipients && request.to.is_empty() && request.cc.is_empty() && request.bcc.is_empty()
+    {
         return Err("收件人为空".to_string());
     }
     let from_box = if from.name.trim().is_empty() {

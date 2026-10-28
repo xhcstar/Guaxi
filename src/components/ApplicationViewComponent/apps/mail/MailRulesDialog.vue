@@ -170,7 +170,7 @@
                 <label class="mail-flabel">生效文件夹</label>
                 <select v-model="cond.folder" class="mail-input">
                   <option value="inbox">仅收件箱</option>
-                  <option value="">所有文件夹</option>
+                  <option value="*">所有文件夹</option>
                 </select>
               </div>
             </div>
@@ -199,13 +199,37 @@
                 />
               </div>
               <div class="mail-field">
-                <label class="mail-flabel">添加分类标签</label>
-                <input v-model="act.labels" class="mail-input" placeholder="用逗号分隔" />
+                <label class="mail-flabel">
+                  添加分类标签
+                  <span v-if="splitList(act.labels).length" class="mail-rule-count">
+                    {{ splitList(act.labels).length }} 个
+                  </span>
+                </label>
+                <textarea
+                  v-model="act.labels"
+                  class="mail-input mail-rule-grow"
+                  rows="1"
+                  :title="act.labels"
+                  placeholder="用逗号分隔"
+                  @input="autoGrow"
+                ></textarea>
               </div>
             </div>
             <div class="mail-field">
-              <label class="mail-flabel">转发到</label>
-              <input v-model="act.forwardTo" class="mail-input" placeholder="可选，多个用逗号分隔" />
+              <label class="mail-flabel">
+                转发到
+                <span v-if="splitList(act.forwardTo).length" class="mail-rule-count">
+                  {{ splitList(act.forwardTo).length }} 个地址
+                </span>
+              </label>
+              <textarea
+                v-model="act.forwardTo"
+                class="mail-input mail-rule-grow"
+                rows="1"
+                :title="act.forwardTo"
+                placeholder="可选，多个用逗号分隔"
+                @input="autoGrow"
+              ></textarea>
             </div>
             <div style="display: flex; gap: 16px; flex-wrap: wrap">
               <label class="mail-check"><input v-model="act.markRead" type="checkbox" />标为已读</label>
@@ -214,10 +238,20 @@
               <label class="mail-check"><input v-model="draft.stopProcessing" type="checkbox" />命中后停止后续规则</label>
             </div>
 
-            <div style="display: flex; gap: 8px; margin-top: 12px">
-              <button class="mail-btn is-primary" @click="saveDraft">保存规则</button>
+            <div style="display: flex; gap: 8px; margin-top: 12px; align-items: center">
+              <button class="mail-btn is-primary" :disabled="saving" @click="saveDraft">
+                {{ savingLabel }}
+              </button>
               <button class="mail-btn" @click="editing = false">取消</button>
+              <!-- 规则平时只作用于「同步到的新邮件」，新建规则后老邮件纹丝不动，
+                   用户建完文件夹点进去是空的。这里给一个「立刻对已有邮件也执行」。 -->
+              <label class="mail-check" style="margin-left: auto">
+                <input v-model="applyExisting" type="checkbox" />
+                保存后立即对已有的邮件执行
+              </label>
             </div>
+            <!-- 保存/执行失败就地说明，不弹系统对话框（这里刚被吐槽过一次）。 -->
+            <p v-if="saveError" class="mail-rule-error">{{ saveError }}</p>
           </div>
         </section>
 
@@ -296,6 +330,11 @@ const props = defineProps({
   createFolderFn: { type: Function, default: null },
   /** 从服务器刷新文件夹表：列表要能随其它客户端新建的文件夹更新。 */
   refreshFoldersFn: { type: Function, default: null },
+  /**
+   * 保存规则（可选立即对已有邮件执行）。必须是函数 prop：
+   * emit 拿不到返回值，而「立即执行」要先知道后端给这条规则分配的 id。
+   */
+  saveRuleFn: { type: Function, default: null },
 })
 const emit = defineEmits([
   'close',
@@ -343,6 +382,16 @@ function addSenderRule() {
 
 const editing = ref(false)
 const draftIndex = ref(-1)
+/** 保存后是否立刻对库里已有的邮件执行一遍。 */
+const applyExisting = ref(false)
+const saving = ref(false)
+/** 保存或「立即执行」失败的说明：就地显示，不弹系统对话框。 */
+const saveError = ref('')
+const savingLabel = computed(() => {
+  if (!saving.value) return '保存规则'
+  // 扫已有邮件是逐封判断 + 逐封移动，几百封要跑一会儿，得说清在忙什么。
+  return applyExisting.value ? '正在对已有邮件执行…' : '保存中…'
+})
 
 const blankDraft = () => ({
   id: '',
@@ -548,6 +597,7 @@ function startNew() {
     delete: false,
   })
   draftIndex.value = -1
+  saveError.value = ''
   editing.value = true
   refreshFolders()
   nextTick(resizeGrowables)
@@ -564,7 +614,7 @@ function editRule(rule) {
     subjectNot: joinList(c.subjectNotContains),
     body: joinList(c.bodyContains),
     regex: c.anyMatchesRegex || '',
-    folder: (c.folderRoles || []).length ? '' : 'inbox',
+    folder: (c.folderRoles || []).includes('*') ? '*' : 'inbox',
     attachmentOnly: Boolean(c.hasAttachment),
   })
   const a = rule.action || {}
@@ -577,12 +627,13 @@ function editRule(rule) {
     delete: Boolean(a.delete),
   })
   draftIndex.value = props.rules.findIndex((r) => r.id === rule.id)
+  saveError.value = ''
   editing.value = true
   refreshFolders()
   nextTick(resizeGrowables)
 }
 
-function saveDraft() {
+async function saveDraft() {
   pickerTarget.value = ''
   const payload = {
     ...draft,
@@ -595,7 +646,8 @@ function saveDraft() {
       anyMatchesRegex: cond.regex.trim() || null,
       hasAttachment: cond.attachmentOnly ? true : null,
       accountIds: [],
-      folderRoles: cond.folder ? [cond.folder] : [],
+      // 后端语义：空 = 只处理收件箱（Outlook 默认），`*` = 所有文件夹。
+      folderRoles: cond.folder === 'inbox' ? [] : ['*'],
       minSize: null,
     },
     action: {
@@ -611,8 +663,21 @@ function saveDraft() {
     },
   }
   if (!payload.name.trim()) payload.name = '未命名规则'
-  emit('save', payload)
-  editing.value = false
+  const applyNow = applyExisting.value
+  saving.value = true
+  saveError.value = ''
+  try {
+    // 走函数 prop 而不是 emit：保存后要拿到这条规则的 id 才能「立即对已有邮件执行」，
+    // 并把处理条数如实回报（0 封命中也要说一声，否则用户以为按钮没生效）。
+    if (props.saveRuleFn) await props.saveRuleFn(payload, applyNow)
+    else emit('save', payload)
+    editing.value = false
+    applyExisting.value = false
+  } catch (error) {
+    saveError.value = `保存失败：${String(error?.message || error)}`
+  } finally {
+    saving.value = false
+  }
 }
 
 async function toggleRule(rule, enabled) {
@@ -728,6 +793,17 @@ function removeRule(rule) {
   color: var(--mail-text-muted);
   font-size: 10.5px;
   font-weight: 500;
+}
+
+/* 就地报错：保存 / 立即执行失败时显示在按钮行下面，不弹系统对话框。 */
+.mail-rule-error {
+  margin: 8px 0 0;
+  padding: 6px 10px;
+  border-radius: var(--mail-radius-sm);
+  background: color-mix(in srgb, var(--mail-danger) 12%, transparent);
+  color: var(--mail-danger);
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 /* 通讯录面板：内联在条件行下方，标题写清楚这次是往哪一栏里加人。 */

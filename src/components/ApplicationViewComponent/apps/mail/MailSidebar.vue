@@ -52,6 +52,7 @@
           @click="selectStandard(entry)"
           @contextmenu.prevent="entry.folder && openFolderMenu(entry.folder, $event)"
           @dragover="onDragOver(entry.folder, $event)"
+          @dragenter="onDragEnter(entry.folder, $event)"
           @dragleave="onDragLeave(entry.folder)"
           @drop.prevent="onDrop(entry.folder)"
         >
@@ -121,6 +122,7 @@
           @click="$emit('select-folder', folder.name)"
           @contextmenu.prevent="openFolderMenu(folder, $event)"
           @dragover="onDragOver(folder, $event)"
+          @dragenter="onDragEnter(folder, $event)"
           @dragleave="onDragLeave(folder)"
           @drop.prevent="onDrop(folder)"
         >
@@ -257,8 +259,16 @@ const folderMenu = ref(null)
 /** 拖拽悬停中的文件夹（用于高亮可放区域）。 */
 const dropTarget = ref('')
 
-/** 只接受邮件列表拖过来的行：拖文件 / 文字到侧栏不该高亮成「可以放下」。 */
+/**
+ * 这趟拖拽是不是「移动邮件」。
+ *
+ * 两个条件任一成立即可：
+ * - dataTransfer 里带着我们自定义的类型（从行的空白处起拖）；
+ * - body 上有拖拽标记（从行内的文字上起拖时，Chromium 拖的是那段文字，
+ *   自定义类型不会出现在 types 里——这正是「拖不动」的真实原因）。
+ */
 function canAcceptDrop(event) {
+  if (document.body.classList.contains('mail-dragging')) return true
   const types = event?.dataTransfer?.types
   if (!types) return false
   return Array.from(types).includes('text/x-guaxi-mail')
@@ -266,9 +276,14 @@ function canAcceptDrop(event) {
 
 function onDragOver(folder, event) {
   if (!folder || !canAcceptDrop(event)) return
+  // dragover 里不 preventDefault，浏览器就不会把这一下当成可放置目标。
   event.preventDefault()
   if (event.dataTransfer) event.dataTransfer.dropEffect = 'move'
   dropTarget.value = folder.name
+}
+
+function onDragEnter(folder, event) {
+  onDragOver(folder, event)
 }
 
 function onDragLeave(folder) {
@@ -277,6 +292,7 @@ function onDragLeave(folder) {
 
 function onDrop(folder) {
   dropTarget.value = ''
+  document.body.classList.remove('mail-dragging')
   if (folder) emit('drop-on-folder', folder.name)
 }
 

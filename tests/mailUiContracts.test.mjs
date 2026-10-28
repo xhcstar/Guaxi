@@ -27,7 +27,16 @@ test('右键菜单：只有一个「移动」入口，文件夹收进子菜单',
   assert.ok(!/移到「\{\{ folder\.displayName \}\}」/.test(mailApp), '不应再有逐条列出的「移到」按钮')
   assert.ok(mailApp.includes('contextSubmenu'), '应当有子菜单状态')
   assert.ok(mailApp.includes('mail-context-submenu'), '应当渲染子菜单容器')
-  assert.ok(mailApp.includes("openSubmenu('move')"), '移动条目应展开子菜单')
+  assert.ok(/openSubmenu\('move', \$event\)/.test(mailApp), '移动条目应展开子菜单')
+  // 子菜单必须挂在主菜单外面：主菜单是 overflow-y:auto 的滚动容器，
+  // 写在里面的绝对定位子菜单会被裁掉（右键「移动」看不到文件夹）。
+  assert.ok(
+    /\.mail-context-submenu\s*\{[\s\S]{0,120}position:\s*fixed/.test(mailApp),
+    '子菜单应 fixed 定位，不被主菜单的滚动容器裁掉',
+  )
+  const parentAt = mailApp.indexOf('is-parent')
+  const parentBlock = mailApp.slice(parentAt, mailApp.indexOf('</div>', parentAt))
+  assert.ok(parentAt >= 0 && !parentBlock.includes('mail-context-submenu'), '子菜单不应再嵌在父条目里')
 })
 
 test('移动子菜单：列出全部可移动文件夹，而不是只列几个角色', () => {

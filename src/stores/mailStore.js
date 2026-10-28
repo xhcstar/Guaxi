@@ -1472,21 +1472,25 @@ export const useMailStore = defineStore('mail', {
 
     /**
      * 关闭编辑器。有内容时先存进草稿箱——「写了半封关掉就没了」是最伤人的体验。
-     * 存草稿失败不阻塞关闭，但要把原因带到界面上。
+     *
+     * 返回 `{ saved, localOnly, error }`：调用方要能把结果如实说给用户。
+     * 以前失败只写进日志，用户看到的就是「我明明关了，草稿箱里什么都没有」，
+     * 只能自己猜（真实反馈：收件人为空的草稿被后端拒绝，界面上一点动静都没有）。
      */
     async closeCompose({ saveDraft = true } = {}) {
       const draft = this.composing
       this.composing = null
-      if (!saveDraft || !draft) return
+      if (!saveDraft || !draft) return { saved: false, skipped: true }
       const hasContent =
         draft.subject?.trim() ||
         (draft.html || '').trim() ||
         (draft.text || '').trim() ||
         draft.to?.length ||
-        draft.attachments?.length
-      if (!hasContent) return
+        draft.attachments?.length ||
+        draft.inlineImages?.length
+      if (!hasContent) return { saved: false, skipped: true }
       try {
-        await invoke('mail_save_draft', {
+        const saved = await invoke('mail_save_draft', {
           request: {
             accountId: draft.accountId,
             to: draft.to,
@@ -1511,9 +1515,13 @@ export const useMailStore = defineStore('mail', {
         await this._discardMailboxDraft(draft)
         await this.loadFolders(draft.accountId).catch(() => {})
         await this.reloadUnread()
+        // 列表也要跟上：用户往往就停在草稿箱里看这一封，不刷新会以为没存上。
+        await this.loadMessages({ silent: true }).catch(() => {})
+        return { saved: true, localOnly: Boolean(saved?.localOnly) }
       } catch (error) {
         logger.warn('关闭时保存草稿失败', error)
         this.lastError = `草稿保存失败：${error?.message || error}`
+        return { saved: false, error: String(error?.message || error) }
       }
     },
 

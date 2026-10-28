@@ -1580,6 +1580,46 @@ pub async fn mail_save_as_eml(
     Ok(target_path)
 }
 
+/// 打开本机保存的 `.eml` 查看。
+///
+/// 「另存为 .eml」只有出口没有入口：用户把邮件存成文件之后，想看还得换程序。
+/// 这里读一个本地文件、走与收信完全相同的解析 + 清洗路径，返回一份可直接渲染的详情。
+/// 不写库、不碰账户：附件的 `part` 偏移对本地文件没有意义，前端只列名字与大小。
+#[command]
+pub async fn mail_read_eml(app: AppHandle, path: String) -> Result<MessageDetail, String> {
+    ensure_init(&app)?;
+    let bytes = std::fs::read(&path).map_err(|e| format!("读取文件失败：{e}"))?;
+    let parsed = mime::parse(&bytes, true).ok_or("这个文件不是一封可解析的邮件（.eml）")?;
+    let file_name = std::path::Path::new(&path)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("邮件")
+        .to_string();
+    Ok(MessageDetail {
+        account_id: String::new(),
+        folder: file_name,
+        uid: 0,
+        message_id: parsed.message_id.clone(),
+        subject: parsed.subject.clone(),
+        from_name: parsed.from_name.clone(),
+        from_addr: parsed.from_addr.clone(),
+        to: parsed.to.clone(),
+        cc: parsed.cc.clone(),
+        bcc: parsed.bcc.clone(),
+        reply_to: parsed.reply_to.clone(),
+        date: parsed.date,
+        in_reply_to: parsed.in_reply_to.clone(),
+        references: parsed.references.clone(),
+        html: parsed.html.clone(),
+        text: parsed.text.clone(),
+        attachments: parsed.attachments.clone(),
+        headers: parsed.headers.clone(),
+        labels: String::new(),
+        seen: true,
+        flagged: false,
+    })
+}
+
 /// 把邮件正文另存为 `.html`（单文件，图片仍是远端地址）。
 #[command]
 pub async fn mail_save_as_html(
@@ -2353,7 +2393,7 @@ fn save_draft_locally(account: &Account, mut request: SendRequest) -> Result<u32
         name: account.display_name.clone(),
         address: account.email.clone(),
     };
-    let raw = mime::build(&request, &from, &account.signature)?;
+    let raw = mime::build_draft(&request, &from, &account.signature)?;
     pop3_sync::save_draft_copy(account, &raw)
 }
 
@@ -2448,21 +2488,32 @@ pub async fn mail_save_draft(
         name: account.display_name.clone(),
         address: account.email.clone(),
     };
-    let raw = mime::build(&request, &from, &account.signature)?;
+    let raw = mime::build_draft(&request, &from, &account.signature)?;
     let raw = insert_draft_recipients_header(raw, &original_recipients);
     let drafts = store::list_folders(&account.id)?
         .into_iter()
         .find(|f| f.role == FolderRole::Drafts)
-        .map(|f| f.name)
-        .ok_or_else(|| "账户没有草稿箱".to_string())?;
+        .map(|f| f.name);
+
+    // 没有草稿箱、或者连不上服务器（离线 / OAuth 过期）：草稿先落到本机库的 Drafts。
+    // 「只要没发出去就必须留下一份草稿」优先于「草稿必须在服务器上」——
+    // 用户关掉编辑器却看到草稿箱空空如也，比草稿暂时只在本机严重得多。
+    let Some(drafts) = drafts else {
+        return save_draft_copy_locally(&account, &raw).await;
+    };
     let acc = account.clone();
     let drafts_for_append = drafts.clone();
     let password_for_append = password.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        imap::append_to_folder(&acc, &password_for_append, &drafts_for_append, &raw, &["draft", "seen"])
+    let raw_for_append = raw.clone();
+    let appended = tauri::async_runtime::spawn_blocking(move || {
+        imap::append_to_folder(&acc, &password_for_append, &drafts_for_append, &raw_for_append, &["draft", "seen"])
     })
     .await
-    .map_err(|e| format!("保存草稿任务失败: {e}"))??;
+    .map_err(|e| format!("保存草稿任务失败: {e}"))?;
+    if let Err(error) = appended {
+        warn!(account = %account.email, error = %error, "mail: 草稿写服务器草稿箱失败，落到本机");
+        return save_draft_copy_locally(&account, &raw).await;
+    }
 
     // 立刻同步一次草稿箱，让它在侧栏里马上可见。
     // 只按 UID 增量拉，不重拉整个文件夹。
@@ -2472,10 +2523,11 @@ pub async fn mail_save_draft(
     let acc = account.clone();
     let drafts_for_sync = drafts.clone();
     let snippet_len = settings.snippet_len as usize;
+    let password_for_sync = password.clone();
     let _ = tauri::async_runtime::spawn_blocking(move || {
         imap::sync_folder(
             &acc,
-            &password,
+            &password_for_sync,
             &drafts_for_sync,
             uid_validity,
             last_uid,
@@ -2489,6 +2541,21 @@ pub async fn mail_save_draft(
     let new_uid = store::last_uid(&account.id, &drafts)?;
     let uid = if new_uid > last_uid { Some(new_uid) } else { None };
     Ok(serde_json::json!({ "folder": drafts, "uid": uid }))
+}
+
+/// 草稿落到**本机** Drafts（服务器不可达时的兜底，也是 POP3 的正常路径）。
+async fn save_draft_copy_locally(
+    account: &Account,
+    raw: &[u8],
+) -> Result<serde_json::Value, String> {
+    let raw = raw.to_vec();
+    let acc = account.clone();
+    let uid = tauri::async_runtime::spawn_blocking(move || {
+        pop3_sync::save_copy_to(&acc, "Drafts", &raw, false)
+    })
+    .await
+    .map_err(|e| format!("保存草稿任务失败: {e}"))??;
+    Ok(serde_json::json!({ "folder": "Drafts", "uid": uid, "localOnly": true }))
 }
 
 // ---------------------------------------------------------------------------
@@ -2513,6 +2580,172 @@ pub async fn mail_save_rule(app: AppHandle, rule: MailRule) -> Result<MailRule, 
     }
     store::upsert_rule(&rule)?;
     Ok(rule)
+}
+
+/// 把规则**立即**应用到库里已有的邮件上。
+///
+/// 规则平时只在「同步到新邮件」时跑一遍，所以新建一条规则后老邮件纹丝不动，
+/// 用户建完文件夹点进去是空的（真实反馈）。这里按规则的范围扫一遍本地库，
+/// 复用与新邮件完全相同的执行路径（移动 / 标记 / 打标签 / 转发）。
+#[command]
+pub async fn mail_apply_rules_to_existing(
+    app: AppHandle,
+    account_id: String,
+    rule_id: Option<String>,
+) -> Result<serde_json::Value, String> {
+    ensure_init(&app)?;
+    let account = load_account(&account_id)?;
+    let wanted = rule_id.filter(|id| !id.trim().is_empty());
+    let picked: Vec<MailRule> = store::list_rules()?
+        .into_iter()
+        .filter(|r| r.enabled)
+        .filter(|r| match &wanted {
+            Some(id) => &r.id == id,
+            None => true,
+        })
+        .collect();
+    if picked.is_empty() {
+        return Ok(serde_json::json!({ "matched": 0, "scanned": 0 }));
+    }
+    let folders = store::list_folders(&account.id)?;
+    // 规则限定了角色就只扫那些文件夹；空 = 收件箱；`*` = 全部文件夹。
+    let roles: Vec<String> = picked
+        .iter()
+        .flat_map(|r| r.condition.folder_roles.clone())
+        .collect();
+    let all_roles = roles.iter().any(|role| role == "*");
+    let targets: Vec<&MailFolder> = folders
+        .iter()
+        .filter(|f| !f.local_only)
+        .filter(|f| {
+            all_roles
+                || roles.is_empty()
+                    && f.role == FolderRole::Inbox
+                    || !roles.is_empty() && roles.iter().any(|role| *role == f.role.as_str())
+        })
+        .collect();
+
+    let body_needed = rules::needs_body(&picked);
+    let mut scanned = 0usize;
+    let mut matched = 0usize;
+    let mut batch: Vec<MessageSummary> = Vec::new();
+    for folder in targets {
+        let Ok(rows) = store::list_recent(&account.id, &folder.name, u32::MAX, 0) else {
+            continue;
+        };
+        for msg in rows {
+            scanned += 1;
+            if msg.outgoing {
+                continue;
+            }
+            let body = if body_needed {
+                store::get_body(&msg.account_id, &msg.folder, msg.uid)
+                    .ok()
+                    .flatten()
+                    .map(|(_, text, _, _)| text)
+                    .unwrap_or_default()
+            } else {
+                String::new()
+            };
+            let ctx = rules::RuleContext {
+                message: &msg,
+                body_preview: &body,
+                account: &account,
+                folder_role: folder.role.as_str(),
+            };
+            if rules::evaluate(&picked, &ctx).is_empty() {
+                continue;
+            }
+            matched += 1;
+            batch.push(msg);
+        }
+    }
+    let mut moved = 0usize;
+    if !batch.is_empty() {
+        // 源夹先记下来：移动成功的行会被删掉，事后要靠它核对到底搬走了几封。
+        let mut sources: Vec<String> = batch.iter().map(|m| m.folder.clone()).collect();
+        sources.sort();
+        sources.dedup();
+        apply_rules_to_new(&account, &batch, &picked).await;
+        if picked
+            .iter()
+            .any(|r| r.action.move_to.is_some() || r.action.delete)
+        {
+            // 「命中」不等于「搬走了」：离线时 IMAP MOVE 整批失败，只报命中数会让用户
+            // 以为规则坏了。按源夹重新数一遍还剩哪些，差值才是真的处理掉了。
+            for folder in &sources {
+                let alive: std::collections::HashSet<u32> = store::list_recent(&account.id, folder, u32::MAX, 0)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|m| m.uid)
+                    .collect();
+                moved += batch
+                    .iter()
+                    .filter(|m| &m.folder == folder && !alive.contains(&m.uid))
+                    .count();
+            }
+        } else {
+            moved = matched;
+        }
+        // 移动 / 标记都改了本地行：把涉及的文件夹计数校正一次，侧栏才不会停在旧数字。
+        let mut touched: Vec<String> = sources;
+        // 目标夹里只有服务器上的那一封，本地库还没有对应的行：不补这一次同步，
+        // 用户点进刚在规则里新建的文件夹看到的仍然是空的（真实反馈）。
+        if !pop3_sync::is_pop3(&account) {
+            for dest in rule_target_folders(&picked) {
+                if sync_folder_once(&account, &dest).await {
+                    touched.push(dest);
+                }
+            }
+        }
+        touched.sort();
+        touched.dedup();
+        for folder in touched {
+            refresh_folder_totals(&account.id, &folder);
+        }
+    }
+    Ok(serde_json::json!({ "matched": matched, "scanned": scanned, "moved": moved }))
+}
+
+/// 这批规则会把邮件送去哪些文件夹（移动与复制的目标，去重后返回）。
+fn rule_target_folders(rules: &[MailRule]) -> Vec<String> {
+    let mut out: Vec<String> = rules
+        .iter()
+        .flat_map(|r| [r.action.move_to.clone(), r.action.copy_to.clone()])
+        .flatten()
+        .map(|name| name.trim().to_string())
+        .filter(|name| !name.is_empty())
+        .collect();
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// 增量拉一个文件夹，让刚被规则移进去的邮件立刻在本地可见。
+/// 离线 / 认证过期就返回 false：这次没同步成，等常规同步再补，不影响已完成的移动。
+async fn sync_folder_once(account: &Account, folder: &str) -> bool {
+    let Ok(password) = account_password(account) else {
+        return false;
+    };
+    let Ok((uid_validity, _)) = store::folder_uid_state(&account.id, folder) else {
+        return false;
+    };
+    let Ok(last_uid) = store::last_uid(&account.id, folder) else {
+        return false;
+    };
+    let snippet_len = store::load_settings().snippet_len as usize;
+    let acc = account.clone();
+    let name = folder.to_string();
+    let synced = tauri::async_runtime::spawn_blocking(move || {
+        imap::sync_folder(&acc, &password, &name, uid_validity, last_uid, snippet_len)
+    })
+    .await
+    .map(|result| result.is_ok())
+    .unwrap_or(false);
+    if !synced {
+        warn!(account = %account.email, folder = %folder, "mail: 规则目标文件夹同步失败");
+    }
+    synced
 }
 
 #[command]

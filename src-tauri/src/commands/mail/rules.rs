@@ -54,14 +54,18 @@ fn conditions_match(cond: &RuleCondition, ctx: &RuleContext<'_>) -> bool {
     if !cond.account_ids.is_empty() && !cond.account_ids.iter().any(|id| id == &msg.account_id) {
         return false;
     }
-    // 文件夹范围：空表示「收件箱」（Outlook 默认）。
-    if !cond.folder_roles.is_empty() {
-        if !cond.folder_roles.iter().any(|r| r == ctx.folder_role) {
-            return false;
-        }
-    } else if ctx.folder_role != "inbox" {
+    // 文件夹范围：空表示「收件箱」（Outlook 默认）；`*` 表示所有文件夹。
+    if cond.folder_roles.is_empty() {
         // 只有明确指定了文件夹角色的规则才处理非收件箱邮件；
         // 否则「把所有来自 X 的邮件归档」会把已发送的回复也挪走。
+        if ctx.folder_role != "inbox" {
+            return false;
+        }
+    } else if !cond
+        .folder_roles
+        .iter()
+        .any(|role| role == "*" || role == ctx.folder_role)
+    {
         return false;
     }
 

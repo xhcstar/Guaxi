@@ -25,6 +25,12 @@
       @apply-template="applyTemplate"
       @check-attachments="onCheckAttachments"
     />
+
+    <!-- 窗口里没有主界面那套 toast：草稿有没有存上、存到了服务器还是只在本机，
+         必须在这里说一句，否则用户只能靠猜（关掉窗口发现草稿箱是空的，就会以为丢了）。 -->
+    <div v-if="notice" class="mail-compose-notice" :class="{ 'is-error': notice.error }">
+      {{ notice.text }}
+    </div>
   </div>
 </template>
 
@@ -59,10 +65,20 @@ const settings = windowSettings
 const templates = windowTemplates
 const draft = windowDraft
 const attachmentChecks = ref([])
+/** 窗口内的轻量提示：草稿存上了 / 只存到本机 / 存失败，都要说一句。 */
+const notice = ref(null)
+let noticeTimer = null
 
-const notify = (text) => {
-  // 窗口很小，用一个轻量提示条即可（不引入主窗口的 toast 机制）。
+function showNotice(text, error = false) {
+  if (!text) return
+  notice.value = { text, error }
+  clearTimeout(noticeTimer)
+  noticeTimer = setTimeout(() => (notice.value = null), error ? 5200 : 2600)
+}
+
+const notify = (text, error = false) => {
   console.warn('[mail-compose]', text)
+  showNotice(text, error)
   window.dispatchEvent(new CustomEvent('mail-compose-notice', { detail: text }))
 }
 
@@ -142,6 +158,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   unlistenClose?.()
+  clearTimeout(noticeTimer)
 })
 </script>
 
@@ -166,5 +183,23 @@ onBeforeUnmount(() => {
 .mail-compose-window-state.is-error p {
   margin: 0;
   line-height: 1.7;
+}
+.mail-compose-notice {
+  position: fixed;
+  left: 50%;
+  bottom: 22px;
+  transform: translateX(-50%);
+  z-index: 30;
+  max-width: 70vw;
+  padding: 8px 16px;
+  border-radius: 999px;
+  background: var(--mail-text);
+  color: var(--mail-bg);
+  font-size: 12.5px;
+  box-shadow: var(--mail-shadow);
+}
+.mail-compose-notice.is-error {
+  background: var(--mail-danger);
+  color: #fff;
 }
 </style>

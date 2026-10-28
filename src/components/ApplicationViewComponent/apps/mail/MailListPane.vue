@@ -133,7 +133,7 @@
           @keydown.enter="$emit('open', item.row)"
           @contextmenu.prevent="onRowContextMenu(item.row, $event)"
           @dragstart="onDragStart(item.row, $event)"
-          @dragend="$emit('drag-end')"
+          @dragend="onDragEnd"
         >
           <MailRowContent
             :row="item.row"
@@ -164,7 +164,7 @@
           @keydown.enter="$emit('open', row)"
           @contextmenu.prevent="onRowContextMenu(row, $event)"
           @dragstart="onDragStart(row, $event)"
-          @dragend="$emit('drag-end')"
+          @dragend="onDragEnd"
         >
           <MailRowContent
             :row="row"
@@ -351,7 +351,16 @@ function onDragStart(row, event) {
   // 拖动已选中的行时整批一起走；否则只走这一行。
   const payload = isChecked(row) ? [...props.selectedKeys] : [keyOf(row)]
   event.dataTransfer.setData('text/x-guaxi-mail', JSON.stringify(payload))
+  // 从行内的文字上起拖时，Chromium 拖的是「那段文字」而不是整行，
+  // dataTransfer 里就只有 text/plain —— 侧栏光靠自定义类型会认不出来。
+  // 拖拽期间在 body 上打个标记，落点处按「类型或标记」双条件判断。
+  document.body.classList.add('mail-dragging')
   emit('drag-start', row)
+}
+
+function onDragEnd() {
+  document.body.classList.remove('mail-dragging')
+  emit('drag-end')
 }
 
 function onBatchMove(event) {

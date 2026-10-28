@@ -42,6 +42,7 @@
         @accounts="openAccounts"
         @contacts="showContacts = true"
         @rules="showRules = true"
+        @open-eml="onOpenEml"
         @settings="openSettings"
         @replay-offline="onReplayOffline"
       />
@@ -219,7 +220,7 @@
                 @save-draft="onSaveDraft"
                 @apply-template="(tpl) => store.applyTemplate(tpl)"
                 @check-attachments="onCheckAttachments"
-                @close="store.closeCompose"
+                @close="onCloseCompose"
               />
             </div>
           </template>
@@ -255,7 +256,7 @@
       @save-draft="onSaveDraft"
       @apply-template="(tpl) => store.applyTemplate(tpl)"
       @check-attachments="onCheckAttachments"
-      @close="store.closeCompose"
+      @close="onCloseCompose"
     />
 
     <!-- 账户管理 -->
@@ -285,9 +286,17 @@
       @open-message="onOpenContactMessage"
     />
 
+    <!-- 查看本机保存的 .eml -->
+    <MailEmlDialog
+      v-if="emlDetail"
+      :detail="emlDetail"
+      :path="emlPath"
+      :theme-mode="store.theme?.mode || 'dark'"
+      @close="emlDetail = null"
+    />
+
     <!-- 规则管理 -->
-    <MailRulesDialog
-      v-if="showRules"
+    <MailRulesDialog      v-if="showRules"
       :rules="store.rules"
       :accounts="store.accounts"
       :folders-by-account="store.foldersByAccount"
@@ -295,6 +304,7 @@
       :sender-rules="store.senderRules"
       :create-folder-fn="onCreateFolderFromRules"
       :refresh-folders-fn="onRefreshFoldersFromRules"
+      :save-rule-fn="onSaveRuleFromDialog"
       @close="showRules = false"
       @save="store.saveRule"
       @delete="store.deleteRule"
@@ -377,28 +387,39 @@
       <div
         class="mail-context-item is-parent"
         :class="{ 'is-open': contextSubmenu === 'move' }"
-        @mouseenter="openSubmenu('move')"
+        @mouseenter="openSubmenu('move', $event)"
         @mouseleave="scheduleSubmenuClose"
       >
         <span>移动</span>
         <span class="mail-context-chevron" aria-hidden="true">›</span>
-        <div v-if="contextSubmenu === 'move'" class="mail-context-submenu" @click.stop>
-          <div v-if="!contextFolders.length" class="mail-context-empty">没有可移动到的文件夹</div>
-          <button
-            v-for="folder in contextFolders"
-            :key="folder.name"
-            class="mail-context-item"
-            :class="{ 'is-current': folder.name === contextMenu.row?.folder }"
-            :title="folder.name"
-            @click="contextAction('move', folder.name)"
-          >
-            {{ folder.displayName }}
-          </button>
-        </div>
       </div>
       <div class="mail-context-sep"></div>
       <button class="mail-context-item" @click="contextAction('saveEml')">另存为 .eml（含附件）</button>
       <button class="mail-context-item" @click="contextAction('saveHtml')">另存为 .html（正文）</button>
+    </div>
+
+    <!-- 「移动」的子菜单挂在主菜单外面、用 fixed 定位：
+         主菜单自己有 max-height + overflow-y:auto，写在里面的绝对定位子菜单
+         会被这个滚动容器裁掉——表现就是右键「移动」看不到任何文件夹。 -->
+    <div
+      v-if="contextMenu && contextSubmenu === 'move'"
+      class="mail-context mail-context-submenu"
+      :style="{ left: `${submenuPos.x}px`, top: `${submenuPos.y}px` }"
+      @click.stop
+      @mouseenter="keepSubmenu"
+      @mouseleave="scheduleSubmenuClose"
+    >
+      <div v-if="!contextFolders.length" class="mail-context-empty">没有可移动到的文件夹</div>
+      <button
+        v-for="folder in contextFolders"
+        :key="folder.name"
+        class="mail-context-item"
+        :class="{ 'is-current': folder.name === contextMenu.row?.folder }"
+        :title="folder.name"
+        @click="contextAction('move', folder.name)"
+      >
+        {{ folder.displayName }}
+      </button>
     </div>
 
     <!-- 底部提示 -->
@@ -457,6 +478,7 @@ import MailReader from './mail/MailReader.vue'
 import MailComposer from './mail/MailComposer.vue'
 import MailAccountDialog from './mail/MailAccountDialog.vue'
 import MailRulesDialog from './mail/MailRulesDialog.vue'
+import MailEmlDialog from './mail/MailEmlDialog.vue'
 import ContactsDialog from './mail/ContactsDialog.vue'
 import MailSettingsDrawer from './mail/MailSettingsDrawer.vue'
 
@@ -465,6 +487,9 @@ const logger = createLogger('MailApp')
 
 const showAccounts = ref(false)
 const showRules = ref(false)
+/** 顶栏「打开 .eml」：解析出来的本机邮件文件。 */
+const emlDetail = ref(null)
+const emlPath = ref('')
 const showContacts = ref(false)
 const showSettings = ref(false)
 const showShortcuts = ref(false)
@@ -662,7 +687,7 @@ watch(
     if (key) activeKey.value = key
     // 内联回复跟着当前邮件走：换一封/关掉阅读区时把它存进草稿箱，
     // 否则回复卡片会挂在另一封邮件头上。
-    if (detailKey && detailKey !== key && store.composing) store.closeCompose()
+    if (detailKey && detailKey !== key && store.composing) onCloseCompose()
     detailKey = key
   },
 )
@@ -772,10 +797,12 @@ onMounted(async () => {
   if (window.location.search.includes('setup=1')) showAccounts.value = true
   try {
     const { listen } = await import('@tauri-apps/api/event')
-    stopComposeClosed = await listen('mail-compose:closed', () => {
+    stopComposeClosed = await listen('mail-compose:closed', (event) => {
       store.loadOutbox().catch(() => {})
       store.loadFolders(store.activeAccountId, { refresh: true }).catch(() => {})
       store.loadMessages({ silent: true }).catch(() => {})
+      // 独立窗口里存上的草稿，回到主窗口要能看见这条消息——否则「我刚才写的呢」。
+      if (event?.payload?.saved) notify('未发送，已存入草稿箱')
     })
   } catch {
     /* 非 Tauri 环境（浏览器预览）没有事件系统，忽略即可 */
@@ -793,6 +820,21 @@ onBeforeUnmount(() => {
 })
 
 // ---------------- 操作 ----------------
+
+/**
+ * 关闭编辑器：把「有没有真的存进草稿箱」说清楚。
+ *
+ * 存失败只在控制台里留一行日志是不够的——用户判断「有没有存」的唯一依据是
+ * 草稿箱里能不能看到那封，看不见就当没存（真实反馈）。
+ */
+async function onCloseCompose() {
+  const result = await store.closeCompose()
+  if (!result || result.skipped || !result.saved) {
+    if (result?.error) notify(`草稿没有保存：${result.error}`, true)
+    return
+  }
+  notify(result.localOnly ? '未发送，已存到本机草稿箱（服务器未连接）' : '未发送，已存入草稿箱')
+}
 
 async function onSync() {
   const result = await store.syncNow()
@@ -826,7 +868,49 @@ function onRefreshFoldersFromRules() {
   store.loadFolders(store.activeAccountId, { refresh: true }).catch(() => {})
 }
 
-async function onDeleteFolder(folder) {  if (folder.role !== 'custom') {
+/**
+ * 保存规则，并按需立刻对库里已有的邮件执行一遍。
+ *
+ * 规则平时只在同步到新邮件时跑，所以「建了规则 + 建了文件夹」之后点进新文件夹
+ * 还是空的（真实反馈）。勾选立即执行时扫一遍已有邮件，并把命中条数说清楚——
+ * 命中 0 封也要说，否则用户会以为按钮没生效。
+ */
+async function onSaveRuleFromDialog(rule, applyExisting = false) {
+  const saved = await store.saveRule(rule)
+  if (!applyExisting) {
+    notify(`规则「${saved.name}」已保存，将作用于之后收到的新邮件`)
+    return saved
+  }
+  const accountId = store.activeAccountId || store.accounts[0]?.id
+  if (!accountId) {
+    notify('没有可用账户，无法对已有邮件执行规则', true)
+    return saved
+  }
+  const result = await invoke('mail_apply_rules_to_existing', { accountId, ruleId: saved.id })
+  const matched = Number(result?.matched) || 0
+  const scanned = Number(result?.scanned) || 0
+  // moved 是后端按「源夹里少了几行」数出来的真数：离线时 IMAP MOVE 会整批失败，
+  // 只报命中数就会变成「提示成功、文件夹里还是空的」。
+  const moved = Number(result?.moved) || 0
+  const partial = matched > 0 && moved < matched
+  notify(
+    !matched
+      ? `已检查 ${scanned} 封已有邮件，没有命中这条规则的`
+      : partial
+        ? `命中 ${matched} 封，实际处理 ${moved} 封——其余没能连上服务器，等下次同步再补`
+        : `已对已有邮件执行：${matched} 封已按规则处理（共检查 ${scanned} 封）`,
+    partial,
+  )
+  await Promise.all([
+    store.loadFolders(accountId).catch(() => {}),
+    store.loadMessages({ silent: true }).catch(() => {}),
+    store.reloadUnread().catch(() => {}),
+  ])
+  return saved
+}
+
+async function onDeleteFolder(folder) {
+  if (folder.role !== 'custom') {
     notify('系统文件夹不能删除', true)
     return
   }
@@ -961,6 +1045,29 @@ async function onRefreshFolders() {
   await store.refreshFolders()
   await store.loadMessages({ silent: true })
   notify('文件夹已刷新')
+}
+
+/**
+ * 顶栏「打开 .eml」：选一个本机保存的邮件文件来看。
+ *
+ * 「另存为 .eml」一直只有出口，存下来的文件想看还得换程序；这里补上入口。
+ * 解析与清洗都在后端做（与收信完全同一条路径），前端只负责渲染。
+ */
+async function onOpenEml() {
+  try {
+    const { open } = await import('@tauri-apps/plugin-dialog')
+    const path = await open({
+      title: '打开邮件文件',
+      multiple: false,
+      filters: [{ name: '邮件文件', extensions: ['eml', 'EML', 'msg'] }],
+    })
+    if (!path) return
+    const detail = await invoke('mail_read_eml', { path })
+    emlPath.value = path
+    emlDetail.value = detail
+  } catch (error) {
+    notify(String(error?.message || error), true)
+  }
 }
 
 async function onOpenMessage(row) {
@@ -1292,6 +1399,9 @@ function onRowContextMenu({ row, event }) {
   const rows = inSelection ? store.selectedRows() : [row]
   contextMenu.value = { row, rows, x, y }
   contextSubmenu.value = ''
+  // 右键即刷新一次该账户的文件夹表：在别处（网页端 / 本机其它入口）新建的文件夹
+  // 要能马上出现在「移动」子菜单里，而不是等下一轮同步。
+  if (row.accountId) store.loadFolders(row.accountId, { refresh: true }).catch(() => {})
   setTimeout(() => document.addEventListener('click', closeContextMenu, { once: true }), 0)
 }
 
@@ -1373,15 +1483,30 @@ async function contextAction(action, target) {
 }
 /** 右键菜单里正在展开的子菜单（目前只有「移动」）。 */
 const contextSubmenu = ref('')
+/** 子菜单的视口坐标（fixed 定位，见模板里的说明）。 */
+const submenuPos = ref({ x: 0, y: 0 })
 let submenuTimer = null
 
-function openSubmenu(name) {
+function openSubmenu(name, event) {
   clearTimeout(submenuTimer)
   contextSubmenu.value = name
+  const rect = event?.currentTarget?.getBoundingClientRect?.()
+  if (!rect) return
+  const height = Math.min(window.innerHeight * 0.6, 460)
+  submenuPos.value = {
+    x: Math.min(rect.right + 2, Math.max(8, window.innerWidth - 260)),
+    y: Math.min(rect.top, Math.max(8, window.innerHeight - height - 8)),
+  }
+}
+
+/** 鼠标从父项移进子菜单时会短暂离开父项：收到子菜单上要重新计时，否则点不到。 */
+function keepSubmenu() {
+  clearTimeout(submenuTimer)
+  contextSubmenu.value = 'move'
 }
 
 /**
- * 收起子菜单前留一点延迟：鼠标从父项斜着移进子菜单时会短暂离开父项，
+ * 收起子菜单前留一点延迟：鼠标斜着移过去会短暂离开两侧元素，
  * 立刻收起的话子菜单根本点不到。
  */
 function scheduleSubmenuClose() {
@@ -1460,7 +1585,7 @@ async function onDropOnFolder(folderName) {
       notify(`已移到垃圾邮件（${targets.length} 封）`)
     } else {
       await store.runBatch('move', folderName, targets)
-      notify(`已移动 ${targets.length} 封到该文件夹`)
+      notify(`已移动 ${targets.length} 封到「${folder?.displayName || folderName}」`)
     }
     if (skipped) notify(`另有 ${skipped} 封属于其它账户，没有移动`, true)
   } catch (error) {
@@ -1924,9 +2049,9 @@ defineExpose({ expandThread })
   font-size: 10.5px;
 }
 .mail-context-submenu {
-  position: absolute;
-  left: calc(100% - 4px);
-  top: -5px;
+  /* 与主菜单同级、fixed 定位：主菜单是 overflow-y:auto 的滚动容器，
+     画在里面的绝对定位子菜单会被它裁掉——右键「移动」看不到文件夹就是这个原因。 */
+  position: fixed;
   z-index: 61;
   min-width: 180px;
   max-width: 300px;
