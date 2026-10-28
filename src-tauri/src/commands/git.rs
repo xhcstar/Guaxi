@@ -43,6 +43,121 @@ fn git_output_message(output: &std::process::Output) -> String {
     }
 }
 
+/// 执行 git 子进程。分支、合并、贮藏这类需要维护 .git 内部状态的操作交给
+/// 官方 CLI 处理，比自己拼 MERGE_HEAD / stash reflog 更可靠；参数全部走 argv，
+/// 不经过 shell，因此分支名里带空格或 `-` 也不会被解释成选项。
+fn run_git_output(
+    repo_dir: &Path,
+    args: &[&str],
+) -> Result<std::process::Output, String> {
+    let mut cmd = std::process::Command::new("git");
+    apply_git_hidden_window(&mut cmd);
+    cmd.current_dir(repo_dir)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GCM_INTERACTIVE", "never")
+        .args(args)
+        .output()
+        .map_err(|e| format!("无法执行 git（请确认已安装 Git 且已加入 PATH）：{}", e))
+}
+
+fn run_git(repo_dir: &Path, args: &[&str]) -> Result<String, String> {
+    let output = run_git_output(repo_dir, args)?;
+    if output.status.success() {
+        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    } else {
+        Err(git_output_message(&output))
+    }
+}
+
+fn conflict_paths_from_index(repo: &Repository) -> Vec<String> {
+    let mut paths = BTreeSet::new();
+    if let Ok(index) = repo.index() {
+        if let Ok(conflicts) = index.conflicts() {
+            for conflict in conflicts.flatten() {
+                for entry in [conflict.our, conflict.their, conflict.ancestor]
+                    .into_iter()
+                    .flatten()
+                {
+                    if let Ok(path) = String::from_utf8(entry.path) {
+                        paths.insert(path);
+                    }
+                }
+            }
+        }
+    }
+    paths.into_iter().collect()
+}
+
+fn blob_text(repo: &Repository, oid: Oid) -> Option<String> {
+    repo.find_blob(oid)
+        .ok()
+        .and_then(|blob| String::from_utf8(blob.content().to_vec()).ok())
+}
+
+/// 本地分支相对 upstream 的 (upstream 名, ahead, behind)。
+/// 没有配置 upstream 时退回 origin/<同名分支>：用户第一次推送前也能看到领先/落后。
+fn branch_tracking(repo: &Repository, branch: &git2::Branch<'_>) -> (Option<String>, usize, usize) {
+    let local_oid = branch.get().target();
+
+    if let Ok(upstream) = branch.upstream() {
+        let name = upstream
+            .get()
+            .name()
+            .map(|n| n.trim_start_matches("refs/remotes/").to_string());
+        let counts = match (local_oid, upstream.get().target()) {
+            (Some(local), Some(remote)) => repo.graph_ahead_behind(local, remote).unwrap_or((0, 0)),
+            _ => (0, 0),
+        };
+        return (name, counts.0, counts.1);
+    }
+
+    let fallback_name = branch
+        .name()
+        .ok()
+        .flatten()
+        .and_then(|name| {
+            let reference_name = format!("refs/remotes/origin/{}", name);
+            repo.find_reference(&reference_name)
+                .ok()
+                .map(|reference| (format!("origin/{}", name), reference.target()))
+        });
+    if let Some((label, remote_oid)) = fallback_name {
+        let counts = match (local_oid, remote_oid) {
+            (Some(local), Some(remote)) => repo.graph_ahead_behind(local, remote).unwrap_or((0, 0)),
+            _ => (0, 0),
+        };
+        return (Some(label), counts.0, counts.1);
+    }
+
+    (None, 0, 0)
+}
+
+/// 写入合并结果到工作区并把该路径加进索引。`add_path` 会把当前路径的
+/// stage 1/2/3 冲突条目替换成 stage 0，等价于 `git add <file>`。
+fn write_and_stage_file(repo: &Repository, file_path: &str, content: &str) -> Result<(), String> {
+    let rel = Path::new(file_path);
+    if rel.is_absolute()
+        || rel
+            .components()
+            .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
+        return Err(format!("非法文件路径: {}", file_path));
+    }
+
+    let abs = repo_workdir_file_path(repo, "", rel);
+    if let Some(parent) = abs.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("创建目录失败: {}", e))?;
+    }
+    std::fs::write(&abs, content.as_bytes()).map_err(|e| format!("写入文件失败: {}", e))?;
+
+    let mut index = repo.index().map_err(|e| format!("读取索引失败: {}", e))?;
+    index
+        .add_path(rel)
+        .map_err(|e| format!("加入索引失败: {}", e))?;
+    index.write().map_err(|e| format!("写入索引失败: {}", e))?;
+    Ok(())
+}
+
 fn repo_workdir_path(repo: &Repository, fallback_path: &str) -> PathBuf {
     repo.workdir()
         .unwrap_or_else(|| Path::new(fallback_path))
@@ -256,6 +371,9 @@ pub struct GitChange {
     // 非重命名条目该字段为 None（序列化为 null）。
     #[serde(skip_serializing_if = "Option::is_none")]
     orig_path: Option<String>,
+    // 合并冲突文件不进“更改 / 已暂存”，由前端的“合并更改”分组单独展示。
+    #[serde(default)]
+    conflicted: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -272,6 +390,56 @@ pub struct GitDiffHunk {
 pub struct GitBranch {
     name: String,
     is_current: bool,
+    #[serde(default)]
+    is_remote: bool,
+    #[serde(default)]
+    upstream: Option<String>,
+    #[serde(default)]
+    ahead: usize,
+    #[serde(default)]
+    behind: usize,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct GitSyncState {
+    branch: Option<String>,
+    detached: bool,
+    upstream: Option<String>,
+    ahead: usize,
+    behind: usize,
+    has_remote: bool,
+    merging: bool,
+    rebasing: bool,
+    cherry_picking: bool,
+    stash_count: usize,
+    conflicted: usize,
+}
+
+/// 合并 / 拣选 / 还原 / 贮藏这类可能产生冲突的操作统一返回这个结构：
+/// 前端据此决定是弹成功提示，还是把用户引导到「合并更改」。
+#[derive(Debug, Serialize, Deserialize)]
+pub struct GitOperationOutcome {
+    status: String,
+    message: String,
+    conflicts: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct GitStashEntry {
+    index: usize,
+    selector: String,
+    message: String,
+    oid: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ConflictFile {
+    path: String,
+    base: Option<String>,
+    ours: Option<String>,
+    theirs: Option<String>,
+    working: String,
+    binary: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -346,11 +514,14 @@ pub async fn get_git_status(path: String) -> Result<Vec<GitChange>, String> {
         let mut index = repo
             .index()
             .map_err(|e| format!("Failed to get repository index: {}", e))?;
-        let index_tree_oid = index
-            .write_tree()
-            .map_err(|e| format!("Failed to write index tree: {}", e))?;
+        // 合并冲突时 index 里同时存在 stage 1/2/3，libgit2 不允许写成 tree（EUNMERGED）。
+        // 这时退回 HEAD 树：冲突条目本身会被单独标成 conflicted，其它文件的展示不受影响。
+        let index_tree_id = match index.write_tree() {
+            Ok(oid) => oid,
+            Err(_) => head_tree.id(),
+        };
         let index_tree = repo
-            .find_tree(index_tree_oid)
+            .find_tree(index_tree_id)
             .map_err(|e| format!("Failed to find index tree: {}", e))?;
 
         let mut options = StatusOptions::new();
@@ -388,6 +559,24 @@ pub async fn get_git_status(path: String) -> Result<Vec<GitChange>, String> {
             // 暂存也只会把它变成一个 gitlink，所以直接不进变更列表。
             if rel_path.ends_with('/') || rel_path.ends_with('\\') {
                 debug!("Skipping directory entry in git status: {}", rel_path);
+                continue;
+            }
+
+            // 合并冲突没有“已暂存/未暂存”的二分：index 里同时存在 1/2/3 三个阶段。
+            // 单独作为 conflicted 条目返回，前端放到「合并更改」分组里。
+            let st = entry.status();
+            if st.is_conflicted() {
+                changes.push(GitChange {
+                    path: rel_path.clone(),
+                    status: "U".to_string(),
+                    lines_added: Vec::new(),
+                    lines_modified: Vec::new(),
+                    lines_deleted: Vec::new(),
+                    diff: String::new(),
+                    staged: false,
+                    orig_path: None,
+                    conflicted: true,
+                });
                 continue;
             }
 
@@ -497,13 +686,13 @@ pub async fn get_git_status(path: String) -> Result<Vec<GitChange>, String> {
                         diff: String::new(),
                         staged,
                         orig_path,
+                        conflicted: false,
                     });
                     Ok(())
                 };
 
             // 设计说明：同一路径可能同时存在“已暂存”和“未暂存”两份差异。
             // VS Code 会在两个分组各显示一个条目；这里不能用 else-if 折叠掉工作区状态。
-            let st = entry.status();
             if st.is_index_new() {
                 append_change("A", true, &rel_path, None)?;
             } else if st.is_index_modified() {
@@ -617,11 +806,6 @@ pub fn list_branches(path: String) -> Result<Vec<GitBranch>, String> {
         e.to_string()
     })?;
 
-    let branches = repo.branches(Some(BranchType::Local)).map_err(|e| {
-        error!("Failed to list branches: {}", e);
-        e.to_string()
-    })?;
-
     let current_branch = repo
         .head()
         .ok()
@@ -630,7 +814,12 @@ pub fn list_branches(path: String) -> Result<Vec<GitBranch>, String> {
     debug!("Current branch: {:?}", current_branch);
 
     let mut result = Vec::new();
-    for branch in branches {
+
+    let local_branches = repo.branches(Some(BranchType::Local)).map_err(|e| {
+        error!("Failed to list local branches: {}", e);
+        e.to_string()
+    })?;
+    for branch in local_branches {
         let (branch, _) = branch.map_err(|e| {
             error!("Failed to process branch: {}", e);
             e.to_string()
@@ -643,26 +832,87 @@ pub fn list_branches(path: String) -> Result<Vec<GitBranch>, String> {
             })?
             .unwrap_or_default()
             .to_string();
-        let name_clone = name.clone();
+        let (upstream, ahead, behind) = branch_tracking(&repo, &branch);
         result.push(GitBranch {
+            is_current: current_branch.as_deref() == Some(name.as_str()),
             name,
-            is_current: current_branch
-                .as_ref()
-                .map_or(false, |cb| cb == &name_clone),
+            is_remote: false,
+            upstream,
+            ahead,
+            behind,
         });
     }
+
+    // 远端分支也带上，分支选择器才能直接检出 origin/xxx（本地不存在时后端会自动建跟踪分支）。
+    if let Ok(remote_branches) = repo.branches(Some(BranchType::Remote)) {
+        for (branch, _) in remote_branches.flatten() {
+            let Ok(Some(name)) = branch.name() else {
+                continue;
+            };
+            if name.ends_with("/HEAD") {
+                continue;
+            }
+            result.push(GitBranch {
+                name: name.to_string(),
+                is_current: false,
+                is_remote: true,
+                upstream: None,
+                ahead: 0,
+                behind: 0,
+            });
+        }
+    }
+
+    // 当前分支置顶，其余本地分支在前、远端分支在后，各组内按名字排序。
+    result.sort_by(|a, b| {
+        b.is_current
+            .cmp(&a.is_current)
+            .then(a.is_remote.cmp(&b.is_remote))
+            .then(a.name.cmp(&b.name))
+    });
 
     info!("Found {} branches", result.len());
     Ok(result)
 }
 
 #[tauri::command]
-pub fn git_commit(path: String, message: String) -> Result<(), String> {
+pub fn git_commit(
+    path: String,
+    message: String,
+    amend: Option<bool>,
+    all: Option<bool>,
+) -> Result<(), String> {
     info!("Committing changes to path: {}", path);
     let repo = Repository::discover(&path).map_err(|e| {
         error!("Failed to discover repository: {}", e);
         e.to_string()
     })?;
+
+    let amend = amend.unwrap_or(false);
+    let all_changes = all.unwrap_or(false);
+
+    // --amend / -a 需要重建父提交或自动暂存已跟踪文件；合并 / 拣选 / 还原
+    // 进行中时还要带上第二个父提交并清理 MERGE_HEAD；仓库还没有第一个提交时
+    // git2 也拿不到父提交。这几种都交给 git CLI。
+    let has_head = repo.head().is_ok();
+    let needs_cli_commit =
+        amend || all_changes || !has_head || repo.state() != git2::RepositoryState::Clean;
+    if needs_cli_commit {
+        let repo_dir = repo_workdir_path(&repo, &path);
+        let mut args: Vec<String> = vec!["commit".to_string()];
+        if all_changes {
+            args.push("-a".to_string());
+        }
+        if amend {
+            args.push("--amend".to_string());
+        }
+        args.push("-m".to_string());
+        args.push(message);
+        let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+        run_git(&repo_dir, &arg_refs)?;
+        info!("Commit successful (cli)");
+        return Ok(());
+    }
 
     let mut index = repo.index().map_err(|e| {
         error!("Failed to get repository index: {}", e);
@@ -885,7 +1135,7 @@ pub fn auto_commit_cellmeta_changes(path: String) -> Result<AutoCellmetaCommitRe
 }
 
 #[tauri::command]
-pub fn git_push(path: String) -> Result<(), String> {
+pub fn git_push(path: String, force: Option<bool>) -> Result<(), String> {
     info!("Pushing changes to remote for path: {}", path);
     let repo = Repository::discover(&path).map_err(|e| {
         error!("Failed to discover repository: {}", e);
@@ -898,34 +1148,19 @@ pub fn git_push(path: String) -> Result<(), String> {
         .and_then(|h| h.shorthand().map(|s| s.to_string()))
         .unwrap_or_else(|| "main".to_string());
 
-    let repo_dir = repo.workdir().unwrap_or_else(|| Path::new(&path));
-    let mut git_cmd = std::process::Command::new("git");
-    #[cfg(windows)]
-    git_cmd.creation_flags(0x0800_0000);
-    let output = git_cmd
-        .current_dir(repo_dir)
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .env("GCM_INTERACTIVE", "never")
-        .arg("push")
-        .arg("-u")
-        .arg("origin")
-        .arg(&current_branch)
-        .output()
-        .map_err(|e| format!("无法执行 git（请确认已安装 Git 且已加入 PATH）：{}", e))?;
-
-    if !output.status.success() {
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let msg = if stdout.trim().is_empty() {
-            stderr.trim().to_string()
-        } else if stderr.trim().is_empty() {
-            stdout.trim().to_string()
-        } else {
-            format!("{}\n{}", stdout.trim_end(), stderr.trim_start())
-        };
-        return Err(format!("git push 失败（{}）：{}", current_branch, msg));
+    let repo_dir = repo_workdir_path(&repo, &path);
+    let mut args: Vec<&str> = vec!["push", "-u"];
+    if force.unwrap_or(false) {
+        // 强制推送只允许 --force-with-lease：远端有新提交时会被拒绝，避免覆盖他人工作。
+        args.push("--force-with-lease");
     }
+    args.push("origin");
+    args.push(&current_branch);
 
+    run_git(&repo_dir, &args)
+        .map_err(|e| format!("git push 失败（{}）：{}", current_branch, e))?;
+
+    info!("Push successful");
     return Ok(());
 
     #[cfg(any())]
@@ -1054,7 +1289,7 @@ pub fn git_push(path: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn git_pull(path: String) -> Result<(), String> {
+pub fn git_pull(path: String, rebase: Option<bool>) -> Result<(), String> {
     info!("Pulling changes for path: {}", path);
     let repo = Repository::discover(&path).map_err(|e| {
         error!("Failed to discover repository: {}", e);
@@ -1068,34 +1303,16 @@ pub fn git_pull(path: String) -> Result<(), String> {
         .and_then(|h| h.shorthand().map(|s| s.to_string()))
         .unwrap_or_else(|| "main".to_string());
 
-    let repo_dir = repo.workdir().unwrap_or_else(|| Path::new(&path));
-    let mut git_cmd = std::process::Command::new("git");
-    #[cfg(windows)]
-    git_cmd.creation_flags(0x0800_0000);
-    let output = git_cmd
-        .current_dir(repo_dir)
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .env("GCM_INTERACTIVE", "never")
-        .arg("pull")
-        .arg("--ff-only")
-        .arg("origin")
-        .arg(&current_branch)
-        .output()
-        .map_err(|e| format!("无法执行 git（请确认已安装 Git 且已加入 PATH）：{}", e))?;
+    let repo_dir = repo_workdir_path(&repo, &path);
+    let strategy = if rebase.unwrap_or(false) {
+        "--rebase"
+    } else {
+        "--ff-only"
+    };
+    run_git(&repo_dir, &["pull", strategy, "origin", &current_branch])
+        .map_err(|e| format!("git pull 失败（{}）：{}", current_branch, e))?;
 
-    if !output.status.success() {
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let msg = if stdout.trim().is_empty() {
-            stderr.trim().to_string()
-        } else if stderr.trim().is_empty() {
-            stdout.trim().to_string()
-        } else {
-            format!("{}\n{}", stdout.trim_end(), stderr.trim_start())
-        };
-        return Err(format!("git pull 失败（{}）：{}", current_branch, msg));
-    }
-
+    info!("Pull successful");
     return Ok(());
 
     #[cfg(any())]
@@ -1266,27 +1483,63 @@ pub fn git_pull(path: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn create_branch(path: String, branch_name: String) -> Result<(), String> {
-    info!("Creating branch: {} for path: {}", branch_name, path);
+pub fn create_branch(
+    path: String,
+    branch_name: String,
+    start_point: Option<String>,
+    checkout: Option<bool>,
+) -> Result<(), String> {
+    info!(
+        "Creating branch: {} for path: {} (start_point={:?})",
+        branch_name, path, start_point
+    );
     let repo = Repository::discover(&path).map_err(|e| {
         error!("Failed to discover repository: {}", e);
         e.to_string()
     })?;
 
-    let head = repo.head().map_err(|e| {
-        error!("Failed to get HEAD: {}", e);
-        e.to_string()
-    })?;
-
-    let commit = repo.find_commit(head.target().unwrap()).map_err(|e| {
-        error!("Failed to find commit: {}", e);
-        e.to_string()
-    })?;
+    let commit = match start_point
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        Some(revision) => repo
+            .revparse_single(revision)
+            .and_then(|obj| obj.peel_to_commit())
+            .map_err(|e| format!("无法解析分支起点 {}: {}", revision, e))?,
+        None => {
+            let head = repo.head().map_err(|e| {
+                error!("Failed to get HEAD: {}", e);
+                e.to_string()
+            })?;
+            let oid = head
+                .target()
+                .ok_or_else(|| "当前 HEAD 没有指向具体提交".to_string())?;
+            repo.find_commit(oid)
+                .map_err(|e| format!("Failed to find commit: {}", e))?
+        }
+    };
 
     repo.branch(&branch_name, &commit, false).map_err(|e| {
         error!("Failed to create branch: {}", e);
         e.to_string()
     })?;
+
+    if checkout.unwrap_or(false) {
+        let branch = repo
+            .find_branch(&branch_name, BranchType::Local)
+            .map_err(|e| format!("Failed to find new branch: {}", e))?;
+        let reference = branch.into_reference();
+        let mut checkout_options = CheckoutBuilder::new();
+        checkout_options.safe();
+        let tree = commit
+            .tree()
+            .map_err(|e| format!("Failed to get commit tree: {}", e))?;
+        repo.checkout_tree(tree.as_object(), Some(&mut checkout_options))
+            .map_err(|e| format!("Failed to checkout new branch: {}", e))?;
+        repo.set_head(reference.name().unwrap_or("HEAD"))
+            .map_err(|e| format!("Failed to set HEAD: {}", e))?;
+    }
 
     info!("Branch created successfully");
     Ok(())
@@ -1364,6 +1617,7 @@ pub fn get_staged_files(path: String) -> Result<Vec<GitChange>, String> {
             diff: String::new(),
             staged: true, // 添加 staged 字段并设置为 true
             orig_path: None,
+            conflicted: false,
         })
         .collect())
 }
@@ -2923,55 +3177,36 @@ pub fn checkout_branch(path: String, branch_name: String) -> Result<(), String> 
         error!("Failed to discover repository: {}", e);
         e.to_string()
     })?;
+    let repo_dir = repo_workdir_path(&repo, &path);
 
-    // 查找本地分支
-    let branch = match repo.find_branch(&branch_name, BranchType::Local) {
-        Ok(b) => b,
-        Err(_) => {
-            // 如果本地分支不存在，尝试查找远程分支
-            let remote_branch_name = format!("origin/{}", branch_name);
-            repo.find_branch(&remote_branch_name, BranchType::Remote)
-                .map_err(|e| {
-                    error!("Failed to find branch {}: {}", branch_name, e);
-                    format!("Branch {} not found: {}", branch_name, e)
-                })?
+    // 检出走 `git checkout`，不再 force + remove_untracked：
+    // 旧实现切分支会直接丢掉工作区改动和未跟踪文件，和 VS Code 的行为相反。
+    // 现在如果本地改动会被覆盖，git 会拒绝检出并把原因带回前端。
+    if repo.find_branch(&branch_name, BranchType::Local).is_ok() {
+        run_git(&repo_dir, &["checkout", &branch_name])
+            .map_err(|e| format!("切换分支 {} 失败：{}", branch_name, e))?;
+        info!("Successfully checked out branch: {}", branch_name);
+        return Ok(());
+    }
+
+    if repo.find_branch(&branch_name, BranchType::Remote).is_ok() {
+        let short = branch_name
+            .split_once('/')
+            .map(|(_, rest)| rest)
+            .unwrap_or(branch_name.as_str());
+        let tracking = run_git(
+            &repo_dir,
+            &["checkout", "-b", short, "--track", &branch_name],
+        );
+        if tracking.is_err() {
+            run_git(&repo_dir, &["checkout", short])
+                .map_err(|e| format!("检出远端分支 {} 失败：{}", branch_name, e))?;
         }
-    };
+        info!("Successfully checked out remote branch: {}", branch_name);
+        return Ok(());
+    }
 
-    let reference = branch.into_reference();
-    let commit = repo
-        .reference_to_annotated_commit(&reference)
-        .map_err(|e| {
-            error!("Failed to get annotated commit: {}", e);
-            e.to_string()
-        })?;
-
-    // 设置检出选项
-    let mut checkout_builder = CheckoutBuilder::new();
-    checkout_builder.force(); // 强制检出，丢弃本地修改
-    checkout_builder.remove_untracked(true); // 删除未跟踪的文件
-
-    // 获取 commit 对象并转换为 Object
-    let commit_obj = repo.find_commit(commit.id()).map_err(|e| {
-        error!("Failed to find commit: {}", e);
-        e.to_string()
-    })?;
-
-    // 使用 commit 对象进行检出
-    repo.checkout_tree(&commit_obj.as_object(), Some(&mut checkout_builder))
-        .map_err(|e| {
-            error!("Failed to checkout tree: {}", e);
-            e.to_string()
-        })?;
-
-    // 设置HEAD指向新分支
-    repo.set_head(reference.name().unwrap()).map_err(|e| {
-        error!("Failed to set HEAD: {}", e);
-        e.to_string()
-    })?;
-
-    info!("Successfully checked out branch: {}", branch_name);
-    Ok(())
+    Err(format!("找不到分支：{}", branch_name))
 }
 
 #[tauri::command]
@@ -3103,6 +3338,15 @@ fn git_index_tree(repo: &Repository) -> Result<Tree<'_>, String> {
         .map_err(|e| format!("Failed to find index tree: {}", e))
 }
 
+/// 直接从索引的 stage 0 条目读内容。
+/// 合并冲突时整个索引不能写成 tree，但只要目标文件本身已解决，stage 0 仍然可用。
+fn read_index_file_content(repo: &Repository, file_path: &Path) -> Option<String> {
+    let index = repo.index().ok()?;
+    let entry = index.get_path(file_path, 0)?;
+    let blob = repo.find_blob(entry.id).ok()?;
+    String::from_utf8(blob.content().to_vec()).ok()
+}
+
 /// 从某个 tree（HEAD / 索引）里读出单文件内容。文件不存在时返回空串——
 /// 新增文件和删除文件都靠这个语义表达。
 fn read_blob_at_tree(
@@ -3189,14 +3433,14 @@ pub async fn get_git_file_diff(
             };
             let modified = match &index_tree {
                 Some(tree) => read_blob_at_tree(&repo, tree, target)?,
-                None => String::new(),
+                None => read_index_file_content(&repo, target).unwrap_or_default(),
             };
             (original, modified)
         } else {
             // 未暂存：索引 -> 工作区
             let original = match &index_tree {
                 Some(tree) => read_blob_at_tree(&repo, tree, target)?,
-                None => String::new(),
+                None => read_index_file_content(&repo, target).unwrap_or_default(),
             };
             let full_path = repo_workdir_file_path(&repo, &path, target);
             let modified = match std::fs::read_to_string(&full_path) {
@@ -3596,4 +3840,438 @@ pub fn get_commit_file_diff(
     ))?;
 
     Ok((original, modified))
+}
+
+// ───── 同步状态 / 远程 ─────────────────────────────────────────
+
+#[tauri::command]
+pub fn get_git_sync_state(path: String) -> Result<GitSyncState, String> {
+    let mut repo = Repository::discover(&path)
+        .map_err(|e| format!("Failed to discover repository: {}", e))?;
+
+    let head = repo.head().ok();
+    let detached = head.as_ref().map(|h| !h.is_branch()).unwrap_or(false);
+    let branch = head.and_then(|h| h.shorthand().map(|s| s.to_string()));
+
+    let mut upstream = None;
+    let mut ahead = 0;
+    let mut behind = 0;
+    if let Some(name) = branch.as_deref() {
+        if let Ok(local) = repo.find_branch(name, BranchType::Local) {
+            let (tracking, a, b) = branch_tracking(&repo, &local);
+            upstream = tracking;
+            ahead = a;
+            behind = b;
+        }
+    }
+
+    let state = repo.state();
+    let merging =
+        state == git2::RepositoryState::Merge || repo.path().join("MERGE_HEAD").exists();
+    let rebasing = matches!(
+        state,
+        git2::RepositoryState::Rebase
+            | git2::RepositoryState::RebaseInteractive
+            | git2::RepositoryState::RebaseMerge
+            | git2::RepositoryState::ApplyMailbox
+            | git2::RepositoryState::ApplyMailboxOrRebase
+    );
+    let cherry_picking = matches!(
+        state,
+        git2::RepositoryState::CherryPick | git2::RepositoryState::CherryPickSequence
+    );
+
+    let mut stash_count = 0usize;
+    let _ = repo.stash_foreach(|_, _, _| {
+        stash_count += 1;
+        true
+    });
+
+    let conflicted = conflict_paths_from_index(&repo).len();
+    let has_remote = repo
+        .remotes()
+        .map(|remotes| !remotes.is_empty())
+        .unwrap_or(false);
+
+    Ok(GitSyncState {
+        branch,
+        detached,
+        upstream,
+        ahead,
+        behind,
+        has_remote,
+        merging,
+        rebasing,
+        cherry_picking,
+        stash_count,
+        conflicted,
+    })
+}
+
+#[tauri::command]
+pub fn git_fetch(path: String, remote: Option<String>) -> Result<(), String> {
+    let repo = Repository::discover(&path)
+        .map_err(|e| format!("Failed to discover repository: {}", e))?;
+    let repo_dir = repo_workdir_path(&repo, &path);
+
+    let remote_name = match remote.filter(|r| !r.trim().is_empty()) {
+        Some(name) => name,
+        None => {
+            let remotes = repo
+                .remotes()
+                .map_err(|e| format!("读取远程仓库失败: {}", e))?;
+            if remotes.iter().flatten().any(|r| r == "origin") {
+                "origin".to_string()
+            } else {
+                remotes
+                    .iter()
+                    .flatten()
+                    .next()
+                    .map(|s| s.to_string())
+                    .ok_or_else(|| "当前仓库没有配置远程地址".to_string())?
+            }
+        }
+    };
+
+    run_git(&repo_dir, &["fetch", "--prune", &remote_name])
+        .map_err(|e| format!("获取 {} 失败：{}", remote_name, e))?;
+    Ok(())
+}
+
+// ───── 合并 / 分支管理 ─────────────────────────────────────────
+
+fn git_operation_outcome(
+    repo: &Repository,
+    output: &std::process::Output,
+    action: &str,
+) -> Result<GitOperationOutcome, String> {
+    let message = git_output_message(output);
+    if output.status.success() {
+        return Ok(GitOperationOutcome {
+            status: "success".to_string(),
+            message,
+            conflicts: Vec::new(),
+        });
+    }
+
+    let conflicts = conflict_paths_from_index(repo);
+    if conflicts.is_empty() {
+        Err(format!("{} 失败：{}", action, message))
+    } else {
+        Ok(GitOperationOutcome {
+            status: "conflicts".to_string(),
+            message,
+            conflicts,
+        })
+    }
+}
+
+#[tauri::command]
+pub fn merge_branch(path: String, branch_name: String) -> Result<GitOperationOutcome, String> {
+    let repo = Repository::discover(&path)
+        .map_err(|e| format!("Failed to discover repository: {}", e))?;
+    let repo_dir = repo_workdir_path(&repo, &path);
+    let output = run_git_output(&repo_dir, &["merge", "--no-edit", &branch_name])?;
+    git_operation_outcome(&repo, &output, "git merge")
+}
+
+#[tauri::command]
+pub fn abort_merge(path: String) -> Result<(), String> {
+    let repo = Repository::discover(&path)
+        .map_err(|e| format!("Failed to discover repository: {}", e))?;
+    let repo_dir = repo_workdir_path(&repo, &path);
+    run_git(&repo_dir, &["merge", "--abort"]).map_err(|e| format!("中止合并失败：{}", e))?;
+    Ok(())
+}
+
+/// 中止当前进行中的合并 / 拣选 / 还原。三种操作的中止命令不同，前端只暴露一个入口。
+#[tauri::command]
+pub fn abort_git_operation(path: String) -> Result<(), String> {
+    let repo = Repository::discover(&path)
+        .map_err(|e| format!("Failed to discover repository: {}", e))?;
+    let repo_dir = repo_workdir_path(&repo, &path);
+    let (args, label): (Vec<&str>, &str) = match repo.state() {
+        git2::RepositoryState::Merge => (vec!["merge", "--abort"], "中止合并"),
+        git2::RepositoryState::CherryPick
+        | git2::RepositoryState::CherryPickSequence => (vec!["cherry-pick", "--abort"], "中止拣选"),
+        git2::RepositoryState::Revert | git2::RepositoryState::RevertSequence => {
+            (vec!["revert", "--abort"], "中止还原")
+        }
+        git2::RepositoryState::Rebase
+        | git2::RepositoryState::RebaseInteractive
+        | git2::RepositoryState::RebaseMerge => (vec!["rebase", "--abort"], "中止变基"),
+        _ => return Err("当前没有进行中的 Git 操作".to_string()),
+    };
+    run_git(&repo_dir, &args).map_err(|e| format!("{}失败：{}", label, e))?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn rename_branch(path: String, old_name: String, new_name: String) -> Result<(), String> {
+    let repo = Repository::discover(&path)
+        .map_err(|e| format!("Failed to discover repository: {}", e))?;
+    let repo_dir = repo_workdir_path(&repo, &path);
+    run_git(&repo_dir, &["branch", "-m", &old_name, &new_name])
+        .map_err(|e| format!("重命名分支失败：{}", e))?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn delete_branch(path: String, branch_name: String, force: Option<bool>) -> Result<(), String> {
+    let repo = Repository::discover(&path)
+        .map_err(|e| format!("Failed to discover repository: {}", e))?;
+    let repo_dir = repo_workdir_path(&repo, &path);
+    let flag = if force.unwrap_or(false) { "-D" } else { "-d" };
+    run_git(&repo_dir, &["branch", flag, &branch_name])
+        .map_err(|e| format!("删除分支失败：{}", e))?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn undo_last_commit(path: String) -> Result<(), String> {
+    let repo = Repository::discover(&path)
+        .map_err(|e| format!("Failed to discover repository: {}", e))?;
+    let repo_dir = repo_workdir_path(&repo, &path);
+    repo.revparse_single("HEAD~1")
+        .map_err(|_| "无法撤销：当前分支只有一个提交".to_string())?;
+    run_git(&repo_dir, &["reset", "--soft", "HEAD~1"])
+        .map_err(|e| format!("撤销上次提交失败：{}", e))?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn git_cherry_pick(path: String, commit_id: String) -> Result<GitOperationOutcome, String> {
+    let repo = Repository::discover(&path)
+        .map_err(|e| format!("Failed to discover repository: {}", e))?;
+    let repo_dir = repo_workdir_path(&repo, &path);
+    let output = run_git_output(&repo_dir, &["cherry-pick", &commit_id])?;
+    git_operation_outcome(&repo, &output, "git cherry-pick")
+}
+
+#[tauri::command]
+pub fn git_revert_commit(path: String, commit_id: String) -> Result<GitOperationOutcome, String> {
+    let repo = Repository::discover(&path)
+        .map_err(|e| format!("Failed to discover repository: {}", e))?;
+    let repo_dir = repo_workdir_path(&repo, &path);
+    let output = run_git_output(&repo_dir, &["revert", "--no-edit", &commit_id])?;
+    git_operation_outcome(&repo, &output, "git revert")
+}
+
+#[tauri::command]
+pub fn git_checkout_commit(path: String, commit_id: String) -> Result<(), String> {
+    let repo = Repository::discover(&path)
+        .map_err(|e| format!("Failed to discover repository: {}", e))?;
+    let repo_dir = repo_workdir_path(&repo, &path);
+    run_git(&repo_dir, &["checkout", "--detach", &commit_id])
+        .map_err(|e| format!("检出提交失败：{}", e))?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn git_reset_to_commit(
+    path: String,
+    commit_id: String,
+    mode: Option<String>,
+) -> Result<(), String> {
+    let repo = Repository::discover(&path)
+        .map_err(|e| format!("Failed to discover repository: {}", e))?;
+    let repo_dir = repo_workdir_path(&repo, &path);
+    let mode = mode.unwrap_or_else(|| "mixed".to_string());
+    let flag = match mode.as_str() {
+        "soft" => "--soft",
+        "mixed" => "--mixed",
+        "hard" => "--hard",
+        _ => return Err(format!("未知的重置模式：{}", mode)),
+    };
+    run_git(&repo_dir, &["reset", flag, &commit_id])
+        .map_err(|e| format!("重置失败：{}", e))?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn git_create_tag(
+    path: String,
+    name: String,
+    message: Option<String>,
+    commit_id: Option<String>,
+) -> Result<(), String> {
+    let repo = Repository::discover(&path)
+        .map_err(|e| format!("Failed to discover repository: {}", e))?;
+    let repo_dir = repo_workdir_path(&repo, &path);
+
+    let mut args: Vec<String> = vec!["tag".to_string()];
+    if let Some(message) = message.filter(|m| !m.trim().is_empty()) {
+        args.push("-a".to_string());
+        args.push(name);
+        args.push("-m".to_string());
+        args.push(message);
+    } else {
+        args.push(name);
+    }
+    if let Some(commit_id) = commit_id.filter(|c| !c.trim().is_empty()) {
+        args.push(commit_id);
+    }
+    let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+    run_git(&repo_dir, &arg_refs).map_err(|e| format!("创建标签失败：{}", e))?;
+    Ok(())
+}
+
+// ───── 贮藏 ───────────────────────────────────────────────────
+
+#[tauri::command]
+pub fn git_stash_push(
+    path: String,
+    message: Option<String>,
+    include_untracked: Option<bool>,
+) -> Result<(), String> {
+    let repo = Repository::discover(&path)
+        .map_err(|e| format!("Failed to discover repository: {}", e))?;
+    let repo_dir = repo_workdir_path(&repo, &path);
+
+    let mut args: Vec<String> = vec!["stash".to_string(), "push".to_string()];
+    if include_untracked.unwrap_or(true) {
+        args.push("-u".to_string());
+    }
+    if let Some(message) = message.filter(|m| !m.trim().is_empty()) {
+        args.push("-m".to_string());
+        args.push(message);
+    }
+    let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+    run_git(&repo_dir, &arg_refs).map_err(|e| format!("贮藏失败：{}", e))?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn git_stash_list(path: String) -> Result<Vec<GitStashEntry>, String> {
+    let repo = Repository::discover(&path)
+        .map_err(|e| format!("Failed to discover repository: {}", e))?;
+    let repo_dir = repo_workdir_path(&repo, &path);
+
+    let output = run_git(
+        &repo_dir,
+        &["stash", "list", "--format=%gd%x1f%gs%x1f%H"],
+    )?;
+    if output.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let entries = output
+        .lines()
+        .enumerate()
+        .map(|(index, line)| {
+            let mut parts = line.split('\u{1f}');
+            GitStashEntry {
+                index,
+                selector: parts.next().unwrap_or_default().to_string(),
+                message: parts.next().unwrap_or_default().to_string(),
+                oid: parts.next().unwrap_or_default().to_string(),
+            }
+        })
+        .collect();
+    Ok(entries)
+}
+
+#[tauri::command]
+pub fn git_stash_apply(
+    path: String,
+    index: usize,
+    pop: Option<bool>,
+) -> Result<GitOperationOutcome, String> {
+    let repo = Repository::discover(&path)
+        .map_err(|e| format!("Failed to discover repository: {}", e))?;
+    let repo_dir = repo_workdir_path(&repo, &path);
+    let action = if pop.unwrap_or(false) { "pop" } else { "apply" };
+    let selector = format!("stash@{{{}}}", index);
+    let output = run_git_output(&repo_dir, &["stash", action, &selector])?;
+    git_operation_outcome(&repo, &output, &format!("git stash {}", action))
+}
+
+#[tauri::command]
+pub fn git_stash_drop(path: String, index: usize) -> Result<(), String> {
+    let repo = Repository::discover(&path)
+        .map_err(|e| format!("Failed to discover repository: {}", e))?;
+    let repo_dir = repo_workdir_path(&repo, &path);
+    let selector = format!("stash@{{{}}}", index);
+    run_git(&repo_dir, &["stash", "drop", &selector])
+        .map_err(|e| format!("删除贮藏失败：{}", e))?;
+    Ok(())
+}
+
+// ───── 冲突内容 / 合并编辑器 ───────────────────────────────────
+
+#[tauri::command]
+pub fn get_merge_conflict(path: String, file_path: String) -> Result<ConflictFile, String> {
+    let repo = Repository::discover(&path)
+        .map_err(|e| format!("Failed to discover repository: {}", e))?;
+    let target = file_path.replace('\\', "/");
+
+    let mut base = None;
+    let mut ours = None;
+    let mut theirs = None;
+    let mut text_decodable = true;
+
+    let entry_path = |entry: &Option<IndexEntry>| {
+        entry
+            .as_ref()
+            .and_then(|e| String::from_utf8(e.path.clone()).ok())
+    };
+
+    if let Ok(index) = repo.index() {
+        if let Ok(conflicts) = index.conflicts() {
+            for conflict in conflicts.flatten() {
+                let path = entry_path(&conflict.our)
+                    .or_else(|| entry_path(&conflict.their))
+                    .or_else(|| entry_path(&conflict.ancestor));
+                if path.as_deref() != Some(target.as_str()) {
+                    continue;
+                }
+
+                let our_text = conflict.our.as_ref().and_then(|e| blob_text(&repo, e.id));
+                let their_text = conflict
+                    .their
+                    .as_ref()
+                    .and_then(|e| blob_text(&repo, e.id));
+                let base_text = conflict
+                    .ancestor
+                    .as_ref()
+                    .and_then(|e| blob_text(&repo, e.id));
+
+                if conflict.our.is_some() && our_text.is_none() {
+                    text_decodable = false;
+                }
+                if conflict.their.is_some() && their_text.is_none() {
+                    text_decodable = false;
+                }
+                if conflict.ancestor.is_some() && base_text.is_none() {
+                    text_decodable = false;
+                }
+
+                ours = our_text;
+                theirs = their_text;
+                base = base_text;
+                break;
+            }
+        }
+    }
+
+    let abs = repo_workdir_file_path(&repo, &path, Path::new(&target));
+    let raw = std::fs::read(&abs).unwrap_or_default();
+    let binary = raw.contains(&0) || !text_decodable;
+    let working = String::from_utf8(raw).unwrap_or_default();
+
+    Ok(ConflictFile {
+        path: target,
+        base,
+        ours,
+        theirs,
+        working,
+        binary,
+    })
+}
+
+#[tauri::command]
+pub fn resolve_conflict(path: String, file_path: String, content: String) -> Result<(), String> {
+    let repo = Repository::discover(&path)
+        .map_err(|e| format!("Failed to discover repository: {}", e))?;
+    write_and_stage_file(&repo, &file_path, &content)
 }
