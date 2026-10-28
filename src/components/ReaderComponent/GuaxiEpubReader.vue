@@ -872,6 +872,13 @@ const currentPage = ref(1)
 const totalPages = ref(0)
 /** Kindle 系电子书的分章内容（仅 mobi/azw/azw3 使用）。 */
 const kindleSections = ref([])
+/** 与 `kindleSections` 同一次解析产出的整本 Markdown，供右侧正文列使用。 */
+const kindleMarkdown = ref('')
+/**
+ * 左侧分章与右侧正文在 onMounted 里并行启动，右侧要等同一次解析完成。
+ * 保存 promise 而不是再解析一遍：一本 mobi 的整本解析是秒级的。
+ */
+let kindlePayloadPromise = null
 const jumpPage = ref(1)
 
 const readerStorageKey = computed(() => {
@@ -1081,12 +1088,18 @@ const isKindleEbook = computed(() =>
  * 每节的 html 已经做过资源内联与净化，直接按章插入即可。
  * 只渲染当前章而不是整本：一本 mobi 常有几百节、几百 MB 的图片 data URI，
  * 全量挂进 DOM 会让翻章卡上好几秒；右侧正文本来就是按章加载的。
+ *
+ * `withMarkdown` 让同一次解析顺带产出整本 Markdown 给右侧正文列用。不读库里那份 `.md`：
+ * 它是导入时外部引擎的产物，而 Marker 那类引擎并不认 MOBI/AZW 容器 —— 实测一本 mobi
+ * 落盘的「Markdown」是 2.7 MB 的原始二进制（开头就是 `BOOKMOBI`），塞进 renderMarkdown
+ * 直接把右侧列挂死成一片空白，还从二进制里漏出几十个 `kindle:embed:` 图片请求。
  */
 const loadKindleSections = async () => {
   try {
     const payload = await invoke('read_document_for_reader', {
       path: props.filePath,
       kind: props.kind || props.fileType,
+      withMarkdown: true,
     })
     if (!payload || payload.format !== 'ebook') {
       throw new Error('后端未返回电子书结构')
@@ -1094,6 +1107,7 @@ const loadKindleSections = async () => {
     const list = Array.isArray(payload.sections) ? payload.sections : []
     if (!list.length) throw new Error('这本书没有可显示的正文')
     kindleSections.value = list
+    kindleMarkdown.value = typeof payload.markdown === 'string' ? payload.markdown : ''
     totalPages.value = list.length
     renderKindleSection(currentPage.value - 1)
     applyZoomLevel()
@@ -1101,6 +1115,7 @@ const loadKindleSections = async () => {
       path: props.filePath,
       sections: list.length,
       toc: Array.isArray(payload.toc) ? payload.toc.length : 0,
+      markdownChars: kindleMarkdown.value.length,
     })
   } catch (error) {
     logger.error('[EpubReader] load kindle sections failed', {
@@ -1334,7 +1349,9 @@ const loadEpubDocument = async () => {
     // Kindle 系走另一条路：后端已经把整本书解析成分章节 HTML（见 EbookPayload），
     // epub.js 只认 EPUB 容器，硬塞 mobi 进去只会在 book.open() 里失败。
     if (isKindleEbook.value) {
-      await loadKindleSections();
+      // 赋值要发生在第一个 await 之前：并行的 loadMarkdownPage 靠它决定等什么。
+      kindlePayloadPromise = loadKindleSections()
+      await kindlePayloadPromise
       return;
     }
     logger.info('开始加载EPUB文档:', props.filePath);
@@ -2670,8 +2687,41 @@ const getImagesDirectory = async () => {
   );
 };
 
+/** 把一份 Markdown 文本灌进右侧正文列：渲染、补按钮、生成目录。 */
+const applyMarkdownText = async (text, libraryBasePath) => {
+  markdownContent.value = text;
+  markdownLines.value = await convertMarkdownToLines(text, { libraryBasePath });
+
+  await nextTick();
+  requestAnimationFrame(() => {
+    const container = markdownContainer.value;
+    if (container) {
+      const theme = resolveMarkdownTheme();
+      addCopyButtons(container, { theme });
+      addMediaViewerButtons(container, { theme });
+      logger.info('[EpubReader] media buttons refreshed:', {
+        images: container.querySelectorAll('img').length,
+        mermaid: container.querySelectorAll('.mermaid, svg').length,
+      });
+    }
+  });
+
+  generateOutlineFromMarkdown(text);
+}
+
 const loadMarkdownPage = async () => {
   try {
+    // Kindle 系：正文来自左侧同一次解析，不读库里那份 `.md`（见 loadKindleSections 的说明）。
+    if (isKindleEbook.value) {
+      await kindlePayloadPromise;
+      if (!kindleMarkdown.value) {
+        throw new Error('这本书没有可显示的正文');
+      }
+      // 图片已在解析时内联成 data URI，没有相对路径要解析。
+      await applyMarkdownText(kindleMarkdown.value, '');
+      return;
+    }
+
     if (!markdownFilePath.value) {
       await updateMarkdownPath();
     }
@@ -2686,24 +2736,7 @@ const loadMarkdownPage = async () => {
     }
 
     const mdDir = await dirname(markdownFilePath.value);
-    markdownContent.value = response.content;
-    markdownLines.value = await convertMarkdownToLines(markdownContent.value, { libraryBasePath: mdDir });
-
-    await nextTick();
-    requestAnimationFrame(() => {
-      const container = markdownContainer.value;
-      if (container) {
-        const theme = resolveMarkdownTheme();
-        addCopyButtons(container, { theme });
-        addMediaViewerButtons(container, { theme });
-        logger.info('[EpubReader] media buttons refreshed:', {
-          images: container.querySelectorAll('img').length,
-          mermaid: container.querySelectorAll('.mermaid, svg').length,
-        });
-      }
-    });
-
-    generateOutlineFromMarkdown(markdownContent.value);
+    await applyMarkdownText(response.content, mdDir);
 
   } catch (error) {
     logger.error('加载Markdown失败:', error);
@@ -3099,7 +3132,16 @@ const syncMarkdownToChapter = (chapter) => {
 }
 
 const nextPage = async () => {
-  if (currentPage.value >= totalPages.value || !epubInstance.value) return;
+  if (currentPage.value >= totalPages.value) return;
+
+  // Kindle 系没有 epub.js 实例（见 loadEpubDocument），章节就是数组下标，
+  // 交给 goToPage 改 currentPage 即可，渲染由 watch(currentPage) 完成。
+  if (isKindleEbook.value) {
+    await goToPage(currentPage.value + 1);
+    return;
+  }
+
+  if (!epubInstance.value) return;
 
   try {
     await epubInstance.value.rendition.next();
@@ -3118,7 +3160,14 @@ const nextPage = async () => {
 };
 
 const prevPage = async () => {
-  if (currentPage.value <= 1 || !epubInstance.value) return;
+  if (currentPage.value <= 1) return;
+
+  if (isKindleEbook.value) {
+    await goToPage(currentPage.value - 1);
+    return;
+  }
+
+  if (!epubInstance.value) return;
 
   try {
     await epubInstance.value.rendition.prev();
@@ -3140,7 +3189,23 @@ const goToPage = async (page) => {
   const pageNum = typeof page === 'number' ? page : jumpPage.value;
   const targetPage = Math.max(1, Math.min(pageNum, totalPages.value));
 
-  if (!epubInstance.value || targetPage === currentPage.value) return;
+  if (targetPage === currentPage.value) return;
+
+  // Kindle 系：epubInstance 恒为 null，早先那句统一的前置判断让目录跳转、书签、
+  // 阅读位置往返和「下一章节」按钮一起变成静默无操作。
+  if (isKindleEbook.value) {
+    if (!kindleSections.value.length) return;
+
+    pagedReadingHistory.markJump();
+    // 只改页码：左侧源文列由 watch(currentPage) -> renderKindleSection 同步。
+    currentPage.value = targetPage;
+    jumpPage.value = targetPage;
+
+    syncMarkdownToChapter(targetPage)
+    return;
+  }
+
+  if (!epubInstance.value) return;
 
   // 章节/页跳转：先把离开的位置记进历史。
   pagedReadingHistory.markJump();
@@ -3655,9 +3720,18 @@ const handleResize = () => {
 
 watch(() => props.filePath, async (newPath) => {
   if (newPath) {
+    // 换书：上一本的解析结果对这一本没有意义。Kindle 的右侧正文现在取自内存里那份
+    // （kindleMarkdown），不清掉就会连着显示上一本。
+    kindleSections.value = []
+    kindleMarkdown.value = ''
+    kindlePayloadPromise = null
+    totalPages.value = 0
     await updateMarkdownPath();
     currentPage.value = 1;
-    loadMarkdownPage(1);
+    // 不 await：loadEpubDocument 的 Kindle 分支会在第一个 await 之前就把
+    // kindlePayloadPromise 设好，紧接着的 loadMarkdownPage 等的正是它。
+    loadEpubDocument();
+    loadMarkdownPage();
     notesContent.value = '';
     // 换文件：上一份文档的阅读位置对这份没有意义。
     pagedReadingHistory.reset();

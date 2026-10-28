@@ -140,6 +140,18 @@ impl ConversionQueue {
             return Ok(());
         }
 
+        // 电子书：在起探针子进程之前短路。Marker / MinerU 不认 MOBI / AZW 容器，会把
+        // 二进制当正文吐出来（库里那份以 `BOOKMOBI` 开头的 2.7 MB `.md` 就是这么产生的），
+        // anydoc 也明确不覆盖电子书。统一走阅读器用的同一份 ebook-rs 解析。
+        if engine::is_ebook_input(&task.input_path) {
+            if let Err(e) = task_store::set_resolved_engine(task_id, "ebook", None) {
+                warn!(task_id, error = %e, "写入解析引擎失败");
+            }
+            return self
+                .run_ebook_task(task_id, &file_name, &task.input_path, &task.output_dir)
+                .await;
+        }
+
         self.emit_progress(&file_name, 2, 100, "分析文档...", None);
 
         // 解析引擎（auto 走探针，MinerU 缺失回退 marker）
@@ -468,6 +480,65 @@ impl ConversionQueue {
                 file_name,
                 &format!("极速引擎任务异常: {}", e),
             ),
+        }
+
+        Ok(())
+    }
+
+    /// 电子书执行路径：进程内 ebook-rs 解析，与 anydoc 分支同构（无子进程、无装配、
+    /// 无进度协议，只在转换前后各查一次取消标志）。
+    ///
+    /// 整本解析是 CPU 密集的（MOBI 要走一遍记录重排与资源内联），所以放 `spawn_blocking`，
+    /// 不占异步运行时线程。
+    async fn run_ebook_task(
+        self: &Arc<Self>,
+        task_id: i64,
+        file_name: &str,
+        input_path: &str,
+        output_dir: &str,
+    ) -> Result<(), String> {
+        if task_store::is_canceled(task_id).unwrap_or(false) {
+            return Ok(());
+        }
+
+        let (_, expected_md) = engine::expected_md_path_for(input_path, output_dir);
+        self.emit_progress(file_name, 20, 100, "电子书解析中...", None);
+
+        let in_path = PathBuf::from(input_path);
+        let out_path = expected_md.clone();
+        let result =
+            tokio::task::spawn_blocking(move || engine::convert_with_ebook_rs(&in_path, &out_path))
+                .await;
+
+        if task_store::is_canceled(task_id).unwrap_or(false) {
+            self.emit_task_update(task_id);
+            return Ok(());
+        }
+
+        match result {
+            Ok(Ok(())) => {
+                if !expected_md.exists() {
+                    self.finish_failed_terminal(
+                        task_id,
+                        file_name,
+                        &format!("转换结束但未找到输出文件: {}", expected_md.display()),
+                    );
+                    return Ok(());
+                }
+                match task_store::mark_succeeded(task_id, expected_md.to_str()) {
+                    Ok(true) => {
+                        self.emit_progress(file_name, 100, 100, "转换完成", None);
+                        info!(task_id, engine = "ebook", md = %expected_md.display(), "转换成功");
+                    }
+                    Ok(false) => {}
+                    Err(e) => error!(task_id, "写入成功状态出错：{}", e),
+                }
+                self.emit_task_update(task_id);
+            }
+            Ok(Err(e)) => self.finish_failed_terminal(task_id, file_name, &e),
+            Err(e) => {
+                self.finish_failed_terminal(task_id, file_name, &format!("电子书解析异常: {}", e))
+            }
         }
 
         Ok(())

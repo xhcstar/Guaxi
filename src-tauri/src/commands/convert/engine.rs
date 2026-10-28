@@ -777,6 +777,38 @@ pub fn convert_with_anydoc(input_path: &Path, output_md: &Path) -> Result<(), St
     Ok(())
 }
 
+/// 电子书转换路径：进程内用 ebook-rs 解析并写出 Markdown。
+///
+/// MOBI / AZW / KFX 这类容器外部引擎（Marker、MinerU）读不出结构，会把二进制当文本
+/// 吐出来，落盘的 `.md` 是一坨乱码；anydoc 明确不覆盖电子书。所以电子书谁都不给，
+/// 直接走这条与阅读器完全一致的解析路径。
+///
+/// 阻塞调用，务必放在 `spawn_blocking` 里执行。
+pub fn convert_with_ebook_rs(input_path: &Path, output_md: &Path) -> Result<(), String> {
+    let markdown = crate::commands::doc_reader::ebook_markdown_blocking(input_path)?;
+
+    if let Some(parent) = output_md.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("创建输出目录失败: {}", e))?;
+    }
+    std::fs::write(output_md, markdown).map_err(|e| format!("写入 Markdown 失败: {}", e))?;
+    Ok(())
+}
+
+/// 输入是否是「必须走 `convert_with_ebook_rs`」的电子书。按扩展名判断，不做内容嗅探 ——
+/// 路由发生在起子进程之前，这里省下的正是那次探针。
+///
+/// EPUB 故意不在内：Marker 认得 EPUB 容器，能把图片抽成独立文件、版式还原也更好，
+/// 继续走原引擎。这里只接管外部引擎读不出结构的那几种（MOBI / AZW / AZW3 / KFX / FB2 /
+/// LIT / CBZ）。名单基数与阅读器共用 `EBOOK_KINDS`，不会两边各说各话。
+pub fn is_ebook_input(input_path: &str) -> bool {
+    let ext = Path::new(input_path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    ext != "epub" && crate::commands::doc_reader::is_ebook_kind(&ext)
+}
+
 /// 把 anydoc 的类型化错误翻译成给用户看的中文文案。
 /// `ConvertError` 标了 `#[non_exhaustive]`，兜底分支必须保留。
 /// 有声书转换（`tts_book.rs`）解析 .doc 时复用同一份文案，故为 `pub(crate)`。

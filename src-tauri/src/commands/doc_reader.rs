@@ -410,6 +410,11 @@ pub struct EbookPayload {
     pub kind: String,
     pub sections: Vec<EbookSection>,
     pub toc: Vec<EbookTocItem>,
+    /// 整本 Markdown，仅在 `read_document_for_reader` 的 `withMarkdown` 为真时填充。
+    /// 阅读器右侧正文列用它，而不是导入期由外部引擎写进库里的 `.md` —— 后者对 mobi
+    /// 这类格式并不可信（见 `GuaxiEpubReader` 的 `loadMarkdownPage`）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub markdown: Option<String>,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -1836,7 +1841,80 @@ fn read_ebook_blocking(path: &Path, kind: &str) -> Result<EbookPayload, String> 
         kind: kind.to_string(),
         sections,
         toc,
+        markdown: None,
     })
+}
+
+/// 把已解析的分节 HTML 拼成整本 Markdown，每节前留一个 `<!-- section N -->` 注释。
+///
+/// 阅读器右侧正文列与导入期的落盘转换共用这一份实现，两边才能得到逐字一致的章节划分：
+/// 左侧按节渲染源文，右侧要按同一节号滚动对齐（`syncMarkdownToChapter`）。
+pub(crate) fn ebook_markdown_text(sections: &[EbookSection]) -> String {
+    let mut md = String::new();
+    for section in sections {
+        md.push_str(&format!("\n\n<!-- section {} -->\n\n", section.index + 1));
+        md.push_str(&html_to_markdown_lite(&section.html));
+    }
+    md
+}
+
+/// 由 ebook-rs 解析的电子书类型。转换队列按它路由，`read_document_for_reader` 按它决定
+/// 是否自带正文，两边必须是同一份名单，否则会出现「阅读器能开、导入却丢给外部引擎」。
+pub(crate) const EBOOK_KINDS: [&str; 8] =
+    ["epub", "mobi", "azw", "azw3", "kfx", "fb2", "lit", "cbz"];
+
+pub(crate) fn is_ebook_kind(kind: &str) -> bool {
+    EBOOK_KINDS.contains(&kind)
+}
+
+/// 电子书 → Markdown 的同步入口（进程内，阻塞）。转换队列在 `spawn_blocking` 里调用。
+///
+/// 为什么要自己转：外部引擎（Marker / MinerU）并不真的认 MOBI 容器，喂进去会把
+/// 二进制当文本吐出来 —— 库里那份 2.7 MB「以 `BOOKMOBI` 开头」的 `.md` 就是这么来的，
+/// 阅读器整篇塞进 `renderMarkdown` 之后直接挂死，右侧正文列一片空白。
+pub(crate) fn ebook_markdown_blocking(path: &Path) -> Result<String, String> {
+    let kind = sniff_internal(path)?;
+    if !is_ebook_kind(&kind.kind) {
+        return Err(format!("不是可解析的电子书：{}", kind.kind));
+    }
+    let payload = read_ebook_blocking(path, &kind.kind)?;
+    let markdown = ebook_markdown_text(&payload.sections);
+    if markdown.trim().is_empty() {
+        return Err("电子书正文为空".to_string());
+    }
+    Ok(markdown)
+}
+
+/// 阅读器右侧正文列用的那份 Markdown：去掉内联成 data URI 的图片。
+///
+/// 左侧源文列只挂当前章，插图按章全量显示；右侧是整本一次性渲染，两者对体积的约束
+/// 完全不同。实测这本 mobi 的 34 张插图共 2.9 MB，base64 后约 3.9 MB —— 整本 Markdown
+/// 带上它们就退回「2.7 MB 二进制把右侧列挂死」那个坑。正文文本本身约 1 MB，可以渲染。
+fn ebook_markdown_for_reader(sections: &[EbookSection]) -> String {
+    strip_data_uri_images(&ebook_markdown_text(sections))
+}
+
+/// 删掉 `![](data:...)` 整段。`html_to_markdown_lite` 的图片输出就是这个固定形状
+/// （alt 恒为空），且 base64 与 MIME 里都不可能出现 `)`，所以右括号就是最近的闭合，
+/// 不需要一个完整的 Markdown 解析器。
+fn strip_data_uri_images(markdown: &str) -> String {
+    const IMG_OPEN: &str = "![](data:";
+    let mut out = String::with_capacity(markdown.len());
+    let mut rest = markdown;
+    while let Some(at) = rest.find(IMG_OPEN) {
+        out.push_str(&rest[..at]);
+        let tail = &rest[at + IMG_OPEN.len()..];
+        match tail.find(')') {
+            Some(close) => rest = &tail[close + 1..],
+            // 没有闭合括号：当普通文本原样保留剩下的，不再往后找。
+            None => {
+                out.push_str(&rest[at..]);
+                return out;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 // ───────────────────────── 电子书编码兜底 ─────────────────────────
@@ -2597,7 +2675,13 @@ pub enum ReaderDocument {
 ///
 /// PDF 与图片由前端直接走 pdfium / `<img>`，不需要经过这里（也就不会把大文件搬进 IPC）。
 #[tauri::command]
-pub async fn read_document_for_reader(path: String, kind: String) -> Result<ReaderDocument, String> {
+pub async fn read_document_for_reader(
+    path: String,
+    kind: String,
+    // 顺带返回整本 Markdown。右侧正文列要它才不需要去读库里那份 `.md`，而解析已经做完，
+    // 拼一份文本的代价远小于再起一次解析或一次外部转换。
+    with_markdown: Option<bool>,
+) -> Result<ReaderDocument, String> {
     let p = Path::new(&path).to_path_buf();
     if !p.exists() {
         return Err("文件不存在".to_string());
@@ -2607,13 +2691,16 @@ pub async fn read_document_for_reader(path: String, kind: String) -> Result<Read
     let kind_lower = kind.trim().to_ascii_lowercase();
 
     match kind_lower.as_str() {
-        "epub" | "mobi" | "azw" | "azw3" | "kfx" | "fb2" | "lit" | "cbz" => {
+        k if is_ebook_kind(k) => {
             let kind_for_task = kind_lower.clone();
-            let payload = tauri::async_runtime::spawn_blocking(move || {
+            let mut payload = tauri::async_runtime::spawn_blocking(move || {
                 read_ebook_blocking(&p, &kind_for_task)
             })
             .await
             .map_err(|e| format!("电子书解析任务失败: {}", e))??;
+            if with_markdown.unwrap_or(false) {
+                payload.markdown = Some(ebook_markdown_for_reader(&payload.sections));
+            }
             Ok(ReaderDocument::Ebook(payload))
         }
         "doc" | "rtf" | "odt" | "odp" | "ppt" | "ods" => {
@@ -2881,7 +2968,7 @@ pub async fn convert_document_to_markdown(
             })
         }
         // 电子书：分节 HTML 已是结构完整的正文，转成带章节标题的 Markdown。
-        "epub" | "mobi" | "azw3" | "kfx" | "fb2" | "lit" | "cbz" => {
+        k if is_ebook_kind(k) => {
             let p2 = p.clone();
             let kind_name = kind.kind.clone();
             let payload = tauri::async_runtime::spawn_blocking(move || {
@@ -2890,16 +2977,12 @@ pub async fn convert_document_to_markdown(
             .await
             .map_err(|e| format!("电子书解析任务失败: {}", e))??;
 
-            let mut md = String::new();
-            for section in &payload.sections {
-                md.push_str(&format!("\n\n<!-- section {} -->\n\n", section.index + 1));
-                md.push_str(&html_to_markdown_lite(&section.html));
-            }
-            if md.trim().is_empty() {
+            let markdown = ebook_markdown_text(&payload.sections);
+            if markdown.trim().is_empty() {
                 return Err("电子书正文为空".to_string());
             }
             Ok(ConvertedMarkdown {
-                markdown: md,
+                markdown,
                 engine: "ebook-rs".to_string(),
                 media_dir: None,
             })
@@ -3374,6 +3457,26 @@ fn decode_entities(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn strip_data_uri_images_removes_only_inlined_images() {
+        let md = "前文\n\n![](data:image/jpeg;base64,/9j/4AAQSkZJRg==)\n\n后文 ![](images/a.png) 保留\n";
+        let out = strip_data_uri_images(md);
+        assert_eq!(out, "前文\n\n\n\n后文 ![](images/a.png) 保留\n");
+    }
+
+    #[test]
+    fn strip_data_uri_images_keeps_text_when_bracket_never_closes() {
+        // 正文里出现裸 `![](data:` 而没有闭合括号：整段原样保留，不能吞掉后文。
+        let md = "a![](data:broken";
+        assert_eq!(strip_data_uri_images(md), md);
+    }
+
+    #[test]
+    fn strip_data_uri_images_handles_consecutive_images() {
+        let md = "![](data:image/png;base64,AAA)![](data:image/png;base64,BBB)尾";
+        assert_eq!(strip_data_uri_images(md), "尾");
+    }
 
     #[test]
     fn sniff_detects_png_disguised_as_text() {

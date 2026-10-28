@@ -251,7 +251,8 @@ const taskMessage = (task) => {
     mineru: '高质量强引擎',
     marker: 'Marker',
     fast: '快速引擎',
-    anydoc: '极速引擎'
+    anydoc: '极速引擎',
+    ebook: '电子书解析'
   }[engine] || ''
   const base = task?.message || '等待处理'
   return engineLabel ? `[${engineLabel}] ${base}` : base
