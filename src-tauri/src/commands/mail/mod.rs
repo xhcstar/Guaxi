@@ -660,14 +660,6 @@ async fn sync_folder_guarded(
         {
             return Ok(Vec::new());
         }
-        // 记下同步前的文件夹名：`imap::list_folders` 用它区分「用户原本就有的」
-        // 与「服务器这次新带下来的」目录（后者多半是服务商的遗留结构）。
-        if let Ok(existing) = store::list_folders(&account_id) {
-            sync::remember_folder_names(
-                &account_id,
-                existing.into_iter().map(|f| f.name).collect(),
-            );
-        }
         let (uid_validity, _) = store::folder_uid_state(&account_id, &folder_name)?;
         let last_uid = store::last_uid(&account_id, &folder_name)?;
         let items = imap::sync_folder_pooled(
