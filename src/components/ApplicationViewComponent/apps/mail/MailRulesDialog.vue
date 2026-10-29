@@ -1,5 +1,5 @@
 <template>
-  <div class="mail-modal-backdrop" @click.self="$emit('close')">
+  <div class="mail-modal-backdrop">
     <div class="mail-modal is-wide mail-rules-modal" role="dialog" aria-label="收信规则">
       <div class="mail-modal-head">
         <h2 class="mail-modal-title">收信规则</h2>

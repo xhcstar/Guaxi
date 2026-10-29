@@ -18,6 +18,7 @@ const bridge = read('src/components/ApplicationViewComponent/apps/mail/composeWi
 const store = read('src/stores/mailStore.js')
 const mailApp = read('src/components/ApplicationViewComponent/apps/MailApp.vue')
 const mod = read('src-tauri/src/commands/mail/mod.rs')
+const palette = read('src/components/ApplicationViewComponent/apps/mail/palette.js')
 
 test('存草稿：不再用「内容为空」把用户挡回去', () => {
   // 三个入口以前都会因为空内容直接 return：关编辑器 / 关独立窗口 / 定时暂存。
@@ -39,6 +40,24 @@ test('放弃：发送旁边有入口，关之前让用户选存草稿还是直�
   assert.ok(/discardCompose\(\) \{/.test(store), 'store 要有不落库的放弃路径')
   assert.ok(/async function onDiscard\(\)[\s\S]{0,120}closeWindow\(\{ save: false \}\)/.test(shell), '独立窗口放弃时关窗且不存')
   assert.ok(/@close="onSaveAndClose"/.test(shell), '独立窗口里「存为草稿并关闭」也要真的存')
+})
+
+test('颜色：工具栏与单元格菜单共用一套常用色', () => {
+  // 反馈原话：「常见颜色都要有，而不是仅仅都是偏白色的亮色」，以及「统一一下颜色」。
+  for (const color of ['#000000', '#c00000', '#ff0000', '#ffc000', '#00b050', '#0070c0', '#7030a0']) {
+    assert.ok(palette.includes(color), `常用色缺 ${color}`)
+  }
+  const fills = palette.slice(palette.indexOf('HIGHLIGHT_COLORS = ['))
+  for (const color of ['#ddebf7', '#ffc000', '#ff7c80', '#00b050', '#0070c0']) {
+    assert.ok(fills.includes(color), `填充色缺 ${color}`)
+  }
+  // 三处选颜色的地方都从 palette.js 取，不再各有一套。
+  assert.ok(/export const TEXT_COLOR_LIST = STANDARD_COLORS\.flat\(\)/.test(palette), '文字色要拉平成共享清单')
+  assert.ok(/export const FILL_COLOR_LIST = HIGHLIGHT_COLORS\.flat\(\)/.test(palette), '填充色要拉平成共享清单')
+  assert.ok(/v-for="\(row, index\) in STANDARD_COLORS"/.test(composer), '工具栏字体颜色用共享色板')
+  assert.ok(/v-for="\(row, index\) in HIGHLIGHT_COLORS"/.test(composer), '工具栏突出显示用共享色板')
+  assert.ok(/FILL_COLOR_LIST : TEXT_COLOR_LIST/.test(composer), '单元格菜单用共享色板')
+  assert.ok(/type="color"/.test(composer), '保留自定义取色器')
 })
 
 test('侧栏角标：存完草稿要重算草稿夹的计数', () => {

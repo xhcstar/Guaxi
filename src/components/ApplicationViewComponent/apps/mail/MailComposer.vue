@@ -870,13 +870,18 @@
               </option>
             </select>
           </div>
-          <!-- 填充 / 文字颜色用系统取色器：一个色块代替两排色板，想用邮件里
-               没有的颜色也不用改代码。旁边的斜杠清掉填充。 -->
+          <!-- 填充 / 文字颜色：点开是常用色网格（浅色打底 + 常见饱和色都有），
+               想要别的再走系统取色器。关着的时候只占两个按钮。 -->
           <div class="mail-editor-menu-row-actions">
-            <label class="mail-editor-menu-color" title="单元格填充色">
-              <span>填充</span>
-              <input type="color" :value="DEFAULT_CELL_FILL" @change="onCellFillColor" />
-            </label>
+            <button
+              class="mail-editor-menu-color"
+              :class="{ 'is-on': colorPanel === 'fill' }"
+              title="单元格填充色"
+              @click="toggleColorPanel('fill')"
+            >
+              <span class="mail-editor-menu-color-dot" :style="{ background: DEFAULT_CELL_FILL }"></span>
+              填充
+            </button>
             <button
               class="mail-fmt-btn"
               title="清除填充"
@@ -885,9 +890,34 @@
             >
               <MailIcon name="clearFormat" :size="14" />
             </button>
-            <label class="mail-editor-menu-color" title="单元格文字颜色">
-              <span>文字</span>
-              <input type="color" :value="DEFAULT_TEXT_COLOR" @change="onCellTextColor" />
+            <button
+              class="mail-editor-menu-color"
+              :class="{ 'is-on': colorPanel === 'text' }"
+              title="单元格文字颜色"
+              @click="toggleColorPanel('text')"
+            >
+              <span class="mail-editor-menu-color-dot" :style="{ background: DEFAULT_TEXT_COLOR }"></span>
+              文字
+            </button>
+          </div>
+          <div v-if="colorPanel" class="mail-editor-menu-colors">
+            <button
+              v-for="color in colorPanel === 'fill' ? FILL_COLOR_LIST : TEXT_COLOR_LIST"
+              :key="color"
+              class="mail-editor-menu-swatch"
+              :style="{ background: color }"
+              :title="color"
+              @click="
+                colorPanel === 'fill' ? tableAction('cellFill', color) : tableAction('cellColor', color)
+              "
+            ></button>
+            <label class="mail-editor-menu-custom" title="自定义颜色">
+              <input
+                type="color"
+                :value="colorPanel === 'fill' ? DEFAULT_CELL_FILL : DEFAULT_TEXT_COLOR"
+                @change="colorPanel === 'fill' ? onCellFillColor($event) : onCellTextColor($event)"
+              />
+              自定义
             </label>
           </div>
           <div class="mail-editor-menu-sep"></div>
@@ -1002,8 +1032,10 @@ import AddressInput from './AddressInput.vue'
 import AddressPicker from './AddressPicker.vue'
 import MailIcon from './MailIcon.vue'
 import {
+  FILL_COLOR_LIST,
   HIGHLIGHT_COLORS,
   STANDARD_COLORS,
+  TEXT_COLOR_LIST,
   pushRecent,
 } from './palette'
 import { buildTableHtml, markdownToEmailHtml } from './composeTable'
@@ -2046,6 +2078,17 @@ const CELL_FONT_SIZES = [11, 12, 13, 14, 16]
 const DEFAULT_CELL_FILL = '#ddebf7'
 const DEFAULT_TEXT_COLOR = '#44546a'
 
+/**
+ * 单元格的填充 / 文字颜色与工具栏共用同一份色板（见 palette.js），
+ * 以前两处各有一套，同一个红色在两处对不上。
+ */
+/** 展开的是哪一组颜色：'' / 'fill' / 'text'。 */
+const colorPanel = ref('')
+
+function toggleColorPanel(kind) {
+  colorPanel.value = colorPanel.value === kind ? '' : kind
+}
+
 /** 当前打开着的右键菜单：`{ x, y, table, image, cell, tableEl, row, col, rows, cols }`。 */
 const editorMenu = ref(null)
 const editorMenuRef = ref(null)
@@ -2083,6 +2126,7 @@ function onEditorContextMenu(event) {
   // 表格与图片的右键由我们接管（行列 / 宽度操作）；其余位置也接管，保证菜单跟着光标。
   event.preventDefault()
   const spot = { x: event.clientX, y: event.clientY }
+  colorPanel.value = ''
   const cell = event.target?.closest?.('td, th')
   const table = event.target?.closest?.('table')
   const img = event.target?.closest?.('img')
@@ -2104,6 +2148,7 @@ function onEditorContextMenu(event) {
 
 function closeEditorMenu() {
   editorMenu.value = null
+  colorPanel.value = ''
   document.removeEventListener('mousedown', closeEditorMenu)
 }
 

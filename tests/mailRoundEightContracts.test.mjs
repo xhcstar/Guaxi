@@ -57,7 +57,7 @@ test('格式刷：工具栏有入口，能复制当前格式再刷到选区', ()
 
 test('编辑器工具：枚举收进下拉、颜色用取色器、浮动条用图标', () => {
   assert.ok(/mail-editor-menu-select/.test(composer), '表格样式 / 宽度 / 字号要有下拉')
-  assert.ok(/input type="color"/.test(composer), '填充与文字颜色用取色器')
+  assert.ok(/type="color"/.test(composer), '填充与文字颜色用取色器')
   assert.ok(!/v-for="color in CELL_FILLS"/.test(composer), '不再平铺色板')
   // 浮动条上的表格操作改成图标 + title。
   assert.ok(/v-for="item in TABLE_ROW_ACTIONS"[\s\S]{0,260}MailIcon :name="item\.icon"/.test(composer), '浮动条用图标')

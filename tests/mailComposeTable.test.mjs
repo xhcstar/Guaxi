@@ -82,13 +82,23 @@ test('两行普通的 | 文本不会被误判成表格', () => {
   assert.ok(!html.includes('<table'), '缺分隔行时不当表格')
 })
 
-test('调色板是 Office 风格的 5 列标准色', () => {
-  assert.equal(STANDARD_COLORS.length, 4)
-  assert.equal(STANDARD_COLORS[0].length, 5)
-  assert.equal(HIGHLIGHT_COLORS.length, 4)
+test('调色板是 5 列标准色，深色和饱和色都要有', () => {
+  // 行数不固定（按常用色增减），但每行必须正好 5 个，色板才是整齐的网格。
+  assert.ok(STANDARD_COLORS.length >= 3)
+  assert.ok(HIGHLIGHT_COLORS.length >= 3)
   for (const row of [...STANDARD_COLORS, ...HIGHLIGHT_COLORS]) {
+    assert.equal(row.length, 5)
     for (const color of row) assert.match(color, /^#[0-9a-f]{6}$/)
   }
+  // 「常见颜色都要有」：文字色里必须有黑、正红、绿、蓝。
+  const text = STANDARD_COLORS.flat()
+  for (const color of ['#000000', '#ff0000', '#00b050', '#0070c0']) {
+    assert.ok(text.includes(color), `文字色缺 ${color}`)
+  }
+  // 填充色既要有浅色打底，也要有饱和色。
+  const fill = HIGHLIGHT_COLORS.flat()
+  assert.ok(fill.includes('#ddebf7'), '填充缺浅色打底')
+  assert.ok(fill.includes('#ffc000') || fill.includes('#00b050'), '填充缺饱和色')
 })
 
 test('最近用过的颜色：去重、置顶、限长', () => {

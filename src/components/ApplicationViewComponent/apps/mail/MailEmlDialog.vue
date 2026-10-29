@@ -1,5 +1,5 @@
 <template>
-  <div class="mail-modal-backdrop" @click.self="$emit('close')">
+  <div class="mail-modal-backdrop" @mousedown.self="$emit('close')">
     <div class="mail-modal is-wide mail-eml-modal" role="dialog" aria-label="查看 .eml 邮件">
       <div class="mail-modal-head">
         <h2 class="mail-modal-title">本地邮件文件</h2>

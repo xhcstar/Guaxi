@@ -1,5 +1,5 @@
 <template>
-  <div class="mail-modal-backdrop" @click.self="$emit('close')">
+  <div class="mail-modal-backdrop">
     <!-- 设置窗口可拖拽调整大小：诊断、诊断报告与模板正文都需要更多空间，
          固定 760px 的宽度在这些场景下不够用。 -->
     <div class="mail-modal mail-settings-modal" role="dialog" aria-label="外观与设置">
@@ -345,37 +345,75 @@
           <li v-for="w in sieveWarnings" :key="w">{{ w }}</li>
         </ul>
 
-        <!-- 模板 -->
+        <!-- 模板已独立成页（见下方「邮件模板」）。 -->
+        </section>
+
+        <!-- ============ 邮件模板 ============ -->
+        <section v-show="activeTab === 'templates'" class="mail-settings-panel mail-templates-panel">
+          <div class="mail-templates-layout">
+            <!-- 左：已有模板。点一条就载入右边编辑。 -->
+            <div class="mail-templates-list">
+              <div class="mail-templates-list-head">
+                <span>已有模板</span>
+                <button class="mail-btn" @click="newTemplate">新建</button>
+              </div>
+              <p v-if="!templates.length" class="mail-hint">
+                还没有模板。新建一个之后，写信时在工具栏的「模板」里就能一键套用。
+              </p>
+              <button
+                v-for="tpl in templates"
+                :key="tpl.id"
+                class="mail-template-item"
+                :class="{ 'is-active': editingTemplateId === tpl.id }"
+                :title="tpl.subject || tpl.name"
+                @click="editTemplate(tpl)"
+              >
+                <span class="mail-template-item-name">{{ tpl.name || '（未命名）' }}</span>
+                <span class="mail-template-item-subject">{{ tpl.subject || '（无主题）' }}</span>
+              </button>
+            </div>
+
+            <!-- 右：编辑区。正文占满剩余高度，不再挤在三行里。 -->
+            <div class="mail-templates-editor">
+              <div class="mail-field-row">
+                <div class="mail-field">
+                  <label class="mail-flabel">模板名称</label>
+                  <input v-model="draftTemplate.name" class="mail-input" placeholder="例如：周报" />
+                </div>
+                <div class="mail-field">
+                  <label class="mail-flabel">模板主题</label>
+                  <input v-model="draftTemplate.subject" class="mail-input" placeholder="主题行" />
+                </div>
+              </div>
+              <div class="mail-field is-grow">
+                <label class="mail-flabel">模板正文</label>
+                <textarea
+                  v-model="draftTemplate.html"
+                  class="mail-textarea mail-template-body"
+                  placeholder="模板正文（HTML 或纯文本，写信时从「模板」下拉套用）"
+                ></textarea>
+              </div>
+              <div class="mail-templates-actions">
+                <button class="mail-btn is-primary" :disabled="!canSaveTemplate" @click="saveTemplateEdit">
+                  {{ editingTemplateId ? '保存修改' : '保存为新模板' }}
+                </button>
+                <button
+                  class="mail-btn"
+                  :disabled="!canSaveTemplate"
+                  @click="saveTemplateEdit({ asNew: true })"
+                >
+                  另存为新模板
+                </button>
+                <button v-if="editingTemplateId" class="mail-btn is-danger" @click="removeCurrentTemplate">
+                  删除这个模板
+                </button>
+                <span class="mail-hint">写信时工具栏「模板」下拉里可以一键套用。</span>
+              </div>
+            </div>
+          </div>
         </section>
 
         <section v-show="activeTab === 'data'" class="mail-settings-panel">
-        <div class="mail-section-divider"></div>
-        <div class="mail-flabel" style="margin-bottom: 6px">邮件模板</div>
-        <div v-for="tpl in templates" :key="tpl.id" class="mail-account-row">
-          <span class="meta">
-            <span class="email">{{ tpl.name || '（未命名）' }}</span>
-            <span class="servers">{{ tpl.subject || '（无主题）' }}</span>
-          </span>
-          <button class="mail-btn is-danger" @click="removeTemplate(tpl)">删除</button>
-        </div>
-        <div class="mail-field-row">
-          <div class="mail-field">
-            <label class="mail-flabel">模板名称</label>
-            <input v-model="draftTemplate.name" class="mail-input" placeholder="例如：周报" />
-          </div>
-          <div class="mail-field">
-            <label class="mail-flabel">模板主题</label>
-            <input v-model="draftTemplate.subject" class="mail-input" placeholder="主题行" />
-          </div>
-        </div>
-        <textarea
-          v-model="draftTemplate.html"
-          class="mail-textarea"
-          rows="3"
-          placeholder="模板正文（HTML 或纯文本，写信时可以套用）"
-        ></textarea>
-        <button class="mail-btn" style="margin-top: 6px" @click="addTemplate">保存为新模板</button>
-
         <!-- 诊断 -->
 
         <div class="mail-section-divider"></div>
@@ -464,7 +502,7 @@
         <!-- 用 div 而不是 p：p 里嵌 <template v-if> 会让 Vue 的 HTML 解析器报
              「Attribute name cannot contain U+0022」并让整个组件编译失败。 -->
         <div class="mail-hint" style="margin: 0 0 8px">
-          当前目录：<code>{{ storage.activeDir || '（读取中）' }}</code>
+          当前目录：<code>{{ storage.activeDir || storageError || '（读取中）' }}</code>
           <template v-if="storage.dbBytes">
             · 数据库 {{ (storage.dbBytes / 1024 / 1024).toFixed(1) }} MB
           </template>
@@ -514,6 +552,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import MailIcon from './MailIcon.vue'
+import { askMailConfirm } from './mailConfirm'
 
 /**
  * 设置分页。一个长列表里塞下主题、网络、加密、Sieve、模板、诊断，
@@ -539,10 +578,16 @@ const SETTINGS_TABS = [
     hint: 'S/MIME、OpenPGP 与服务器端规则（Sieve）',
   },
   {
+    key: 'templates',
+    label: '邮件模板',
+    icon: 'book',
+    hint: '新建、编辑与整理常用邮件模板，写信时从「模板」里套用',
+  },
+  {
     key: 'data',
     label: '数据与诊断',
     icon: 'note',
-    hint: '邮件模板、诊断报告、本地加密、存储位置与备份',
+    hint: '诊断报告、本地加密、存储位置与备份',
   },
 ]
 
@@ -563,6 +608,8 @@ const props = defineProps({
   oauthStatusFn: { type: Function, default: null },
   sievePreviewFn: { type: Function, default: null },
   sieveSyncFn: { type: Function, default: null },
+  /** 保存模板（需要拿回保存后的 id，才能停在「已选中」状态）。 */
+  saveTemplateFn: { type: Function, default: null },
   smimeStatusFn: { type: Function, default: null },
   pgpKeysFn: { type: Function, default: null },
 })
@@ -582,6 +629,64 @@ const pgpKeys = ref([])
 const sieveScript = ref('')
 const sieveWarnings = ref([])
 const draftTemplate = ref({ name: '', subject: '', html: '' })
+/** 正在编辑哪一条（空 = 新建）。保存后靠它决定「覆盖」还是「新增」。 */
+const editingTemplateId = ref('')
+const canSaveTemplate = computed(
+  () =>
+    Boolean(
+      draftTemplate.value.name.trim() ||
+        draftTemplate.value.subject.trim() ||
+        draftTemplate.value.html.trim(),
+    ),
+)
+
+function newTemplate() {
+  editingTemplateId.value = ''
+  draftTemplate.value = { name: '', subject: '', html: '' }
+}
+
+function editTemplate(tpl) {
+  editingTemplateId.value = tpl.id
+  draftTemplate.value = { name: tpl.name || '', subject: tpl.subject || '', html: tpl.html || '' }
+}
+
+/** 保存：有选中就覆盖那一条，「另存为」则总是新增。 */
+async function saveTemplateEdit({ asNew = false } = {}) {
+  if (!canSaveTemplate.value) return
+  const tpl = draftTemplate.value
+  const payload = {
+    id: asNew ? '' : editingTemplateId.value || '',
+    name: tpl.name.trim() || tpl.subject.trim() || '未命名模板',
+    subject: tpl.subject,
+    html: tpl.html,
+    text: '',
+    createdAt: 0,
+  }
+  try {
+    // 函数 prop 才能拿到保存后的 id：保存完要继续停在「已选中」状态。
+    const saved = props.saveTemplateFn
+      ? await props.saveTemplateFn(payload)
+      : (emit('save-template', payload), null)
+    if (saved?.id) {
+      editingTemplateId.value = saved.id
+      draftTemplate.value = { name: saved.name, subject: saved.subject, html: saved.html }
+    } else if (asNew) {
+      newTemplate()
+    }
+  } catch (error) {
+    window.alert(String(error?.message || error))
+  }
+}
+
+async function removeCurrentTemplate() {
+  const tpl = props.templates.find((item) => item.id === editingTemplateId.value)
+  if (!tpl) return
+  if (!(await askMailConfirm('删除后写信时就不能再套用它了。', { title: `删除模板「${tpl.name}」？`, confirmText: '删除模板' }))) {
+    return
+  }
+  emit('delete-template', tpl.id)
+  newTemplate()
+}
 
 const densityOptions = [
   { value: 'compact', label: '紧凑' },
@@ -592,15 +697,18 @@ const densityOptions = [
 const fonts = ref([])
 const encryptionEnabled = ref(true)
 const storage = ref({ activeDir: '', customDir: '', dbPath: '', dbBytes: 0 })
+const storageError = ref('')
 const migrating = ref(false)
 const targetDir = ref('')
 
 async function loadStorage() {
   try {
     storage.value = await invoke('mail_storage_info')
+    storageError.value = ''
     targetDir.value = storage.value.customDir || ''
-  } catch {
-    /* 设置页拿不到存储信息不算致命，保持默认展示 */
+  } catch (error) {
+    // 以前是静默吞掉：界面上永远停在「（读取中）」，用户以为功能没做。
+    storageError.value = `读取存储位置失败：${error?.message || error}`
   }
 }
 
@@ -785,30 +893,9 @@ async function pushSieve() {
   }
 }
 
-async function addTemplate() {
-  const tpl = draftTemplate.value
-  if (!tpl.name.trim() && !tpl.subject.trim() && !tpl.html.trim()) return
-  try {
-    await emit('save-template', {
-      id: '',
-      name: tpl.name.trim() || tpl.subject.trim() || '未命名模板',
-      subject: tpl.subject,
-      html: tpl.html,
-      text: '',
-      createdAt: 0,
-    })
-    draftTemplate.value = { name: '', subject: '', html: '' }
-  } catch (error) {
-    window.alert(String(error?.message || error))
-  }
-}
-
-function removeTemplate(tpl) {
-  if (!window.confirm(`删除模板「${tpl.name}」？`)) return
-  emit('delete-template', tpl.id)
-}
-
 onMounted(loadCrypto)
+// 打开设置就取一次存储信息：以前只在迁移之后才读，界面上永远停在「（读取中）」。
+onMounted(loadStorage)
 
 onMounted(async () => {
   try {

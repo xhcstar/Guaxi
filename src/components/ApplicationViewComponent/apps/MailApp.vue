@@ -329,6 +329,7 @@
       :sieve-sync-fn="syncSieve"
       :smime-status-fn="smimeStatus"
       :pgp-keys-fn="pgpKeys"
+      :save-template-fn="store.saveTemplate"
       @close="showSettings = false"
       @update="onSettingsUpdate"
       @save-template="store.saveTemplate"
@@ -339,7 +340,7 @@
     />
 
     <!-- 快捷键帮助 -->
-    <div v-if="showShortcuts" class="mail-modal-backdrop" @click.self="showShortcuts = false">
+    <div v-if="showShortcuts" class="mail-modal-backdrop" @mousedown.self="showShortcuts = false">
       <div class="mail-modal" role="dialog" aria-label="键盘快捷键">
         <div class="mail-modal-head">
           <h2 class="mail-modal-title">键盘快捷键</h2>
@@ -444,7 +445,7 @@
       <button class="mail-btn" @click="scheduledOpen = true">管理</button>
     </div>
 
-    <div v-if="scheduledOpen" class="mail-modal-backdrop" @click.self="scheduledOpen = false">
+    <div v-if="scheduledOpen" class="mail-modal-backdrop" @mousedown.self="scheduledOpen = false">
       <div class="mail-modal mail-schedule-modal" role="dialog" aria-label="待发送邮件">
         <div class="mail-modal-head">
           <h2 class="mail-modal-title">待发送邮件</h2>

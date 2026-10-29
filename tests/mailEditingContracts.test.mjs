@@ -77,7 +77,7 @@ test('表格：工具行给出行列、样式与单元格内容工具', () => {
   assert.ok(composer.includes('TABLE_STYLES'), '应能选表格样式预设')
   assert.ok(composer.includes('CELL_FONT_SIZES'), '应能改单元格字号')
   // 填充 / 文字颜色用取色器，不再平铺两排色板。
-  assert.ok(/input type="color"/.test(composer), '单元格填充与文字颜色要用取色器')
+  assert.ok(/type="color"/.test(composer), '单元格填充与文字颜色要用取色器')
   assert.ok(/function onCellFillColor/.test(composer) && /function onCellTextColor/.test(composer), '取色器的结果要能落到单元格上')
   assert.ok(
     /function tableAction\(action, payload, context = null\)/.test(composer),

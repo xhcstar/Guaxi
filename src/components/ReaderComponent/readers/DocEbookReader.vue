@@ -224,6 +224,21 @@
       >
         <Icon :icon="readAloudPlaying ? stopIcon : volumeIcon" width="15" height="15" />
       </button>
+
+      <!--
+        智能助手开关：面板由宿主（ReaderPane）持有 —— 独立阅读器窗口内置一套，
+        主应用内嵌时展开全局右栏。这里只负责把意图抛上去。
+      -->
+      <button
+        class="guaxi-doc-reader__icon-btn"
+        :class="{ 'is-on': assistantOpen }"
+        :title="assistantOpen ? '隐藏智能助手' : '显示智能助手'"
+        aria-label="智能助手"
+        :aria-pressed="assistantOpen"
+        @click="emit('toggle-assistant')"
+      >
+        <Icon :icon="botIcon" width="15" height="15" />
+      </button>
     </div>
 
 
@@ -571,7 +586,6 @@ import botIcon from '@iconify-icons/lucide/bot'
 import wandIcon from '@iconify-icons/lucide/wand-2'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { createLogger } from '../../../utils/logger'
-import { useRightSiderStore } from '../../../stores/rightSiderStore'
 import { useReadingHistory } from '../../../composables/useReadingHistory'
 import { useReaderReadAloud } from '../../../composables/useReaderReadAloud'
 import { useSelectionTranslate } from '../../../composables/useSelectionTranslate'
@@ -587,13 +601,16 @@ const GuaxiSelectionTranslatePanel = defineAsyncComponent(
 )
 
 const logger = createLogger('DocEbookReader')
-const rightSiderStore = useRightSiderStore()
 
 const props = defineProps({
   path: { type: String, required: true },
   name: { type: String, default: '' },
   kind: { type: String, default: 'epub' },
+  /** 宿主里的助手面板当前是否展开：只用于开关按钮的按下态。 */
+  assistantOpen: { type: Boolean, default: false },
 })
+
+const emit = defineEmits(['toggle-assistant', 'ask-assistant'])
 
 const frameRef = ref(null)
 const loading = ref(true)
@@ -1597,27 +1614,19 @@ const querySelectionText = async () => {
 /**
  * 送到智能助手。
  *
- * 电子书阅读器自己没有助手侧栏（另外四个阅读器各带一个），这里复用全局右栏的助手面板：
- * rightSiderStore 是应用级的，打开的是同一个对话，用户不会看到「两个助手」。
+ * 「问 AI」送去哪里由宿主决定（独立阅读器窗口内置面板 / 主应用全局右栏），
+ * 本组件只把选中的文字抛出去，不自己碰面板状态 —— 否则同一个对话会出现两个入口。
  */
 const sendSelectionToAssistant = (overrideText, options = {}) => {
   const text = String(overrideText ?? selectionText.value ?? '').trim()
   if (!text) return false
-  try {
-    rightSiderStore.setPanel('assistant')
-    rightSiderStore.open()
-    rightSiderStore.appendAssistantDraft(text, {
-      autoSend: options.autoSend !== false,
-      disableWebSearch: !!options.disableWebSearch,
-    })
-    hideSelectionBar()
-    return true
-  } catch (error) {
-    logger.warn('[DocEbookReader] send selection to assistant failed', {
-      error: String(error?.message || error),
-    })
-    return false
-  }
+  emit('ask-assistant', {
+    text,
+    autoSend: options.autoSend !== false,
+    disableWebSearch: !!options.disableWebSearch,
+  })
+  hideSelectionBar()
+  return true
 }
 
 const askSelectionWithAssistant = () => {

@@ -1623,8 +1623,8 @@
 .mail-modal {
   display: flex;
   flex-direction: column;
-  width: min(760px, 92vw);
-  max-height: 86vh;
+  width: min(820px, 94vw);
+  max-height: 88vh;
   /* 弹层必须完全不透明：backdrop 的暗色不该透进内容里。 */
   opacity: 1;
   border: 1px solid var(--mail-border-strong);
@@ -1636,7 +1636,7 @@
 }
 
 .mail-modal.is-wide {
-  width: min(980px, 94vw);
+  width: min(1120px, 96vw);
 }
 
 .mail-modal-head {
@@ -1929,8 +1929,8 @@
   /* 可拖拽调整大小 + 记住用户在窗口标题栏里的尺寸偏好。 */
   resize: both;
   overflow: auto;
-  width: min(880px, 92vw);
-  height: min(760px, 88vh);
+  width: min(1040px, 94vw);
+  height: min(820px, 90vh);
   max-width: 96vw;
   max-height: 94vh;
   min-width: 520px;
@@ -1983,6 +1983,89 @@
 
 .mail-settings-panel {
   min-height: 0;
+}
+
+/* 邮件模板页：左边是已有模板，右边是编辑区；正文占满剩余高度，
+   不再像以前那样挤在「数据与诊断」里的三行文本框。 */
+.mail-templates-layout {
+  display: grid;
+  grid-template-columns: 236px minmax(0, 1fr);
+  gap: 14px;
+  min-height: 460px;
+}
+.mail-templates-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 0;
+  max-height: 60vh;
+  overflow-y: auto;
+  padding-right: 6px;
+  border-right: 1px solid var(--mail-border);
+}
+.mail-templates-list-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+  color: var(--mail-text-secondary);
+  font-size: 12px;
+}
+.mail-template-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 7px 8px;
+  border: 1px solid transparent;
+  border-radius: var(--mail-radius-sm);
+  background: transparent;
+  color: var(--mail-text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.mail-template-item:hover {
+  background: var(--mail-panel-hover);
+}
+.mail-template-item.is-active {
+  border-color: var(--mail-accent);
+  background: var(--mail-accent-soft);
+}
+.mail-template-item-name {
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.mail-template-item-subject {
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--mail-text-muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mail-templates-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  min-height: 0;
+}
+.mail-field.is-grow {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.mail-template-body {
+  flex: 1 1 auto;
+  min-height: 300px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  line-height: 1.6;
+  resize: vertical;
+}
+.mail-templates-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
 }
 
 /* 写信窗口 */
@@ -2508,24 +2591,65 @@ body.mail-image-dragging * {
   background: var(--mail-panel-hover);
   color: var(--mail-text);
 }
-/* 填充 / 文字颜色改成系统取色器：一个色块顶替原来两排色板。 */
+/* 填充 / 文字颜色：两个按钮展开一组常用色，外加系统取色器兜底。 */
 .mail-editor-menu-color {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  padding: 2px 6px;
+  padding: 2px 7px;
   border: 1px solid var(--mail-border);
   border-radius: 4px;
+  background: transparent;
   color: var(--mail-text-secondary);
+  font: inherit;
   font-size: 11px;
   cursor: pointer;
 }
-.mail-editor-menu-color input[type='color'] {
-  width: 20px;
+.mail-editor-menu-color:hover,
+.mail-editor-menu-color.is-on {
+  border-color: var(--mail-accent);
+  color: var(--mail-accent);
+}
+.mail-editor-menu-color-dot {
+  width: 12px;
+  height: 12px;
+  border: 1px solid var(--mail-border-strong);
+  border-radius: 3px;
+}
+.mail-editor-menu-colors {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  padding: 4px 10px 8px;
+}
+.mail-editor-menu-swatch {
+  width: 18px;
   height: 18px;
   padding: 0;
-  border: 0;
+  border: 1px solid var(--mail-border);
   border-radius: 3px;
+  cursor: pointer;
+}
+.mail-editor-menu-swatch:hover {
+  outline: 2px solid var(--mail-accent);
+  outline-offset: 1px;
+}
+.mail-editor-menu-custom {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 6px;
+  border: 1px solid var(--mail-border);
+  border-radius: 3px;
+  color: var(--mail-text-muted);
+  font-size: 10.5px;
+  cursor: pointer;
+}
+.mail-editor-menu-custom input[type='color'] {
+  width: 18px;
+  height: 16px;
+  padding: 0;
+  border: 0;
   background: transparent;
   cursor: pointer;
 }

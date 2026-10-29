@@ -28,6 +28,7 @@
         :path="path"
         :file-name="fileName"
         :theme="normalizedTheme"
+        standalone
         @force-editor="onForceEditor"
         @convert-to-markdown="onConvertToMarkdown"
       />

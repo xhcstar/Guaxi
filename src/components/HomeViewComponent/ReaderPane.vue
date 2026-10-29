@@ -208,6 +208,20 @@
               <span v-if="pdfHighlights.length" class="gdr-pdf-switch__badge">{{ pdfHighlights.length }}</span>
             </button>
           </div>
+          <!--
+            助手开关：不放进上面那个 v-if="!pdfAside" 的分组 —— 左侧侧栏开着时它也是
+            可用的（两者分居左右、互不挤占），藏起来只会让人以为没这个功能。
+          -->
+          <button
+            class="guaxi-doc-reader__icon-btn"
+            :class="{ 'is-on': readerAssistantActive }"
+            :title="readerAssistantActive ? '隐藏智能助手' : '显示智能助手'"
+            aria-label="智能助手"
+            :aria-pressed="readerAssistantActive"
+            @click="toggleReaderAssistant"
+          >
+            <Icon :icon="botIcon" width="15" height="15" />
+          </button>
         </template>
       </GuaxiPdfViewer>
 
@@ -368,6 +382,9 @@
       :path="path"
       :name="fileName"
       :kind="target.kind"
+      :assistant-open="readerAssistantActive"
+      @toggle-assistant="toggleReaderAssistant"
+      @ask-assistant="(payload) => openReaderAssistant(payload?.text, payload || {})"
     />
 
     <DocHtmlReader
@@ -412,6 +429,37 @@
         </div>
       </div>
     </div>
+
+    <!--
+      助手面板（仅独立阅读器窗口）。
+
+      主应用内嵌时全局右栏就在旁边，再来一个就是同一份对话的两个实例；
+      独立窗口没有那套外壳，只能自己渲染一个，否则「问 AI」点了没有落点。
+      抽屉式覆盖而不是挤压正文：PDF 的 `.gpv` 依赖 `left/right` 定宽
+      （见 GuaxiPdfViewer 里 gpc 根节点的说明），再加一个 flex 兄弟会把正文挤坏。
+    -->
+    <aside
+      v-if="standalone"
+      class="gdr-assistant"
+      :class="{ 'is-open': showReaderAssistant }"
+      :aria-hidden="!showReaderAssistant"
+    >
+      <div class="gdr-assistant__head">
+        <span class="gdr-assistant__title">智能助手</span>
+        <button
+          class="guaxi-doc-reader__icon-btn"
+          title="收起智能助手"
+          aria-label="收起智能助手"
+          @click="showReaderAssistant = false"
+        >
+          <Icon :icon="closeIcon" width="15" height="15" />
+        </button>
+      </div>
+      <div class="gdr-assistant__body">
+        <!-- 展开时才挂载：助手是一大块独立 chunk，收起状态下没有理由加载它。 -->
+        <GuaxiAgentAssistant v-if="showReaderAssistant" />
+      </div>
+    </aside>
   </div>
 </template>
 
@@ -437,6 +485,7 @@ import { createLogger } from '../../utils/logger'
 import { usePageTranslate, splitIntoParagraphs } from '../../composables/usePageTranslate'
 import { useSelectionReadAloud } from '../../composables/useSelectionReadAloud'
 import { useRightSiderStore } from '../../stores/rightSiderStore'
+import { useSiderStore } from '../../stores/useSiderStore'
 
 // 各阅读器按需加载：打开一本 MOBI 不该把 pdfium 阅读器、Office 阅读器一起下载并解析。
 // 阅读器窗口是独立 webview，首帧速度几乎完全取决于入口加载了多少模块（见 reader-main.js）。
@@ -450,10 +499,16 @@ const DocOfficeReader = defineAsyncComponent(() => import('../ReaderComponent/re
 const GuaxiSelectionTranslatePanel = defineAsyncComponent(
   () => import('./GuaxiSelectionTranslatePanel.vue')
 )
+// 独立阅读器窗口内置的助手面板：只在真正展开时加载，不拖慢首帧。
+const GuaxiAgentAssistant = defineAsyncComponent(
+  () => import('./GuaxiAgentAssistant.vue')
+)
 
 const logger = createLogger('ReaderPane')
-// 「问 AI / 用 AI 翻译」把选中文字送进全局右侧助手（应用级 store，打开的是同一个对话）。
+// 「问 AI / 用 AI 翻译」送去哪里，由宿主决定（见 openReaderAssistant）：
+// 主应用内嵌时有全局右栏，独立阅读器窗口没有，只能用它自己的这一套。
 const rightSiderStore = useRightSiderStore()
+const siderStore = useSiderStore()
 
 /** word / spreadsheet / slides 三个 reader 分组，现在都由 DocOfficeReader 承接。 */
 const isOfficeReader = computed(() =>
@@ -466,6 +521,13 @@ const props = defineProps({
   path: { type: String, required: true },
   fileName: { type: String, default: '' },
   theme: { type: String, default: 'light' },
+  /**
+   * 是否跑在独立阅读器窗口（doc-reader.html）里。
+   *
+   * 「问 AI」要有个能看见的地方：主应用内嵌时用全局右栏，独立窗口里没有那套外壳，
+   * 只能本组件自己渲染一个助手面板 —— 否则点下去什么都不会发生。
+   */
+  standalone: { type: Boolean, default: false },
 })
 
 defineEmits(['force-editor', 'convert-to-markdown'])
@@ -810,6 +872,17 @@ const pdfSelectionPreview = computed(() => {
   return t.length > 24 ? `${t.slice(0, 24)}…` : t
 })
 const pdfRootEl = ref(null)
+/** 内置助手面板是否展开（只在独立阅读器窗口里渲染，见 openReaderAssistant）。 */
+const showReaderAssistant = ref(false)
+/**
+ * 顶部助手开关的按下态。两条宿主路径各自的事实来源不同：
+ * 独立窗口看自己的面板，主应用内嵌看全局右栏。
+ */
+const readerAssistantActive = computed(() =>
+  props.standalone
+    ? showReaderAssistant.value
+    : (rightSiderStore.isOpen && rightSiderStore.panel === 'assistant')
+)
 
 /**
  * 选好文字后算浮条位置。
@@ -936,34 +1009,55 @@ const queryPdfSelection = async () => {
 }
 
 /**
- * 把选中文字送到右侧智能助手。
+ * 把选中文字送到右侧智能助手，并把那块栏真正打开。
  *
- * 独立阅读器窗口没有自己的助手侧栏（GuaxiConvertPDFReader 那一套），所以与 DocEbookReader
- * 一样走全局右栏：rightSiderStore 是应用级的，打开的是同一个对话。
+ * 两种宿主两条路：
+ * - 独立阅读器窗口：没有全局右栏（GuaxiContent 不在这里），自己渲染一个助手面板；
+ * - 主应用内嵌：全局右栏存在，但默认是**折叠**的（宽度 0），只调 open() 看不见，
+ *   必须同时 setRightSiderCollapsed(false) —— 与 GuaxiHeader 里那颗助手按钮一致。
  */
-const sendPdfSelectionToAssistant = (text, options = {}) => {
+const openReaderAssistant = (text, options = {}) => {
   const t = String(text || '').trim()
   if (!t) return false
-  try {
+  if (props.standalone) {
+    showReaderAssistant.value = true
+  } else {
     rightSiderStore.setPanel('assistant')
     rightSiderStore.open()
-    rightSiderStore.appendAssistantDraft(t, {
-      autoSend: options.autoSend !== false,
-      disableWebSearch: !!options.disableWebSearch,
-    })
-    return true
-  } catch (error) {
-    logger.warn('[ReaderPane] send selection to assistant failed', {
-      error: String(error?.message || error),
-    })
-    return false
+    siderStore.setRightSiderCollapsed('home', false)
   }
+  rightSiderStore.appendAssistantDraft(t, {
+    autoSend: options.autoSend !== false,
+    disableWebSearch: !!options.disableWebSearch,
+  })
+  return true
+}
+
+/**
+ * 顶部那颗助手开关。行为随宿主走，但用户看到的永远是同一颗按钮、同一个位置：
+ * 独立窗口折叠/展开自己的面板，主应用内嵌时折叠/展开全局右栏。
+ */
+const toggleReaderAssistant = () => {
+  if (props.standalone) {
+    showReaderAssistant.value = !showReaderAssistant.value
+    return
+  }
+  const collapsed = siderStore.isRightSiderCollapsed?.['home'] ?? true
+  const isAssistant = rightSiderStore.panel === 'assistant'
+  if (!collapsed && rightSiderStore.isOpen && isAssistant) {
+    rightSiderStore.close()
+    siderStore.setRightSiderCollapsed('home', true)
+    return
+  }
+  rightSiderStore.setPanel('assistant')
+  rightSiderStore.open()
+  siderStore.setRightSiderCollapsed('home', false)
 }
 
 const askPdfSelectionWithAssistant = () => {
   const text = String(pdfSelectionText.value || '').trim()
   if (!text) return
-  sendPdfSelectionToAssistant(text, { autoSend: true })
+  openReaderAssistant(text, { autoSend: true })
   clearPdfSelection()
 }
 
@@ -979,7 +1073,7 @@ const openPdfAssistantTranslate = () => {
   const lang = pdfTranslate.toLang?.value || 'zh'
   const label = pdfTranslate.langOptions?.find((x) => x.value === lang)?.label || lang
   const prompt = `请将以下内容翻译成${label}，保持原意并保留术语与格式，只输出译文：\n\n${text}`
-  const ok = sendPdfSelectionToAssistant(prompt, { autoSend: true, disableWebSearch: true })
+  const ok = openReaderAssistant(prompt, { autoSend: true, disableWebSearch: true })
   if (ok) clearPdfSelection()
 }
 
@@ -1602,5 +1696,40 @@ const openExternally = async () => {
   inset: 0;
   display: flex;
   flex-direction: column;
+}
+
+/* 独立阅读器窗口的内置助手面板：抽屉式从右侧滑出，不参与正文排布。 */
+.gdr-assistant {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(560px, 46vw);
+  display: flex;
+  flex-direction: column;
+  background: var(--guaxi-panel-bg, #fff);
+  color: var(--guaxi-text-primary, #1f2328);
+  border-left: 1px solid var(--guaxi-border, rgba(0, 0, 0, 0.1));
+  box-shadow: -8px 0 24px rgba(0, 0, 0, 0.18);
+  /* z-index 要压过 .guaxi-doc-reader(8) 与 PDF 浮条(20)，又不能盖到应用弹层之上。 */
+  z-index: 60;
+  transform: translateX(100%);
+  transition: transform 0.22s ease;
+}
+.gdr-assistant.is-open { transform: translateX(0); }
+
+.gdr-assistant__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--guaxi-border, rgba(0, 0, 0, 0.1));
+}
+.gdr-assistant__title { font-size: 13px; font-weight: 600; }
+.gdr-assistant__body {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
 }
 </style>
