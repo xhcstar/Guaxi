@@ -20,7 +20,10 @@ const mailApp = read('src/components/ApplicationViewComponent/apps/MailApp.vue')
 test('切账号：默认落在收件箱', () => {
   const fn = store.slice(store.indexOf('selectAccount(id)'), store.indexOf('selectAccount(id)') + 600)
   assert.ok(/this\.activeFolder = inbox\?\.name/.test(fn), '要切到收件箱')
-  assert.ok(/this\.scope = 'folder'/.test(fn), '范围要设为该文件夹，而不是 all')
+  assert.ok(
+    /this\.scope = id \? 'folder' : 'all'/.test(fn),
+    '具体账户进收件箱；「全部账户」才用跨账户视图',
+  )
 })
 
 test('图片控制框：裁剪在编辑区里，滚动时也跟着走', () => {

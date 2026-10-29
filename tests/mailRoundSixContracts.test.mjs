@@ -62,8 +62,8 @@ test('移动子菜单：目标清单要包含自建文件夹', () => {
   assert.ok(/const contextFolders = computed/.test(mailApp), '子菜单要读实时文件夹表')
   assert.ok(/FOLDER_ROLE_ORDER = \[[^\]]*'custom'/.test(mailApp), '自建文件夹要排在角色序里，不能被过滤掉')
   assert.ok(
-    /\.filter\(\(folder\) => folder\.role !== 'outbox'\)/.test(mailApp),
-    '只排除发件箱，其余可归档目录都要能选',
+    /selectableMoveTargets\(store\.foldersByAccount/.test(mailApp),
+    '目标清单走共享规则：排除发件箱与模板壳，其余都可归档',
   )
 })
 

@@ -54,7 +54,10 @@ test('规则条件：从通讯录加人后输入框向下长，而不是把地�
 test('规则「移到文件夹」：按当前账户取文件夹，悬浮面板里就地新建与刷新', () => {
   assert.ok(mailApp.includes(':active-account-id="store.activeAccountId"'), '要把当前账户传给弹层')
   assert.ok(/const ruleAccountId = computed/.test(rules), '文件夹列表要绑定到一个账户')
-  assert.ok(/\.filter\(\(folder\) => folder\.role !== 'outbox'\)/.test(rules), '发件箱不是归档目的地')
+  assert.ok(
+    /selectableMoveTargets\(props\.foldersByAccount/.test(rules),
+    '发件箱与模板壳不是归档目的地',
+  )
   // 选择与新建都在悬浮面板里完成：不再用 window.prompt，也不用原生 select。
   assert.ok(/<MailFolderPicker/.test(rules), '改用悬浮文件夹面板')
   assert.ok(!/window\.prompt/.test(rules), '不应再用系统输入框')

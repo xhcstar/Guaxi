@@ -356,18 +356,31 @@ fn detect_role(name: &str, attributes: &[NameAttribute<'_>]) -> FolderRole {
     FolderRole::Custom
 }
 
-/// 服务器下发、但几乎肯定是服务商自动套结构的目录（QQ / 163 / 企业邮常见）。
+/// 服务商模板壳的完整路径。
 ///
-/// 判断依据是「文件夹树的上层节点」而不是名字本身：一个不可选的父目录，
-/// 下面只有系统子目录（已删除 / 已发送 / 邮件订阅）时，它只是服务商模板留下的，
-/// 用户在别的客户端建的是具体文件夹（`工作/2026` 的 `工作` 是可选的）。
-fn looks_like_provider_container(name: &str, selectable: bool) -> bool {
-    if selectable {
-        return false;
+/// 判定靠结构而不是名字：一个目录的子树里挂着两个以上**标准角色**的文件夹
+/// （收件箱 / 已发送 / 已删除…），它多半是 QQ / 163 下发的模板树（「其他文件夹」）。
+/// 用户自己建的「工作/2026」子树里不会有系统目录，不会被误判。
+/// 前端 `folderTree.js` 用的是同一套规则，两边必须一致。
+fn provider_shells(listed: &[(String, Option<String>, bool, FolderRole)]) -> std::collections::HashSet<String> {
+    use std::collections::HashMap;
+    let mut counts: HashMap<String, usize> = HashMap::new();
+    for (name, delimiter, _selectable, role) in listed {
+        if *role == FolderRole::Custom || *role == FolderRole::Outbox {
+            continue;
+        }
+        let delim = delimiter.clone().unwrap_or_else(|| "/".to_string());
+        let parts: Vec<&str> = name.split(delim.as_str()).collect();
+        // 只统计「被包裹在别的目录里」的系统目录，顶层的收件箱 / 已发送不算。
+        for i in 1..parts.len() {
+            *counts.entry(parts[..i].join(&delim)).or_insert(0) += 1;
+        }
     }
-    // 顶层节点（或共享邮箱的「其他用户」节点）多半是壳：下面挂的是别人 / 别的邮箱。
-    let depth = name.split(['/', '.']).filter(|s| !s.trim().is_empty()).count();
-    depth <= 1
+    counts
+        .into_iter()
+        .filter(|(_, count)| *count >= 2)
+        .map(|(prefix, _)| prefix)
+        .collect()
 }
 
 /// 列出文件夹并带回未读数。`LIST "" "*"` 一次拿全，`STATUS` 逐个查未读。
@@ -402,20 +415,27 @@ pub fn list_folders(account: &Account, password: &str) -> Result<Vec<MailFolder>
     }
 
     let mut statuses = StatusReader::new(session, account, password);
+    let shells = provider_shells(&listed);
     let mut folders: Vec<MailFolder> = Vec::new();
-    // 同步前本地已有的文件夹名：出现过的沿用「用户自己的」，新出现的按结构判断。
-    let known = super::sync::folder_names(&account.id);
     for (raw_name, delimiter, selectable, role) in listed {
-        let (unread, total) = if selectable {
+        let delim = delimiter.clone().unwrap_or_else(|| "/".to_string());
+        // 模板壳本身与它下面的目录：不问 STATUS。它们不进侧栏、也不会被同步，
+        // 每轮刷新都去 STATUS 一遍纯属浪费（QQ 那个壳还经常把通道搞挂）。
+        let in_shell = shells
+            .iter()
+            .any(|p| raw_name == *p || raw_name.starts_with(&format!("{p}{delim}")));
+        let (unread, total) = if selectable && !in_shell {
             statuses.counts(&raw_name)
         } else {
             (0, 0)
         };
-        let is_known = known.contains(&raw_name);
-        let user_created = role != FolderRole::Custom
-            || is_known
-            || (!looks_like_provider_container(&raw_name, selectable)
-                && (total > 0 || unread > 0));
+        // 「用户自己的文件夹」只能由用户自己决定：他在我们这里新建一个（或右键
+        // 保留在侧栏），本地那一行才会是 user_created=1，`replace_folders` 会把
+        // 这个标记继承下来。服务器 LIST 里出现的一切都按「不是用户的」处理——
+        // 以前这里用「本地已存在」或「里面有邮件」来猜，结果 QQ 自带的
+        // 「其他文件夹」既已存在又有邮件，删掉后下一轮同步又被标回来，
+        // 侧栏里怎么删都删不干净（真实反馈）。
+        let user_created = role != FolderRole::Custom;
 
         folders.push(MailFolder {
             account_id: account.id.clone(),

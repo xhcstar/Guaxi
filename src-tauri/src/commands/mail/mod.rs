@@ -528,6 +528,9 @@ fn note_local_folder(account_id: &str, name: &str) -> Result<(), String> {
         .iter()
         .any(|f| f.name == name)
     {
+        // 服务器早就有这个名字（同步带下来过、或者用户刚在别的客户端建的）：
+        // 光「已存在」不够，要把它标成用户的，否则用户在这边建完侧栏里看不到。
+        store::set_folder_user_created(account_id, name, true)?;
         return Ok(());
     }
     store::insert_folder_row(&MailFolder {
@@ -898,6 +901,20 @@ async fn apply_rules_to_new(
 
 /// 规则 / 名单触发的移动：搬完再删本地行，失败只记日志（不阻塞同步）。
 async fn apply_rule_move(account: &Account, msg: &MessageSummary, target: &str) {
+    // POP3 的文件夹全在本机：走本地搬行，别去连 IMAP（会直接失败，
+    // 表现是「规则命中但邮件没动」）。
+    if pop3_sync::is_pop3(account) {
+        let moved = move_locally(
+            &msg.account_id,
+            &msg.folder,
+            &[msg.uid],
+            target,
+        );
+        if let Err(e) = moved {
+            error!(error = %e, uid = msg.uid, "mail: 规则移动邮件失败（本地）");
+        }
+        return;
+    }
     let (acc, folder_name, target_owned) =
         (account.clone(), msg.folder.clone(), target.to_string());
     let uids = vec![msg.uid];
@@ -2470,8 +2487,10 @@ pub async fn mail_flush_outbox(app: AppHandle) -> Result<serde_json::Value, Stri
 pub async fn mail_save_draft(
     app: AppHandle,
     request: SendRequest,
+    sync_after_append: Option<bool>,
 ) -> Result<serde_json::Value, String> {
     ensure_init(&app)?;
+    let sync_after_append = sync_after_append.unwrap_or(true);
     let account = load_account(&request.account_id)?;
     // POP3 没有服务器端的草稿箱：草稿只落本地库的 Drafts，不发 IMAP APPEND。
     if pop3_sync::is_pop3(&account) {
@@ -2525,6 +2544,32 @@ pub async fn mail_save_draft(
     if let Err(error) = appended {
         warn!(account = %account.email, error = %error, "mail: 草稿写服务器草稿箱失败，落到本机");
         return save_draft_copy_locally(&account, &raw).await;
+    }
+
+    // 关窗时的「最后一份草稿」不需要等这次同步：APPEND 成功就已经在服务器草稿箱里了，
+    // 后面的增量同步只是为了拿 UID（编辑器用它在下一轮替换而不是追加）。让用户
+    // 等这一两秒再关窗，表现就是「点保存并关闭很慢」。
+    if !sync_after_append {
+        let (acc, folder_name, secret) = (account.clone(), drafts.clone(), password.clone());
+        tauri::async_runtime::spawn_blocking(move || {
+            let Ok((uid_validity, _)) = store::folder_uid_state(&acc.id, &folder_name) else {
+                return;
+            };
+            let Ok(last_uid) = store::last_uid(&acc.id, &folder_name) else {
+                return;
+            };
+            let snippet_len = store::load_settings().snippet_len as usize;
+            let _ = imap::sync_folder(
+                &acc,
+                &secret,
+                &folder_name,
+                uid_validity,
+                last_uid,
+                snippet_len,
+            );
+            refresh_folder_totals(&acc.id, &folder_name);
+        });
+        return Ok(serde_json::json!({ "folder": drafts, "uid": null, "deferred": true }));
     }
 
     // 立刻同步一次草稿箱，让它在侧栏里马上可见。
@@ -2632,7 +2677,9 @@ pub async fn mail_apply_rules_to_existing(
     let all_roles = roles.iter().any(|role| role == "*");
     let targets: Vec<&MailFolder> = folders
         .iter()
-        .filter(|f| !f.local_only)
+        // 只排除发件箱（本机待发队列）。以前用 `!local_only`：POP3 账户的文件夹
+        // 全都是本地的，结果一封邮件都扫不到，报「没有命中」——用户明明有邮件。
+        .filter(|f| f.role != FolderRole::Outbox)
         .filter(|f| {
             all_roles
                 || roles.is_empty()

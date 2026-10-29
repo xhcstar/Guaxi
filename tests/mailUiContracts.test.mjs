@@ -42,12 +42,14 @@ test('右键菜单：只有一个「移动」入口，文件夹收进子菜单',
 test('移动子菜单：列出全部可移动文件夹，而不是只列几个角色', () => {
   assert.ok(!/const MOVE_ROLES = \[/.test(mailApp), '不应再用固定的角色白名单')
   assert.ok(
-    /contextFolders[\s\S]{0,900}selectable !== false/.test(mailApp),
-    '应包含所有可选的文件夹',
+    /contextFolders[\s\S]{0,900}selectableMoveTargets\(/.test(mailApp),
+    '应包含所有可选且可同步的文件夹',
   )
   // 源文件夹与发件箱不能出现在「移动」目标里。
   assert.ok(/folder\.name !== current/.test(mailApp), '应排除当前所在文件夹')
-  assert.ok(/folder\.role !== 'outbox'/.test(mailApp), '发件箱不是可移动目标')
+  assert.ok(/selectableMoveTargets\(store\.foldersByAccount/.test(mailApp), '目标清单走共享规则')
+  const folderTree = read('src/components/ApplicationViewComponent/apps/mail/folderTree.js')
+  assert.ok(/role !== 'outbox'/.test(folderTree), '发件箱是本机队列，不是可移动目标')
 })
 
 test('侧栏：不再有「更多文件夹」分组', () => {
@@ -56,11 +58,11 @@ test('侧栏：不再有「更多文件夹」分组', () => {
   assert.ok(!/moreFolders/.test(sidebar), '不应保留更多文件夹的计算')
 })
 
-test('侧栏：自建文件夹全部平铺，且只显示用户自己建的', () => {
+test('侧栏：自建文件夹全部平铺，且只列服务器上真实的普通目录', () => {
   assert.ok(sidebar.includes('primaryCustomFolders'), '自建文件夹应直接平铺')
   assert.ok(
-    sidebar.includes('f.userCreated !== false'),
-    '服务商带下来的模板目录不应默认出现在侧栏',
+    /visibleCustomFolders\(folders\.value\)/.test(sidebar),
+    '只排除服务商模板壳，其余服务器目录照常显示',
   )
 })
 

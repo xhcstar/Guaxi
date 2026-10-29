@@ -223,6 +223,7 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, ref } from 'vue'
 import { mailDrag } from './mailDragState'
+import { visibleCustomFolders } from './folderTree'
 
 const props = defineProps({
   accounts: { type: Array, default: () => [] },
@@ -347,12 +348,10 @@ const customFolders = computed(() => {
   const standardNames = new Set(
     standardFolders.value.filter((e) => e.folder).map((e) => e.folder.name),
   )
-  return folders.value.filter(
+  // 「服务器上有就列出来」，只排除服务商模板壳（QQ 的「其他文件夹」那种，
+  // 子树里装着已删除/已发送）；用户在别处建的普通目录照常显示。
+  return visibleCustomFolders(folders.value).filter(
     (f) =>
-      f.role === 'custom' &&
-      // 只展示用户自己建的：服务器同步带下来的「其他文件夹」这类模板目录
-      // 不是用户的整理方式，侧栏里不该出现（想留可以在右键菜单里「保留在侧栏」）。
-      f.userCreated !== false &&
       !standardNames.has(f.name) &&
       !DELEGATE_PREFIXES.some((p) => f.name.toLowerCase().startsWith(p)),
   )

@@ -474,6 +474,7 @@ import { groupRecipientToken } from '../../../stores/contactsStore'
 import { createLogger } from '../../../utils/logger'
 import { avatarSeed, densityMetrics, monoFontStack, readingFontStack, themeToStyle } from './mail/theme'
 import { flattenQuoteHtml } from './mail/quoteCards'
+import { selectableMoveTargets } from './mail/folderTree'
 import { SHORTCUT_LIST, useMailShortcuts } from './mail/useMailShortcuts'
 import MailToolbar from './mail/MailToolbar.vue'
 import MailSidebar from './mail/MailSidebar.vue'
@@ -657,10 +658,10 @@ const contextFolders = computed(() => {
   if (!menu) return []
   const accountId = menu.row?.accountId || store.activeAccountId
   const current = menu.row?.folder
-  return (store.foldersByAccount[accountId] || [])
-    .filter((folder) => folder.selectable !== false)
+  // 服务商模板壳（QQ 的「其他文件夹」那类）不进目标列表：它们的邮件本来就不同步，
+  // 移进去等于凭空消失。
+  return selectableMoveTargets(store.foldersByAccount[accountId] || [])
     .filter((folder) => folder.name !== current)
-    .filter((folder) => folder.role !== 'outbox')
     .sort((a, b) => {
       const ai = FOLDER_ROLE_ORDER.indexOf(a.role)
       const bi = FOLDER_ROLE_ORDER.indexOf(b.role)

@@ -40,8 +40,10 @@ test('回复 / 转发默认就地编辑，可选新窗口', () => {
 
 test('关窗一定先存草稿（只要还没发出去）', () => {
   assert.ok(
-    /export async function closeWindow\(\{ save = true \} = \{\}\)[\s\S]{0,600}saveDraft\(\)/.test(bridge),
-    'closeWindow 默认先 saveDraft',
+    /export async function closeWindow\(\{ save = true \} = \{\}\)[\s\S]{0,600}saveDraft\(\{ syncFolder: false \}\)/.test(
+      bridge,
+    ),
+    'closeWindow 默认先 saveDraft（不等草稿箱同步，否则关闭会明显变慢）',
   )
   assert.ok(bridge.includes("invoke('mail_save_draft'"), '草稿要真正写进库')
   // 窗口壳的关闭走 closeWindow({ save: true })

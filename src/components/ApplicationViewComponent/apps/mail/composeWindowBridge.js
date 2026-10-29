@@ -176,11 +176,13 @@ export async function saveDraftToMailbox(request) {
 }
 
 /** 存草稿。只要还开着一封编辑中的邮件就写一条，哪怕是空的（还能继续编辑）。 */
-export async function saveDraft() {
+export async function saveDraft({ syncFolder = true } = {}) {
   const draft = composeDraft.value
   if (!draft) return false
   await invoke('mail_save_draft', {
     request: draftRequest(draft, { saveToSent: false }),
+    // 关窗时不等同步：APPEND 成功就算存好了，同步只为拿 UID。
+    syncAfterAppend: syncFolder,
   })
   await discardDraftsOf(draft)
   return true
@@ -227,7 +229,8 @@ export async function closeWindow({ save = true } = {}) {
   let saved = false
   if (save) {
     try {
-      saved = await saveDraft()
+      // 关窗前这一次不等草稿箱同步：否则「保存并关闭」要等网络往返。
+      saved = await saveDraft({ syncFolder: false })
     } catch (err) {
       logger.error('关窗前保存草稿失败', err)
     }

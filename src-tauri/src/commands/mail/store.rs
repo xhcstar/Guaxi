@@ -104,7 +104,7 @@ fn open() -> Result<Connection, String> {
 /// 为什么必须做版本化迁移：老用户的 `mail.db` 已经存在，`CREATE TABLE IF NOT EXISTS`
 /// 只会补新表、不会补新列；一旦某天查询里用到新列，整个邮件页会直接报
 /// 「no such column」而不是「少一个功能」。
-pub const SCHEMA_VERSION: i32 = 5;
+pub const SCHEMA_VERSION: i32 = 6;
 
 pub fn init(app: &AppHandle) -> Result<(), String> {
     let path = db_path(app)?;
@@ -364,6 +364,17 @@ fn migrate(conn: &mut Connection) -> Result<(), String> {
             [],
         )
         .ok();
+    }
+    if version < 6 {
+        // v6：把「我的文件夹」还给用户自己。
+        //
+        // v5 回填时用「有邮件就算用户在用」把服务商自带的目录（QQ 的「其他文件夹」等）
+        // 全标成了用户自己的；imap 每次同步又按「本地已存在 / 有邮件」把它标回来，
+        // 于是删掉的文件夹下一轮同步又自己冒出来（真实反馈）。这里一次性清掉
+        // 自定义角色的标记：之后只有在我们这边新建、或右键「保留在侧栏」的才会出现。
+        // 标准角色（收件箱 / 已发送…）不受影响，它们走侧栏的固定区块。
+        tx.execute("UPDATE folders SET user_created = 0 WHERE role = 'custom'", [])
+            .map_err(|e| format!("迁移到 v6 失败: {e}"))?;
     }
     tx.pragma_update(None, "user_version", SCHEMA_VERSION)
         .map_err(|e| format!("写入 schema 版本失败: {e}"))?;

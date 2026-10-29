@@ -317,6 +317,7 @@ import AddressPicker from './AddressPicker.vue'
 import MailIcon from './MailIcon.vue'
 import MailFolderPicker from './MailFolderPicker.vue'
 import { askMailConfirm } from './mailConfirm'
+import { selectableMoveTargets } from './folderTree'
 import { useContactsStore, expandGroupMembers } from '../../../../stores/contactsStore'
 
 const props = defineProps({
@@ -528,13 +529,10 @@ const accountLabel = computed(() => {
  * 所以退回第一个账户并明确标注账户名。
  * 排序与层级交给 MailFolderPicker（它按角色与名字排，并把带分隔符的名字组成树）。
  */
-const targetFolders = computed(() => {
-  const list = props.foldersByAccount[ruleAccountId.value] || []
-  return list
-    .filter((folder) => folder.selectable !== false)
-    // 发件箱是本地队列，不是可归档的目的地。
-    .filter((folder) => folder.role !== 'outbox')
-})
+const targetFolders = computed(() =>
+  // 服务商模板壳里的目录不进这里：那些文件夹的邮件本来不同步，规则移进去等于丢失。
+  selectableMoveTargets(props.foldersByAccount[ruleAccountId.value] || []),
+)
 
 /** 列表随文件夹表实时变化：面板打开时再问一次服务器，别让用户以为建了却不存在。 */
 function refreshFolders() {

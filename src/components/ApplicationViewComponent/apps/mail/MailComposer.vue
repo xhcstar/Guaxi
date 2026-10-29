@@ -79,16 +79,24 @@
           </button>
           <!-- 放弃：紧挨着发送，允许整封作废；关之前问一句要不要留草稿。 -->
           <button
+            ref="discardBtnRef"
             class="mail-icon-btn mail-discard-btn"
             :class="{ 'is-on': discardOpen }"
             title="放弃这次编辑"
             aria-label="放弃编辑"
             :disabled="sending"
-            @click="discardOpen = !discardOpen"
+            @click="toggleDiscardPanel"
           >
             <MailIcon name="trash" :size="15" />
           </button>
-          <div v-if="discardOpen" class="mail-discard-panel" @mousedown.stop>
+          <!-- fixed 定位：以前挂在操作条里（absolute），会被页头的层叠关系压住，
+               背景像透明的一样，指针还能穿透去触发下面图标的提示。 -->
+          <div
+            v-if="discardOpen"
+            class="mail-discard-panel"
+            :style="{ left: `${discardPos.left}px`, top: `${discardPos.top}px` }"
+            @mousedown.stop
+          >
             <p class="mail-discard-title">放弃这次编辑？</p>
             <button class="mail-btn" @click="discardWithDraft">存为草稿并关闭</button>
             <button class="mail-btn is-danger" @click="discardForget">直接放弃</button>
@@ -738,6 +746,8 @@
         <span class="mail-image-handle is-tr" @mousedown.prevent.stop="onFrameMouseDown"></span>
         <span class="mail-image-handle is-bl" @mousedown.prevent.stop="onFrameMouseDown"></span>
         <span class="mail-image-handle is-br" @mousedown.prevent.stop="onFrameMouseDown"></span>
+        <!-- 拖动把手：按住它就能把图片挪到别的段落前后，不用正好按在图片上。 -->
+        <span class="mail-image-move" title="按住拖动，移动图片位置" @mousedown.prevent.stop="startFrameMove">⠿</span>
       </div>
     </div>
 
@@ -1689,6 +1699,25 @@ function onTranslateOutside(event) {
 
 /** 放弃按钮展开的小面板：只问「要不要留一份草稿」。 */
 const discardOpen = ref(false)
+const discardBtnRef = ref(null)
+/** 面板的视口坐标（fixed 定位，见模板里的注释）。 */
+const discardPos = ref({ left: 0, top: 0 })
+
+function toggleDiscardPanel() {
+  if (discardOpen.value) {
+    discardOpen.value = false
+    return
+  }
+  const el = discardBtnRef.value
+  if (el) {
+    const box = el.getBoundingClientRect()
+    discardPos.value = {
+      left: Math.max(8, Math.round(box.right - 200)),
+      top: Math.round(box.bottom + 6),
+    }
+  }
+  discardOpen.value = true
+}
 
 /** 留草稿再关：交给父级的关闭流程去写草稿箱。 */
 function discardWithDraft() {
@@ -2056,12 +2085,14 @@ function onEditorMouseDown(event) {
   pendingImageMove = { x: event.clientX, y: event.clientY, img }
 }
 
-/** 列表 / 段落这样的顶层块：图片换位置时就插在它的前后（和 Outlook 一致）。 */
-function topBlockOf(el) {
-  const editor = editorRef.value
-  let node = el
-  while (node?.parentElement && node.parentElement !== editor) node = node.parentElement
-  return node && node !== editor ? node : null
+/** 从控制框上的把手开始拖动：不依赖「正好按在图片上」。 */
+function startFrameMove(event) {
+  const img = selectedImage.value
+  if (!img) return
+  event.preventDefault?.()
+  movingImage = { img }
+  document.body.classList.add('mail-image-dragging')
+  placeImageAtY(img, event.clientY)
 }
 
 function onWindowMouseMoveForImage(event) {
@@ -2078,24 +2109,36 @@ function onWindowMouseMoveForImage(event) {
   }
   const img = movingImage.img
   const editor = editorRef.value
-  const under = document.elementFromPoint(event.clientX, event.clientY)
-  if (!under || !editor?.contains(under) || under === img || img.contains(under)) return
-  const block = topBlockOf(under)
-  if (block) {
-    if (block === img || block.contains(img)) return
-    const box = block.getBoundingClientRect()
-    block.insertAdjacentElement(
-      event.clientY < box.top + box.height / 2 ? 'beforebegin' : 'afterend',
-      img,
-    )
-  } else if (under === editor) {
-    // 拖到正文后面的空白处（很常见）：直接放到末尾，不要「什么都不发生」。
-    editor.appendChild(img)
-  } else {
-    return
-  }
+  if (!editor) return
+  placeImageAtY(img, event.clientY)
   refreshImageFrame()
   refreshEditBar()
+}
+
+/**
+ * 按鼠标的纵向位置决定图片插到哪：找第一个「中线在指针下方」的顶层块，插到它前面；
+ * 一个都没有就放到末尾。
+ *
+ * 不再用 elementFromPoint：编辑区四周有内边距、末尾有空白，指针落在这些地方时
+ * 命中不到任何块，表现就是「拖了没反应」，而光标停在图片上时命中的又是图片本身。
+ * 按坐标算位置，整块区域都能拖。
+ */
+function placeImageAtY(img, clientY) {
+  const editor = editorRef.value
+  if (!editor || !img) return
+  const box = editor.getBoundingClientRect()
+  if (clientY < box.top - 40 || clientY > box.bottom + 40) return
+  const blocks = [...editor.children].filter((el) => el !== img && !el.contains(img))
+  let before = null
+  for (const el of blocks) {
+    const rect = el.getBoundingClientRect()
+    if (clientY < rect.top + rect.height / 2) {
+      before = el
+      break
+    }
+  }
+  if (before) before.insertAdjacentElement('beforebegin', img)
+  else editor.appendChild(img)
 }
 
 function onWindowMouseUpForImage() {

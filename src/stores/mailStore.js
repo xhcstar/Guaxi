@@ -395,9 +395,10 @@ export const useMailStore = defineStore('mail', {
       const folders = this.foldersByAccount[id] || []
       const inbox = folders.find((f) => f.role === 'inbox') || folders[0]
       this.activeFolder = inbox?.name || 'INBOX'
-      // 切账户默认落在收件箱：「全部邮件」是跨账户的检索视图，进来就看到它
+      // 切具体账户默认落在收件箱：「全部邮件」是跨账户的检索视图，进来就看到它
       // 会让人以为新账户里全是别的账户的信（真实反馈）。
-      this.scope = 'folder'
+      // 「全部账户」（id 为空）本身就没有收件箱可言，仍然用跨账户视图。
+      this.scope = id ? 'folder' : 'all'
       this.activeLabel = ''
       this.detail = null
       this.thread = []
@@ -412,6 +413,18 @@ export const useMailStore = defineStore('mail', {
     async loadFolders(accountId, { refresh = false } = {}) {
       const seq = (foldersRequestSeq.get(accountId) || 0) + 1
       foldersRequestSeq.set(accountId, seq)
+      // 刷新要等一次服务器 LIST；侧栏不能空着等它。手上还没有这份列表时，
+      // 先把本地已有的结构亮出来，服务器那份回来再覆盖。
+      if (refresh && !(this.foldersByAccount[accountId] || []).length) {
+        try {
+          const cached = await invoke('mail_list_folders', { accountId })
+          if (foldersRequestSeq.get(accountId) === seq) {
+            this.foldersByAccount = { ...this.foldersByAccount, [accountId]: cached || [] }
+          }
+        } catch {
+          /* 本地都读不到就继续等服务器那份 */
+        }
+      }
       try {
         const folders = refresh
           ? await invoke('mail_refresh_folders', { accountId })
@@ -1557,6 +1570,9 @@ export const useMailStore = defineStore('mail', {
       // 用户看到的就是「关了编辑器，草稿箱什么也没有」。
       try {
         const saved = await invoke('mail_save_draft', {
+          // 关窗时不等「同步草稿箱」那一步：APPEND 成功就已经存好了，
+          // 后面的同步只为拿 UID，等它会让关闭明显变慢。
+          syncAfterAppend: false,
           request: {
             accountId: draft.accountId,
             to: draft.to,
@@ -1583,6 +1599,8 @@ export const useMailStore = defineStore('mail', {
         await this.reloadUnread()
         // 列表也要跟上：用户往往就停在草稿箱里看这一封，不刷新会以为没存上。
         await this.loadMessages({ silent: true }).catch(() => {})
+        // 服务器端这次没等同步：草稿计数在后台同步完成后校正（约 4 秒）。
+        scheduleFolderRefresh(this, draft.accountId)
         return { saved: true, localOnly: Boolean(saved?.localOnly) }
       } catch (error) {
         logger.warn('关闭时保存草稿失败', error)
