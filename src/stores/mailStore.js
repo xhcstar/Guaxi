@@ -395,7 +395,9 @@ export const useMailStore = defineStore('mail', {
       const folders = this.foldersByAccount[id] || []
       const inbox = folders.find((f) => f.role === 'inbox') || folders[0]
       this.activeFolder = inbox?.name || 'INBOX'
-      this.scope = 'all'
+      // 切账户默认落在收件箱：「全部邮件」是跨账户的检索视图，进来就看到它
+      // 会让人以为新账户里全是别的账户的信（真实反馈）。
+      this.scope = 'folder'
       this.activeLabel = ''
       this.detail = null
       this.thread = []

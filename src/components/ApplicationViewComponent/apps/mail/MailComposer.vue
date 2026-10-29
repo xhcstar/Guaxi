@@ -568,16 +568,32 @@
           <MailIcon name="image" :size="15" />
         </button>
 
-        <select
-          v-if="templates.length"
-          class="mail-select"
-          style="max-width: 130px"
-          title="套用模板"
-          @change="onTemplateChange($event)"
-        >
-          <option value="">套用模板…</option>
-          <option v-for="t in templates" :key="t.id" :value="t.id">{{ t.name || '（未命名）' }}</option>
-        </select>
+        <!-- 模板库：一个图标弹出可选清单（名称 + 主题），点一条直接套用。
+            以前是个 <select>，选项长了就被截断，也看不出模板讲什么。 -->
+        <div v-if="templates.length" class="mail-color-control" @mousedown.stop>
+          <button
+            class="mail-fmt-btn"
+            :class="{ 'is-on': openPalette === 'template' }"
+            title="从模板库插入"
+            aria-label="从模板库插入"
+            @mousedown.prevent="togglePalette('template')"
+          >
+            <MailIcon name="book" :size="15" />
+          </button>
+          <div v-if="openPalette === 'template'" class="mail-palette is-templates" @mousedown.prevent>
+            <div class="mail-palette-label">从模板库插入（覆盖主题与正文）</div>
+            <button
+              v-for="t in templates"
+              :key="t.id"
+              class="mail-template-pick"
+              :title="t.subject || t.name"
+              @click="applyTemplateNow(t)"
+            >
+              <span class="mail-template-pick-name">{{ t.name || '（未命名）' }}</span>
+              <span class="mail-template-pick-subject">{{ t.subject || '（无主题）' }}</span>
+            </button>
+          </div>
+        </div>
 
         <button
           v-if="needsPeerCert"
@@ -656,6 +672,7 @@
           @click="onEditorClick"
           @input="onEditorInput"
           @paste="onPaste"
+          @dragstart.prevent
           @keydown.ctrl.b.prevent="format('bold')"
           @keydown.ctrl.i.prevent="format('italic')"
           @keydown.ctrl.u.prevent="format('underline')"
@@ -695,21 +712,33 @@
          传送到 body 之后 var() 全部落空，菜单就成了「透明的」，字也看不清。
          两者都是 fixed 定位，只要没有带 transform 的祖先就不会被编辑区裁掉。 -->
     <!-- 选中图片的控制框：四个角都能拖，直观地改大小。框本身不吃鼠标事件，
-         只有四个角上的把手吃——否则就没法拖动图片换位置了。 -->
+         只有四个角上的把手吃——否则就没法拖动图片换位置了。
+         外层是「编辑区可视范围」的裁剪层：fixed 定位的控制框一旦滚出编辑区就会
+         叠到工具栏和标题上（真实反馈），套一层 overflow:hidden 就再也出不去。 -->
     <div
       v-if="imageFrame"
-      class="mail-image-frame"
+      class="mail-image-frame-layer"
       :style="{
-        left: `${imageFrame.left}px`,
-        top: `${imageFrame.top}px`,
-        width: `${imageFrame.width}px`,
-        height: `${imageFrame.height}px`,
+        left: `${imageFrame.layer.left}px`,
+        top: `${imageFrame.layer.top}px`,
+        width: `${imageFrame.layer.width}px`,
+        height: `${imageFrame.layer.height}px`,
       }"
     >
-      <span class="mail-image-handle is-tl" @mousedown.prevent.stop="onFrameMouseDown"></span>
-      <span class="mail-image-handle is-tr" @mousedown.prevent.stop="onFrameMouseDown"></span>
-      <span class="mail-image-handle is-bl" @mousedown.prevent.stop="onFrameMouseDown"></span>
-      <span class="mail-image-handle is-br" @mousedown.prevent.stop="onFrameMouseDown"></span>
+      <div
+        class="mail-image-frame"
+        :style="{
+          left: `${imageFrame.left}px`,
+          top: `${imageFrame.top}px`,
+          width: `${imageFrame.width}px`,
+          height: `${imageFrame.height}px`,
+        }"
+      >
+        <span class="mail-image-handle is-tl" @mousedown.prevent.stop="onFrameMouseDown"></span>
+        <span class="mail-image-handle is-tr" @mousedown.prevent.stop="onFrameMouseDown"></span>
+        <span class="mail-image-handle is-bl" @mousedown.prevent.stop="onFrameMouseDown"></span>
+        <span class="mail-image-handle is-br" @mousedown.prevent.stop="onFrameMouseDown"></span>
+      </div>
     </div>
 
     <!-- 选中图片 / 光标停在表格里时，贴着目标上沿浮出的一条小工具：只放最常用的
@@ -1967,7 +1996,29 @@ function refreshImageFrame() {
     imageFrame.value = null
     return
   }
-  imageFrame.value = viewportRect(img)
+  const imageBox = img.getBoundingClientRect()
+  // 可见区域是「滚动容器」而不是编辑区本身：编辑区的高度等于全文高度，
+  // 拿它的矩形做裁剪的话，滚动时框照样会冒到工具栏上。
+  const scroller = editor.closest?.('.mail-compose-body') || editor
+  const viewBox = scroller.getBoundingClientRect()
+  // 图片整个滚出可视区就不再画框：裁剪层之外也没什么可看的了。
+  if (imageBox.bottom <= viewBox.top || imageBox.top >= viewBox.bottom) {
+    imageFrame.value = null
+    return
+  }
+  imageFrame.value = {
+    // 裁剪层 = 滚动容器的可视矩形；框的坐标相对它算，滚出边界就被裁掉。
+    layer: {
+      left: viewBox.left,
+      top: viewBox.top,
+      width: viewBox.width,
+      height: viewBox.height,
+    },
+    left: imageBox.left - viewBox.left,
+    top: imageBox.top - viewBox.top,
+    width: imageBox.width,
+    height: imageBox.height,
+  }
 }
 
 function onFrameMouseDown(event) {
@@ -2030,9 +2081,19 @@ function onWindowMouseMoveForImage(event) {
   const under = document.elementFromPoint(event.clientX, event.clientY)
   if (!under || !editor?.contains(under) || under === img || img.contains(under)) return
   const block = topBlockOf(under)
-  if (!block || block === img || block.contains(img)) return
-  const box = block.getBoundingClientRect()
-  block.insertAdjacentElement(event.clientY < box.top + box.height / 2 ? 'beforebegin' : 'afterend', img)
+  if (block) {
+    if (block === img || block.contains(img)) return
+    const box = block.getBoundingClientRect()
+    block.insertAdjacentElement(
+      event.clientY < box.top + box.height / 2 ? 'beforebegin' : 'afterend',
+      img,
+    )
+  } else if (under === editor) {
+    // 拖到正文后面的空白处（很常见）：直接放到末尾，不要「什么都不发生」。
+    editor.appendChild(img)
+  } else {
+    return
+  }
   refreshImageFrame()
   refreshEditBar()
 }
@@ -2054,11 +2115,14 @@ function onWindowMouseUpForImage() {
 // 浮条要跟着目标走：正文滚动、窗口改尺寸都得重算位置（一帧最多算一次）。
 let barReflowQueued = false
 function onEditBarReflow() {
-  if (!editBar.value || barReflowQueued) return
+  // 以前只在浮条可见时重算：只选中图片（没浮条）时滚动，控制框会停在原地、
+  // 甚至叠到工具栏上。控制框自己也要跟着滚。
+  if (barReflowQueued) return
   barReflowQueued = true
   requestAnimationFrame(() => {
     barReflowQueued = false
     if (editBar.value) refreshEditBar()
+    else refreshImageFrame()
   })
 }
 onMounted(() => {
@@ -2979,19 +3043,16 @@ function removeInlineImage(contentId) {
   }
 }
 
-/** 套用模板：只覆盖主题与正文，保留收件人。 */
-function onTemplateChange(event) {
-  const id = event.target.value
-  event.target.value = ''
-  if (!id) return
-  const template = props.templates.find((t) => t.id === id)
+/** 套用模板：只覆盖主题与正文，保留收件人。点模板条目本身就是确认。 */
+function applyTemplateNow(template) {
   if (!template) return
-  if (!window.confirm(`套用模板「${template.name}」会覆盖当前主题与正文，继续？`)) return
+  closePalette()
   emit('apply-template', template)
   if (editorRef.value && template.html) {
     editorRef.value.innerHTML = template.html
     lastHtml = template.html
     scheduleQuoteTheme()
+    onEditorInput()
   }
 }
 

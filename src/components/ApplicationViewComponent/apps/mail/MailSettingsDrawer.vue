@@ -360,17 +360,25 @@
               <p v-if="!templates.length" class="mail-hint">
                 还没有模板。新建一个之后，写信时在工具栏的「模板」里就能一键套用。
               </p>
-              <button
+              <div
                 v-for="tpl in templates"
                 :key="tpl.id"
-                class="mail-template-item"
+                class="mail-template-row"
                 :class="{ 'is-active': editingTemplateId === tpl.id }"
-                :title="tpl.subject || tpl.name"
-                @click="editTemplate(tpl)"
               >
-                <span class="mail-template-item-name">{{ tpl.name || '（未命名）' }}</span>
-                <span class="mail-template-item-subject">{{ tpl.subject || '（无主题）' }}</span>
-              </button>
+                <button class="mail-template-item" :title="tpl.subject || tpl.name" @click="editTemplate(tpl)">
+                  <span class="mail-template-item-name">{{ tpl.name || '（未命名）' }}</span>
+                  <span class="mail-template-item-subject">{{ tpl.subject || '（无主题）' }}</span>
+                </button>
+                <span class="mail-template-row-actions">
+                  <button class="mail-fmt-btn" title="复制这个模板" aria-label="复制模板" @click.stop="duplicateTemplate(tpl)">
+                    <MailIcon name="copy" :size="14" />
+                  </button>
+                  <button class="mail-fmt-btn" title="删除这个模板" aria-label="删除模板" @click.stop="removeTemplateById(tpl)">
+                    <MailIcon name="trash" :size="14" />
+                  </button>
+                </span>
+              </div>
             </div>
 
             <!-- 右：编辑区。正文占满剩余高度，不再挤在三行里。 -->
@@ -387,11 +395,10 @@
               </div>
               <div class="mail-field is-grow">
                 <label class="mail-flabel">模板正文</label>
-                <textarea
+                <MailTemplateEditor
                   v-model="draftTemplate.html"
-                  class="mail-textarea mail-template-body"
-                  placeholder="模板正文（HTML 或纯文本，写信时从「模板」下拉套用）"
-                ></textarea>
+                  placeholder="在这里写模板正文；写信时从工具栏「从模板库插入」一键套用"
+                />
               </div>
               <div class="mail-templates-actions">
                 <button class="mail-btn is-primary" :disabled="!canSaveTemplate" @click="saveTemplateEdit">
@@ -552,6 +559,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import MailIcon from './MailIcon.vue'
+import MailTemplateEditor from './MailTemplateEditor.vue'
 import { askMailConfirm } from './mailConfirm'
 
 /**
@@ -680,12 +688,32 @@ async function saveTemplateEdit({ asNew = false } = {}) {
 
 async function removeCurrentTemplate() {
   const tpl = props.templates.find((item) => item.id === editingTemplateId.value)
-  if (!tpl) return
-  if (!(await askMailConfirm('删除后写信时就不能再套用它了。', { title: `删除模板「${tpl.name}」？`, confirmText: '删除模板' }))) {
+  if (tpl) await removeTemplateById(tpl)
+}
+
+/** 列表里直接删：不必先点进编辑区。 */
+async function removeTemplateById(tpl) {
+  if (
+    !(await askMailConfirm('删除后写信时就不能再套用它了。', {
+      title: `删除模板「${tpl.name}」？`,
+      confirmText: '删除模板',
+    }))
+  ) {
     return
   }
   emit('delete-template', tpl.id)
-  newTemplate()
+  if (editingTemplateId.value === tpl.id) newTemplate()
+}
+
+/** 复制一份（不覆盖原模板）：常用模板改个抬头就能复用。 */
+async function duplicateTemplate(tpl) {
+  editTemplate(tpl)
+  draftTemplate.value = {
+    name: `${tpl.name || '模板'} 副本`,
+    subject: tpl.subject || '',
+    html: tpl.html || '',
+  }
+  await saveTemplateEdit({ asNew: true })
 }
 
 const densityOptions = [

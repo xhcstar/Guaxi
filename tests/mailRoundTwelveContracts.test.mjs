@@ -28,8 +28,14 @@ test('邮件模板：独立页签 + 左侧列表 + 大编辑区', () => {
   assert.ok(/'邮件模板'/.test(settings), '页签名是「邮件模板」')
   assert.ok(/class="mail-templates-layout"/.test(settings), '模板页要分栏')
   assert.ok(/class="mail-templates-list"/.test(settings), '左侧是已有模板列表')
-  assert.ok(/mail-template-body/.test(settings), '右侧正文编辑区')
-  assert.ok(/\.mail-template-body\s*\{[\s\S]{0,160}min-height: 300px/.test(css), '正文编辑区要够大')
+  // 右侧是真正的编辑器（带格式按钮 + 源码切换），不是三行文本框。
+  assert.ok(/<MailTemplateEditor/.test(settings), '右侧用模板编辑器组件')
+  const templateEditor = read(mailDir + 'MailTemplateEditor.vue')
+  assert.ok(/class="mail-template-body"/.test(templateEditor), '编辑器正文区')
+  assert.ok(/contenteditable="true"/.test(templateEditor), '正文要可编辑（富文本）')
+  assert.ok(/insertUnorderedList/.test(templateEditor) && /bold/.test(templateEditor), '要有常用格式按钮')
+  assert.ok(/toggleSource/.test(templateEditor), '要能切到源码改 HTML')
+  assert.ok(/\.mail-template-editor \.mail-template-body\s*\{[\s\S]{0,200}min-height: 300px/.test(css), '正文编辑区要够大')
   // 编辑现有模板要有明确入口：点列表项载入、保存覆盖、另存为新。
   assert.ok(/function editTemplate/.test(settings) && /editingTemplateId/.test(settings), '点列表项要载入编辑')
   assert.ok(/保存修改/.test(settings) && /另存为新模板/.test(settings), '覆盖与另存要分开')

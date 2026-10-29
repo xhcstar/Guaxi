@@ -1267,7 +1267,9 @@ async function onDeleteCurrent(detail) {
     uid: detail.uid,
   }
   try {
-    await store.deleteMessages([row])
+    // 走 runBatch：会话聚合行会按 threadUids 展开，删的是整条会话，
+    // 与行上的删除按钮行为一致（以前这里走 deleteMessages，只删一封）。
+    await store.runBatch('delete', null, [row])
     notify('已删除')
   } catch (error) {
     notify(String(error?.message || error), true)

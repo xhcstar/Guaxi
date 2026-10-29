@@ -2033,12 +2033,35 @@
   text-align: left;
   cursor: pointer;
 }
-.mail-template-item:hover {
+
+/* 列表项 + 行内操作（复制 / 删除）：行本身可点，操作按钮在右侧。 */
+.mail-template-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  border: 1px solid transparent;
+  border-radius: var(--mail-radius-sm);
+}
+.mail-template-row:hover {
   background: var(--mail-panel-hover);
 }
-.mail-template-item.is-active {
+.mail-template-row.is-active {
   border-color: var(--mail-accent);
   background: var(--mail-accent-soft);
+}
+.mail-template-row .mail-template-item {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.mail-template-row-actions {
+  display: flex;
+  gap: 2px;
+  padding-right: 4px;
+  opacity: 0;
+}
+.mail-template-row:hover .mail-template-row-actions,
+.mail-template-row.is-active .mail-template-row-actions {
+  opacity: 1;
 }
 .mail-template-item-name {
   font-size: 12.5px;
@@ -2066,9 +2089,94 @@
 .mail-template-body {
   flex: 1 1 auto;
   min-height: 300px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  line-height: 1.6;
   resize: vertical;
+}
+
+/* 模板正文编辑器：一行格式按钮 + 可编辑正文（或源码）。 */
+.mail-template-editor {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 0;
+}
+.mail-template-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 6px;
+  border: 1px solid var(--mail-border);
+  border-radius: var(--mail-radius-sm) var(--mail-radius-sm) 0 0;
+  background: var(--mail-bg-sunken);
+}
+.mail-template-tool-label {
+  font-size: 12px;
+  font-weight: 650;
+}
+.mail-template-mode {
+  font-size: 11.5px;
+  padding: 0 8px;
+}
+.mail-template-editor .mail-template-body {
+  flex: 1 1 auto;
+  min-height: 300px;
+  margin-top: -6px;
+  padding: 10px 12px;
+  border: 1px solid var(--mail-border);
+  border-radius: 0 0 var(--mail-radius-sm) var(--mail-radius-sm);
+  background: var(--mail-bg-sunken);
+  color: var(--mail-text);
+  font-size: 13px;
+  line-height: 1.7;
+  overflow-y: auto;
+  outline: none;
+}
+.mail-template-editor .mail-template-body:empty::before {
+  content: attr(data-placeholder);
+  color: var(--mail-text-muted);
+  pointer-events: none;
+}
+.mail-template-source {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  resize: vertical;
+}
+
+/* 写信工具栏的模板库面板：名称 + 主题，点一条直接套用。 */
+.mail-palette.is-templates {
+  min-width: 260px;
+  max-width: 360px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+.mail-template-pick {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--mail-text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.mail-template-pick:hover {
+  background: var(--mail-panel-hover);
+}
+.mail-template-pick-name {
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.mail-template-pick-subject {
+  overflow: hidden;
+  color: var(--mail-text-muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .mail-templates-actions {
   display: flex;
@@ -2289,10 +2397,16 @@
   white-space: nowrap;
 }
 
-/* 图片控制框：框不吃事件（要能拖动图片本身），只有四个角吃。 */
-.mail-image-frame {
+/* 图片控制框：外面套一层「编辑区可视范围」的裁剪层，滚动时框不会跑到工具栏上。
+   裁剪层与框本身都不吃鼠标事件（要能拖动图片本身），只有四个角吃。 */
+.mail-image-frame-layer {
   position: fixed;
   z-index: 61;
+  overflow: hidden;
+  pointer-events: none;
+}
+.mail-image-frame {
+  position: absolute;
   border: 1px solid var(--mail-accent);
   pointer-events: none;
 }
@@ -2874,6 +2988,14 @@ body.mail-image-dragging * {
   border: 1px dashed var(--mail-border-strong);
   border-radius: 4px;
   background: var(--mail-bg-sunken);
+}
+
+/* contenteditable 里的图片默认可以被浏览器「原生拖拽」，它会抢走 mousemove，
+   导致我们自己的拖动换位置完全收不到事件（真实反馈：图片拖不动）。
+   这里禁掉原生拖拽，位置由编辑器自己的指针逻辑处理。 */
+.mail-compose-editor img {
+  -webkit-user-drag: none;
+  user-select: none;
 }
 /* 插入的表格在编辑区里按当前主题显示。
    HTML 里保留 bgcolor / border 这些表现属性（收件端不认我们的样式表），
