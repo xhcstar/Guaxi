@@ -26237,15 +26237,15 @@ onUnmounted(() => {
   background-color: rgba(0, 0, 0, 0.28);
 }
 
-:global(:root[data-guaxi-theme='dark']) .breadcrumb-scroll {
+:root[data-guaxi-theme='dark'] .breadcrumb-scroll {
   scrollbar-color: rgba(255, 255, 255, 0.22) transparent;
 }
 
-:global(:root[data-guaxi-theme='dark']) .breadcrumb-scroll::-webkit-scrollbar-thumb {
+:root[data-guaxi-theme='dark'] .breadcrumb-scroll::-webkit-scrollbar-thumb {
   background-color: rgba(255, 255, 255, 0.18);
 }
 
-:global(:root[data-guaxi-theme='dark']) .breadcrumb-scroll::-webkit-scrollbar-thumb:hover {
+:root[data-guaxi-theme='dark'] .breadcrumb-scroll::-webkit-scrollbar-thumb:hover {
   background-color: rgba(255, 255, 255, 0.26);
 }
 
@@ -27685,34 +27685,38 @@ onUnmounted(() => {
   box-sizing: border-box;
 }
 
+/* 笔记本（Vditor）正文表格：与预览、阅读器共用 --guaxi-table-* 一套配色，
+   明暗由变量自己翻，不再另写一份暗色规则。 */
 .realtime-vditor :deep(.vditor-reset table) {
   width: 100%;
   max-width: 100%;
   table-layout: fixed;
   border-collapse: collapse;
-  border: 1px solid var(--guaxi-border, #d0d7de);
-  background: var(--guaxi-content-bg, #ffffff);
-  color: var(--guaxi-text-primary, #1f2328);
+  border: 1px solid var(--guaxi-table-border, #d0d7de);
+  background: var(--guaxi-table-bg, #ffffff);
+  color: var(--guaxi-table-text, #1f2328);
 }
 
 .realtime-vditor :deep(.vditor-reset th),
 .realtime-vditor :deep(.vditor-reset td) {
-  border: 1px solid var(--guaxi-border, #d0d7de);
+  border: 1px solid var(--guaxi-table-border, #d0d7de);
   padding: 8px 10px;
   text-align: left;
-  background: var(--guaxi-content-bg, #ffffff);
-  color: var(--guaxi-text-primary, #1f2328);
+  background: var(--guaxi-table-bg, #ffffff);
+  color: var(--guaxi-table-text, #1f2328);
   overflow-wrap: anywhere;
   word-break: break-word;
 }
 
 .realtime-vditor :deep(.vditor-reset th) {
-  background: rgba(175, 184, 193, 0.18);
+  background: var(--guaxi-table-head-bg, #f6f8fa);
+  color: var(--guaxi-table-head-text, #1f2328);
   font-weight: 700;
+  border-bottom-color: var(--guaxi-table-border-strong, #d5dbe3);
 }
 
 .realtime-vditor :deep(.vditor-reset tr:nth-child(even) td) {
-  background: rgba(175, 184, 193, 0.08);
+  background: var(--guaxi-table-row-alt-bg, #fafbfc);
 }
 
 .realtime-vditor :deep(.vditor-ir pre),
@@ -27758,36 +27762,17 @@ onUnmounted(() => {
   height: auto;
 }
 
-:global(:root[data-guaxi-theme='dark']) .realtime-vditor :deep(.vditor-reset table) {
-  border-color: #30363d;
-}
-
-:global(:root[data-guaxi-theme='dark']) .realtime-vditor :deep(.vditor-reset th),
-:global(:root[data-guaxi-theme='dark']) .realtime-vditor :deep(.vditor-reset td) {
-  border-color: #30363d;
-  background: #0f1720;
-  color: #e6edf3;
-}
-
-:global(:root[data-guaxi-theme='dark']) .realtime-vditor :deep(.vditor-reset th) {
-  background: #18222d;
-}
-
-:global(:root[data-guaxi-theme='dark']) .realtime-vditor :deep(.vditor-reset tr:nth-child(even) td) {
-  background: #131d27;
-}
-
-:global(:root[data-guaxi-theme='dark']) .realtime-vditor :deep(.vditor-ir pre),
-:global(:root[data-guaxi-theme='dark']) .realtime-vditor :deep(.vditor-wysiwyg pre),
-:global(:root[data-guaxi-theme='dark']) .realtime-vditor :deep(.vditor-reset pre) {
+:root[data-guaxi-theme='dark'] .realtime-vditor :deep(.vditor-ir pre),
+:root[data-guaxi-theme='dark'] .realtime-vditor :deep(.vditor-wysiwyg pre),
+:root[data-guaxi-theme='dark'] .realtime-vditor :deep(.vditor-reset pre) {
   background: #1f242d !important;
   border-color: #30363d !important;
   color: #e6edf3 !important;
 }
 
-:global(:root[data-guaxi-theme='dark']) .realtime-vditor :deep(.vditor-ir code),
-:global(:root[data-guaxi-theme='dark']) .realtime-vditor :deep(.vditor-wysiwyg code),
-:global(:root[data-guaxi-theme='dark']) .realtime-vditor :deep(.vditor-reset code) {
+:root[data-guaxi-theme='dark'] .realtime-vditor :deep(.vditor-ir code),
+:root[data-guaxi-theme='dark'] .realtime-vditor :deep(.vditor-wysiwyg code),
+:root[data-guaxi-theme='dark'] .realtime-vditor :deep(.vditor-reset code) {
   background: rgba(110, 118, 129, 0.24) !important;
   color: #e6edf3 !important;
 }
@@ -28969,53 +28954,8 @@ onUnmounted(() => {
   background-color: var(--guaxi-header-bg) !important;
 }
 
-/* ───── 预览区 Markdown 表格：边框 / 表头底色 / 斑马行 ─────
- * 1. 这组规则必须留在 `<style scoped>` 里：`:deep()` 只有经过 Vue 编译才会被展开成
- *    `.preview[data-v-x] table`，写在普通 `<style>` 块里会被原样输出，浏览器把 `:deep()`
- *    视为未知伪类、整条规则丢弃——预览表格的边框就是这样丢掉的（14ab9cb3 引入）。
- * 2. 暗色后缀直接写 `:root[...]` 而不是 `:global(:root[...])`：在 scoped 块里后者会被编译成
- *    孤立的 `:root[...]`，后半段选择器会丢失。
- * 3. 显式排除 Python 单元 / 数据面板注入的 `.guaxi-dataframe-table`、
- *    `.guaxi-inline-dataframe__table`：它们自带一套无边框设计，本次修复不该改变它们的观感。
- */
-.preview :deep(table:not(.guaxi-dataframe-table):not(.guaxi-inline-dataframe__table)) {
-  width: 100%;
-  border-collapse: collapse;
-  border: 1px solid #ddd;
-}
-
-.preview :deep(th:not(.guaxi-dataframe-table *):not(.guaxi-inline-dataframe__table *)),
-.preview :deep(td:not(.guaxi-dataframe-table *):not(.guaxi-inline-dataframe__table *)) {
-  border: 1px solid #ddd;
-  padding: 8px;
-  text-align: center;
-}
-
-.preview :deep(th:not(.guaxi-dataframe-table *):not(.guaxi-inline-dataframe__table *)) {
-  background-color: #f4f4f4;
-  font-weight: bold;
-}
-
-.preview :deep(tr:nth-child(even):not(.guaxi-dataframe-table *):not(.guaxi-inline-dataframe__table *)) {
-  background-color: #f9f9f9;
-}
-
-:root[data-guaxi-theme='dark'] .preview :deep(table:not(.guaxi-dataframe-table):not(.guaxi-inline-dataframe__table)) {
-  border-color: #30363d;
-}
-
-:root[data-guaxi-theme='dark'] .preview :deep(th:not(.guaxi-dataframe-table *):not(.guaxi-inline-dataframe__table *)),
-:root[data-guaxi-theme='dark'] .preview :deep(td:not(.guaxi-dataframe-table *):not(.guaxi-inline-dataframe__table *)) {
-  border-color: #30363d;
-}
-
-:root[data-guaxi-theme='dark'] .preview :deep(th:not(.guaxi-dataframe-table *):not(.guaxi-inline-dataframe__table *)) {
-  background-color: #18222d;
-}
-
-:root[data-guaxi-theme='dark'] .preview :deep(tr:nth-child(even):not(.guaxi-dataframe-table *):not(.guaxi-inline-dataframe__table *)) {
-  background-color: #131d27;
-}
+/* 预览区 Markdown 表格的样式在 App.vue 的全局样式里（与阅读器正文、语法手册共用一份），
+ * 这里不再重复定义。需要改表格观感时改那一处。 */
 </style>
 
 <style>
@@ -29240,23 +29180,23 @@ body.guaxi-tab-dragging * {
  *    这里改为只命中右键菜单专用 class，让菜单按内容完整展开。
  * 3. n-dropdown 会 teleport 到 body，因此使用 :global 和全局编辑器字体变量保持与主编辑器一致。
  */
-:global(.editor-context-menu-dropdown.n-dropdown),
-:global(.editor-context-menu-dropdown.n-dropdown-menu),
-:global(.editor-context-menu-dropdown .n-dropdown-option),
-:global(.editor-context-menu-dropdown .n-dropdown-option-body),
-:global(.editor-context-menu-dropdown .n-dropdown-option-body__label) {
+.editor-context-menu-dropdown.n-dropdown,
+.editor-context-menu-dropdown.n-dropdown-menu,
+.editor-context-menu-dropdown .n-dropdown-option,
+.editor-context-menu-dropdown .n-dropdown-option-body,
+.editor-context-menu-dropdown .n-dropdown-option-body__label {
   font-family: var(--guaxi-editor-font-family, 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei', 'Courier New') !important;
 }
 
-:global(.editor-context-menu-dropdown.n-dropdown),
-:global(.editor-context-menu-dropdown.n-dropdown-menu) {
+.editor-context-menu-dropdown.n-dropdown,
+.editor-context-menu-dropdown.n-dropdown-menu {
   max-height: none !important;
   overflow: visible !important;
   scrollbar-width: none !important;
 }
 
-:global(.editor-context-menu-dropdown.n-dropdown::-webkit-scrollbar),
-:global(.editor-context-menu-dropdown.n-dropdown-menu::-webkit-scrollbar) {
+.editor-context-menu-dropdown.n-dropdown::-webkit-scrollbar,
+.editor-context-menu-dropdown.n-dropdown-menu::-webkit-scrollbar {
   width: 0 !important;
   height: 0 !important;
   display: none !important;
@@ -29325,17 +29265,17 @@ body.guaxi-tab-dragging * {
   box-sizing: border-box;
 }
 
-.preview :deep(mjx-container),
-.preview :deep(.math-inline),
-.preview :deep(.math-block) {
+.preview mjx-container,
+.preview .math-inline,
+.preview .math-block {
   max-width: 100%;
   overflow-x: auto;
   overflow-y: hidden;
 }
 
-.preview :deep(.mermaid),
-.preview :deep(svg.mermaid),
-.preview :deep(.mermaid svg) {
+.preview .mermaid,
+.preview svg.mermaid,
+.preview .mermaid svg {
   max-width: 100%;
   height: auto;
   box-sizing: border-box;
@@ -29842,7 +29782,7 @@ body.guaxi-tab-dragging * {
 }
 
 .dark-mode .guaxi-codecell-media,
-:global(:root[data-guaxi-theme='dark']) .guaxi-codecell-media {
+:root[data-guaxi-theme='dark'] .guaxi-codecell-media {
   border-color: rgba(71, 85, 105, 0.65);
   background:
     radial-gradient(circle at top left, rgba(31, 41, 55, 0.96), rgba(17, 24, 39, 0.94)),
@@ -29852,7 +29792,7 @@ body.guaxi-tab-dragging * {
     inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 
-:global(:root[data-guaxi-theme='dark']) .python-runtime-entry {
+:root[data-guaxi-theme='dark'] .python-runtime-entry {
   background: linear-gradient(135deg,
       color-mix(in srgb, var(--guaxi-panel-bg) 88%, #274c77 12%),
       color-mix(in srgb, var(--guaxi-panel-bg) 90%, #1f6f5c 10%));
@@ -29877,22 +29817,22 @@ body.guaxi-tab-dragging * {
 .dark .python-runtime-package-log,
 .dark-mode .python-runtime-package-row,
 .dark .python-runtime-package-row,
-:global(:root[data-guaxi-theme='dark']) .python-runtime-meta__item,
-:global(:root[data-guaxi-theme='dark']) .python-runtime-package-pill,
-:global(:root[data-guaxi-theme='dark']) .python-runtime-guide,
-:global(:root[data-guaxi-theme='dark']) .python-runtime-archive-card,
-:global(:root[data-guaxi-theme='dark']) .python-runtime-status-card,
-:global(:root[data-guaxi-theme='dark']) .python-runtime-install-card,
-:global(:root[data-guaxi-theme='dark']) .python-runtime-package-browser,
-:global(:root[data-guaxi-theme='dark']) .python-runtime-package-log,
-:global(:root[data-guaxi-theme='dark']) .python-runtime-package-row {
+:root[data-guaxi-theme='dark'] .python-runtime-meta__item,
+:root[data-guaxi-theme='dark'] .python-runtime-package-pill,
+:root[data-guaxi-theme='dark'] .python-runtime-guide,
+:root[data-guaxi-theme='dark'] .python-runtime-archive-card,
+:root[data-guaxi-theme='dark'] .python-runtime-status-card,
+:root[data-guaxi-theme='dark'] .python-runtime-install-card,
+:root[data-guaxi-theme='dark'] .python-runtime-package-browser,
+:root[data-guaxi-theme='dark'] .python-runtime-package-log,
+:root[data-guaxi-theme='dark'] .python-runtime-package-row {
   border-color: var(--guaxi-border, #3e4451);
   background: var(--guaxi-content-bg, #282c34);
 }
 
 .dark-mode .python-runtime-package-log__output,
 .dark .python-runtime-package-log__output,
-:global(:root[data-guaxi-theme='dark']) .python-runtime-package-log__output {
+:root[data-guaxi-theme='dark'] .python-runtime-package-log__output {
   /* 设计说明：stdout/stderr 跟随编辑器内容底色，避免 Python 工作台在暗色模式里出现独立深蓝面板层。 */
   background: var(--guaxi-content-bg, #282c34);
   border-color: var(--guaxi-border, #3e4451);
@@ -29900,7 +29840,7 @@ body.guaxi-tab-dragging * {
 
 .dark-mode .python-runtime-package-log__output.is-error,
 .dark .python-runtime-package-log__output.is-error,
-:global(:root[data-guaxi-theme='dark']) .python-runtime-package-log__output.is-error {
+:root[data-guaxi-theme='dark'] .python-runtime-package-log__output.is-error {
   background: var(--guaxi-content-bg, #282c34);
   border-color: color-mix(in srgb, #e06c75 38%, var(--guaxi-border, #3e4451));
 }
@@ -29916,12 +29856,12 @@ body.guaxi-tab-dragging * {
 .dark-mode .python-runtime-package-browser__search,
 .dark .python-runtime-package-browser__search,
 .dark-mode .guaxi-dataframe-btn,
-:global(:root[data-guaxi-theme='dark']) .python-runtime-ghost-btn,
-:global(:root[data-guaxi-theme='dark']) .python-runtime-chip-btn,
-:global(:root[data-guaxi-theme='dark']) .python-runtime-install__btn,
-:global(:root[data-guaxi-theme='dark']) .python-runtime-install__input,
-:global(:root[data-guaxi-theme='dark']) .python-runtime-package-browser__search,
-:global(:root[data-guaxi-theme='dark']) .guaxi-dataframe-btn {
+:root[data-guaxi-theme='dark'] .python-runtime-ghost-btn,
+:root[data-guaxi-theme='dark'] .python-runtime-chip-btn,
+:root[data-guaxi-theme='dark'] .python-runtime-install__btn,
+:root[data-guaxi-theme='dark'] .python-runtime-install__input,
+:root[data-guaxi-theme='dark'] .python-runtime-package-browser__search,
+:root[data-guaxi-theme='dark'] .guaxi-dataframe-btn {
   border-color: var(--guaxi-border, #3e4451);
   background: var(--guaxi-panel-bg, #21252b);
   color: var(--guaxi-text-primary, #abb2bf);
@@ -29929,7 +29869,7 @@ body.guaxi-tab-dragging * {
 
 .dark-mode .python-runtime-package-row__action,
 .dark .python-runtime-package-row__action,
-:global(:root[data-guaxi-theme='dark']) .python-runtime-package-row__action {
+:root[data-guaxi-theme='dark'] .python-runtime-package-row__action {
   border-color: var(--guaxi-border, #3e4451);
   background: var(--guaxi-panel-bg, #21252b);
   color: var(--guaxi-text-primary, #abb2bf);
@@ -29937,14 +29877,14 @@ body.guaxi-tab-dragging * {
 
 .dark-mode .python-runtime-package-row__action:hover,
 .dark .python-runtime-package-row__action:hover,
-:global(:root[data-guaxi-theme='dark']) .python-runtime-package-row__action:hover {
+:root[data-guaxi-theme='dark'] .python-runtime-package-row__action:hover {
   border-color: color-mix(in srgb, #61afef 42%, var(--guaxi-border, #3e4451));
   background: color-mix(in srgb, var(--guaxi-panel-bg, #21252b) 84%, #abb2bf 16%);
 }
 
 .dark-mode .python-runtime-package-row__action.is-danger,
 .dark .python-runtime-package-row__action.is-danger,
-:global(:root[data-guaxi-theme='dark']) .python-runtime-package-row__action.is-danger {
+:root[data-guaxi-theme='dark'] .python-runtime-package-row__action.is-danger {
   color: #e06c75;
   border-color: color-mix(in srgb, #e06c75 36%, var(--guaxi-border, #3e4451));
 }
@@ -29953,15 +29893,15 @@ body.guaxi-tab-dragging * {
 .dark .python-runtime-guide__path-value,
 .dark-mode .python-runtime-archive-card__path,
 .dark .python-runtime-archive-card__path,
-:global(:root[data-guaxi-theme='dark']) .python-runtime-guide__path-value,
-:global(:root[data-guaxi-theme='dark']) .python-runtime-archive-card__path {
+:root[data-guaxi-theme='dark'] .python-runtime-guide__path-value,
+:root[data-guaxi-theme='dark'] .python-runtime-archive-card__path {
   background: var(--guaxi-panel-bg, #21252b);
   color: var(--guaxi-text-primary, #abb2bf);
 }
 
 .dark-mode .python-runtime-guide__step.done,
 .dark .python-runtime-guide__step.done,
-:global(:root[data-guaxi-theme='dark']) .python-runtime-guide__step.done {
+:root[data-guaxi-theme='dark'] .python-runtime-guide__step.done {
   color: #8af0b4;
   border-color: rgba(74, 222, 128, 0.26);
   background: rgba(22, 101, 52, 0.28);
@@ -29969,13 +29909,13 @@ body.guaxi-tab-dragging * {
 
 .dark-mode .python-runtime-package-pill--button:hover,
 .dark .python-runtime-package-pill--button:hover,
-:global(:root[data-guaxi-theme='dark']) .python-runtime-package-pill--button:hover {
+:root[data-guaxi-theme='dark'] .python-runtime-package-pill--button:hover {
   background: color-mix(in srgb, var(--guaxi-panel-bg, #21252b) 86%, var(--guaxi-text-primary, #abb2bf) 14%);
 }
 
 .dark-mode .python-runtime-panel,
 .dark .python-runtime-panel,
-:global(:root[data-guaxi-theme='dark']) .python-runtime-panel {
+:root[data-guaxi-theme='dark'] .python-runtime-panel {
   background: var(--guaxi-panel-bg, #21252b);
   border-color: var(--guaxi-border, #3e4451);
   box-shadow:
@@ -29985,21 +29925,21 @@ body.guaxi-tab-dragging * {
 
 .dark-mode .python-runtime-status-card.is-success,
 .dark .python-runtime-status-card.is-success,
-:global(:root[data-guaxi-theme='dark']) .python-runtime-status-card.is-success {
+:root[data-guaxi-theme='dark'] .python-runtime-status-card.is-success {
   border-color: color-mix(in srgb, #98c379 34%, var(--guaxi-border, #3e4451));
   background: color-mix(in srgb, var(--guaxi-content-bg, #282c34) 88%, #98c379 12%);
 }
 
 .dark-mode .python-runtime-status-card.is-warning,
 .dark .python-runtime-status-card.is-warning,
-:global(:root[data-guaxi-theme='dark']) .python-runtime-status-card.is-warning {
+:root[data-guaxi-theme='dark'] .python-runtime-status-card.is-warning {
   border-color: color-mix(in srgb, #e5c07b 34%, var(--guaxi-border, #3e4451));
   background: color-mix(in srgb, var(--guaxi-content-bg, #282c34) 88%, #e5c07b 12%);
 }
 
 .dark-mode .python-runtime-status-card.is-danger,
 .dark .python-runtime-status-card.is-danger,
-:global(:root[data-guaxi-theme='dark']) .python-runtime-status-card.is-danger {
+:root[data-guaxi-theme='dark'] .python-runtime-status-card.is-danger {
   border-color: color-mix(in srgb, #e06c75 34%, var(--guaxi-border, #3e4451));
   background: color-mix(in srgb, var(--guaxi-content-bg, #282c34) 88%, #e06c75 12%);
 }
@@ -30012,10 +29952,10 @@ body.guaxi-tab-dragging * {
 .dark .python-runtime-section__title,
 .dark-mode .python-runtime-package-row,
 .dark .python-runtime-package-row,
-:global(:root[data-guaxi-theme='dark']) .python-runtime-panel__title,
-:global(:root[data-guaxi-theme='dark']) .python-runtime-status-card__value,
-:global(:root[data-guaxi-theme='dark']) .python-runtime-section__title,
-:global(:root[data-guaxi-theme='dark']) .python-runtime-package-row {
+:root[data-guaxi-theme='dark'] .python-runtime-panel__title,
+:root[data-guaxi-theme='dark'] .python-runtime-status-card__value,
+:root[data-guaxi-theme='dark'] .python-runtime-section__title,
+:root[data-guaxi-theme='dark'] .python-runtime-package-row {
   color: var(--guaxi-text-primary, #abb2bf);
 }
 
@@ -30025,27 +29965,27 @@ body.guaxi-tab-dragging * {
 .dark .python-runtime-status-card__label,
 .dark-mode .python-runtime-package-browser__empty,
 .dark .python-runtime-package-browser__empty,
-:global(:root[data-guaxi-theme='dark']) .python-runtime-panel__subtitle,
-:global(:root[data-guaxi-theme='dark']) .python-runtime-status-card__label,
-:global(:root[data-guaxi-theme='dark']) .python-runtime-package-browser__empty {
+:root[data-guaxi-theme='dark'] .python-runtime-panel__subtitle,
+:root[data-guaxi-theme='dark'] .python-runtime-status-card__label,
+:root[data-guaxi-theme='dark'] .python-runtime-package-browser__empty {
   color: var(--guaxi-text-secondary, #9da5b4);
 }
 
-:global(:root[data-guaxi-theme='dark']) .guaxi-dataframe-btn:hover {
+:root[data-guaxi-theme='dark'] .guaxi-dataframe-btn:hover {
   background: color-mix(in srgb, var(--guaxi-panel-bg, #21252b) 86%, var(--guaxi-text-primary, #abb2bf) 14%);
 }
 
-:global(:root[data-guaxi-theme='dark']) .guaxi-dataframe-table-wrap {
+:root[data-guaxi-theme='dark'] .guaxi-dataframe-table-wrap {
   border-color: rgba(71, 85, 105, 0.72);
   background: rgba(15, 23, 42, 0.64);
 }
 
-:global(:root[data-guaxi-theme='dark']) .guaxi-dataframe-table th {
+:root[data-guaxi-theme='dark'] .guaxi-dataframe-table th {
   background: rgba(30, 41, 59, 0.98);
   color: #f8fafc;
 }
 
-:global(:root[data-guaxi-theme='dark']) .guaxi-dataframe-table td {
+:root[data-guaxi-theme='dark'] .guaxi-dataframe-table td {
   color: #e6edf3;
   border-bottom-color: rgba(71, 85, 105, 0.4);
 }
@@ -30084,42 +30024,42 @@ body.guaxi-tab-dragging * {
   color: rgba(148, 163, 184, 0.94);
 }
 
-.dark-mode .preview :deep(.guaxi-preview-file-card),
-:root.dark .preview :deep(.guaxi-preview-file-card),
-:root[data-guaxi-theme='dark'] .preview :deep(.guaxi-preview-file-card) {
+.dark-mode .preview .guaxi-preview-file-card,
+:root.dark .preview .guaxi-preview-file-card,
+:root[data-guaxi-theme='dark'] .preview .guaxi-preview-file-card {
   border-color: rgba(71, 85, 105, 0.42);
   background: color-mix(in srgb, var(--guaxi-panel-bg, #111827) 90%, var(--guaxi-content-bg, #0f172a) 10%);
   box-shadow: 0 10px 24px rgba(2, 6, 23, 0.28);
 }
 
-.dark-mode .preview :deep(.guaxi-preview-file-card__link:hover),
-:root.dark .preview :deep(.guaxi-preview-file-card__link:hover),
-:root[data-guaxi-theme='dark'] .preview :deep(.guaxi-preview-file-card__link:hover) {
+.dark-mode .preview .guaxi-preview-file-card__link:hover,
+:root.dark .preview .guaxi-preview-file-card__link:hover,
+:root[data-guaxi-theme='dark'] .preview .guaxi-preview-file-card__link:hover {
   background: color-mix(in srgb, var(--guaxi-panel-bg, #111827) 94%, var(--guaxi-content-bg, #0f172a) 6%);
 }
 
-.dark-mode .preview :deep(.guaxi-preview-file-card__eyebrow),
-:root.dark .preview :deep(.guaxi-preview-file-card__eyebrow),
-:root[data-guaxi-theme='dark'] .preview :deep(.guaxi-preview-file-card__eyebrow) {
+.dark-mode .preview .guaxi-preview-file-card__eyebrow,
+:root.dark .preview .guaxi-preview-file-card__eyebrow,
+:root[data-guaxi-theme='dark'] .preview .guaxi-preview-file-card__eyebrow {
   background: rgba(34, 211, 238, 0.14);
   color: #67e8f9;
 }
 
-.dark-mode .preview :deep(.guaxi-preview-file-card__title),
-:root.dark .preview :deep(.guaxi-preview-file-card__title),
-:root[data-guaxi-theme='dark'] .preview :deep(.guaxi-preview-file-card__title) {
+.dark-mode .preview .guaxi-preview-file-card__title,
+:root.dark .preview .guaxi-preview-file-card__title,
+:root[data-guaxi-theme='dark'] .preview .guaxi-preview-file-card__title {
   color: #e5edf7;
 }
 
-.dark-mode .preview :deep(.guaxi-preview-file-card__excerpt),
-:root.dark .preview :deep(.guaxi-preview-file-card__excerpt),
-:root[data-guaxi-theme='dark'] .preview :deep(.guaxi-preview-file-card__excerpt) {
+.dark-mode .preview .guaxi-preview-file-card__excerpt,
+:root.dark .preview .guaxi-preview-file-card__excerpt,
+:root[data-guaxi-theme='dark'] .preview .guaxi-preview-file-card__excerpt {
   color: rgba(203, 213, 225, 0.9);
 }
 
-.dark-mode .preview :deep(.guaxi-preview-file-card__meta),
-:root.dark .preview :deep(.guaxi-preview-file-card__meta),
-:root[data-guaxi-theme='dark'] .preview :deep(.guaxi-preview-file-card__meta) {
+.dark-mode .preview .guaxi-preview-file-card__meta,
+:root.dark .preview .guaxi-preview-file-card__meta,
+:root[data-guaxi-theme='dark'] .preview .guaxi-preview-file-card__meta {
   color: rgba(148, 163, 184, 0.9);
 }
 
@@ -30143,7 +30083,7 @@ body.guaxi-tab-dragging * {
 }
 
 .dark-mode .guaxi-pdf-preview-toolbar,
-:global(:root[data-guaxi-theme='dark']) .guaxi-pdf-preview-toolbar {
+:root[data-guaxi-theme='dark'] .guaxi-pdf-preview-toolbar {
   border-bottom-color: rgba(71, 85, 105, 0.45);
   background: linear-gradient(180deg, rgba(17, 24, 39, 0.98), rgba(20, 28, 42, 0.96));
 }
@@ -30151,29 +30091,29 @@ body.guaxi-tab-dragging * {
 .dark-mode .guaxi-pdf-file-badge,
 .dark-mode .guaxi-pdf-toolbar-indicator,
 .dark-mode .guaxi-pdf-toolbar-btn,
-:global(:root[data-guaxi-theme='dark']) .guaxi-pdf-file-badge,
-:global(:root[data-guaxi-theme='dark']) .guaxi-pdf-toolbar-indicator,
-:global(:root[data-guaxi-theme='dark']) .guaxi-pdf-toolbar-btn {
+:root[data-guaxi-theme='dark'] .guaxi-pdf-file-badge,
+:root[data-guaxi-theme='dark'] .guaxi-pdf-toolbar-indicator,
+:root[data-guaxi-theme='dark'] .guaxi-pdf-toolbar-btn {
   background: rgba(15, 23, 42, 0.88);
   border-color: rgba(71, 85, 105, 0.5);
   color: #e5edf7;
 }
 
 .dark-mode .guaxi-pdf-toolbar-btn.accent,
-:global(:root[data-guaxi-theme='dark']) .guaxi-pdf-toolbar-btn.accent {
+:root[data-guaxi-theme='dark'] .guaxi-pdf-toolbar-btn.accent {
   background: linear-gradient(135deg, #2563eb, #3b82f6);
   color: #ffffff;
 }
 
 .dark-mode .guaxi-pdf-preview-viewport,
-:global(:root[data-guaxi-theme='dark']) .guaxi-pdf-preview-viewport {
+:root[data-guaxi-theme='dark'] .guaxi-pdf-preview-viewport {
   background:
     linear-gradient(180deg, rgba(15, 23, 42, 0.96), rgba(17, 24, 39, 0.98)),
     repeating-linear-gradient(45deg, rgba(255, 255, 255, 0.04) 0 12px, rgba(255, 255, 255, 0.02) 12px 24px);
 }
 
 .dark-mode .guaxi-pdf-page-card,
-:global(:root[data-guaxi-theme='dark']) .guaxi-pdf-page-card {
+:root[data-guaxi-theme='dark'] .guaxi-pdf-page-card {
   border-color: rgba(100, 116, 139, 0.34);
   box-shadow:
     0 18px 34px rgba(2, 6, 23, 0.4),
@@ -30196,7 +30136,7 @@ body.guaxi-tab-dragging * {
   }
 }
 
-.preview :deep(.hljs),
+.preview .hljs,
 .hljs {
   position: relative;
   border-radius: 6px;
@@ -30214,7 +30154,7 @@ body.guaxi-tab-dragging * {
   overflow-wrap: anywhere;
 }
 
-.preview :deep(.hljs code),
+.preview .hljs code,
 .hljs code {
   font-family: inherit !important;
   background: transparent !important;
@@ -30225,7 +30165,7 @@ body.guaxi-tab-dragging * {
   word-break: break-word;
 }
 
-.preview :deep(pre:not(.hljs)) {
+.preview pre:not(.hljs) {
   border-radius: 6px;
   border: 1px solid #e1e4e8;
   background: #ffffff !important;
@@ -30237,7 +30177,7 @@ body.guaxi-tab-dragging * {
   overflow-wrap: anywhere;
 }
 
-.preview :deep(pre:not(.hljs) > code) {
+.preview pre:not(.hljs) > code {
   display: block;
   border-radius: inherit;
   border: 0;
@@ -30249,19 +30189,19 @@ body.guaxi-tab-dragging * {
   word-break: break-word;
 }
 
-.dark-mode .preview :deep(pre:not(.hljs)),
-:global(:root[data-guaxi-theme='dark']) .preview :deep(pre:not(.hljs)) {
+.dark-mode .preview pre:not(.hljs),
+:root[data-guaxi-theme='dark'] .preview pre:not(.hljs) {
   /* 设计说明：
    * 1. 未声明语言的 fenced code block 通常不会拿到 `.hljs` 类名，因此不能只依赖 `.hljs` 的暗色样式。
-   * 2. 这类代码块是通过 `v-html` 注入到预览区里的，`scoped` 下必须配合 `:deep(...)` 才能真正命中内部 `pre` 元素。
+   * 2. 这类代码块是通过 `v-html` 注入到预览区里的，没有 scope 属性，因此这里用普通后代选择器命中，不要套 `:deep()`。
    * 3. `code` 子节点继续保持透明背景，这样不会与外层容器叠出一层亮色底板。
    */
   border-color: #30363d;
   background: #1f242d !important;
 }
 
-.dark-mode .preview :deep(pre:not(.hljs) > code),
-:global(:root[data-guaxi-theme='dark']) .preview :deep(pre:not(.hljs) > code) {
+.dark-mode .preview pre:not(.hljs) > code,
+:root[data-guaxi-theme='dark'] .preview pre:not(.hljs) > code {
   background: transparent !important;
   color: #c9d1d9;
 }
@@ -30276,8 +30216,8 @@ body.guaxi-tab-dragging * {
 
 /* 暗色模式代码块 */
 .dark-mode .hljs,
-:global(:root[data-guaxi-theme='dark']) .hljs,
-:global(:root[data-guaxi-theme='dark']) .preview :deep(.hljs) {
+:root[data-guaxi-theme='dark'] .hljs,
+:root[data-guaxi-theme='dark'] .preview .hljs {
   background: #1f242d !important;
   border-color: #30363d;
   color: #c9d1d9;
@@ -30285,21 +30225,21 @@ body.guaxi-tab-dragging * {
 }
 
 .dark-mode .hljs code,
-:global(:root[data-guaxi-theme='dark']) .hljs code,
-:global(:root[data-guaxi-theme='dark']) .preview :deep(.hljs code) {
+:root[data-guaxi-theme='dark'] .hljs code,
+:root[data-guaxi-theme='dark'] .preview .hljs code {
   font-family: inherit !important;
 }
 
 .dark-mode .preview :not(pre)>code:not(.hljs),
-:global(:root[data-guaxi-theme='dark']) .preview :not(pre)>code:not(.hljs) {
+:root[data-guaxi-theme='dark'] .preview :not(pre)>code:not(.hljs) {
   background: rgba(110, 118, 129, 0.25);
   color: #c9d1d9;
 }
 
 .dark-mode .hljs-comment,
 .dark-mode .hljs-quote,
-:global(:root[data-guaxi-theme='dark']) .hljs-comment,
-:global(:root[data-guaxi-theme='dark']) .hljs-quote {
+:root[data-guaxi-theme='dark'] .hljs-comment,
+:root[data-guaxi-theme='dark'] .hljs-quote {
   color: #8b949e;
 }
 
@@ -30308,38 +30248,38 @@ body.guaxi-tab-dragging * {
 .dark-mode .hljs-literal,
 .dark-mode .hljs-built_in,
 .dark-mode .hljs-type,
-:global(:root[data-guaxi-theme='dark']) .hljs-keyword,
-:global(:root[data-guaxi-theme='dark']) .hljs-selector-tag,
-:global(:root[data-guaxi-theme='dark']) .hljs-literal,
-:global(:root[data-guaxi-theme='dark']) .hljs-built_in,
-:global(:root[data-guaxi-theme='dark']) .hljs-type {
+:root[data-guaxi-theme='dark'] .hljs-keyword,
+:root[data-guaxi-theme='dark'] .hljs-selector-tag,
+:root[data-guaxi-theme='dark'] .hljs-literal,
+:root[data-guaxi-theme='dark'] .hljs-built_in,
+:root[data-guaxi-theme='dark'] .hljs-type {
   color: #ff7b72;
 }
 
 .dark-mode .hljs-string,
 .dark-mode .hljs-doctag,
 .dark-mode .hljs-regexp,
-:global(:root[data-guaxi-theme='dark']) .hljs-string,
-:global(:root[data-guaxi-theme='dark']) .hljs-doctag,
-:global(:root[data-guaxi-theme='dark']) .hljs-regexp {
+:root[data-guaxi-theme='dark'] .hljs-string,
+:root[data-guaxi-theme='dark'] .hljs-doctag,
+:root[data-guaxi-theme='dark'] .hljs-regexp {
   color: #a5d6ff;
 }
 
 .dark-mode .hljs-number,
 .dark-mode .hljs-symbol,
 .dark-mode .hljs-bullet,
-:global(:root[data-guaxi-theme='dark']) .hljs-number,
-:global(:root[data-guaxi-theme='dark']) .hljs-symbol,
-:global(:root[data-guaxi-theme='dark']) .hljs-bullet {
+:root[data-guaxi-theme='dark'] .hljs-number,
+:root[data-guaxi-theme='dark'] .hljs-symbol,
+:root[data-guaxi-theme='dark'] .hljs-bullet {
   color: #79c0ff;
 }
 
 .dark-mode .hljs-title,
 .dark-mode .hljs-section,
 .dark-mode .hljs-function .hljs-title,
-:global(:root[data-guaxi-theme='dark']) .hljs-title,
-:global(:root[data-guaxi-theme='dark']) .hljs-section,
-:global(:root[data-guaxi-theme='dark']) .hljs-function .hljs-title {
+:root[data-guaxi-theme='dark'] .hljs-title,
+:root[data-guaxi-theme='dark'] .hljs-section,
+:root[data-guaxi-theme='dark'] .hljs-function .hljs-title {
   color: #d2a8ff;
 }
 
@@ -30349,30 +30289,30 @@ body.guaxi-tab-dragging * {
 .dark-mode .hljs-template-variable,
 .dark-mode .hljs-property,
 .dark-mode .hljs-params,
-:global(:root[data-guaxi-theme='dark']) .hljs-attr,
-:global(:root[data-guaxi-theme='dark']) .hljs-attribute,
-:global(:root[data-guaxi-theme='dark']) .hljs-variable,
-:global(:root[data-guaxi-theme='dark']) .hljs-template-variable,
-:global(:root[data-guaxi-theme='dark']) .hljs-property,
-:global(:root[data-guaxi-theme='dark']) .hljs-params {
+:root[data-guaxi-theme='dark'] .hljs-attr,
+:root[data-guaxi-theme='dark'] .hljs-attribute,
+:root[data-guaxi-theme='dark'] .hljs-variable,
+:root[data-guaxi-theme='dark'] .hljs-template-variable,
+:root[data-guaxi-theme='dark'] .hljs-property,
+:root[data-guaxi-theme='dark'] .hljs-params {
   color: #ffa657 !important;
 }
 
 .dark-mode .hljs-subst,
 .dark-mode .hljs-operator,
 .dark-mode .hljs-punctuation,
-:global(:root[data-guaxi-theme='dark']) .hljs-subst,
-:global(:root[data-guaxi-theme='dark']) .hljs-operator,
-:global(:root[data-guaxi-theme='dark']) .hljs-punctuation {
+:root[data-guaxi-theme='dark'] .hljs-subst,
+:root[data-guaxi-theme='dark'] .hljs-operator,
+:root[data-guaxi-theme='dark'] .hljs-punctuation {
   color: #c9d1d9 !important;
 }
 
 .dark-mode .hljs-meta,
 .dark-mode .hljs-tag,
 .dark-mode .hljs-name,
-:global(:root[data-guaxi-theme='dark']) .hljs-meta,
-:global(:root[data-guaxi-theme='dark']) .hljs-tag,
-:global(:root[data-guaxi-theme='dark']) .hljs-name {
+:root[data-guaxi-theme='dark'] .hljs-meta,
+:root[data-guaxi-theme='dark'] .hljs-tag,
+:root[data-guaxi-theme='dark'] .hljs-name {
   color: #7ee787;
 }
 
@@ -30392,23 +30332,26 @@ body.guaxi-tab-dragging * {
  * 预览区 Markdown 表格的样式不在这个块里定义，已移回上面的 `<style scoped>` 块。
  *
  * 原因：`:deep()` 只有在 `<style scoped>` 里才会被 Vue 展开成 `.preview[data-v-x] table`；
- * 写在这个普通 `<style>` 块里会被原样保留，浏览器把 `:deep()` 当成未知伪类并丢弃整条规则，
- * 于是预览表格彻底没有边框。这是 14ab9cb3 引入的回归，不要再把表格规则搬回这里。
+ * 写在这个普通 `<style>` 块里会被原样保留，浏览器把它当成未知伪类并丢弃整条规则，
+ * 于是预览表格彻底没有边框。这是 14ab9cb3 引入的回归，表格规则不要再搬回这里。
+ *
+ * 本块里其余预览规则已改成普通后代选择器（v-html 注入的节点没有 scope 属性），
+ * 同样不要再套 `:deep()` / `:global()`——它们在这个块里不会被编译，只会让规则失效。
  */
 
-.preview :deep(input),
-.preview :deep(textarea),
-.preview :deep(select),
-.preview :deep([contenteditable='true']) {
+.preview input,
+.preview textarea,
+.preview select,
+.preview [contenteditable='true'] {
   background: var(--guaxi-content-bg, #ffffff);
   color: var(--guaxi-text-primary, #1f2328);
   border-color: var(--guaxi-border, #d0d7de);
 }
 
-:global(:root[data-guaxi-theme='dark']) .preview :deep(input),
-:global(:root[data-guaxi-theme='dark']) .preview :deep(textarea),
-:global(:root[data-guaxi-theme='dark']) .preview :deep(select),
-:global(:root[data-guaxi-theme='dark']) .preview :deep([contenteditable='true']) {
+:root[data-guaxi-theme='dark'] .preview input,
+:root[data-guaxi-theme='dark'] .preview textarea,
+:root[data-guaxi-theme='dark'] .preview select,
+:root[data-guaxi-theme='dark'] .preview [contenteditable='true'] {
   background: #11161c;
   color: #e6edf3;
   border-color: #30363d;
@@ -30562,12 +30505,12 @@ body.guaxi-tab-dragging * {
   max-height: none;
 }
 
-:global(:root[data-guaxi-theme='dark']) .preview .guaxi-media-group__item {
+:root[data-guaxi-theme='dark'] .preview .guaxi-media-group__item {
   background: transparent;
   box-shadow: none;
 }
 
-:global(:root[data-guaxi-theme='dark']) .preview .guaxi-media-group__item:hover {
+:root[data-guaxi-theme='dark'] .preview .guaxi-media-group__item:hover {
   opacity: 0.98;
 }
 
@@ -30690,22 +30633,22 @@ body.guaxi-tab-dragging * {
   box-shadow: none;
 }
 
-.python-console-dock :deep(.guaxi-terminal-panel) {
+.python-console-dock .guaxi-terminal-panel {
   width: 100%;
   height: 100%;
   border-top: none !important;
   box-shadow: none !important;
 }
 
-.python-console-dock :deep(.guaxi-terminal-panel__toolbar) {
+.python-console-dock .guaxi-terminal-panel__toolbar {
   border-top: none !important;
   box-shadow: none !important;
 }
 
-.python-console-dock :deep(.guaxi-terminal-panel__toolbar::before),
-.python-console-dock :deep(.guaxi-terminal-panel__toolbar::after),
-.python-console-dock :deep(.guaxi-terminal-panel::before),
-.python-console-dock :deep(.guaxi-terminal-panel::after) {
+.python-console-dock .guaxi-terminal-panel__toolbar::before,
+.python-console-dock .guaxi-terminal-panel__toolbar::after,
+.python-console-dock .guaxi-terminal-panel::before,
+.python-console-dock .guaxi-terminal-panel::after {
   content: none !important;
 }
 
@@ -31151,89 +31094,89 @@ body.guaxi-tab-dragging * {
   font-weight: 700;
 }
 
-:global(:root[data-guaxi-theme='dark']) .python-console-panel,
-:global(:root[data-guaxi-theme='dark']) .guaxi-pycell-card {
+:root[data-guaxi-theme='dark'] .python-console-panel,
+:root[data-guaxi-theme='dark'] .guaxi-pycell-card {
   border-color: rgba(148, 163, 184, 0.22);
   box-shadow:
     0 20px 38px rgba(2, 6, 23, 0.42),
     0 1px 0 rgba(148, 163, 184, 0.08) inset;
 }
 
-:global(:root[data-guaxi-theme='dark']) .python-console-dock {
+:root[data-guaxi-theme='dark'] .python-console-dock {
   border-top-color: rgba(148, 163, 184, 0.16);
 }
 
-:global(:root[data-guaxi-theme='dark']) .python-console-dock__resize-grip {
+:root[data-guaxi-theme='dark'] .python-console-dock__resize-grip {
   background: rgba(148, 163, 184, 0.42);
 }
 
-:global(:root[data-guaxi-theme='dark']) .python-console-panel__title,
-:global(:root[data-guaxi-theme='dark']) .guaxi-pycell-card__title,
-:global(:root[data-guaxi-theme='dark']) .guaxi-pycell-card__var-name {
+:root[data-guaxi-theme='dark'] .python-console-panel__title,
+:root[data-guaxi-theme='dark'] .guaxi-pycell-card__title,
+:root[data-guaxi-theme='dark'] .guaxi-pycell-card__var-name {
   color: #e5eefc;
 }
 
-:global(:root[data-guaxi-theme='dark']) .python-console-panel__meta,
-:global(:root[data-guaxi-theme='dark']) .guaxi-inline-dataframe__meta {
+:root[data-guaxi-theme='dark'] .python-console-panel__meta,
+:root[data-guaxi-theme='dark'] .guaxi-inline-dataframe__meta {
   color: #c7d4e5;
 }
 
-:global(:root[data-guaxi-theme='dark']) .guaxi-pycell-card__highlight .hljs-comment {
+:root[data-guaxi-theme='dark'] .guaxi-pycell-card__highlight .hljs-comment {
   color: #5c6370;
 }
 
-:global(:root[data-guaxi-theme='dark']) .guaxi-pycell-card__highlight .hljs-keyword {
+:root[data-guaxi-theme='dark'] .guaxi-pycell-card__highlight .hljs-keyword {
   color: #c678dd;
 }
 
-:global(:root[data-guaxi-theme='dark']) .guaxi-pycell-card__highlight .hljs-string {
+:root[data-guaxi-theme='dark'] .guaxi-pycell-card__highlight .hljs-string {
   color: #98c379;
 }
 
-:global(:root[data-guaxi-theme='dark']) .guaxi-pycell-card__highlight .hljs-number,
-:global(:root[data-guaxi-theme='dark']) .guaxi-pycell-card__highlight .hljs-literal {
+:root[data-guaxi-theme='dark'] .guaxi-pycell-card__highlight .hljs-number,
+:root[data-guaxi-theme='dark'] .guaxi-pycell-card__highlight .hljs-literal {
   color: #d19a66;
 }
 
-:global(:root[data-guaxi-theme='dark']) .guaxi-pycell-card__highlight .hljs-title,
-:global(:root[data-guaxi-theme='dark']) .guaxi-pycell-card__highlight .hljs-title.function_ {
+:root[data-guaxi-theme='dark'] .guaxi-pycell-card__highlight .hljs-title,
+:root[data-guaxi-theme='dark'] .guaxi-pycell-card__highlight .hljs-title.function_ {
   color: #61afef;
 }
 
-:global(:root[data-guaxi-theme='dark']) .guaxi-pycell-card__highlight .hljs-property,
-:global(:root[data-guaxi-theme='dark']) .guaxi-pycell-card__highlight .hljs-variable {
+:root[data-guaxi-theme='dark'] .guaxi-pycell-card__highlight .hljs-property,
+:root[data-guaxi-theme='dark'] .guaxi-pycell-card__highlight .hljs-variable {
   color: #e06c75;
 }
 
-:global(:root[data-guaxi-theme='dark']) .python-console-panel__btn,
-:global(:root[data-guaxi-theme='dark']) .guaxi-inline-dataframe__btn {
+:root[data-guaxi-theme='dark'] .python-console-panel__btn,
+:root[data-guaxi-theme='dark'] .guaxi-inline-dataframe__btn {
   border-color: rgba(148, 163, 184, 0.34);
   background: linear-gradient(180deg, rgba(30, 41, 59, 0.98), rgba(22, 30, 47, 0.98));
   color: #eff6ff;
   box-shadow: 0 6px 16px rgba(2, 6, 23, 0.18);
 }
 
-:global(:root[data-guaxi-theme='dark']) .guaxi-inline-dataframe__btn:hover {
+:root[data-guaxi-theme='dark'] .guaxi-inline-dataframe__btn:hover {
   border-color: rgba(125, 211, 252, 0.58);
   background: linear-gradient(180deg, rgba(37, 50, 72, 0.99), rgba(29, 41, 61, 0.99));
   color: #ffffff;
   box-shadow: 0 8px 20px rgba(14, 165, 233, 0.16);
 }
 
-:global(:root[data-guaxi-theme='dark']) .guaxi-inline-dataframe__btn:focus-visible {
+:root[data-guaxi-theme='dark'] .guaxi-inline-dataframe__btn:focus-visible {
   outline: none;
   border-color: rgba(125, 211, 252, 0.68);
   box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.22);
 }
 
-:global(:root[data-guaxi-theme='dark']) .python-console-panel__input,
-:global(:root[data-guaxi-theme='dark']) .guaxi-inline-dataframe {
+:root[data-guaxi-theme='dark'] .python-console-panel__input,
+:root[data-guaxi-theme='dark'] .guaxi-inline-dataframe {
   border-color: rgba(148, 163, 184, 0.16);
   background: rgba(13, 20, 34, 0.9);
   color: #f6f9ff;
 }
 
-:global(:root[data-guaxi-theme='dark']) .guaxi-inline-dataframe__table th {
+:root[data-guaxi-theme='dark'] .guaxi-inline-dataframe__table th {
   background: rgba(51, 65, 85, 0.72);
 }
 

@@ -176,6 +176,16 @@ const themeOverrides = computed(() => {
   /* 弱分隔线（表格行、面板底边等）。此前从未定义，所有用它的地方都回退到
      rgba(0,0,0,.06)——在暗色下等于不可见，于是表格行边界整片消失。 */
   --guaxi-border-weak: rgba(0, 0, 0, 0.08);
+  /* Markdown 表格配色：预览、阅读器窗口、语法手册三处共用这一组，改一处全局生效。
+     亮色走「白底 + 极浅表头 + 发丝线」，暗色不用纯黑，跟随面板底色提亮两档。 */
+  --guaxi-table-bg: #ffffff;
+  --guaxi-table-border: #e4e8ee;
+  --guaxi-table-border-strong: #d5dbe3;
+  --guaxi-table-head-bg: #f6f8fa;
+  --guaxi-table-head-text: #24292f;
+  --guaxi-table-row-alt-bg: #fafbfc;
+  --guaxi-table-row-hover-bg: #f2f6fb;
+  --guaxi-table-text: #24292f;
   --guaxi-text-primary: #1f2328;
   --guaxi-text-secondary: #57606a;
   /* 别名：部分组件（统计看板图表、影像工坊、首页面板等）误用了 --guaxi-text-color
@@ -266,6 +276,15 @@ const themeOverrides = computed(() => {
   --guaxi-border-color: var(--guaxi-border);
   /* 暗色下的弱分隔线要比亮色更亮一档，否则表格行边界完全看不见。 */
   --guaxi-border-weak: rgba(255, 255, 255, 0.11);
+  /* 表格：底色跟面板走，不压成纯黑；表头比底色亮一档，斑马行只差一点点。 */
+  --guaxi-table-bg: #21252b;
+  --guaxi-table-border: #353c47;
+  --guaxi-table-border-strong: #434b58;
+  --guaxi-table-head-bg: #262c35;
+  --guaxi-table-head-text: #e6edf3;
+  --guaxi-table-row-alt-bg: #232931;
+  --guaxi-table-row-hover-bg: #2d343e;
+  --guaxi-table-text: #d8e0eb;
   --guaxi-text-primary: #d8e0eb;
   --guaxi-text-secondary: #9da5b4;
   --guaxi-text-color: var(--guaxi-text-primary);
@@ -508,18 +527,110 @@ pre::-webkit-scrollbar-track,
   box-sizing: border-box;
 }
 
-.markdown-content table {
-  width: 100%;
-  max-width: 100%;
-  table-layout: fixed;
-  border-collapse: collapse;
-}
-
-.markdown-content th,
-.markdown-content td {
+/* ───── Markdown 表格：编辑器预览 / 阅读器 / 语法手册共用一套 ─────
+ * 设计说明：
+ * 1. 三个渲染面以前各自为政：`.preview` 的规则写错样式块而整条失效，`.markdown-content`
+ *    只有布局没有观感，手册窗口干脆没有表格规则 —— 同一张表在三个地方长得不一样。
+ *    这里收成一份，颜色全部走 --guaxi-table-* 变量（App.vue 与 guaxiBase.css 各一份，
+ *    对应主窗口与独立阅读器窗口两个入口，改配色两处都要动）。
+ * 2. 只给「带 thead 的表」画卡片：markdown 管道表格一定有 thead，而 Word/PDF 转换出来的
+ *    HTML 里大量是用于排版的嵌套表，给它们加边框和 100% 宽度会把版式搞烂。
+ * 3. 圆角外框要求 border-collapse: separate；此时单元格只画右/下边线，末列与末行收口，
+ *    否则会是双线。
+ * 4. 排除 Python 单元与数据面板注入的表格，它们自带一套无边框紧凑样式。
+ */
+:is(.markdown-content, .markdown-manual-card-body, .markdown-body, .preview)
+  table:not(:is(.guaxi-dataframe-table, .guaxi-inline-dataframe__table)):not(.guaxi-notebook__dataframe *) {
   min-width: 0;
   overflow-wrap: anywhere;
   word-break: break-word;
+}
+
+:is(.markdown-content, .markdown-manual-card-body, .markdown-body, .preview)
+  :is(th, td):not(:is(.guaxi-dataframe-table, .guaxi-inline-dataframe__table, .guaxi-notebook__dataframe) *) {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+/* 无 thead 的表（Word / PDF 转 HTML 出来的排版表）保持原来的 100% 宽 + 固定布局，
+   不套卡片样式也不改它们的列宽算法，否则转换出来的版式会跟着变。 */
+:is(.markdown-content, .markdown-manual-card-body, .markdown-body, .preview)
+  table:not(:has(> thead)):not(:is(.guaxi-dataframe-table, .guaxi-inline-dataframe__table)):not(.guaxi-notebook__dataframe *) {
+  width: 100%;
+  table-layout: fixed;
+}
+
+:is(.markdown-content, .markdown-manual-card-body, .markdown-body, .preview)
+  table:has(> thead):not(:is(.guaxi-dataframe-table, .guaxi-inline-dataframe__table)) {
+  width: 100%;
+  max-width: 100%;
+  margin: 1em 0;
+  border: 1px solid var(--guaxi-table-border);
+  border-radius: 10px;
+  border-collapse: separate;
+  border-spacing: 0;
+  background: var(--guaxi-table-bg);
+  color: var(--guaxi-table-text);
+  line-height: 1.55;
+}
+
+:is(.markdown-content, .markdown-manual-card-body, .markdown-body, .preview)
+  table:has(> thead):not(:is(.guaxi-dataframe-table, .guaxi-inline-dataframe__table))
+  :is(th, td) {
+  padding: 8px 14px;
+  border-right: 1px solid var(--guaxi-table-border);
+  border-bottom: 1px solid var(--guaxi-table-border);
+  text-align: left;
+  vertical-align: top;
+}
+
+:is(.markdown-content, .markdown-manual-card-body, .markdown-body, .preview)
+  table:has(> thead) :is(tr > :last-child) {
+  border-right: 0;
+}
+
+:is(.markdown-content, .markdown-manual-card-body, .markdown-body, .preview)
+  table:has(> thead) tbody tr:last-child > :is(th, td) {
+  border-bottom: 0;
+}
+
+:is(.markdown-content, .markdown-manual-card-body, .markdown-body, .preview)
+  table:has(> thead) thead th {
+  background: var(--guaxi-table-head-bg);
+  color: var(--guaxi-table-head-text);
+  font-weight: 600;
+  border-bottom-color: var(--guaxi-table-border-strong);
+}
+
+:is(.markdown-content, .markdown-manual-card-body, .markdown-body, .preview)
+  table:has(> thead) thead tr:first-child > th:first-child {
+  border-top-left-radius: 9px;
+}
+
+:is(.markdown-content, .markdown-manual-card-body, .markdown-body, .preview)
+  table:has(> thead) thead tr:first-child > th:last-child {
+  border-top-right-radius: 9px;
+}
+
+:is(.markdown-content, .markdown-manual-card-body, .markdown-body, .preview)
+  table:has(> thead) tbody tr:last-child > td:first-child {
+  border-bottom-left-radius: 9px;
+}
+
+:is(.markdown-content, .markdown-manual-card-body, .markdown-body, .preview)
+  table:has(> thead) tbody tr:last-child > td:last-child {
+  border-bottom-right-radius: 9px;
+}
+
+:is(.markdown-content, .markdown-manual-card-body, .markdown-body, .preview)
+  table:has(> thead) tbody tr:nth-child(even) > td {
+  background: var(--guaxi-table-row-alt-bg);
+}
+
+:is(.markdown-content, .markdown-manual-card-body, .markdown-body, .preview)
+  table:has(> thead) tbody tr:hover > td {
+  background: var(--guaxi-table-row-hover-bg);
 }
 
 .markdown-content pre,

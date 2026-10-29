@@ -1761,28 +1761,31 @@ pre code {
 
 /* 这些规则只服务于聊天气泡里 v-html 渲染的 Markdown。
    必须挂到 .message-content 下：以前是裸元素选择器，会作用到全应用的表格/图片——
-   邮件正文就被 `tr:nth-child(even)` 刷成了主题面板色，深色主题下出现整行深色块。 */
+   邮件正文就被 `tr:nth-child(even)` 刷成了主题面板色，深色主题下出现整行深色块。
+   配色走 --guaxi-table-* 一套，与预览 / 阅读器的 Markdown 表格同一张色表。 */
 .message-content table {
   width: 100%;
   border-collapse: collapse;
-  border: 1px solid var(--guaxi-border);
+  border: 1px solid var(--guaxi-table-border, #e4e8ee);
+  background: var(--guaxi-table-bg, #ffffff);
+  color: var(--guaxi-table-text, #24292f);
 }
 
 .message-content th,
 .message-content td {
-  border: 1px solid var(--guaxi-border);
-  padding: 8px;
-  text-align: center;
+  border: 1px solid var(--guaxi-table-border, #e4e8ee);
+  padding: 6px 10px;
+  text-align: left;
 }
 
 .message-content th {
-  background-color: var(--guaxi-header-bg);
-  color: var(--guaxi-text-primary);
-  font-weight: bold;
+  background-color: var(--guaxi-table-head-bg, #f6f8fa);
+  color: var(--guaxi-table-head-text, #24292f);
+  font-weight: 600;
 }
 
-.message-content tr:nth-child(even) {
-  background-color: var(--guaxi-panel-bg);
+.message-content tbody tr:nth-child(even) > td {
+  background-color: var(--guaxi-table-row-alt-bg, #fafbfc);
 }
 
 .message-content img {

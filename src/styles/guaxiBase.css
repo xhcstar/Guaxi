@@ -23,6 +23,15 @@
   /* 弱分隔线（表格行、面板底边）。此前未定义，全部回退到 rgba(0,0,0,.06)，
      暗色下不可见，表格行边界会整片消失。 */
   --guaxi-border-weak: rgba(0, 0, 0, 0.08);
+  /* Markdown 表格配色，与 App.vue 的 :root 保持同一组值（两个入口各一份，原因见文件头）。 */
+  --guaxi-table-bg: #ffffff;
+  --guaxi-table-border: #e4e8ee;
+  --guaxi-table-border-strong: #d5dbe3;
+  --guaxi-table-head-bg: #f6f8fa;
+  --guaxi-table-head-text: #24292f;
+  --guaxi-table-row-alt-bg: #fafbfc;
+  --guaxi-table-row-hover-bg: #f2f6fb;
+  --guaxi-table-text: #24292f;
   --guaxi-text-primary: #1f2328;
   --guaxi-text-secondary: #57606a;
   /* 别名：部分组件（统计看板图表、影像工坊、首页面板等）误用了 --guaxi-text-color
@@ -91,6 +100,14 @@
   --guaxi-border: #3e4451;
   --guaxi-border-color: var(--guaxi-border);
   --guaxi-border-weak: rgba(255, 255, 255, 0.11);
+  --guaxi-table-bg: #21252b;
+  --guaxi-table-border: #353c47;
+  --guaxi-table-border-strong: #434b58;
+  --guaxi-table-head-bg: #262c35;
+  --guaxi-table-head-text: #e6edf3;
+  --guaxi-table-row-alt-bg: #232931;
+  --guaxi-table-row-hover-bg: #2d343e;
+  --guaxi-table-text: #d8e0eb;
   --guaxi-text-primary: #d8e0eb;
   --guaxi-text-secondary: #9da5b4;
   --guaxi-text-color: var(--guaxi-text-primary);

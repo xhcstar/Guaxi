@@ -842,9 +842,9 @@ const formatTime = (timeString) => {
   overflow-wrap: anywhere;
 }
 
-.article-content :deep(li) > :deep(.guaxi-bilingual-line),
-.article-content :deep(td) > :deep(.guaxi-bilingual-line),
-.article-content :deep(th) > :deep(.guaxi-bilingual-line) {
+.article-content :deep(li > .guaxi-bilingual-line),
+.article-content :deep(td > .guaxi-bilingual-line),
+.article-content :deep(th > .guaxi-bilingual-line) {
   margin: 2px 0 0;
   border-radius: 6px;
 }

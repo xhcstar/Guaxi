@@ -192,11 +192,20 @@ onBeforeUnmount(() => {
 .agent-md :deep(table) {
   border-collapse: collapse;
   margin: 0.6em 0;
+  background: var(--guaxi-table-bg, #ffffff);
+  color: var(--guaxi-table-text, #24292f);
 }
 
 .agent-md :deep(th),
 .agent-md :deep(td) {
-  border: 1px solid var(--guaxi-border);
+  border: 1px solid var(--guaxi-table-border, #e4e8ee);
   padding: 5px 9px;
+  text-align: left;
+}
+
+.agent-md :deep(th) {
+  background: var(--guaxi-table-head-bg, #f6f8fa);
+  color: var(--guaxi-table-head-text, #24292f);
+  font-weight: 600;
 }
 </style>
