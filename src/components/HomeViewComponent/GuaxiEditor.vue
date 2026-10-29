@@ -28968,6 +28968,54 @@ onUnmounted(() => {
 :deep(.monaco-editor .glyph-margin) {
   background-color: var(--guaxi-header-bg) !important;
 }
+
+/* ───── 预览区 Markdown 表格：边框 / 表头底色 / 斑马行 ─────
+ * 1. 这组规则必须留在 `<style scoped>` 里：`:deep()` 只有经过 Vue 编译才会被展开成
+ *    `.preview[data-v-x] table`，写在普通 `<style>` 块里会被原样输出，浏览器把 `:deep()`
+ *    视为未知伪类、整条规则丢弃——预览表格的边框就是这样丢掉的（14ab9cb3 引入）。
+ * 2. 暗色后缀直接写 `:root[...]` 而不是 `:global(:root[...])`：在 scoped 块里后者会被编译成
+ *    孤立的 `:root[...]`，后半段选择器会丢失。
+ * 3. 显式排除 Python 单元 / 数据面板注入的 `.guaxi-dataframe-table`、
+ *    `.guaxi-inline-dataframe__table`：它们自带一套无边框设计，本次修复不该改变它们的观感。
+ */
+.preview :deep(table:not(.guaxi-dataframe-table):not(.guaxi-inline-dataframe__table)) {
+  width: 100%;
+  border-collapse: collapse;
+  border: 1px solid #ddd;
+}
+
+.preview :deep(th:not(.guaxi-dataframe-table *):not(.guaxi-inline-dataframe__table *)),
+.preview :deep(td:not(.guaxi-dataframe-table *):not(.guaxi-inline-dataframe__table *)) {
+  border: 1px solid #ddd;
+  padding: 8px;
+  text-align: center;
+}
+
+.preview :deep(th:not(.guaxi-dataframe-table *):not(.guaxi-inline-dataframe__table *)) {
+  background-color: #f4f4f4;
+  font-weight: bold;
+}
+
+.preview :deep(tr:nth-child(even):not(.guaxi-dataframe-table *):not(.guaxi-inline-dataframe__table *)) {
+  background-color: #f9f9f9;
+}
+
+:root[data-guaxi-theme='dark'] .preview :deep(table:not(.guaxi-dataframe-table):not(.guaxi-inline-dataframe__table)) {
+  border-color: #30363d;
+}
+
+:root[data-guaxi-theme='dark'] .preview :deep(th:not(.guaxi-dataframe-table *):not(.guaxi-inline-dataframe__table *)),
+:root[data-guaxi-theme='dark'] .preview :deep(td:not(.guaxi-dataframe-table *):not(.guaxi-inline-dataframe__table *)) {
+  border-color: #30363d;
+}
+
+:root[data-guaxi-theme='dark'] .preview :deep(th:not(.guaxi-dataframe-table *):not(.guaxi-inline-dataframe__table *)) {
+  background-color: #18222d;
+}
+
+:root[data-guaxi-theme='dark'] .preview :deep(tr:nth-child(even):not(.guaxi-dataframe-table *):not(.guaxi-inline-dataframe__table *)) {
+  background-color: #131d27;
+}
 </style>
 
 <style>
@@ -30340,36 +30388,13 @@ body.guaxi-tab-dragging * {
   border-color: rgba(255, 255, 255, 0.1) !important;
 }
 
-.preview :deep(table) {
-  box-sizing: border-box;
-  width: 100%;
-  max-width: 100%;
-  table-layout: fixed;
-  border-collapse: collapse;
-  border: 1px solid #ddd;
-  background: #ffffff;
-  color: #24292f;
-}
-
-.preview :deep(th),
-.preview :deep(td) {
-  border: 1px solid #ddd;
-  padding: 8px;
-  text-align: center;
-  background: #ffffff;
-  color: #24292f;
-  overflow-wrap: anywhere;
-  word-break: break-word;
-}
-
-.preview :deep(th) {
-  background-color: #f4f4f4;
-  font-weight: bold;
-}
-
-.preview :deep(tr:nth-child(even) td) {
-  background-color: #f9f9f9;
-}
+/*
+ * 预览区 Markdown 表格的样式不在这个块里定义，已移回上面的 `<style scoped>` 块。
+ *
+ * 原因：`:deep()` 只有在 `<style scoped>` 里才会被 Vue 展开成 `.preview[data-v-x] table`；
+ * 写在这个普通 `<style>` 块里会被原样保留，浏览器把 `:deep()` 当成未知伪类并丢弃整条规则，
+ * 于是预览表格彻底没有边框。这是 14ab9cb3 引入的回归，不要再把表格规则搬回这里。
+ */
 
 .preview :deep(input),
 .preview :deep(textarea),
@@ -30378,27 +30403,6 @@ body.guaxi-tab-dragging * {
   background: var(--guaxi-content-bg, #ffffff);
   color: var(--guaxi-text-primary, #1f2328);
   border-color: var(--guaxi-border, #d0d7de);
-}
-
-:global(:root[data-guaxi-theme='dark']) .preview :deep(table) {
-  border-color: #30363d;
-  background: #0f1720;
-  color: #e6edf3;
-}
-
-:global(:root[data-guaxi-theme='dark']) .preview :deep(th),
-:global(:root[data-guaxi-theme='dark']) .preview :deep(td) {
-  border-color: #30363d;
-  background: #0f1720;
-  color: #e6edf3;
-}
-
-:global(:root[data-guaxi-theme='dark']) .preview :deep(th) {
-  background: #18222d;
-}
-
-:global(:root[data-guaxi-theme='dark']) .preview :deep(tr:nth-child(even) td) {
-  background: #131d27;
 }
 
 :global(:root[data-guaxi-theme='dark']) .preview :deep(input),
