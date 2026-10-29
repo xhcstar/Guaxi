@@ -1,5 +1,9 @@
 <template>
-  <div v-if="mailConfirmState.open" class="mail-modal-backdrop" @mousedown.self="answerMailConfirm(false)">
+  <div
+    v-if="mailConfirmState.open"
+    class="mail-modal-backdrop mail-confirm-backdrop"
+    @mousedown.self="answerMailConfirm(false)"
+  >
     <div class="mail-modal mail-confirm" role="dialog" aria-modal="true">
       <div class="mail-modal-body">
         <p v-if="mailConfirmState.title" class="mail-confirm-title">{{ mailConfirmState.title }}</p>

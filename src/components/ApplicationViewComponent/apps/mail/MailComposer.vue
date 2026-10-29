@@ -786,6 +786,14 @@
         >
           <MailIcon :name="align.icon" :size="15" />
         </button>
+        <span class="mail-edit-bar-sep"></span>
+        <!-- 位置：整块上移 / 下移。拖拽被浏览器手势吃掉时也能挪。 -->
+        <button class="mail-edit-bar-btn" title="上移一位（与上一段交换位置）" aria-label="上移" @click="moveImageStep(-1)">
+          <MailIcon name="moveUp" :size="15" />
+        </button>
+        <button class="mail-edit-bar-btn" title="下移一位（与下一段交换位置）" aria-label="下移" @click="moveImageStep(1)">
+          <MailIcon name="moveDown" :size="15" />
+        </button>
       </template>
       <template v-else>
         <span class="mail-edit-bar-label">表格 {{ tableTools?.rows }}×{{ tableTools?.cols }}</span>
@@ -2082,6 +2090,9 @@ function onFrameMouseUp() {
 function onEditorMouseDown(event) {
   const img = event.target?.closest?.('img')
   if (!img || !editorRef.value?.contains(img)) return
+  // 图片上按下鼠标：拦掉默认行为（选文字 / 浏览器原生图片拖拽）。不拦的话
+  // 这次手势会被浏览器接管，我们在 window 上根本收不到 mousemove。
+  event.preventDefault()
   pendingImageMove = { x: event.clientX, y: event.clientY, img }
 }
 
@@ -2093,6 +2104,33 @@ function startFrameMove(event) {
   movingImage = { img }
   document.body.classList.add('mail-image-dragging')
   placeImageAtY(img, event.clientY)
+}
+
+/**
+ * 整块上移 / 下移图片。
+ *
+ * 拖拽在某些输入设备 / webview 上会被浏览器手势吃掉（已经踩过几次），这里给一个
+ * 确定性的入口：按当前图片所在的位置，找它前一个 / 后一个顶层块，插到对应的边。
+ */
+function moveImageStep(delta) {
+  const img = selectedImage.value
+  const editor = editorRef.value
+  if (!img || !editor?.contains(img)) return
+  const box = img.getBoundingClientRect()
+  const blocks = [...editor.children].filter((el) => el !== img && !el.contains(img))
+  if (!blocks.length) return
+  if (delta > 0) {
+    const after = blocks.find((el) => el.getBoundingClientRect().top >= box.bottom - 2)
+    if (!after) return
+    placeImageAtY(img, after.getBoundingClientRect().bottom + 1)
+  } else {
+    const before = [...blocks].reverse().find((el) => el.getBoundingClientRect().bottom <= box.top + 2)
+    if (!before) return
+    placeImageAtY(img, before.getBoundingClientRect().top + 1)
+  }
+  refreshImageFrame()
+  refreshEditBar()
+  onEditorInput()
 }
 
 function onWindowMouseMoveForImage(event) {
