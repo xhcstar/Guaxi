@@ -457,7 +457,7 @@
       </div>
       <div class="gdr-assistant__body">
         <!-- 展开时才挂载：助手是一大块独立 chunk，收起状态下没有理由加载它。 -->
-        <GuaxiAgentAssistant v-if="showReaderAssistant" />
+        <ReaderAssistantPanel v-if="showReaderAssistant" :theme="theme" />
       </div>
     </aside>
   </div>
@@ -500,8 +500,9 @@ const GuaxiSelectionTranslatePanel = defineAsyncComponent(
   () => import('./GuaxiSelectionTranslatePanel.vue')
 )
 // 独立阅读器窗口内置的助手面板：只在真正展开时加载，不拖慢首帧。
-const GuaxiAgentAssistant = defineAsyncComponent(
-  () => import('./GuaxiAgentAssistant.vue')
+// 助手依赖 naive-ui 的 message provider，那一层也一起放进这个异步 chunk。
+const ReaderAssistantPanel = defineAsyncComponent(
+  () => import('./ReaderAssistantPanel.vue')
 )
 
 const logger = createLogger('ReaderPane')
