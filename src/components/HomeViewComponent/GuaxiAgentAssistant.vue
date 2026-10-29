@@ -568,7 +568,10 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { open, save } from '@tauri-apps/plugin-dialog'
-import { useMessage } from 'naive-ui'
+// NTooltip / NSelect 必须在这里显式引入：主应用在 main.js 里 `app.use(naive)` 全局注册了，
+// 但独立阅读器窗口走 reader-main.js，没有那次注册 —— 只靠全局注册的话，助手一挂进阅读器，
+// 这两个组件就解析不到（Failed to resolve component）。本地引入对两种宿主都成立。
+import { NTooltip, NSelect, useMessage } from 'naive-ui'
 import { Icon } from '@iconify/vue'
 import copyIcon from '@iconify-icons/lucide/copy'
 import filePenLineIcon from '@iconify-icons/lucide/file-edit'
