@@ -76,10 +76,12 @@ test('表格：工具行给出行列、样式与单元格内容工具', () => {
   assert.ok(composer.includes('TABLE_ROW_ACTIONS'), '应有插入 / 删除行列的入口')
   assert.ok(composer.includes('TABLE_STYLES'), '应能选表格样式预设')
   assert.ok(composer.includes('CELL_FONT_SIZES'), '应能改单元格字号')
-  assert.ok(composer.includes('CELL_FILLS'), '应能改单元格填充')
+  // 填充 / 文字颜色用取色器，不再平铺两排色板。
+  assert.ok(/input type="color"/.test(composer), '单元格填充与文字颜色要用取色器')
+  assert.ok(/function onCellFillColor/.test(composer) && /function onCellTextColor/.test(composer), '取色器的结果要能落到单元格上')
   assert.ok(
     /function tableAction\(action, payload, context = null\)/.test(composer),
-    '右键菜单与工具行要共用同一套实现',
+    '右键菜单与浮动条要共用同一套实现',
   )
   assert.ok(/cellPosition\(table, cell\)/.test(composer), '表格动作要以光标所在单元格为锚点')
 })

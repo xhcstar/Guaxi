@@ -479,6 +479,17 @@
           >
             <span class="mail-md-mark">M↓</span>
           </button>
+          <!-- 格式刷：先把光标处的格式复制下来，再刷到别的文字上（Outlook 的习惯）。 -->
+          <button
+            class="mail-fmt-btn"
+            :class="{ 'is-on': formatPainter }"
+            :title="formatPainter ? '格式已复制：选中要套用的文字（Esc 取消）' : '格式刷：复制当前文字的格式'"
+            aria-label="格式刷"
+            @mousedown.prevent="toggleFormatPainter"
+          >
+            <MailIcon name="formatPainter" :size="15" />
+          </button>
+          <span v-if="formatPainter" class="mail-fmt-hint">选一段文字刷上去</span>
           <button
             class="mail-fmt-btn"
             title="清除格式"
@@ -623,6 +634,7 @@
           contenteditable="true"
           data-placeholder="写点什么…"
           @contextmenu="onEditorContextMenu"
+          @mousedown="onEditorMouseDown"
           @mouseup="onEditorMouseUp"
           @click="onEditorClick"
           @input="onEditorInput"
@@ -665,6 +677,24 @@
     <!-- 浮条与右键菜单留在邮件根节点内部：主题变量（--mail-*）挂在那个根节点上，
          传送到 body 之后 var() 全部落空，菜单就成了「透明的」，字也看不清。
          两者都是 fixed 定位，只要没有带 transform 的祖先就不会被编辑区裁掉。 -->
+    <!-- 选中图片的控制框：四个角都能拖，直观地改大小。框本身不吃鼠标事件，
+         只有四个角上的把手吃——否则就没法拖动图片换位置了。 -->
+    <div
+      v-if="imageFrame"
+      class="mail-image-frame"
+      :style="{
+        left: `${imageFrame.left}px`,
+        top: `${imageFrame.top}px`,
+        width: `${imageFrame.width}px`,
+        height: `${imageFrame.height}px`,
+      }"
+    >
+      <span class="mail-image-handle is-tl" @mousedown.prevent.stop="onFrameMouseDown"></span>
+      <span class="mail-image-handle is-tr" @mousedown.prevent.stop="onFrameMouseDown"></span>
+      <span class="mail-image-handle is-bl" @mousedown.prevent.stop="onFrameMouseDown"></span>
+      <span class="mail-image-handle is-br" @mousedown.prevent.stop="onFrameMouseDown"></span>
+    </div>
+
     <!-- 选中图片 / 光标停在表格里时，贴着目标上沿浮出的一条小工具：只放最常用的
          几项，其余收进右键菜单（Outlook 就是这个分工）。fixed 定位挂在视口上，
          不占版面、也不会被编辑区的滚动容器裁掉。 -->
@@ -708,21 +738,23 @@
           :key="'btr-' + item.action"
           class="mail-edit-bar-btn"
           :title="item.title"
+          :aria-label="item.label"
           @click="tableBarAction(item.action)"
         >
-          {{ item.short }}
+          <MailIcon :name="item.icon" :size="15" />
         </button>
       </template>
       <span class="mail-edit-bar-sep"></span>
-      <button class="mail-edit-bar-btn" title="全部图片/表格操作" @click="openEditMenu">
-        更多
+      <button class="mail-edit-bar-btn" title="更多格式（样式 / 宽度 / 单元格）" aria-label="更多" @click="openEditMenu">
+        <MailIcon name="more" :size="15" />
       </button>
       <button
         class="mail-edit-bar-btn is-danger"
         :title="editBar.target === 'image' ? '从正文里删除这张图片' : '删除整个表格'"
+        aria-label="删除"
         @click="removeEditTarget"
       >
-        删除
+        <MailIcon name="trash" :size="15" />
       </button>
     </div>
 
@@ -754,15 +786,18 @@
           <div class="mail-editor-menu-sep"></div>
           <div class="mail-editor-menu-head">表格宽度与位置</div>
           <div class="mail-editor-menu-row-actions">
-            <button
-              v-for="preset in TABLE_WIDTHS"
-              :key="'mw-' + preset.value"
-              class="mail-editor-menu-chip"
-              :title="preset.title"
-              @click="tableAction('tableWidth', preset.value)"
+            <!-- 宽度与样式都是一次选一个的枚举：收进下拉，不铺一条 chip 阵。 -->
+            <select
+              class="mail-editor-menu-select"
+              title="表格宽度"
+              aria-label="表格宽度"
+              @change="onTableWidth"
             >
-              {{ preset.label }}
-            </button>
+              <option value="">宽度</option>
+              <option v-for="preset in TABLE_WIDTHS" :key="'mw-' + preset.value" :value="preset.value">
+                {{ preset.label }}
+              </option>
+            </select>
             <button
               v-for="align in TABLE_ALIGNMENTS"
               :key="'ma-' + align.key"
@@ -777,14 +812,18 @@
         </div>
         <div class="mail-editor-menu-col">
           <div class="mail-editor-menu-head">表格样式</div>
-          <button
-            v-for="style in TABLE_STYLES"
-            :key="style.key"
-            class="mail-editor-menu-item"
-            @click="tableAction('style', style.key)"
+          <!-- 样式是单选枚举，收进下拉；四个 text item 平铺太占地方。 -->
+          <select
+            class="mail-editor-menu-select is-block"
+            title="表格样式"
+            aria-label="表格样式"
+            @change="onTableStyle"
           >
-            {{ style.label }}
-          </button>
+            <option value="">选择样式…</option>
+            <option v-for="style in TABLE_STYLES" :key="style.key" :value="style.key">
+              {{ style.label }}
+            </option>
+          </select>
           <div class="mail-editor-menu-sep"></div>
           <div class="mail-editor-menu-head">单元格格式</div>
           <div class="mail-editor-menu-row-actions">
@@ -814,32 +853,25 @@
               </option>
             </select>
           </div>
-          <div class="mail-editor-menu-swatches">
+          <!-- 填充 / 文字颜色用系统取色器：一个色块代替两排色板，想用邮件里
+               没有的颜色也不用改代码。旁边的斜杠清掉填充。 -->
+          <div class="mail-editor-menu-row-actions">
+            <label class="mail-editor-menu-color" title="单元格填充色">
+              <span>填充</span>
+              <input type="color" :value="DEFAULT_CELL_FILL" @change="onCellFillColor" />
+            </label>
             <button
-              v-for="color in CELL_FILLS"
-              :key="'fill-' + color"
-              class="mail-editor-menu-swatch"
-              :style="{ background: color }"
-              :title="`填充 ${color}`"
-              @click="tableAction('cellFill', color)"
-            ></button>
-            <button
-              class="mail-editor-menu-swatch is-none"
-              title="无填充"
+              class="mail-fmt-btn"
+              title="清除填充"
+              aria-label="清除填充"
               @click="tableAction('cellFill', '')"
             >
-              ×
+              <MailIcon name="clearFormat" :size="14" />
             </button>
-          </div>
-          <div class="mail-editor-menu-swatches">
-            <button
-              v-for="color in TEXT_COLORS"
-              :key="'fg-' + color"
-              class="mail-editor-menu-swatch"
-              :style="{ background: color }"
-              :title="`文字 ${color}`"
-              @click="tableAction('cellColor', color)"
-            ></button>
+            <label class="mail-editor-menu-color" title="单元格文字颜色">
+              <span>文字</span>
+              <input type="color" :value="DEFAULT_TEXT_COLOR" @change="onCellTextColor" />
+            </label>
           </div>
           <div class="mail-editor-menu-sep"></div>
           <button class="mail-editor-menu-item" @click="tableAction('tableDelete')">删除整个表格</button>
@@ -1123,9 +1155,16 @@ function closePalette() {
 }
 
 function onPaletteEscape(event) {
-  if (event.key === 'Escape' && openPalette.value) {
+  if (event.key !== 'Escape') return
+  if (openPalette.value) {
     event.stopPropagation()
     closePalette()
+    return
+  }
+  // 格式刷的「待刷」状态也按 Esc 取消，免得变成一个退不掉的隐形模式。
+  if (formatPainter.value) {
+    event.stopPropagation()
+    formatPainter.value = null
   }
 }
 
@@ -1478,7 +1517,77 @@ const selectionTranslate = useMailSelectionTranslate(() => editorRef.value)
  * 鼠标松开时只把事件交给共享的划词逻辑：触发条件是「Alt + 划词」
  * （见 useMailSelectionTranslate）。普通拖选不弹面板，否则每松一次鼠标就译一次。
  */
+// ---------------- 格式刷 ----------------
+
+/**
+ * 格式刷：先把光标处的格式「复制」下来，再去刷另一段文字。一次刷完自动取消，
+ * Esc 也能取消——和 Outlook 一致，不做一个会一直粘着的隐形模式。
+ */
+const formatPainter = ref(null)
+
+function toggleFormatPainter() {
+  if (formatPainter.value) {
+    formatPainter.value = null
+    return
+  }
+  formatPainter.value = captureFormat() || null
+}
+
+/** 从光标所在元素上读出要复制的格式（行内样式 + 段落对齐）。 */
+function captureFormat() {
+  const selection = window.getSelection()
+  const node = selection?.anchorNode
+  const el = node ? (node.nodeType === 1 ? node : node.parentElement) : null
+  const editor = editorRef.value
+  if (!el || !editor?.contains(el)) return null
+  const style = window.getComputedStyle(el)
+  const background = style.backgroundColor
+  return {
+    fontFamily: style.fontFamily,
+    fontSize: style.fontSize,
+    fontWeight: style.fontWeight,
+    fontStyle: style.fontStyle,
+    textDecoration: style.textDecorationLine === 'none' ? '' : style.textDecorationLine,
+    color: style.color,
+    // 透明背景别刷成一层白，否则「正常文字」被刷出底色。
+    backgroundColor: /rgba\(0, 0, 0, 0\)|transparent/i.test(background) ? '' : background,
+    textAlign: style.textAlign,
+  }
+}
+
+/** 把复制的格式套到当前选区上。返回 true 表示这次确实刷了。 */
+function paintFormat() {
+  const paint = formatPainter.value
+  const selection = window.getSelection()
+  if (!paint || !selection || !selection.rangeCount) return false
+  const range = selection.getRangeAt(0)
+  if (range.collapsed) return false
+  const span = document.createElement('span')
+  for (const [key, value] of Object.entries(paint)) {
+    if (!value || key === 'textAlign') continue
+    span.style[key] = value
+  }
+  span.appendChild(range.extractContents())
+  range.insertNode(span)
+  // 对齐是段落级的，行内 span 表达不了，落到最近的块级祖先上。
+  if (paint.textAlign) {
+    const block = span.parentElement?.closest?.('p, div, li, td, th, h1, h2, h3, blockquote')
+    if (block) block.style.textAlign = paint.textAlign
+  }
+  const next = document.createRange()
+  next.selectNodeContents(span)
+  selection.removeAllRanges()
+  selection.addRange(next)
+  savedRange = next.cloneRange()
+  formatPainter.value = null
+  onEditorInput()
+  refreshFormatState()
+  return true
+}
+
 function onEditorMouseUp(event) {
+  // 格式刷等着刷：这一下松开鼠标就是「套用」。
+  if (formatPainter.value && paintFormat()) return
   selectionTranslate.handleMouseUp(event)
 }
 
@@ -1592,14 +1701,14 @@ function removeSelectedImage() {
 /** 光标所在的表格；不在表格里就是 null（工具行随之收起）。 */
 const tableTools = ref(null)
 
-// 浮动条放不下整张表格的全部操作，所以这里给一套短标签（长标签留给右键菜单）。
+// 浮动条只放最常用的几项，用图标 + 悬浮提示（文字标签留给右键菜单）。
 const TABLE_ROW_ACTIONS = [
-  { action: 'rowAbove', short: '上插行', label: '上方插入行', title: '在当前行上方插入一行' },
-  { action: 'rowBelow', short: '下插行', label: '下方插入行', title: '在当前行下方插入一行' },
-  { action: 'rowDelete', short: '删行', label: '删除行', title: '删除光标所在这一行' },
-  { action: 'colLeft', short: '左插列', label: '左侧插入列', title: '在当前列左侧插入一列' },
-  { action: 'colRight', short: '右插列', label: '右侧插入列', title: '在当前列右侧插入一列' },
-  { action: 'colDelete', short: '删列', label: '删除列', title: '删除光标所在这一列' },
+  { action: 'rowAbove', icon: 'rowAbove', label: '上方插入行', title: '在当前行上方插入一行' },
+  { action: 'rowBelow', icon: 'rowBelow', label: '下方插入行', title: '在当前行下方插入一行' },
+  { action: 'rowDelete', icon: 'rowDelete', label: '删除行', title: '删除光标所在这一行' },
+  { action: 'colLeft', icon: 'colLeft', label: '左侧插入列', title: '在当前列左侧插入一列' },
+  { action: 'colRight', icon: 'colRight', label: '右侧插入列', title: '在当前列右侧插入一列' },
+  { action: 'colDelete', icon: 'colDelete', label: '删除列', title: '删除光标所在这一列' },
 ]
 const TABLE_WIDTHS = [
   { value: '100', label: '整行', title: '表格占满正文宽度' },
@@ -1688,6 +1797,7 @@ function viewportRect(el) {
 
 function refreshEditBar() {
   const spot = editTargetSpot()
+  refreshImageFrame()
   if (!spot) {
     editBar.value = null
     return
@@ -1755,6 +1865,110 @@ function removeEditTarget() {
 
 watch([selectedImage, tableTools, sourceMode], refreshEditBar)
 
+// ---------------- 图片：拖边框改大小、拖动换位置 ----------------
+
+/**
+ * 套在选中图片外面的控制框（视口坐标）。图片是块级的，四个角都能拖：
+ * 拖右边/右下角连动的都是宽度百分比，高度自动——发出去在别的客户端也不会变形。
+ */
+const imageFrame = ref(null)
+/** 正在拖框改宽度：`{ startX, startWidth, boxWidth }`。 */
+let resizing = null
+/** 正在拖动图片换位置：`{ x, y, img }` / `{ img }`（已越过阈值）。 */
+let pendingImageMove = null
+let movingImage = null
+
+function refreshImageFrame() {
+  const img = selectedImage.value
+  const editor = editorRef.value
+  if (!img || !editor?.contains(img) || sourceMode.value) {
+    imageFrame.value = null
+    return
+  }
+  imageFrame.value = viewportRect(img)
+}
+
+function onFrameMouseDown(event) {
+  const img = selectedImage.value
+  if (!img) return
+  event.preventDefault()
+  event.stopPropagation()
+  resizing = {
+    startX: event.clientX,
+    startWidth: img.getBoundingClientRect().width,
+    boxWidth: editorRef.value?.clientWidth || 1,
+  }
+  window.addEventListener('mousemove', onFrameMouseMove)
+  window.addEventListener('mouseup', onFrameMouseUp, { once: true })
+}
+
+function onFrameMouseMove(event) {
+  if (!resizing || !selectedImage.value) return
+  const width = Math.max(24, resizing.startWidth + (event.clientX - resizing.startX))
+  setImageWidth(Math.round((width / resizing.boxWidth) * 100), { commit: false })
+  refreshImageFrame()
+}
+
+function onFrameMouseUp() {
+  window.removeEventListener('mousemove', onFrameMouseMove)
+  resizing = null
+  commitImageWidth()
+  refreshImageFrame()
+}
+
+/** 在正文里按下鼠标：图片上是「准备拖动换位置」，别的地方交给浏览器。 */
+function onEditorMouseDown(event) {
+  const img = event.target?.closest?.('img')
+  if (!img || !editorRef.value?.contains(img)) return
+  pendingImageMove = { x: event.clientX, y: event.clientY, img }
+}
+
+/** 列表 / 段落这样的顶层块：图片换位置时就插在它的前后（和 Outlook 一致）。 */
+function topBlockOf(el) {
+  const editor = editorRef.value
+  let node = el
+  while (node?.parentElement && node.parentElement !== editor) node = node.parentElement
+  return node && node !== editor ? node : null
+}
+
+function onWindowMouseMoveForImage(event) {
+  if (resizing) return
+  if (!pendingImageMove && !movingImage) return
+  if (!movingImage) {
+    const dx = event.clientX - pendingImageMove.x
+    const dy = event.clientY - pendingImageMove.y
+    if (Math.hypot(dx, dy) < 6) return
+    movingImage = { img: pendingImageMove.img }
+    pendingImageMove = null
+    document.body.classList.add('mail-image-dragging')
+    return
+  }
+  const img = movingImage.img
+  const editor = editorRef.value
+  const under = document.elementFromPoint(event.clientX, event.clientY)
+  if (!under || !editor?.contains(under) || under === img || img.contains(under)) return
+  const block = topBlockOf(under)
+  if (!block || block === img || block.contains(img)) return
+  const box = block.getBoundingClientRect()
+  block.insertAdjacentElement(event.clientY < box.top + box.height / 2 ? 'beforebegin' : 'afterend', img)
+  refreshImageFrame()
+  refreshEditBar()
+}
+
+function onWindowMouseUpForImage() {
+  pendingImageMove = null
+  if (!movingImage) return
+  const img = movingImage.img
+  movingImage = null
+  document.body.classList.remove('mail-image-dragging')
+  // 换完位置重新选中它，控制框跟着走（不然框还停在旧地方）。
+  if (editorRef.value?.contains(img)) selectImage(img)
+  refreshImageFrame()
+  refreshEditBar()
+  onEditorInput()
+  refreshFormatState()
+}
+
 // 浮条要跟着目标走：正文滚动、窗口改尺寸都得重算位置（一帧最多算一次）。
 let barReflowQueued = false
 function onEditBarReflow() {
@@ -1768,18 +1982,24 @@ function onEditBarReflow() {
 onMounted(() => {
   document.addEventListener('scroll', onEditBarReflow, true)
   window.addEventListener('resize', onEditBarReflow)
+  window.addEventListener('mousemove', onWindowMouseMoveForImage)
+  window.addEventListener('mouseup', onWindowMouseUpForImage)
 })
 onBeforeUnmount(() => {
   document.removeEventListener('scroll', onEditBarReflow, true)
   window.removeEventListener('resize', onEditBarReflow)
+  window.removeEventListener('mousemove', onWindowMouseMoveForImage)
+  window.removeEventListener('mouseup', onWindowMouseUpForImage)
+  document.body.classList.remove('mail-image-dragging')
 })
 
 // ---------------- 编辑器右键菜单 ----------------
 
 /** 单元格可选的填充色 / 文字色 / 字号（右键菜单里的快捷项）。 */
-const CELL_FILLS = ['#f2f2f2', '#ddebf7', '#e2efda', '#fff2cc', '#fce4d6', '#ededed']
-const TEXT_COLORS = ['#000000', '#44546a', '#1a5fd0', '#c00000', '#548235', '#ffffff']
 const CELL_FONT_SIZES = [11, 12, 13, 14, 16]
+/** 取色器的初始值：菜单里只放一个色块，具体颜色由系统取色器给。 */
+const DEFAULT_CELL_FILL = '#ddebf7'
+const DEFAULT_TEXT_COLOR = '#44546a'
 
 /** 当前打开着的右键菜单：`{ x, y, table, image, cell, tableEl, row, col, rows, cols }`。 */
 const editorMenu = ref(null)
@@ -1854,6 +2074,26 @@ function imageMenuAction(kind, payload) {
 function onCellFontSize(event) {
   const size = Number(event?.target?.value) || 0
   if (size) tableAction('cellFontSize', size)
+}
+
+function onTableStyle(event) {
+  const key = event?.target?.value
+  if (key) tableAction('style', key)
+}
+
+function onTableWidth(event) {
+  const value = event?.target?.value
+  if (value) tableAction('tableWidth', value)
+}
+
+function onCellFillColor(event) {
+  const color = event?.target?.value
+  if (color) tableAction('cellFill', color)
+}
+
+function onCellTextColor(event) {
+  const color = event?.target?.value
+  if (color) tableAction('cellColor', color)
 }
 
 /** 普通编辑命令（剪切 / 复制 / 粘贴 / 全选）。 */

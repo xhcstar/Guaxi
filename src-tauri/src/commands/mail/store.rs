@@ -1741,11 +1741,18 @@ fn push_like_with_alternatives(
 /// 每个词加双引号（避免 `AND`/`OR`/`*` 被当成语法），词间 AND。
 /// 最后一个纯 ASCII 词加 `*`，让 `invo` 能命中 `invoice`。
 fn fts_query(text: &str) -> String {
+    fts_query_in(text, None)
+}
+
+/// 带列过滤的 FTS 查询：`body:"词"`。FTS5 的列过滤是写在 MATCH 表达式里的，
+/// 不能写成 `messages_fts.body MATCH ?`（那会报 `no such column`）。
+fn fts_query_in(text: &str, column: Option<&str>) -> String {
     let segmented = segment(text);
     let terms: Vec<&str> = segmented.split_whitespace().collect();
     if terms.is_empty() {
         return String::new();
     }
+    let prefix = column.map(|name| format!("{name}:")).unwrap_or_default();
     let last = terms.len() - 1;
     terms
         .iter()
@@ -1754,9 +1761,9 @@ fn fts_query(text: &str) -> String {
             let escaped = w.replace('"', "\"\"");
             let ascii_word = w.chars().all(|c| c.is_ascii_alphanumeric());
             if i == last && ascii_word && w.len() >= 2 {
-                format!("\"{escaped}\"*")
+                format!("{prefix}\"{escaped}\"*")
             } else {
-                format!("\"{escaped}\"")
+                format!("{prefix}\"{escaped}\"")
             }
         })
         .collect::<Vec<_>>()
@@ -1785,9 +1792,9 @@ pub fn search(query: &SearchQuery) -> Result<Vec<MessageSummary>, String> {
         sql.push_str(&format!("m.{col}"));
     }
     sql.push_str(" FROM messages m");
-    if use_fts {
-        sql.push_str(" JOIN messages_fts f ON f.rowid = m.rowid");
-    }
+    // 不再 JOIN messages_fts：MATCH 只能出现在「直接对着 FTS 表」的 WHERE 里，
+    // 一旦和别的条件用 OR 连起来（例如通讯录候选地址那条 LIKE 分支）就会报
+    // `unable to use function MATCH in the requested context`。放到子查询里过滤即可。
     sql.push_str(" WHERE m.deleted = 0");
     let mut args: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
 
@@ -1885,16 +1892,19 @@ pub fn search(query: &SearchQuery) -> Result<Vec<MessageSummary>, String> {
         let mut groups: Vec<String> = Vec::new();
         let mut patterns: Vec<String> = Vec::new();
         if !expr.is_empty() {
-            // MATCH 的左操作数必须是**表名或列名本身，不能用别名**：
-            // 写成 `f MATCH ?` 会直接报 `no such column: f`，而前端把错误当
-            // 「检索失败」静默回退成普通列表——表现就是「输入了但结果没变」。
-            // 这是实际踩到的 bug，不是理论问题。
-            let target = match field {
-                "body" => "messages_fts.body",
-                _ => "messages_fts",
+            // 按正文搜时用列过滤语法 `body:"词"`；其余字段走整表 FTS。
+            // 匹配条件写进子查询：这样 OR 的另一半（候选地址的 LIKE）不会把
+            // MATCH 拖进「不支持的上下文」。
+            let needle = if field == "body" {
+                fts_query_in(&query.text, Some("body"))
+            } else {
+                expr
             };
-            groups.push(format!("{target} MATCH ?"));
-            patterns.push(expr);
+            groups.push(
+                "m.rowid IN (SELECT rowid FROM messages_fts WHERE messages_fts MATCH ?)"
+                    .to_string(),
+            );
+            patterns.push(needle);
         }
         if field != "body" {
             let alt_cols = ["m.subject", "m.from_addr", "m.from_name", "m.to_json"];
@@ -2546,8 +2556,21 @@ mod tests {
     }
 
     #[test]
+    fn fts_query_in_prefixes_every_term_with_the_column() {
+        // 正文搜索用列过滤语法：每个词都要带上列名，否则会退化成整表匹配。
+        assert_eq!(fts_query_in("invo", Some("body")), "body:\"invo\"*");
+        assert_eq!(
+            fts_query_in("invoice 报告", Some("body")),
+            "body:\"invoice\" AND body:\"报告\""
+        );
+        // 不传列名时与 fts_query 一致。
+        assert_eq!(fts_query_in("invo", None), fts_query("invo"));
+    }
+
+    #[test]
     fn escape_like_escapes_wildcards() {
         assert_eq!(escape_like("50%_off"), "50\\%\\_off");
     }
 }
+
 

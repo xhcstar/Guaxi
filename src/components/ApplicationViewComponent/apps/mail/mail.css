@@ -626,13 +626,15 @@
    与 option 的背景 / 前景色。只写 background: transparent 时深色主题下会弹出一块白底，
    与周围完全脱节——所以这里把 option 也按主题着色，显式声明 color-scheme。 */
 .mail-root select.mail-select,
-.mail-root select.mail-input {
+.mail-root select.mail-input,
+.mail-root select.mail-editor-menu-select {
   color-scheme: light dark;
 }
 .mail-select option,
 .mail-select optgroup,
 .mail-input option,
-.mail-input optgroup {
+.mail-input optgroup,
+.mail-editor-menu-select option {
   background-color: var(--mail-panel);
   color: var(--mail-text);
 }
@@ -1183,9 +1185,20 @@
 
 .mail-body table table,
 .mail-body table table table {
-  /* 嵌套层级不额外加边距/边框，避免「套娃框」。 */
+  /* 嵌套层级不额外加边框，避免「套娃框」。
+     只收上下外边距：以前写的是 margin: 0，把 align="center" 的自动左右外边距
+     也一起抹掉了——Outlook 生成的邮件正是靠外层表格 + align=center 把正文居中的，
+     结果同一封信在别的客户端居中、我们这边贴左（真实反馈）。 */
   border: 0;
-  margin: 0;
+  margin-top: 0;
+  margin-bottom: 0;
+}
+
+/* 老式邮件用 align 属性居中表格；把它显式映射成自动外边距，
+   这样即使有别的规则给了 margin，居中依然成立。 */
+.mail-body table[align='center'] {
+  margin-left: auto;
+  margin-right: auto;
 }
 
 /* 邮件里的 <pre> 常被排版工具写成固定宽度（Outlook 的 width:75em），又默认不换行。
@@ -2101,6 +2114,55 @@
   color: var(--mail-accent);
 }
 
+/* 格式刷「已复制格式」时贴在按钮右侧的一句说明：按钮变个色容易看不见。 */
+.mail-fmt-hint {
+  align-self: center;
+  color: var(--mail-accent);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+/* 图片控制框：框不吃事件（要能拖动图片本身），只有四个角吃。 */
+.mail-image-frame {
+  position: fixed;
+  z-index: 61;
+  border: 1px solid var(--mail-accent);
+  pointer-events: none;
+}
+.mail-image-handle {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  border: 1px solid var(--mail-accent);
+  border-radius: 2px;
+  background: var(--mail-panel);
+  pointer-events: auto;
+  cursor: nwse-resize;
+}
+.mail-image-handle.is-tl {
+  left: -5px;
+  top: -5px;
+}
+.mail-image-handle.is-tr {
+  right: -5px;
+  top: -5px;
+  cursor: nesw-resize;
+}
+.mail-image-handle.is-bl {
+  left: -5px;
+  bottom: -5px;
+  cursor: nesw-resize;
+}
+.mail-image-handle.is-br {
+  right: -5px;
+  bottom: -5px;
+}
+body.mail-image-dragging,
+body.mail-image-dragging * {
+  cursor: move !important;
+  user-select: none !important;
+}
+
 /* 图片 / 表格的浮动工具条：贴着选中的目标浮出，只放最常用的几项，其余收进右键菜单。
    fixed 挂在视口上——占版面会把正文顶下去（原来那条第二行就是这个毛病），
    绝对定位在编辑区里又会被它的 overflow 裁掉。 */
@@ -2371,29 +2433,31 @@
   background: var(--mail-panel-hover);
   color: var(--mail-text);
 }
-.mail-editor-menu-swatches {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 3px;
-  padding: 3px 10px 6px;
-}
-.mail-editor-menu-swatch {
-  width: 18px;
-  height: 18px;
-  padding: 0;
+/* 填充 / 文字颜色改成系统取色器：一个色块顶替原来两排色板。 */
+.mail-editor-menu-color {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 6px;
   border: 1px solid var(--mail-border);
-  border-radius: 3px;
+  border-radius: 4px;
+  color: var(--mail-text-secondary);
+  font-size: 11px;
   cursor: pointer;
 }
-.mail-editor-menu-swatch:hover {
-  outline: 2px solid var(--mail-accent);
-  outline-offset: 1px;
-}
-.mail-editor-menu-swatch.is-none {
+.mail-editor-menu-color input[type='color'] {
+  width: 20px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
   background: transparent;
-  color: var(--mail-text-muted);
-  font-size: 12px;
-  line-height: 1;
+  cursor: pointer;
+}
+/* 单独占一整行的下拉（表格样式这类），不要挤在图标行里。 */
+.mail-editor-menu-select.is-block {
+  width: calc(100% - 20px);
+  margin: 2px 10px 6px;
 }
 .mail-editor-menu-row-actions {
   display: flex;
