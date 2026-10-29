@@ -37,7 +37,6 @@
         :idle-active="store.idleActive"
         @toggle-sidebar="toggleSidebar"
         @sync="onSync"
-        @refresh="onRefreshFolders"
         @compose="onCompose"
         @accounts="openAccounts"
         @contacts="showContacts = true"
@@ -850,7 +849,9 @@ async function onCloseCompose() {
 }
 
 async function onSync() {
-  const result = await store.syncNow()
+  // 手动同步顺带重新发现文件夹：别处（手机 / 网页）增删的目录也能立刻出现在这里，
+  // 所以顶栏不再需要一个单独的「重新发现文件夹」按钮。
+  const result = await store.syncNow({ refreshFolders: true })
   if (result.errors?.length) notify(result.errors[0], true)
   else if (result.added) notify(`收到 ${result.added} 封新邮件`)
   else notify('已是最新')
@@ -1051,12 +1052,6 @@ async function onDeleteRow(row) {
   } catch (error) {
     notify(String(error?.message || error), true)
   }
-}
-
-async function onRefreshFolders() {
-  await store.refreshFolders()
-  await store.loadMessages({ silent: true })
-  notify('文件夹已刷新')
 }
 
 /**

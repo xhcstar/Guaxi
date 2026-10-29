@@ -26,6 +26,22 @@ const foldersRequestSeq = new Map()
 /** 操作后的计数校正：合并短时间内的多次操作，避免每次都打一轮完整 STATUS。 */
 const folderRefreshTimers = new Map()
 
+/**
+ * 每个账户最近一次「重新发现文件夹」的时间。
+ *
+ * IDLE 每收到一批新邮件都会触发一次同步，如果每次都 LIST 一遍文件夹结构太重；
+ * 但别处（手机 / 网页）增删目录又要能很快反映出来，所以按分钟节流。
+ */
+const folderStructureRefreshedAt = new Map()
+
+function refreshFolderStructureThrottled(store, accountId, minIntervalMs = 60_000) {
+  if (!accountId) return
+  const last = folderStructureRefreshedAt.get(accountId) || 0
+  if (Date.now() - last < minIntervalMs) return
+  folderStructureRefreshedAt.set(accountId, Date.now())
+  store.loadFolders(accountId, { refresh: true }).catch(() => {})
+}
+
 function scheduleFolderRefresh(store, accountId) {
   if (!accountId) return
   clearTimeout(folderRefreshTimers.get(accountId))
@@ -250,9 +266,12 @@ export const useMailStore = defineStore('mail', {
           if (payload.accountId && payload.accountId !== this.activeAccountId) {
             // 其它账户的变化：只更新未读徽标，不打断当前阅读。
             this.reloadUnread().catch(() => {})
+            refreshFolderStructureThrottled(this, payload.accountId)
             return
           }
           await this.syncNow().catch(() => {})
+          // 服务器推来「有变化」时顺带确认一次文件夹结构（按分钟节流）。
+          refreshFolderStructureThrottled(this, payload.accountId || this.activeAccountId)
         })
         this.unlisten.push(offSync, offNew, offOrigin, offIdle)
       } catch (error) {
@@ -811,7 +830,7 @@ export const useMailStore = defineStore('mail', {
       }
     },
 
-    async syncNow() {
+    async syncNow({ refreshFolders = false } = {}) {
       if (!this.activeAccountId) return { added: 0, errors: [] }
       this.syncing = true
       try {
@@ -819,7 +838,13 @@ export const useMailStore = defineStore('mail', {
           accountId: this.activeAccountId,
           folder: this.activeFolder,
         })
-        await this.loadFolders(this.activeAccountId)
+        // 只在手动同步时重新发现文件夹：IDLE 每来一批新邮件都会走这里，
+        // 每次都 LIST 一遍太重；结构变化还有定时同步兜底。
+        if (refreshFolders) {
+          await this.loadFolders(this.activeAccountId, { refresh: true })
+        } else {
+          await this.loadFolders(this.activeAccountId)
+        }
         await this.reloadUnread()
         await this.loadMessages({ silent: true })
         this.lastSyncAt = Date.now()

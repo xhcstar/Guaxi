@@ -43,21 +43,12 @@
       <button
         class="mail-icon-btn"
         :disabled="syncing"
-        title="同步收件"
+        title="同步收件（同时重新发现文件夹）"
         aria-label="同步收件"
         @click="$emit('sync')"
       >
         <n-icon v-if="!syncing" :component="RefreshOutline" />
         <span v-else class="mail-spin"></span>
-      </button>
-      <button
-        class="mail-icon-btn"
-        :disabled="syncing"
-        title="重新发现文件夹"
-        aria-label="重新发现文件夹"
-        @click="$emit('refresh')"
-      >
-        <n-icon :component="FolderOpenOutline" />
       </button>
 
       <span class="mail-toolbar-sep"></span>
@@ -84,7 +75,6 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { NIcon } from 'naive-ui'
 import {
   CreateOutline,
-  FolderOpenOutline,
   FunnelOutline,
   MailOpenOutline,
   MenuOutline,
@@ -107,7 +97,6 @@ const props = defineProps({
 })
 defineEmits([
   'sync',
-  'refresh',
   'compose',
   'accounts',
   'rules',
