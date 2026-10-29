@@ -86,10 +86,15 @@ test('表格：工具行给出行列、样式与单元格内容工具', () => {
   assert.ok(/cellPosition\(table, cell\)/.test(composer), '表格动作要以光标所在单元格为锚点')
 })
 
-test('删账户：先问账户，再问本机邮件要不要一起删', () => {
+test('删账户：面板内确认，并且真的删掉才算数', () => {
   const remove = accountDialog.slice(accountDialog.indexOf('function remove(account)'))
-  assert.ok(/window\.confirm\([\s\S]{0,900}window\.confirm\(/.test(remove), '应该问两次')
-  assert.ok(/emit\('deleted', account\.id, deleteLocalMail\)/.test(remove), '要把选择传给上层')
+  // 真实 bug：两次 window.confirm 只要有一次被 webview 吞掉，remove() 就直接 return，
+  // 用户点「删除」什么都不会发生，界面上也没有任何提示。
+  assert.ok(!/window\.confirm\(/.test(accountDialog), '删账户不能再依赖系统对话框')
+  assert.ok(/pendingDelete/.test(remove) && /confirmDelete/.test(accountDialog), '改成面板内确认')
+  assert.ok(/同时删除本机已缓存的邮件/.test(accountDialog), '要问一次「本机邮件要不要一起删」')
+  assert.ok(/deleteFn/.test(accountDialog) && /await props\.deleteFn/.test(accountDialog), '要等真正结果（函数 prop）')
+  assert.ok(/deleteError/.test(accountDialog), '失败原因要显示在面板里')
   assert.ok(
     /async deleteAccount\(id, \{ deleteLocalMail = true \} = \{\}\)/.test(store),
     'store 要接收这个选择',
@@ -97,6 +102,11 @@ test('删账户：先问账户，再问本机邮件要不要一起删', () => {
   assert.ok(
     /invoke\('mail_delete_account', \{ accountId: id, deleteLocalMail \}\)/.test(store),
     '选择要传给后端',
+  )
+  // 界面不能自己把账户抹掉又让它回来：以库里的实际结果为准。
+  assert.ok(
+    /invoke\('mail_list_accounts'\)[\s\S]{0,300}后端没有删除这个账户/.test(store),
+    '删完要核对后端，没删掉就报错而不是假装成功',
   )
   assert.ok(
     /pub async fn mail_delete_account\([\s\S]{0,200}delete_local_mail/.test(rustMail),

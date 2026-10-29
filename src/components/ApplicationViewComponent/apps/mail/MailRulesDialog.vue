@@ -316,6 +316,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'v
 import AddressPicker from './AddressPicker.vue'
 import MailIcon from './MailIcon.vue'
 import MailFolderPicker from './MailFolderPicker.vue'
+import { askMailConfirm } from './mailConfirm'
 import { useContactsStore, expandGroupMembers } from '../../../../stores/contactsStore'
 
 const props = defineProps({
@@ -684,8 +685,16 @@ async function toggleRule(rule, enabled) {
   emit('save', { ...rule, enabled })
 }
 
-function removeRule(rule) {
-  if (!window.confirm(`删除规则「${rule.name}」？`)) return
+async function removeRule(rule) {
+  // 系统 confirm 在这个 webview 里可能根本不弹（会静默变成「取消」）。
+  if (
+    !(await askMailConfirm('删除后不再对之后收到的邮件生效。', {
+      title: `删除规则「${rule.name}」？`,
+      confirmText: '删除规则',
+    }))
+  ) {
+    return
+  }
   emit('delete', rule.id)
   if (editing.value && draft.id === rule.id) editing.value = false
 }

@@ -270,6 +270,7 @@
       :oauth-status-fn="store.oauthStatusFor"
       :oauth-complete-fn="onOAuthComplete"
       :save-fn="onSaveAccount"
+      :delete-fn="onAccountDeleted"
       @close="showAccounts = false"
       @deleted="onAccountDeleted"
       @select="onAccountSelected"
@@ -292,6 +293,9 @@
       :theme-mode="store.theme?.mode || 'dark'"
       @close="emlDetail = null"
     />
+
+    <!-- 应用内确认框：所有不可逆操作共用（系统 confirm 在本 webview 里可能不弹）。 -->
+    <MailConfirmHost />
 
     <!-- 规则管理 -->
     <MailRulesDialog      v-if="showRules"
@@ -477,6 +481,8 @@ import MailComposer from './mail/MailComposer.vue'
 import MailAccountDialog from './mail/MailAccountDialog.vue'
 import MailRulesDialog from './mail/MailRulesDialog.vue'
 import MailEmlDialog from './mail/MailEmlDialog.vue'
+import MailConfirmHost from './mail/MailConfirmHost.vue'
+import { askMailConfirm } from './mail/mailConfirm'
 import ContactsDialog from './mail/ContactsDialog.vue'
 import MailSettingsDrawer from './mail/MailSettingsDrawer.vue'
 
@@ -913,11 +919,10 @@ async function onDeleteFolder(folder) {
     return
   }
   if (
-    !window.confirm(
-      `删除文件夹「${folder.displayName}」？
-
-服务器上该文件夹及其中的邮件会一并删除，无法撤销。`,
-    )
+    !(await askMailConfirm(
+      `服务器上该文件夹及其中的邮件会一并删除，无法撤销。`,
+      { title: `删除文件夹「${folder.displayName}」？`, confirmText: '删除文件夹' },
+    ))
   ) {
     return
   }
@@ -1342,9 +1347,10 @@ async function onOpenAttachment({ attachment, detail }) {
     }).catch(() => false)
     if (
       dangerous &&
-      !window.confirm(
-        `「${attachment.filename}」是脚本或可执行文件，打开它可能运行代码。\n确定要用系统默认程序打开吗？`,
-      )
+      !(await askMailConfirm('打开它可能运行代码，请确认来源可信。', {
+        title: `「${attachment.filename}」是脚本或可执行文件`,
+        confirmText: '仍然打开',
+      }))
     ) {
       return
     }

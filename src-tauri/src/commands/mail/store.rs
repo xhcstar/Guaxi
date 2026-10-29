@@ -670,31 +670,47 @@ pub fn touch_oauth_expires(id: &str, expires: i64) -> Result<(), String> {
 /// 待发队列 / 离线队列里的条目无论如何都删：账户没了，这些操作永远投不出去。
 pub fn delete_account(id: &str, delete_local_mail: bool) -> Result<(), String> {
     let mut conn = open()?;
-    let tx = conn.transaction().map_err(|e| e.to_string())?;
-    tx.execute("DELETE FROM accounts WHERE id = ?1", params![id])
-        .ok();
-    tx.execute("DELETE FROM outbox WHERE account_id = ?1", params![id])
-        .ok();
-    if delete_local_mail {
-        // 检索索引必须先删：它是 messages 的外部内容表，跟着主表一起清。
-        if fts_available_conn(&tx) {
-            tx.execute(
-                "DELETE FROM messages_fts WHERE rowid IN
-                 (SELECT rowid FROM messages WHERE account_id = ?1)",
-                params![id],
-            )
-            .ok();
+    {
+        let tx = conn.transaction().map_err(|e| e.to_string())?;
+        // 这里不能再 `.ok()`：以前所有语句的错误都被吞掉，账户没删掉也照样提交，
+        // 界面上什么都看不出来，用户只能看到「点了删除，账户还在」。
+        tx.execute("DELETE FROM accounts WHERE id = ?1", params![id])
+            .map_err(|e| format!("删除账户失败: {e}"))?;
+        tx.execute("DELETE FROM outbox WHERE account_id = ?1", params![id])
+            .map_err(|e| format!("清理待发队列失败: {e}"))?;
+        if delete_local_mail {
+            // 检索索引必须先删：它是 messages 的外部内容表，跟着主表一起清。
+            if fts_available_conn(&tx) {
+                tx.execute(
+                    "DELETE FROM messages_fts WHERE rowid IN
+                     (SELECT rowid FROM messages WHERE account_id = ?1)",
+                    params![id],
+                )
+                .map_err(|e| format!("清理检索索引失败: {e}"))?;
+            }
+            for sql in [
+                "DELETE FROM messages WHERE account_id = ?1",
+                "DELETE FROM message_bodies WHERE account_id = ?1",
+                "DELETE FROM pop3_uids WHERE account_id = ?1",
+                "DELETE FROM folders WHERE account_id = ?1",
+            ] {
+                tx.execute(sql, params![id])
+                    .map_err(|e| format!("清理本机邮件失败: {e}"))?;
+            }
         }
-        tx.execute("DELETE FROM messages WHERE account_id = ?1", params![id])
-            .ok();
-        tx.execute("DELETE FROM message_bodies WHERE account_id = ?1", params![id])
-            .ok();
-        tx.execute("DELETE FROM pop3_uids WHERE account_id = ?1", params![id])
-            .ok();
-        tx.execute("DELETE FROM folders WHERE account_id = ?1", params![id])
-            .ok();
+        tx.commit().map_err(|e| format!("提交删除失败: {e}"))?;
     }
-    tx.commit().map_err(|e| e.to_string())?;
+    // 复核一次：事务「成功」但行还在（只可能来自并发写入）时，必须报错而不是假装成功。
+    let still_there: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM accounts WHERE id = ?1",
+            params![id],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
+    if still_there != 0 {
+        return Err("账户仍然存在，删除没有生效".to_string());
+    }
     let _ = super::offline::delete_account_queue(id);
     Ok(())
 }

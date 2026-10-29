@@ -318,8 +318,18 @@ export const useMailStore = defineStore('mail', {
      */
     async deleteAccount(id, { deleteLocalMail = true } = {}) {
       await invoke('mail_delete_account', { accountId: id, deleteLocalMail })
+      // 以库里的实际结果为准：后端若没真的删掉，界面不能自己把它抹了，
+      // 否则用户看到「删了」、下次启动它又回来了。
+      const remaining = await invoke('mail_list_accounts').catch(() => null)
+      if (remaining) {
+        if (remaining.some((account) => account.id === id)) {
+          throw new Error('后端没有删除这个账户，请稍后重试')
+        }
+        this.accounts = remaining
+      } else {
+        this.accounts = this.accounts.filter((a) => a.id !== id)
+      }
       const wasActive = this.activeAccountId === id
-      this.accounts = this.accounts.filter((a) => a.id !== id)
       delete this.foldersByAccount[id]
       delete this.unread[id]
       // 这一页的列表里可能混着该账户的行：先摘掉，再把当前账户的信重新拉一次。

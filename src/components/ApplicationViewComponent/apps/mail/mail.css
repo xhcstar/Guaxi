@@ -1686,6 +1686,24 @@
   margin-left: auto;
 }
 
+/* 应用内确认框（替代系统 confirm）。 */
+.mail-confirm {
+  width: min(440px, 92vw);
+}
+.mail-confirm-title {
+  margin: 0 0 8px;
+  color: var(--mail-text);
+  font-size: 14px;
+  font-weight: 650;
+}
+.mail-confirm-message {
+  margin: 0;
+  color: var(--mail-text-secondary);
+  font-size: 12.5px;
+  line-height: 1.65;
+  white-space: pre-line;
+}
+
 /* 表单 */
 .mail-field {
   display: flex;
@@ -1771,6 +1789,32 @@
   border: 1px solid var(--mail-border);
   border-radius: var(--mail-radius-sm);
   margin-bottom: 8px;
+}
+
+/* 删账户的确认区：跟在账户行下面，说清代价再动手。 */
+.mail-account-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: -2px 0 12px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--mail-danger) 45%, transparent);
+  border-radius: var(--mail-radius-sm);
+  background: color-mix(in srgb, var(--mail-danger) 8%, transparent);
+}
+.mail-account-confirm-title {
+  margin: 0;
+  color: var(--mail-text);
+  font-size: 12.5px;
+}
+.mail-account-confirm-actions {
+  display: flex;
+  gap: 8px;
+}
+.mail-account-confirm-error {
+  margin: 0;
+  color: var(--mail-danger);
+  font-size: 12px;
 }
 .mail-account-row .meta {
   min-width: 0;

@@ -26,6 +26,25 @@
             <button class="mail-btn is-danger" @click="remove(account)">删除</button>
           </div>
 
+          <!-- 删账户的确认放在面板里，不用系统对话框：一是风格一致，二是那两次
+               window.confirm 一旦被 webview 吞掉，用户点「删除」就什么都不会发生。 -->
+          <div v-if="pendingDelete" class="mail-account-confirm">
+            <p class="mail-account-confirm-title">
+              删除账户 {{ pendingDelete.email }}？服务器上的邮件不受影响。
+            </p>
+            <label class="mail-check">
+              <input v-model="wipeLocalMail" type="checkbox" />
+              同时删除本机已缓存的邮件（正文、附件缓存与相关草稿，不可恢复）
+            </label>
+            <div class="mail-account-confirm-actions">
+              <button class="mail-btn is-danger" :disabled="deleting" @click="confirmDelete">
+                {{ deleting ? '删除中…' : '删除账户' }}
+              </button>
+              <button class="mail-btn" :disabled="deleting" @click="cancelDelete">取消</button>
+            </div>
+            <p v-if="deleteError" class="mail-account-confirm-error">{{ deleteError }}</p>
+          </div>
+
           <div v-if="!accounts.length" class="mail-hint" style="margin-bottom: 14px">
             还没有账户。选一个常用邮箱会自动填好服务器；公司内部或自建邮件系统请点「自定义 / 公司邮箱」，
             IMAP 与 SMTP 地址、端口和加密方式都可以手填。
@@ -419,6 +438,8 @@ const props = defineProps({
    * 拿到账户 id，再把令牌挂到这个 id 上；Vue 的 emit 不回传返回值。
    */
   saveFn: { type: Function, default: null },
+  /** 删除账户（含「本机邮件要不要一起删」）：同样要能拿到结果，失败原因要显示出来。 */
+  deleteFn: { type: Function, default: null },
 })
 const emit = defineEmits(['close', 'saved', 'deleted', 'select'])
 
@@ -1017,21 +1038,42 @@ async function save(closeAfter = true) {
 }
 
 /**
- * 删除账户：先确认删账户本身，再单独问一次「本机邮件怎么办」。
+ * 删账户：在面板里确认，不走系统对话框。
  *
- * 两件事必须分开问：删账户是不可逆的（口令、授权令牌都会一起删），
- * 而「本机缓存的邮件」是一个独立的取舍——有人换设备前想先把邮件留在本机，
- * 也有人要求彻底清干净、不留任何痕迹（正文、附件缓存、草稿一起删）。
+ * 以前是两次 `window.confirm`——只要 webview 吞掉它（Windows 上的 Tauri 就可能），
+ * `remove()` 在第一行就 return 了，用户点「删除」什么都不会发生，也没有任何提示。
+ * 现在改成面板内确认 + 函数 prop 等待真正的结果，失败原因直接显示在这里。
  */
+const pendingDelete = ref(null)
+const wipeLocalMail = ref(true)
+const deleting = ref(false)
+const deleteError = ref('')
+
 function remove(account) {
-  if (!window.confirm(`删除账户 ${account.email}？\n\n服务器上的邮件不会受影响，但本机需要重新添加账户才能再收信。`)) {
-    return
+  deleteError.value = ''
+  wipeLocalMail.value = true
+  pendingDelete.value = account
+}
+
+function cancelDelete() {
+  pendingDelete.value = null
+  deleteError.value = ''
+}
+
+async function confirmDelete() {
+  const account = pendingDelete.value
+  if (!account || deleting.value) return
+  deleting.value = true
+  deleteError.value = ''
+  try {
+    // 函数 prop 才能拿到结果：emit 是单向的，父级失败与否这里看不见。
+    if (props.deleteFn) await props.deleteFn(account.id, wipeLocalMail.value)
+    else emit('deleted', account.id, wipeLocalMail.value)
+    pendingDelete.value = null
+  } catch (error) {
+    deleteError.value = `删除失败：${error?.message || error}`
+  } finally {
+    deleting.value = false
   }
-  const deleteLocalMail = window.confirm(
-    '是否同时删除本机已缓存的邮件？\n\n' +
-      '「确定」= 一并彻底删除本机的邮件正文、附件缓存与相关草稿（不可恢复）。\n' +
-      '「取消」= 只移除账户，本机邮件数据保留。',
-  )
-  emit('deleted', account.id, deleteLocalMail)
 }
 </script>
