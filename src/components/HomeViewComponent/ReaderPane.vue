@@ -208,10 +208,13 @@
               <span v-if="pdfHighlights.length" class="gdr-pdf-switch__badge">{{ pdfHighlights.length }}</span>
             </button>
           </div>
-          <!--
-            助手开关：不放进上面那个 v-if="!pdfAside" 的分组 —— 左侧侧栏开着时它也是
-            可用的（两者分居左右、互不挤占），藏起来只会让人以为没这个功能。
-          -->
+        </template>
+        <!--
+          助手开关放在工具栏最右端：它是常驻的全局面板，不是「这份文档的视图切换」，
+          混在左侧的大纲/译文/批注里会把文档类控件和窗口类控件搅在一起，
+          也不符合「右侧面板的开关在右上角」的习惯。
+        -->
+        <template #toolbar-trailing>
           <button
             class="guaxi-doc-reader__icon-btn"
             :class="{ 'is-on': readerAssistantActive }"
