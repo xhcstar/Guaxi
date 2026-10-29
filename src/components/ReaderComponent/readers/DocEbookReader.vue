@@ -257,12 +257,12 @@
       :lang-options="selectionTranslate.langOptions"
       :word-meta="selectionTranslate.wordMeta.value"
       @translate="selectionTranslate.translate(selectionTranslate.raw.value)"
-      @copy="selectionTranslate.copyResult()"
-      @swap-langs="selectionTranslate.swapLangs()"
-      @toggle-pin="selectionTranslate.togglePin()"
+      @copy="selectionTranslate.copyResult"
+      @swap-langs="selectionTranslate.swapLangs"
+      @toggle-pin="selectionTranslate.togglePin"
       @update:pos="(v) => { selectionTranslate.pos.value = v }"
-      @update:from-lang="(v) => { selectionTranslate.fromLang.value = v }"
-      @update:to-lang="(v) => { selectionTranslate.toLang.value = v }"
+      @update:fromLang="(v) => { selectionTranslate.fromLang.value = v }"
+      @update:toLang="(v) => { selectionTranslate.toLang.value = v }"
       @close="selectionTranslate.close()"
     />
 

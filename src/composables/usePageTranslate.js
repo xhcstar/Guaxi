@@ -112,6 +112,40 @@ export function usePageTranslate({ getContainer = null } = {}) {
     wordMeta.value = null
   }
 
+  /**
+   * 面板上的「重新翻译」。
+   *
+   * 这几个动作（重新翻译 / 复制 / 交换语言 / 固定）原先只有 `useSelectionTranslate` 有，
+   * 而阅读器用的是本模块 —— 面板照样把它们 emit 上来，宿主绑的 `translate()` /
+   * `copyResult()` / `swapLangs()` / `togglePin()` 全是 undefined，点一下就抛
+   * TypeError。这里补齐，语义与 `useSelectionTranslate` 逐条对齐。
+   */
+  const translate = (text) => translateText(text ?? raw.value, pos.value)
+
+  const copyResult = async (payload) => {
+    const t = typeof payload === 'string' ? payload : payload?.text
+    const text = String(t || result.value || '')
+    if (!text) return
+    try {
+      await navigator.clipboard.writeText(text)
+    } catch (error) {
+      logger.warn('[usePageTranslate] copy translation failed', {
+        error: String(error?.message || error),
+      })
+    }
+  }
+
+  const swapLangs = () => {
+    const f = fromLang.value
+    fromLang.value = toLang.value === 'auto' ? 'auto' : toLang.value
+    toLang.value = f === 'auto' ? 'zh' : f
+    translate(raw.value)
+  }
+
+  const togglePin = () => {
+    pinned.value = !pinned.value
+  }
+
   const translateText = async (text, anchor = null) => {
     const t = String(text || '').trim()
     if (!t) return
@@ -231,6 +265,8 @@ export function usePageTranslate({ getContainer = null } = {}) {
     visible, pos, raw, result, error, busy, pinned, items, wordMeta,
     fromLang, toLang, langOptions,
     translateText, close,
+    // 面板上的四个动作（与 useSelectionTranslate 同名同义）
+    translate, copyResult, swapLangs, togglePin,
     // 批量
     progress, translating, doneCount, totalCount,
     translateParagraphs, resetProgress,

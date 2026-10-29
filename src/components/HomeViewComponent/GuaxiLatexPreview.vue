@@ -74,26 +74,26 @@
 
     <!-- 划词译文面板：与阅读器 / 电子书同一套组件，交互一致。 -->
     <GuaxiSelectionTranslatePanel
-      v-if="translate.visible.value"
-      :pos="translate.pos.value"
-      :raw="translate.raw.value"
-      :result="translate.result.value"
-      :error="translate.error.value"
-      :busy="translate.busy.value"
-      :pinned="translate.pinned.value"
-      :items="translate.items.value"
-      :from-lang="translate.fromLang.value"
-      :to-lang="translate.toLang.value"
-      :lang-options="translate.langOptions"
-      :word-meta="translate.wordMeta.value"
-      @translate="translate.translateText(translate.raw.value, translate.pos.value)"
-      @copy="copyTranslated"
-      @swap-langs="swapTranslateLangs"
-      @toggle-pin="translate.pinned.value = !translate.pinned.value"
-      @update:pos="(v) => { translate.pos.value = v }"
-      @update:fromLang="(v) => { translate.fromLang.value = v }"
-      @update:toLang="(v) => { translate.toLang.value = v }"
-      @close="translate.close()"
+      v-if="pageTranslate.visible.value"
+      :pos="pageTranslate.pos.value"
+      :raw="pageTranslate.raw.value"
+      :result="pageTranslate.result.value"
+      :error="pageTranslate.error.value"
+      :busy="pageTranslate.busy.value"
+      :pinned="pageTranslate.pinned.value"
+      :items="pageTranslate.items.value"
+      :from-lang="pageTranslate.fromLang.value"
+      :to-lang="pageTranslate.toLang.value"
+      :lang-options="pageTranslate.langOptions"
+      :word-meta="pageTranslate.wordMeta.value"
+      @translate="pageTranslate.translate"
+      @copy="pageTranslate.copyResult"
+      @swap-langs="pageTranslate.swapLangs"
+      @toggle-pin="pageTranslate.togglePin"
+      @update:pos="(v) => { pageTranslate.pos.value = v }"
+      @update:fromLang="(v) => { pageTranslate.fromLang.value = v }"
+      @update:toLang="(v) => { pageTranslate.toLang.value = v }"
+      @close="pageTranslate.close()"
     />
   </div>
 </template>
@@ -156,7 +156,7 @@ const features = {
 // ───────────────────────── 划词 ─────────────────────────
 // 预览就是 GuaxiPdfViewer，正文是带透明文本层的真实页面，所以选区就在主文档里：
 // 与 ReaderPane 一样直接用 window.getSelection()，不需要 iframe 转发那一套。
-const translate = usePageTranslate({ getContainer: () => rootEl.value || null })
+const pageTranslate = usePageTranslate({ getContainer: () => rootEl.value || null })
 const readAloud = useSelectionReadAloud({})
 const readAloudPlaying = readAloud.busy
 
@@ -220,7 +220,7 @@ const clearSelection = () => {
 const translateSelection = () => {
   const text = String(selectionText.value || '').trim()
   if (!text) return
-  translate.translateText(text, anchor.value)
+  pageTranslate.translateText(text, anchor.value)
   hideBar()
 }
 
@@ -276,34 +276,10 @@ const askSelectionWithAssistant = () => {
 const aiTranslateSelection = () => {
   const text = String(selectionText.value || '').trim()
   if (!text) return
-  const lang = translate.toLang?.value || 'zh'
-  const label = translate.langOptions?.find((x) => x.value === lang)?.label || lang
+  const lang = pageTranslate.toLang?.value || 'zh'
+  const label = pageTranslate.langOptions?.find((x) => x.value === lang)?.label || lang
   const prompt = `请将以下内容翻译成${label}，保持原意并保留术语与格式，只输出译文：\n\n${text}`
   if (sendSelectionToAssistant(prompt, { autoSend: true, disableWebSearch: true })) clearSelection()
-}
-
-const copyTranslated = async (payload) => {
-  const t = typeof payload === 'string' ? payload : payload?.text
-  const text = String(t || translate.result.value || '')
-  if (!text) return
-  try {
-    await navigator.clipboard.writeText(text)
-  } catch (error) {
-    logger.warn('[GuaxiLatexPreview] copy translation failed', {
-      error: String(error?.message || error),
-    })
-  }
-}
-
-/** 交换语言后重新翻一次：只换两个下拉框的值，用户会以为按钮坏了。 */
-const swapTranslateLangs = () => {
-  const from = translate.fromLang.value
-  const to = translate.toLang.value
-  if (from === 'auto') return
-  translate.fromLang.value = to
-  translate.toLang.value = from
-  const raw = String(translate.raw.value || '').trim()
-  if (raw) translate.translateText(raw, translate.pos.value)
 }
 
 // 供 GuaxiEditor 调用的正向定位，转发给基础组件。
