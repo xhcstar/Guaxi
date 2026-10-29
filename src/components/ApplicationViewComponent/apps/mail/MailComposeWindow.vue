@@ -21,6 +21,8 @@
       @update="patchDraft"
       @send="onSend"
       @save-draft="onSaveDraft"
+      @discard="onDiscard"
+      @close="onSaveAndClose"
       @schedule="onSchedule"
       @apply-template="applyTemplate"
       @check-attachments="onCheckAttachments"
@@ -104,11 +106,22 @@ async function onSchedule(at) {
 
 async function onSaveDraft() {
   try {
-    const saved = await saveDraft()
-    notify(saved ? '草稿已保存' : '没有内容可保存')
+    await saveDraft()
+    // 空草稿也会存：用户要的是「还能接着写」，不是「必须有内容」。
+    notify('草稿已保存')
   } catch (err) {
-    notify(String(err?.message || err))
+    notify(String(err?.message || err), true)
   }
+}
+
+/** 编辑器里点了「直接放弃」：不存草稿，直接关窗。 */
+async function onDiscard() {
+  await closeWindow({ save: false })
+}
+
+/** 编辑器里点了「存为草稿并关闭」：走正常的关窗流程（先存再关）。 */
+async function onSaveAndClose() {
+  await closeWindow({ save: true })
 }
 
 async function onCheckAttachments(paths) {

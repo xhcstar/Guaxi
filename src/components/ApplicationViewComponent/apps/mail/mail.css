@@ -2011,6 +2011,37 @@
   align-items: center;
   gap: 6px;
   margin-left: auto;
+  /* 放弃按钮的小面板以这里为定位上下文。 */
+  position: relative;
+}
+/* 放弃这次编辑：贴着头部的操作条展开，问「要不要留草稿」。 */
+.mail-discard-btn.is-on {
+  background: var(--mail-panel-hover);
+  color: var(--mail-danger);
+}
+.mail-discard-panel {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 180px;
+  padding: 10px;
+  border: 1px solid var(--mail-border-strong);
+  border-radius: var(--mail-radius-sm);
+  background: var(--mail-panel);
+  box-shadow: var(--mail-shadow);
+}
+.mail-discard-title {
+  margin: 0 0 2px;
+  color: var(--mail-text);
+  font-size: 12.5px;
+}
+.mail-discard-panel .mail-btn {
+  height: 28px;
+  justify-content: center;
 }
 .mail-composer .mail-modal-close {
   margin-left: 0;

@@ -175,18 +175,10 @@ export async function saveDraftToMailbox(request) {
   return invoke('mail_save_draft', { request })
 }
 
-/** 存草稿。返回 true 表示确实写入了（没有内容时不写）。 */
+/** 存草稿。只要还开着一封编辑中的邮件就写一条，哪怕是空的（还能继续编辑）。 */
 export async function saveDraft() {
   const draft = composeDraft.value
   if (!draft) return false
-  const hasContent =
-    draft.subject?.trim() ||
-    (draft.html || '').trim() ||
-    (draft.text || '').trim() ||
-    draft.to?.length ||
-    draft.attachments?.length ||
-    draft.inlineImages?.length
-  if (!hasContent) return false
   await invoke('mail_save_draft', {
     request: draftRequest(draft, { saveToSent: false }),
   })

@@ -77,6 +77,23 @@
           >
             {{ sending ? '发送中…' : '发送' }}
           </button>
+          <!-- 放弃：紧挨着发送，允许整封作废；关之前问一句要不要留草稿。 -->
+          <button
+            class="mail-icon-btn mail-discard-btn"
+            :class="{ 'is-on': discardOpen }"
+            title="放弃这次编辑"
+            aria-label="放弃编辑"
+            :disabled="sending"
+            @click="discardOpen = !discardOpen"
+          >
+            <MailIcon name="trash" :size="15" />
+          </button>
+          <div v-if="discardOpen" class="mail-discard-panel" @mousedown.stop>
+            <p class="mail-discard-title">放弃这次编辑？</p>
+            <button class="mail-btn" @click="discardWithDraft">存为草稿并关闭</button>
+            <button class="mail-btn is-danger" @click="discardForget">直接放弃</button>
+            <button class="mail-btn" @click="discardOpen = false">取消</button>
+          </div>
         </div>
 
         <!-- 独立窗口用系统标题栏的关闭按钮，这里再放一个只是重复。 -->
@@ -1037,6 +1054,8 @@ const emit = defineEmits([
   'schedule',
   'save-draft',
   'close',
+  /** 用户明确选择「直接放弃」：不留草稿，父级不要走保存流程。 */
+  'discard',
   'apply-template',
   'check-attachments',
 ])
@@ -1594,6 +1613,32 @@ function onEditorMouseUp(event) {
 /** 点正文以外的地方收起译文（固定时保留，用户要它留着对照看）。 */
 function onTranslateOutside(event) {
   selectionTranslate.handleDocumentMouseDown(event)
+  // 放弃菜单：点面板和按钮以外的地方收起。
+  if (discardOpen.value && !event.target?.closest?.('.mail-discard-panel, .mail-discard-btn')) {
+    discardOpen.value = false
+  }
+}
+
+// ---------------- 放弃这次编辑 ----------------
+
+/** 放弃按钮展开的小面板：只问「要不要留一份草稿」。 */
+const discardOpen = ref(false)
+
+/** 留草稿再关：交给父级的关闭流程去写草稿箱。 */
+function discardWithDraft() {
+  discardOpen.value = false
+  emit('close')
+}
+
+/** 什么都不留：把本地暂存也删掉，免得下次启动又被「恢复」出来。 */
+async function discardForget() {
+  discardOpen.value = false
+  try {
+    await invoke('mail_delete_stashed_draft', { id: draftId.value })
+  } catch (error) {
+    logger.warn('删除本地暂存失败', error)
+  }
+  emit('discard')
 }
 
 // ---------------- 图片 / 表格的可见工具 ----------------
@@ -3030,15 +3075,7 @@ function mailboxSignature(html) {
 }
 
 async function stashNow({ toMailbox = true } = {}) {
-  const hasContent =
-    (props.draft.subject || '').trim() ||
-    (props.draft.html || '').trim() ||
-    (sourceMode.value && htmlSource.value.trim()) ||
-    (props.draft.to || []).length ||
-    (props.draft.text || '').trim() ||
-    (props.draft.attachments || []).length ||
-    (props.draft.inlineImages || []).length
-  if (!hasContent) return null
+  // 不判断有没有内容：只要这封还在编辑，就留一份可以继续写的草稿。
   if (stashInflight) return null
   const html = editorRef.value && !sourceMode.value ? serializeEditorHtml() : htmlSource.value
   const payload = { ...props.draft, id: draftId.value, html }

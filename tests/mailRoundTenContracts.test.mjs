@@ -1,0 +1,67 @@
+import test from 'node:test'
+import assert from 'node:assert/strict'
+import fs from 'node:fs'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+// 第十轮：
+//   1. 存草稿不再判断「有没有内容 / 有没有收件人」——空草稿也要能存；
+//   2. 发送旁边要有「放弃」入口，退出前让用户选「存草稿」还是「直接丢」；
+//   3. 存完草稿 / 移动邮件后，侧栏的角标要实时更新。
+const here = path.dirname(fileURLToPath(import.meta.url))
+const root = path.join(here, '..')
+const read = (rel) => fs.readFileSync(path.join(root, rel), 'utf8')
+
+const composer = read('src/components/ApplicationViewComponent/apps/mail/MailComposer.vue')
+const shell = read('src/components/ApplicationViewComponent/apps/mail/MailComposeWindow.vue')
+const bridge = read('src/components/ApplicationViewComponent/apps/mail/composeWindowBridge.js')
+const store = read('src/stores/mailStore.js')
+const mailApp = read('src/components/ApplicationViewComponent/apps/MailApp.vue')
+const mod = read('src-tauri/src/commands/mail/mod.rs')
+
+test('存草稿：不再用「内容为空」把用户挡回去', () => {
+  // 三个入口以前都会因为空内容直接 return：关编辑器 / 关独立窗口 / 定时暂存。
+  assert.ok(!/const hasContent/.test(store), 'store.closeCompose 不再判断内容')
+  assert.ok(!/const hasContent/.test(bridge), '独立窗口 saveDraft 不再判断内容')
+  assert.ok(!/const hasContent/.test(composer), '编辑器 stashNow 不再判断内容')
+  assert.ok(/哪怕收件人、主题、正文全空/.test(store), '注释说明为什么允许空草稿')
+  // 后端草稿组装本来就不要求收件人（mime::build_draft），这里确认没被改回去。
+  assert.ok(/mime::build_draft\(&request, &from, &account\.signature\)/.test(mod), '草稿走放宽校验的组装')
+})
+
+test('放弃：发送旁边有入口，关之前让用户选存草稿还是直接丢', () => {
+  assert.ok(/title="放弃这次编辑"/.test(composer), '发送旁要有放弃按钮')
+  assert.ok(/discardWithDraft/.test(composer) && /存为草稿并关闭/.test(composer), '可选「存为草稿并关闭」')
+  assert.ok(/discardForget/.test(composer) && /直接放弃/.test(composer), '可选「直接放弃」')
+  assert.ok(/mail_delete_stashed_draft/.test(composer), '直接放弃要把本地暂存也删掉')
+  assert.ok(/'discard'/.test(composer), '要能通知父级「不保存」')
+  assert.ok(/function onDiscardCompose[\s\S]{0,200}store\.discardCompose\(\)/.test(mailApp), '主界面收到放弃就清掉编辑状态')
+  assert.ok(/discardCompose\(\) \{/.test(store), 'store 要有不落库的放弃路径')
+  assert.ok(/async function onDiscard\(\)[\s\S]{0,120}closeWindow\(\{ save: false \}\)/.test(shell), '独立窗口放弃时关窗且不存')
+  assert.ok(/@close="onSaveAndClose"/.test(shell), '独立窗口里「存为草稿并关闭」也要真的存')
+})
+
+test('侧栏角标：存完草稿要重算草稿夹的计数', () => {
+  // 「草稿」的数量读 folders 表；以前存完不重算，角标一直不动。
+  assert.ok(
+    /refresh_folder_totals\(&account\.id, &drafts\)/.test(mod),
+    'IMAP 存完草稿要重算草稿夹计数',
+  )
+  assert.ok(
+    /refresh_folder_totals\(&account\.id, "Drafts"\)/.test(mod),
+    '本地草稿（POP3 / 离线兜底）也要重算',
+  )
+  // 移动 / 删除走的是前端先动角标、再等服务端 STATUS 校正。
+  assert.ok(/adjustFolderCount\(accountId, folder, \{ total: -total, unread: -unseen \}\)/.test(store), '移动后来源夹角标先减')
+  assert.ok(/adjustFolderCount\(accountId, target, \{ total, unread: unseen \}\)/.test(store), '目标夹角标先加')
+  assert.ok(/scheduleFolderRefresh\(this, accountId\)/.test(store), '随后用服务端计数校正')
+  // POP3 的邮件全在本机：移动 / 删除后就地重算，重启后不会读回旧数字。
+  assert.ok(
+    /fn move_locally[\s\S]{0,1200}refresh_folder_totals\(account_id, target\)/.test(mod),
+    'POP3 本地移动后目标夹也要重算',
+  )
+  assert.ok(
+    (mod.match(/refresh_folder_totals\(&account_id, &folder\)/g) || []).length >= 2,
+    'POP3 的两种删除入口都要重算来源夹',
+  )
+})

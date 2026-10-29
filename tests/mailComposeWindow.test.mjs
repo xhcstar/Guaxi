@@ -51,14 +51,14 @@ test('关窗一定先存草稿（只要还没发出去）', () => {
 
 test('发送 / 定时发送成功后才跳过保存', () => {
   const shell = read('src/components/ApplicationViewComponent/apps/mail/MailComposeWindow.vue')
-  // 三处「不保存」：错误页的关闭按钮（没有内容可存）+ 发送成功 + 定时发送成功。
+  // 四处「不保存」：错误页的关闭按钮（没有内容可存）+ 发送成功 + 定时发送成功 + 用户点了「直接放弃」。
   const sends = shell.match(/closeWindow\(\{ save: false \}\)/g) || []
-  assert.equal(sends.length, 3, '错误页关闭 1 处 + 发送/定时发送各 1 处')
+  assert.equal(sends.length, 4, '错误页关闭 1 处 + 发送/定时发送/直接放弃各 1 处')
   const script = shell.slice(shell.indexOf('<script setup>'))
   assert.equal(
     (script.match(/closeWindow\(\{ save: false \}\)/g) || []).length,
-    2,
-    '脚本里只有「确实发出去了」才跳过保存',
+    3,
+    '脚本里只有「确实发出去了」或「用户明确放弃」才跳过保存',
   )
 })
 

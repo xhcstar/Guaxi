@@ -1500,18 +1500,20 @@ export const useMailStore = defineStore('mail', {
      * 以前失败只写进日志，用户看到的就是「我明明关了，草稿箱里什么都没有」，
      * 只能自己猜（真实反馈：收件人为空的草稿被后端拒绝，界面上一点动静都没有）。
      */
+    /** 用户明确选择「直接放弃」：不写草稿箱，直接关掉（本地暂存由编辑器删）。 */
+    discardCompose() {
+      const draft = this.composing
+      this.composing = null
+      return draft
+    },
+
     async closeCompose({ saveDraft = true } = {}) {
       const draft = this.composing
       this.composing = null
       if (!saveDraft || !draft) return { saved: false, skipped: true }
-      const hasContent =
-        draft.subject?.trim() ||
-        (draft.html || '').trim() ||
-        (draft.text || '').trim() ||
-        draft.to?.length ||
-        draft.attachments?.length ||
-        draft.inlineImages?.length
-      if (!hasContent) return { saved: false, skipped: true }
+      // 不再判断「有没有内容」：用户一旦开始写信，哪怕收件人、主题、正文全空，
+      // 也该在草稿箱里留一条可以继续编辑的草稿。以前这里把空草稿直接跳过，
+      // 用户看到的就是「关了编辑器，草稿箱什么也没有」。
       try {
         const saved = await invoke('mail_save_draft', {
           request: {

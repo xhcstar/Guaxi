@@ -1397,6 +1397,10 @@ fn move_locally(account_id: &str, folder: &str, uids: &[u32], target: &str) -> R
         }
         let _ = store::delete_message(account_id, folder, *uid);
     }
+    // POP3 的邮件全在本机：两个文件夹的数量都能就地重算，侧栏角标才是准的
+    // （只在内存里改的话，重启后又会读回旧数字）。
+    refresh_folder_totals(account_id, folder);
+    refresh_folder_totals(account_id, target);
     Ok(())
 }
 
@@ -1418,6 +1422,7 @@ pub async fn mail_delete_messages(
         if folder == pop3_sync::INBOX {
             let _ = pop3_sync::sync_counts(&account);
         }
+        refresh_folder_totals(&account_id, &folder);
         return Ok(());
     }
     let password = account_password(&account)?;
@@ -1790,6 +1795,8 @@ pub async fn mail_batch_delete(
         if folder == pop3_sync::INBOX {
             let _ = pop3_sync::sync_counts(&account_for_protocol);
         }
+        // 本地删完就地重算：否则侧栏靠着内存里的乐观值显示，重启后又读回旧数字。
+        refresh_folder_totals(&account_id, &folder);
         return Ok(());
     }
     let folders = store::list_folders(&account_id)?;
@@ -2396,7 +2403,10 @@ fn save_draft_locally(account: &Account, mut request: SendRequest) -> Result<u32
         address: account.email.clone(),
     };
     let raw = mime::build_draft(&request, &from, &account.signature)?;
-    pop3_sync::save_draft_copy(account, &raw)
+    let uid = pop3_sync::save_draft_copy(account, &raw)?;
+    // 侧栏「草稿」的数量来自 folders 表：存完要重算，角标才会立刻 +1。
+    refresh_folder_totals(&account.id, "Drafts");
+    Ok(uid)
 }
 
 /// 投递所有到期的待发邮件。返回成功 / 失败数与失败原因。
@@ -2542,6 +2552,8 @@ pub async fn mail_save_draft(
     // 宁可留一封重复草稿，也不要误删用户的正文。
     let new_uid = store::last_uid(&account.id, &drafts)?;
     let uid = if new_uid > last_uid { Some(new_uid) } else { None };
+    // 侧栏的「草稿」数量读的是 folders 表：存完要重算，否则角标不动。
+    refresh_folder_totals(&account.id, &drafts);
     Ok(serde_json::json!({ "folder": drafts, "uid": uid }))
 }
 
@@ -2557,6 +2569,8 @@ async fn save_draft_copy_locally(
     })
     .await
     .map_err(|e| format!("保存草稿任务失败: {e}"))??;
+    // 侧栏的「草稿」数量是从 folders 表读的：不重算一次，用户存完草稿看不到 +1。
+    refresh_folder_totals(&account.id, "Drafts");
     Ok(serde_json::json!({ "folder": "Drafts", "uid": uid, "localOnly": true }))
 }
 

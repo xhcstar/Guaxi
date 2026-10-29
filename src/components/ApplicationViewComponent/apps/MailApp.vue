@@ -216,6 +216,7 @@
                 @send="onSend"
                 @schedule="onScheduleSend"
                 @save-draft="onSaveDraft"
+                @discard="onDiscardCompose"
                 @apply-template="(tpl) => store.applyTemplate(tpl)"
                 @check-attachments="onCheckAttachments"
                 @close="onCloseCompose"
@@ -252,6 +253,7 @@
       @send="onSend"
       @schedule="onScheduleSend"
       @save-draft="onSaveDraft"
+                @discard="onDiscardCompose"
       @apply-template="(tpl) => store.applyTemplate(tpl)"
       @check-attachments="onCheckAttachments"
       @close="onCloseCompose"
@@ -831,6 +833,12 @@ onBeforeUnmount(() => {
  * 存失败只在控制台里留一行日志是不够的——用户判断「有没有存」的唯一依据是
  * 草稿箱里能不能看到那封，看不见就当没存（真实反馈）。
  */
+/** 编辑器里点了「直接放弃」：不写草稿箱，也不留在本地暂存。 */
+function onDiscardCompose() {
+  store.discardCompose()
+  notify('已放弃这次编辑，没有写入草稿箱')
+}
+
 async function onCloseCompose() {
   const result = await store.closeCompose()
   if (!result || result.skipped || !result.saved) {
