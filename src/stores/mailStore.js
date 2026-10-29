@@ -1400,7 +1400,21 @@ export const useMailStore = defineStore('mail', {
     async runBatch(action, target, explicitRows = null) {
       // 显式传入的行优先：右键菜单可能只针对一封未勾选的邮件，
       // 那时选择集是空的，不能退回 selectedRows()。
-      const rows = explicitRows?.length ? explicitRows : this.selectedRows()
+      const input = explicitRows?.length ? explicitRows : this.selectedRows()
+      if (!input.length) return
+      // 会话聚合行代表「整个条目」：删除 / 移动要作用在它聚合的每一封上，
+      // 否则点一次只少一封、行还在（真实反馈）。threadUids 就是那几封的完整行。
+      const rows = []
+      const seen = new Set()
+      for (const row of input) {
+        const members = Array.isArray(row.threadUids) && row.threadUids.length ? row.threadUids : [row]
+        for (const member of members) {
+          const key = `${member.accountId}:${member.folder}:${member.uid}`
+          if (seen.has(key)) continue
+          seen.add(key)
+          rows.push(member)
+        }
+      }
       if (!rows.length) return
       const groups = new Map()
       for (const row of rows) {

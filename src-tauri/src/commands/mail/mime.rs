@@ -406,6 +406,8 @@ fn build_inner(
         ))?
     };
 
+    // 先留一份发件地址：下面 `from(from_box)` 会把整个 Mailbox 移进 builder。
+    let sender_address = from_box.email.clone();
     let mut builder = Message::builder().from(from_box).subject(&request.subject);
     for addr in &request.to {
         builder = builder.to(parse_mailbox(addr)?);
@@ -415,6 +417,18 @@ fn build_inner(
     }
     for addr in &request.bcc {
         builder = builder.bcc(parse_mailbox(addr)?);
+    }
+    // 草稿允许一个收件人都没有，但 lettre 组报文时必须有一封「信封」——
+    // `Envelope::new` 收件人为空就直接报 `missing destination address`，
+    // 于是空草稿仍然存不进去（真实反馈）。草稿不会被投递，用发件人地址占位；
+    // 信封不写进报文，草稿头里不会多出收件人。
+    if !require_recipients && request.to.is_empty() && request.cc.is_empty() && request.bcc.is_empty()
+    {
+        let placeholder = sender_address;
+        builder = builder.envelope(
+            lettre::address::Envelope::new(Some(placeholder.clone()), vec![placeholder])
+                .map_err(|e| format!("组装草稿失败: {e}"))?,
+        );
     }
     if let Some(id) = request.in_reply_to.as_ref().filter(|s| !s.trim().is_empty()) {
         builder = builder.header(InReplyTo::from(id.trim().to_string()));
@@ -709,6 +723,36 @@ mod tests {
             address: "me@example.com".into(),
         };
         assert!(build(&req, &from, "").is_err());
+    }
+
+    #[test]
+    fn build_draft_allows_completely_empty_message() {
+        // 真实反馈：什么都不填（连收件人、主题、正文都没有）时存草稿仍然失败，
+        // 报 `missing destination address`——那是 lettre 的信封校验，不是我们的检查。
+        let req = SendRequest {
+            account_id: "a".into(),
+            to: vec![],
+            cc: vec![],
+            bcc: vec![],
+            subject: String::new(),
+            text: String::new(),
+            html: None,
+            in_reply_to: None,
+            references: None,
+            attachments: vec![],
+            save_to_sent: None,
+            inline_images: Vec::new(),
+            crypto_mode: String::new(),
+        };
+        let from = MailAddress {
+            name: "我".into(),
+            address: "me@example.com".into(),
+        };
+        let raw = build_draft(&req, &from, "").expect("空草稿也要能组装");
+        let text = String::from_utf8_lossy(&raw);
+        assert!(text.contains("From:"));
+        // 占位信封不能写进报文：草稿里多出一个收件人会误导用户。
+        assert!(!text.contains("To:"));
     }
 
     #[test]

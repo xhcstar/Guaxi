@@ -1039,6 +1039,7 @@ import {
   pushRecent,
 } from './palette'
 import { buildTableHtml, markdownToEmailHtml } from './composeTable'
+import { flattenQuoteCards } from './quoteCards'
 import { applyBodyThemeToElements } from './colors'
 import { useMailSelectionTranslate } from './useMailSelectionTranslate'
 import {
@@ -1336,7 +1337,11 @@ onMounted(async () => {
   // 直接把已有 HTML 灌进 contenteditable：用 innerHTML 而不是 v-html，
   // 避免 Vue 与浏览器的编辑结果互相覆盖（contenteditable 里的 DOM 是浏览器在管）。
   editorRef.value.innerHTML = props.draft.html || ''
-  lastHtml = props.draft.html || ''
+  // 旧草稿 / 转发来的正文里可能还留着一层套一层的引用卡片：统一压平成
+  // 「按时间顺序的卡片列表」（阅读区早就是这么做的）。以前只在 buildQuote 里压，
+  // 从草稿恢复进独立写信窗口时还是层层嵌套（真实反馈）。
+  flattenQuoteCards(editorRef.value)
+  lastHtml = editorRef.value.innerHTML
   initialMailboxSignature = mailboxSignature(lastHtml)
   resolveCidImages()
   scheduleQuoteTheme()
@@ -2414,7 +2419,8 @@ function scheduleQuoteTheme() {
  */
 function resolveCidImages() {  if (!editorRef.value) return
   const images = props.draft.inlineImages || []
-  if (!images.length) return
+  // 没有 inlineImages 也要跑一遍：老草稿的正文里可能还留着 cid:，
+  // 早退的话那张图会一直停在加载失败的状态。
   const map = new Map(
     images.map((img) => [String(img.contentId || '').replace(/^<|>$/g, ''), img.path]),
   )
@@ -2422,17 +2428,33 @@ function resolveCidImages() {  if (!editorRef.value) return
     const src = img.getAttribute('src') || ''
     if (!/^cid:/i.test(src)) return
     const cid = decodeURIComponent(src.slice(4)).replace(/^<|>$/g, '')
-    const path = map.get(cid)
-    if (!path) return
     img.dataset.cid = cid
-    img.src = convertFileSrc(path)
+    const path = map.get(cid)
+    if (path) {
+      img.src = convertFileSrc(path)
+      return
+    }
+    // 找不到落盘文件（草稿被清理 / 附件被删 / 父级还没同步）：不要让它停在 cid: 上，
+    // 浏览器会一直尝试加载并显示成一块空白。换成 1×1 透明图占位，
+    // data-cid 保留着，序列化成草稿时仍然是正确的内容。
+    img.src = MISSING_INLINE_PIXEL
+    img.classList.add('is-missing-inline')
   })
 }
+
+/** 找不到本地文件的 inline 图占位：1×1 透明 GIF。 */
+const MISSING_INLINE_PIXEL =
+  'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7'
 
 /** 生成用于草稿/发送的 HTML：把显示用的 asset URL 换回 `cid:`。 */
 function serializeEditorHtml() {
   if (!editorRef.value) return ''
-  const clone = editorRef.value.cloneNode(true)
+  // 用 <template> 装副本：模板内容是惰性的，往里写 `cid:` 不会触发任何加载。
+  // 以前直接克隆成游离节点，每 30 秒自动保存都会真的去 GET 一遍 cid:，
+  // 控制台刷满 ERR_UNKNOWN_URL_SCHEME。
+  const host = document.createElement('template')
+  host.innerHTML = editorRef.value.innerHTML
+  const clone = host.content
   // 引用卡片的配色映射只为本机编辑区服务（见 scheduleQuoteTheme）：
   // 交给草稿 / 发送之前先还原成邮件原值，不能把深色主题的映射结果发出去。
   const themed = quoteThemeTargets(clone)
@@ -2441,7 +2463,7 @@ function serializeEditorHtml() {
     img.setAttribute('src', `cid:${img.dataset.cid}`)
     img.removeAttribute('data-cid')
   })
-  return clone.innerHTML
+  return host.innerHTML
 }
 
 function format(command, value = null) {
@@ -2640,8 +2662,13 @@ function onPaste(event) {
         })
         if (inline) {
           added.push(inline)
+          // 直接写解析好的本机地址，不要再先塞 `cid:` 再等下一帧替换：
+          // 父级的 inlineImages 更新是异步的，那一刻常常还查不到映射，
+          // 于是 cid: 留在正文里变成一张「永远加载不出来」的图——既刷控制台
+          // （ERR_UNKNOWN_URL_SCHEME），又在深色正文里占出一大块空白。
+          // data-cid 仍然保留，序列化成草稿时会换回 cid。
           parts.push(
-            `<img data-guaxi-img="1" src="cid:${inline.contentId}" data-cid="${inline.contentId}" alt="粘贴的图片" />`,
+            `<img data-guaxi-img="1" src="${convertFileSrc(inline.path)}" data-cid="${inline.contentId}" alt="粘贴的图片" />`,
           )
         } else {
           parts.push(`<img data-guaxi-img="1" src="${url}" alt="粘贴的图片" />`)
@@ -2767,6 +2794,13 @@ function sanitizePastedHtml(html) {
         if (!allowed.has(child.tagName)) {
           // 不认识的容器：把子节点提上来，保留文字。
           while (child.firstChild) node.insertBefore(child.firstChild, child)
+          node.removeChild(child)
+          continue
+        }
+        // 从别的邮件里复制来的内嵌图（src="cid:..."）：图片数据带不过来，
+        // 留着只会变成一张永远加载失败的坏图——控制台刷 ERR_UNKNOWN_URL_SCHEME，
+        // 深色正文里还占出一大块空白。直接丢掉这个 <img>。
+        if (child.tagName === 'IMG' && /^\s*cid:/i.test(child.getAttribute('src') || '')) {
           node.removeChild(child)
           continue
         }

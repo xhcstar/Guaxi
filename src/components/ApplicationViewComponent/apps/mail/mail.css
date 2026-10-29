@@ -1183,6 +1183,15 @@
      width 属性继续生效，max-width 负责窄阅读区的兜底。 */
 }
 
+/* 邮件里的边框颜色是按「白纸」写的：一半是 #fff、一半是 #ccc，在深色纸面上
+   白色的那几段直接看不见，表格看起来就是「断线」。这里只统一颜色、不新增边框
+   ——原本没有边框的排版表仍然没有边框，不会被刷成一堆套娃框。 */
+.mail-body table td,
+.mail-body table th,
+.mail-body table tr {
+  border-color: var(--mail-border);
+}
+
 .mail-body table table,
 .mail-body table table table {
   /* 嵌套层级不额外加边框，避免「套娃框」。
@@ -2855,6 +2864,16 @@ body.mail-image-dragging * {
   /* 图片是块级元素：显式声明不产生行内盒子，否则图片底部会多出一条
      等于行高的空白（选中时就是那条蓝色高亮线的位置）。 */
   vertical-align: top;
+}
+
+/* 找不到本地文件的 inline 图：给一块小的虚线占位，而不是撑出整块空白。 */
+.mail-compose-editor img.is-missing-inline {
+  display: inline-block;
+  width: 140px;
+  height: 44px;
+  border: 1px dashed var(--mail-border-strong);
+  border-radius: 4px;
+  background: var(--mail-bg-sunken);
 }
 /* 插入的表格在编辑区里按当前主题显示。
    HTML 里保留 bgcolor / border 这些表现属性（收件端不认我们的样式表），

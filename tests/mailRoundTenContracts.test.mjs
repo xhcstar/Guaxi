@@ -28,6 +28,11 @@ test('存草稿：不再用「内容为空」把用户挡回去', () => {
   assert.ok(/哪怕收件人、主题、正文全空/.test(store), '注释说明为什么允许空草稿')
   // 后端草稿组装本来就不要求收件人（mime::build_draft），这里确认没被改回去。
   assert.ok(/mime::build_draft\(&request, &from, &account\.signature\)/.test(mod), '草稿走放宽校验的组装')
+  // 但 lettre 自己的信封校验不放过空收件人（`missing destination address`），
+  // 草稿路径必须自己补一封占位信封，否则「什么都不填」仍然存不进去。
+  const mime = read('src-tauri/src/commands/mail/mime.rs')
+  assert.ok(/!require_recipients[\s\S]{0,200}builder\.envelope\(/.test(mime), '空草稿要补占位信封')
+  assert.ok(/build_draft_allows_completely_empty_message/.test(mime), '空草稿要有单测盯着')
 })
 
 test('放弃：发送旁边有入口，关之前让用户选存草稿还是直接丢', () => {
