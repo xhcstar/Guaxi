@@ -6,6 +6,7 @@ import hljs from "highlight.js";
 // 这里在模块求值时先按当前主题注入一次，取代原先 import 的 atom-one-light 兜底表 ——
 // 文档里同时只可能存在一张 hljs 样式表，切换主题才不会被 <head> 的先后顺序顶掉。
 import { applyCodeThemeToDocument, getActiveCodeThemeId } from "../../monaco/codeThemes";
+import { startPreviewTokenHighlight } from "../../monaco/previewTokenHighlight";
 // 暗色 One Dark 代码配色 + 纯图片段落布局（作用域限定，详见文件内说明）。
 import "./guaxiMarkdownExtras.css";
 // 新围栏（```chart / ```excalidraw）的容器样式。只新增选择器，不覆盖任何既有规则。
@@ -28,6 +29,12 @@ const logger = createLogger('GuaxiMarker')
 let mermaidRenderCounter = 0
 
 applyCodeThemeToDocument(getActiveCodeThemeId(), document.documentElement?.dataset?.guaxiTheme)
+
+// 预览代码块需要再用 tree-sitter 上一遍色（hljs 产不出方法/命名空间/装饰器）。
+// 入口放在渲染器里而不是 main.js：
+// 1. 阅读器窗口走的是 doc-reader 入口，不加载 main.js，但同样用这个渲染器；
+// 2. 热更新时组件模块会重跑，entry 里的「只调一次」可能根本不会再执行。
+startPreviewTokenHighlight()
 
 const renderPlainFenceBlock = (code, md) => {
   const escaped = md.utils.escapeHtml(code);

@@ -58,7 +58,6 @@ import { useSiderStore } from './stores/useSiderStore'
 import { initFrontendLogging, createLogger } from './utils/logger'
 import { refreshLspRuntimeExtensionSnapshot } from './monaco/lspCapabilities'
 import { configureMonacoWorkers } from './monaco/workerBootstrap'
-import { startPreviewTokenHighlight } from './monaco/previewTokenHighlight'
 import { initializeGuaxiVscodeServices } from './monaco/vscodeApiBootstrap'
 
 // 按名字用的图标（<Icon icon="mdi:xxx" />）必须在这里离线注册：没注册的名字会让
@@ -311,9 +310,6 @@ invoke('init_backend_services').catch(error => {
 });
 
 app.mount("#app");
-
-// 预览代码块改用 tree-sitter 上色，和编辑器围栏 / Notebook cell 落在同一批语义桶上。
-startPreviewTokenHighlight();
 
 // 应用卸载时清理
 window.addEventListener('beforeunload', async () => {

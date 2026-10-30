@@ -62,7 +62,9 @@ const MAX_CODE_LENGTH = 200_000
 
 const tokenCache = new Map()
 let started = false
-let backendUnavailable = false
+// 失败只冷却一段时间，不做永久禁用：应用启动早期的一次失败不应该让整场预览都不上色。
+const FAILURE_COOLDOWN_MS = 30_000
+let failureCooldownUntil = 0
 
 const rememberTokens = (key, html) => {
   if (tokenCache.size >= CACHE_LIMIT) {
@@ -85,7 +87,8 @@ const isCandidate = (codeEl) => (
  * 预览渲染和导出两条链路共用这里，缓存也共享。
  */
 const fetchTokenHtml = async (code, language) => {
-  if (backendUnavailable || !language || !code.trim() || code.length > MAX_CODE_LENGTH) return ''
+  if (!language || !code.trim() || code.length > MAX_CODE_LENGTH) return ''
+  if (Date.now() < failureCooldownUntil) return ''
   const cacheKey = `${language}
 ${code}`
   const cached = tokenCache.get(cacheKey)
@@ -98,7 +101,7 @@ ${code}`
     rememberTokens(cacheKey, html)
     return html
   } catch (error) {
-    backendUnavailable = true
+    failureCooldownUntil = Date.now() + FAILURE_COOLDOWN_MS
     logger.warn('[PreviewTokens] tree-sitter token request failed, keep highlight.js colors', {
       language,
       error: String(error?.message || error),
@@ -139,7 +142,7 @@ const upgradeBlock = async (codeEl) => {
  */
 export const upgradeHtmlCodeBlocks = async (html) => {
   const source = String(html || '')
-  if (!source || backendUnavailable || typeof document === 'undefined') return source
+  if (!source || typeof document === 'undefined') return source
 
   const template = document.createElement('template')
   template.innerHTML = source

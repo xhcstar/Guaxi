@@ -731,7 +731,9 @@ pre::-webkit-scrollbar-track,
 :root[data-guaxi-theme='dark'] .hljs {
   background: var(--guaxi-panel-bg) !important;
   border-color: var(--guaxi-border) !important;
-  color: var(--guaxi-text-primary) !important;
+  /* 基础文字色必须跟代码主题走：这里曾写成正文色（近白），
+     导致没被 token 命中的标识符在预览里比编辑器里亮一大截。 */
+  color: var(--guaxi-syntax-base) !important;
 }
 
 :root[data-guaxi-theme='dark'] .mermaid {
