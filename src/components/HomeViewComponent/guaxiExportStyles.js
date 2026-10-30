@@ -3,7 +3,8 @@
 // 2. 之前这些样式直接以多段模板字符串硬编码在 GuaxiEditor.vue 的 buildPrintHtml 里，
 //    导致那个函数有几百行、几乎无法阅读；拆出来后 buildPrintHtml 只负责拼装结构。
 // 3. 拆分只搬运字符串、不改变任何选择器/取值，导出结果与之前保持一致。
-import { getActiveCodeThemeId, getCodeTheme } from '../../monaco/codeThemes'
+import { getActiveCodeThemeId, getCodeThemePalette } from '../../monaco/codeThemes'
+import { buildSyntaxTokenCssForPalette } from '../../monaco/syntaxPalette'
 
 // 打印外壳 + highlight.js 浅色主题：
 // 预览 worker 已经把代码块渲染成 hljs-* token，导出外壳必须自带一份浅色高亮主题，
@@ -505,7 +506,12 @@ const scopeExportHljsSelectors = (css) => {
 
 /**
  * 当前代码主题亮色版的内联样式。追加在 EXPORT_SHELL_CSS 之后：
- * 同特异性时靠顺序取胜，覆盖外壳自带的那份亮色兜底；主题取不到时返回空串，外壳的兜底仍然生效。
+ * 同特异性时靠顺序取胜，覆盖外壳自带的那份亮色兜底。
+ *
+ * 取的是色板（而不是上游样式表原样）：导出 HTML 里仍是 `.hljs-*` 类名，
+ * 但颜色必须和软件内预览、编辑器一致，否则导出的 PDF 会是另一套配色。
  */
 export const buildExportCodeThemeCss = () =>
-  scopeExportHljsSelectors(getCodeTheme(getActiveCodeThemeId())?.hljs?.light || '')
+  scopeExportHljsSelectors(
+    buildSyntaxTokenCssForPalette(getCodeThemePalette(getActiveCodeThemeId(), 'light')),
+  )

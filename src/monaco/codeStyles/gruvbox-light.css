@@ -1,0 +1,16 @@
+/* Gruvbox（亮色）。色值取自 gruvbox light（bg #fbf1c7 / fg #3c3836）。 */
+.hljs { background: #fbf1c7; color: #3c3836 }
+.hljs-comment, .hljs-quote { color: #928374 }
+.hljs-keyword, .hljs-doctag, .hljs-selector-tag { color: #9d0006 }
+.hljs-string, .hljs-addition { color: #79740e }
+.hljs-number, .hljs-literal { color: #8f3f71 }
+.hljs-title, .hljs-title.function_ { color: #79740e }
+.hljs-title.class_, .hljs-built_in, .hljs-type { color: #b57614 }
+.hljs-name, .hljs-tag { color: #427b58 }
+.hljs-attr, .hljs-attribute { color: #b57614 }
+.hljs-variable { color: #076678 }
+.hljs-symbol, .hljs-bullet, .hljs-link, .hljs-subst { color: #af3a03 }
+.hljs-meta { color: #af3a03 }
+.hljs-params { color: #3c3836 }
+.hljs-deletion { color: #9d0006 }
+.hljs-section { color: #9d0006 }

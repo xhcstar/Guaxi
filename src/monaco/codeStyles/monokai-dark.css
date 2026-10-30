@@ -1,0 +1,15 @@
+/* Monokai（暗色）。只写语义角色会用到的类：色板解析按这些类取角色色，其余桶由色板派生。 */
+.hljs { background: #272822; color: #f8f8f2 }
+.hljs-comment, .hljs-quote { color: #75715e }
+.hljs-keyword, .hljs-doctag, .hljs-selector-tag { color: #f92672 }
+.hljs-string, .hljs-addition { color: #e6db74 }
+.hljs-number, .hljs-literal { color: #ae81ff }
+.hljs-title, .hljs-title.function_ { color: #a6e22e }
+.hljs-title.class_, .hljs-built_in, .hljs-type { color: #66d9ef }
+.hljs-name, .hljs-tag, .hljs-deletion { color: #f92672 }
+.hljs-attr, .hljs-attribute { color: #a6e22e }
+.hljs-variable { color: #fd971f }
+.hljs-symbol, .hljs-bullet, .hljs-link, .hljs-subst { color: #ae81ff }
+.hljs-meta { color: #fd971f }
+.hljs-params { color: #f8f8f2 }
+.hljs-section { color: #f92672 }

@@ -1,0 +1,15 @@
+/* Monokai 亮色版：上游 Monokai 只有暗色，这里按同一套色相做了一版浅底可读的取值。 */
+.hljs { background: #fafafa; color: #272822 }
+.hljs-comment, .hljs-quote { color: #8b8874 }
+.hljs-keyword, .hljs-doctag, .hljs-selector-tag { color: #c4005c }
+.hljs-string, .hljs-addition { color: #5e6d00 }
+.hljs-number, .hljs-literal { color: #7b3fa0 }
+.hljs-title, .hljs-title.function_ { color: #3a7a00 }
+.hljs-title.class_, .hljs-built_in, .hljs-type { color: #0f6c8a }
+.hljs-name, .hljs-tag, .hljs-deletion { color: #c4005c }
+.hljs-attr, .hljs-attribute { color: #3a7a00 }
+.hljs-variable { color: #b35c00 }
+.hljs-symbol, .hljs-bullet, .hljs-link, .hljs-subst { color: #7b3fa0 }
+.hljs-meta { color: #b35c00 }
+.hljs-params { color: #272822 }
+.hljs-section { color: #c4005c }

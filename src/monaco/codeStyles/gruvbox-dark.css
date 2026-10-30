@@ -1,0 +1,16 @@
+/* Gruvbox（暗色）。色值取自 gruvbox 官方调色板（bg #282828 / fg #ebdbb2）。 */
+.hljs { background: #282828; color: #ebdbb2 }
+.hljs-comment, .hljs-quote { color: #928374 }
+.hljs-keyword, .hljs-doctag, .hljs-selector-tag { color: #fb4934 }
+.hljs-string, .hljs-addition { color: #b8bb26 }
+.hljs-number, .hljs-literal { color: #d3869b }
+.hljs-title, .hljs-title.function_ { color: #b8bb26 }
+.hljs-title.class_, .hljs-built_in, .hljs-type { color: #fabd2f }
+.hljs-name, .hljs-tag { color: #8ec07c }
+.hljs-attr, .hljs-attribute { color: #fabd2f }
+.hljs-variable { color: #83a598 }
+.hljs-symbol, .hljs-bullet, .hljs-link, .hljs-subst { color: #fe8019 }
+.hljs-meta { color: #fe8019 }
+.hljs-params { color: #ebdbb2 }
+.hljs-deletion { color: #fb4934 }
+.hljs-section { color: #fb4934 }

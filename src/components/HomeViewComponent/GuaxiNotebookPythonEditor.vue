@@ -735,6 +735,10 @@ const mountMonacoEditor = async () => {
       roundedSelection: false,
       scrollBeyondLastLine: false,
       wordWrap: 'on',
+      // 设计说明：括号配色来自主题的 editorBracketHighlight.foreground1..6（红/金/黄/绿/蓝/紫），
+      // 属于编辑器额外装饰而非 token 高亮；不清掉的话同一段 Python 在 cell 里括号是彩色的，
+      // 在 Markdown 代码块里却是基础色，代码高亮看起来仍然两套。语义分层保留，只关掉这层。
+      bracketPairColorization: { enabled: false },
       // 设计说明：
       // 1. 探索者 Python Cell 默认应该随中间区域宽度折行，降低整页横向滚动和代码阅读来回拖动。
       // 2. Monaco / VSCode service 层可能通过 override 影响 wordWrap，这里显式把两级 override 都固定为 on。
@@ -1204,15 +1208,18 @@ defineExpose({
    3. 两种模式仍然使用同一个 Tree-sitter 后端，只是暗色直接走 Monaco semantic token，亮色额外补齐可读性。 */
 .guaxi-notebook-python-editor :deep(.nb-python-token-keyword) { color: var(--guaxi-syntax-keyword) !important; }
 .guaxi-notebook-python-editor :deep(.nb-python-token-string) { color: var(--guaxi-syntax-string) !important; }
+.guaxi-notebook-python-editor :deep(.nb-python-token-escape) { color: var(--guaxi-syntax-escape) !important; }
 .guaxi-notebook-python-editor :deep(.nb-python-token-number) { color: var(--guaxi-syntax-number) !important; }
 .guaxi-notebook-python-editor :deep(.nb-python-token-boolean) { color: var(--guaxi-syntax-boolean) !important; }
 .guaxi-notebook-python-editor :deep(.nb-python-token-comment) { color: var(--guaxi-syntax-comment) !important; }
 .guaxi-notebook-python-editor :deep(.nb-python-token-type) { color: var(--guaxi-syntax-type) !important; }
 .guaxi-notebook-python-editor :deep(.nb-python-token-class) { color: var(--guaxi-syntax-class) !important; }
+.guaxi-notebook-python-editor :deep(.nb-python-token-inherit) { color: var(--guaxi-syntax-inherit) !important; }
 .guaxi-notebook-python-editor :deep(.nb-python-token-function) { color: var(--guaxi-syntax-function) !important; }
 .guaxi-notebook-python-editor :deep(.nb-python-token-method) { color: var(--guaxi-syntax-method) !important; }
 .guaxi-notebook-python-editor :deep(.nb-python-token-parameter) { color: var(--guaxi-syntax-parameter) !important; }
 .guaxi-notebook-python-editor :deep(.nb-python-token-variable) { color: var(--guaxi-syntax-variable) !important; }
+.guaxi-notebook-python-editor :deep(.nb-python-token-variable-language) { color: var(--guaxi-syntax-variable-language) !important; }
 .guaxi-notebook-python-editor :deep(.nb-python-token-constant) { color: var(--guaxi-syntax-constant) !important; }
 .guaxi-notebook-python-editor :deep(.nb-python-token-regexp) { color: var(--guaxi-syntax-regexp) !important; }
 .guaxi-notebook-python-editor :deep(.nb-python-token-property) { color: var(--guaxi-syntax-property) !important; }
@@ -1221,6 +1228,8 @@ defineExpose({
 .guaxi-notebook-python-editor :deep(.nb-python-token-attribute) { color: var(--guaxi-syntax-attribute) !important; }
 .guaxi-notebook-python-editor :deep(.nb-python-token-builtin) { color: var(--guaxi-syntax-builtin) !important; }
 .guaxi-notebook-python-editor :deep(.nb-python-token-decorator) { color: var(--guaxi-syntax-decorator) !important; }
+.guaxi-notebook-python-editor :deep(.nb-python-token-label) { color: var(--guaxi-syntax-label) !important; }
+.guaxi-notebook-python-editor :deep(.nb-python-token-tag) { color: var(--guaxi-syntax-tag) !important; }
 .guaxi-notebook-python-editor :deep(.nb-python-token-operator) { color: var(--guaxi-syntax-operator) !important; }
 .guaxi-notebook-python-editor :deep(.nb-python-token-delimiter) { color: var(--guaxi-syntax-punctuation) !important; }
 

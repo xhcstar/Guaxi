@@ -1,101 +1,30 @@
 // 设计说明：
 // 1. tree-sitter-highlight 返回的是各语言 query 的 capture 名称，例如 `function.call`、`variable.member`。
-// 2. Monaco semantic token、Markdown fence decoration、Notebook cell decoration 必须先归一化到同一套 Guaxi token 类型。
-// 3. 这里同时集中维护明暗主题色值和 CSS class 映射，避免不同入口各自解释 capture 后出现颜色漂移。
+// 2. Monaco semantic token、Markdown fence decoration、Notebook cell decoration、预览 `.hljs-*` 必须落到同一套桶。
+// 3. 桶的色值只在 codeThemes/syntaxPalette 里维护；这里只负责「capture → 桶」和「桶 → Monaco 规则」的映射。
 
-export const GUAXI_SYNTAX_TOKEN_TYPES = [
-  'comment',
-  'string',
-  'keyword',
-  'number',
-  'regexp',
-  'operator',
-  'punctuation',
-  'type',
-  'function',
-  'method',
-  'property',
-  'variable',
-  'parameter',
-  'namespace',
-  'class',
-  'boolean',
-  'constant',
-  'attribute',
-  'builtin',
-  'macro',
-  'decorator',
-  'label',
-]
+import { GUAXI_SYNTAX_BUCKETS } from './syntaxPalette.js'
 
-export const GUAXI_SYNTAX_TOKEN_COLORS = {
-  light: {
-    base: '#383a42',
-    comment: '#6a737d',
-    string: '#22863a',
-    keyword: '#a626a4',
-    number: '#986801',
-    boolean: '#986801',
-    regexp: '#007c89',
-    operator: '#007c89',
-    punctuation: '#383a42',
-    type: '#6f42c1',
-    class: '#6f42c1',
-    function: '#0969da',
-    method: '#007c89',
-    property: '#007c89',
-    parameter: '#9a6700',
-    variable: '#0550ae',
-    constant: '#986801',
-    namespace: '#6f42c1',
-    macro: '#a626a4',
-    tag: '#e45649',
-    attribute: '#9a6700',
-    builtin: '#0969da',
-    decorator: '#a626a4',
-    label: '#a626a4',
-  },
-  dark: {
-    base: '#abb2bf',
-    comment: '#5c6370',
-    string: '#98c379',
-    keyword: '#c678dd',
-    number: '#d19a66',
-    boolean: '#d19a66',
-    regexp: '#56b6c2',
-    operator: '#56b6c2',
-    punctuation: '#abb2bf',
-    type: '#e5c07b',
-    class: '#e5c07b',
-    function: '#61afef',
-    method: '#56b6c2',
-    property: '#56b6c2',
-    parameter: '#d19a66',
-    variable: '#d7deea',
-    constant: '#d19a66',
-    namespace: '#e5c07b',
-    macro: '#c678dd',
-    tag: '#e06c75',
-    attribute: '#d19a66',
-    builtin: '#56b6c2',
-    decorator: '#c678dd',
-    label: '#c678dd',
-  },
-}
+// `base` 是正文兜底色，不会作为 token 类型出现，所以不进 legend。
+export const GUAXI_SYNTAX_TOKEN_TYPES = GUAXI_SYNTAX_BUCKETS.filter((bucket) => bucket !== 'base')
 
 const GUAXI_SYNTAX_CLASS_SUFFIX_BY_TYPE = {
   punctuation: 'delimiter',
-  label: 'keyword',
 }
 
 export const getGuaxiSyntaxTokenPriority = (tokenType) => {
   switch (tokenType) {
-    case 'method':
     case 'property':
       return 80
+    case 'method':
+      return 78
+    case 'class':
+    case 'type':
+      return 70
     case 'function':
       return 60
     case 'variable':
+    case 'parameter':
       return 40
     default:
       return 50
@@ -142,6 +71,12 @@ const MARKDOWN_CAPTURE_TO_TOKEN = {
   'markup.link.url': 'function',
 }
 
+/**
+ * tree-sitter capture → 语义桶。
+ *
+ * 这里的细分程度直接决定「参数 / 变量 / 成员 / 常量 / 类型」能不能分开：
+ * 之前 `variable.parameter` 和 `variable` 都落到同一个桶，参数自然和变量同色。
+ */
 export const mapTreeSitterCaptureToGuaxiToken = (tokenType, options = {}) => {
   const type = String(tokenType || '').toLowerCase()
   if (!type) return ''
@@ -151,35 +86,40 @@ export const mapTreeSitterCaptureToGuaxiToken = (tokenType, options = {}) => {
 
   let mapped = ''
   if (type.includes('comment')) mapped = 'comment'
-  else if (type.includes('string.escape') || type.includes('escape')) mapped = 'string'
+  else if (type.includes('string.escape') || type.includes('escape') || type.includes('interpolation')) mapped = 'escape'
+  else if (type.includes('regexp')) mapped = 'regexp'
   else if (type.includes('string')) mapped = 'string'
   else if (type.includes('keyword.operator')) mapped = 'operator'
+  else if (type.includes('keyword.directive') || type.includes('preproc') || type.includes('preprocessor')) mapped = 'macro'
+  // function.macro 必须排在 function 之前，否则 Rust 的 `println!` 会被当成普通函数
+  else if (type.includes('macro')) mapped = 'macro'
   else if (type.includes('keyword') || type.includes('storage') || type.includes('modifier')) mapped = 'keyword'
   else if (type.includes('number') || type.includes('constant.numeric')) mapped = 'number'
   else if (type.includes('boolean')) mapped = 'boolean'
-  else if (type.includes('regexp')) mapped = 'regexp'
   else if (type.includes('operator')) mapped = 'operator'
   else if (type.includes('punctuation') || type.includes('delimiter') || type.includes('bracket')) mapped = 'punctuation'
   else if (type.includes('constructor')) mapped = 'class'
   else if (type.includes('class')) mapped = 'class'
-  else if (type.includes('type') || type.includes('interface') || type.includes('enum') || type.includes('struct')) mapped = 'type'
-  else if (type.includes('variable.parameter') || type.includes('parameter') || type.includes('argument')) mapped = 'parameter'
+  else if (type.includes('enummember') || type.includes('enum.member')) mapped = 'constant'
+  else if (type.includes('interface') || type.includes('enum') || type.includes('struct') || type.includes('type')) mapped = 'type'
+  else if (type.includes('parameter') || type.includes('argument')) mapped = 'parameter'
   else if (type.includes('variable.member') || type.includes('property') || type.includes('member') || type.includes('field')) mapped = 'property'
   else if (type.includes('function.method') || type.includes('method')) mapped = 'method'
   else if (type.includes('function')) mapped = 'function'
-  else if (type.includes('variable.builtin') || type.includes('builtin') || type.includes('support')) mapped = 'builtin'
-  else if (type.includes('macro')) mapped = 'macro'
-  else if (type.includes('module') || type.includes('namespace') || type.includes('package')) mapped = 'namespace'
-  else if (type.includes('tag')) mapped = 'class'
+  else if (type.includes('variable.builtin') || type === 'self' || type === 'this') mapped = 'variable-language'
+  else if (type.includes('builtin') || type.includes('support')) mapped = 'builtin'
   else if (type.includes('attribute')) mapped = 'attribute'
-  else if (type.includes('enummember') || type.includes('event') || type.includes('constant')) mapped = 'constant'
+  else if (type.includes('module') || type.includes('namespace') || type.includes('package')) mapped = 'namespace'
+  else if (type.includes('tag')) mapped = 'tag'
+  else if (type.includes('event') || type.includes('constant')) mapped = 'constant'
   else if (type.includes('decorator') || type.includes('annotation')) mapped = 'decorator'
   else if (type.includes('label')) mapped = 'label'
   else if (type.includes('variable') || type.includes('identifier')) mapped = 'variable'
   else mapped = 'variable'
 
+  // `obj.method()` 里的 method 只有在带点号时才成立；不带点号的 function 保持原样。
   if (
-    mapped === 'function' &&
+    (mapped === 'function' || mapped === 'method') &&
     options?.sourceText != null &&
     Number.isFinite(Number(options?.startOffset)) &&
     isDottedMemberAtOffset(options.sourceText, Number(options.startOffset))
@@ -203,110 +143,142 @@ export const getGuaxiSyntaxClassForCapture = (tokenType, options = {}) => {
 }
 
 // 允许传 'light'/'dark'（历史调用方式）或直接传调色板对象（代码主题功能需要按主题取色）。
-// 兼容两种入参是为了不让 7 处既有调用点一起改签名。
 const resolveSyntaxPalette = (themeOrPalette) => {
   if (themeOrPalette && typeof themeOrPalette === 'object') return themeOrPalette
-  return GUAXI_SYNTAX_TOKEN_COLORS[themeOrPalette] || GUAXI_SYNTAX_TOKEN_COLORS.light
+  return {}
+}
+
+/**
+ * Monaco 词法 token 名 → 语义桶。
+ *
+ * 这张表对应的是各语言 Monaco Monarch 分词器产出的 token 名，
+ * 覆盖不到的类型会掉回基础主题色（表现为「这个文件不跟代码主题走」），所以宁可写全。
+ */
+const MONACO_TOKEN_TO_BUCKET = {
+  comment: 'comment',
+  'comment.doc': 'comment',
+  quote: 'comment',
+
+  keyword: 'keyword',
+  'keyword.control': 'keyword',
+  'keyword.flow': 'keyword',
+  'keyword.directive': 'macro',
+  'keyword.operator': 'operator',
+  literal: 'boolean',
+  constant: 'constant',
+  'constant.numeric': 'number',
+
+  string: 'string',
+  'string.escape': 'escape',
+  'string.regexp': 'regexp',
+  regexp: 'regexp',
+  number: 'number',
+  'number.float': 'number',
+  'number.hex': 'number',
+  boolean: 'boolean',
+
+  type: 'type',
+  'type.identifier': 'type',
+  typeParameter: 'type',
+  struct: 'type',
+  interface: 'type',
+  enum: 'type',
+  'namespace.identifier': 'namespace',
+  namespace: 'namespace',
+  module: 'namespace',
+
+  class: 'class',
+  'class.identifier': 'class',
+  constructor: 'class',
+  enumMember: 'constant',
+
+  function: 'function',
+  'function.identifier': 'function',
+  'function.declaration': 'function',
+  'function.call': 'function',
+  'function.defaultLibrary': 'builtin',
+  method: 'method',
+  'method.call': 'method',
+  property: 'property',
+  'property.name': 'property',
+  field: 'property',
+
+  parameter: 'parameter',
+  'parameter.declaration': 'parameter',
+  variable: 'variable',
+  // Monarch 的 identifier 是「没被更具体规则命中的标识符」，给正文色；
+  // 真正按变量上色的是语义 token（tree-sitter），否则 JSON/YAML 这类文件会整片变红。
+  identifier: 'base',
+  'variable.predefined': 'variable-language',
+  'variable.readonly': 'constant',
+  'variable.defaultLibrary': 'builtin',
+  'variable.language': 'variable-language',
+
+  attribute: 'attribute',
+  'attribute.name': 'attribute',
+  'attribute.value': 'string',
+  tag: 'tag',
+  decorator: 'decorator',
+  annotation: 'decorator',
+  label: 'label',
+  meta: 'macro',
+  metatag: 'macro',
+  macro: 'macro',
+
+  delimiter: 'punctuation',
+  'delimiter.bracket': 'punctuation',
+  'delimiter.parenthesis': 'punctuation',
+  'delimiter.curly': 'punctuation',
+  punctuation: 'punctuation',
+  'punctuation.definition': 'punctuation',
+  'punctuation.bracket': 'punctuation',
+  operator: 'operator',
+  'string.escape.character': 'escape',
+
+  emphasis: 'decorator',
+  strong: 'keyword',
+  'meta.embedded': 'comment',
 }
 
 export const buildGuaxiMonacoThemeRules = (themeOrPalette) => {
   const palette = resolveSyntaxPalette(themeOrPalette)
-  const tokenMap = {
-    comment: 'comment',
-    keyword: 'keyword',
-    string: 'string',
-    number: 'number',
-    regexp: 'regexp',
-    type: 'type',
-    delimiter: 'punctuation',
-    variable: 'variable',
-    parameter: 'parameter',
-    function: 'function',
-    constant: 'constant',
-    class: 'class',
-    identifier: 'base',
-    tag: 'tag',
-    'attribute.name': 'attribute',
-    // LaTeX / Typst 的 Monarch 直接产出裸 `attribute`（`[可选参数]`）、`strong`/`emphasis`。
-    // 缺了这几项，Monaco 会回落到 inherit 来的 VS Code 内置主题色——表现为「这两个文件不跟代码主题走」。
-    attribute: 'attribute',
-    strong: 'keyword',
-    emphasis: 'decorator',
-    'meta.embedded': 'comment',
-    operator: 'operator',
-    punctuation: 'punctuation',
-    'punctuation.definition': 'punctuation',
-    'punctuation.bracket': 'punctuation',
-    property: 'property',
-    method: 'method',
-    'function.declaration': 'function',
-    'function.defaultLibrary': 'function',
-    'parameter.declaration': 'parameter',
-    'variable.readonly': 'constant',
-    'variable.defaultLibrary': 'builtin',
-    'type.defaultLibrary': 'type',
-    'class.defaultLibrary': 'class',
-    interface: 'type',
-    enum: 'type',
-    enumMember: 'constant',
-    namespace: 'namespace',
-    typeParameter: 'type',
-    struct: 'type',
-    macro: 'macro',
-    decorator: 'decorator',
-    label: 'label',
-    'keyword.control': 'keyword',
-    'keyword.defaultLibrary': 'keyword',
-    'string.escape': 'operator',
-    'number.float': 'number',
-    boolean: 'boolean',
-  }
-
-  return Object.entries(tokenMap)
-    .filter(([, colorKey]) => !!palette[colorKey])
-    .map(([token, colorKey]) => ({
+  return Object.entries(MONACO_TOKEN_TO_BUCKET)
+    .filter(([, bucket]) => !!palette[bucket])
+    .map(([token, bucket]) => ({
       token,
-      foreground: String(palette[colorKey]).replace(/^#/, ''),
+      foreground: String(palette[bucket]).replace(/^#/, ''),
     }))
 }
 
 export const buildGuaxiSemanticTokenColors = (themeOrPalette) => {
   const palette = resolveSyntaxPalette(themeOrPalette)
-  return {
-    comment: palette.comment,
-    string: palette.string,
-    keyword: palette.keyword,
-    number: palette.number,
-    regexp: palette.regexp,
-    operator: palette.operator,
-    punctuation: palette.punctuation,
-    'punctuation.definition': palette.punctuation,
-    'punctuation.bracket': palette.punctuation,
-    class: palette.class,
-    enum: palette.type,
-    interface: palette.type,
-    type: palette.type,
-    typeParameter: palette.type,
-    namespace: palette.namespace,
-    struct: palette.type,
-    function: palette.function,
-    method: palette.method,
-    property: palette.property,
-    parameter: palette.parameter,
-    'function.declaration': palette.function,
-    'function.defaultLibrary': palette.function,
-    'parameter.declaration': palette.parameter,
-    variable: palette.variable,
-    constant: palette.constant,
-    attribute: palette.attribute,
-    builtin: palette.builtin,
-    'variable.readonly': palette.constant,
-    'variable.defaultLibrary': palette.builtin,
-    enumMember: palette.constant,
-    boolean: palette.boolean,
-    macro: palette.macro,
-    decorator: palette.decorator,
-    label: palette.label,
-    'string.escape': palette.operator,
+  const colors = {}
+  for (const bucket of GUAXI_SYNTAX_TOKEN_TYPES) {
+    if (palette[bucket]) colors[bucket] = palette[bucket]
   }
+
+  // Monaco / VSCode 语义 token 的固定名字，必须映射到我们的桶，
+  // 否则大模型补全、LSP 语义高亮会退回基础主题色。
+  const aliases = {
+    'function.declaration': 'function',
+    'function.defaultLibrary': 'builtin',
+    'parameter.declaration': 'parameter',
+    variable: 'variable',
+    'variable.readonly': 'constant',
+    'variable.defaultLibrary': 'builtin',
+    'variable.language': 'variable-language',
+    enumMember: 'constant',
+    struct: 'type',
+    interface: 'type',
+    typeParameter: 'type',
+    'punctuation.definition': 'punctuation',
+    'punctuation.bracket': 'punctuation',
+    'string.escape': 'escape',
+    property: 'property',
+    method: 'method',
+  }
+  for (const [alias, bucket] of Object.entries(aliases)) {
+    if (palette[bucket]) colors[alias] = palette[bucket]
+  }
+  return colors
 }

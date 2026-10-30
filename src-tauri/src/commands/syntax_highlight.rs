@@ -432,26 +432,33 @@ fn cache_key(code: &str, language: &str, theme: &str) -> u64 {
     hasher.finish()
 }
 
+// 设计说明：
+// 1. 这里的类名必须和前端 `buildSyntaxTokenCss`（src/monaco/syntaxPalette.js）以及
+//    tree-sitter capture 映射落在同一批语义桶上，否则探索者 Python cell 的 HTML 会和
+//    Notebook cell、围栏代码块出现两套颜色。
+// 2. hljs 本身不产 method / namespace / decorator 这些类，但前端生成的颜色表里有对应定义，
+//    这里照发即可——探索者 Python cell 和 Notebook cell、围栏代码块就会落在同一个语义桶上。
 fn css_class_for_highlight(name: &str) -> &'static str {
     match name {
         "attribute" => "hljs-attr",
         "boolean" => "hljs-literal",
         "comment" | "comment.documentation" => "hljs-comment",
-        "constant" | "constant.builtin" => "hljs-literal",
-        "constructor" | "constructor.builtin" => "hljs-title",
+        "constant" => "hljs-variable constant_",
+        "constant.builtin" => "hljs-built_in",
+        "constructor" | "constructor.builtin" => "hljs-title class_",
         "escape" | "string.escape" => "hljs-subst",
-        "function" | "function.builtin" | "function.call" | "function.method" | "function.special" => {
-            "hljs-title function_"
-        }
-        "function.macro" => "hljs-title function_ hljs-meta",
+        "function" | "function.call" | "function.special" => "hljs-title function_",
+        "function.method" | "function.method.call" => "hljs-method",
+        "function.builtin" => "hljs-built_in",
+        "function.macro" => "hljs-meta",
         "keyword"
         | "keyword.conditional"
-        | "keyword.directive"
         | "keyword.exception"
         | "keyword.function"
         | "keyword.import"
         | "keyword.repeat"
         | "keyword.return" => "hljs-keyword",
+        "keyword.directive" => "hljs-meta",
         "keyword.operator" => "hljs-operator",
         "markup.heading" => "hljs-section",
         "markup.link" | "markup.link.url" => "hljs-link",
@@ -463,17 +470,23 @@ fn css_class_for_highlight(name: &str) -> &'static str {
         "text.literal" => "hljs-code",
         "text.emphasis" => "hljs-emphasis",
         "text.strong" => "hljs-strong",
-        "module" => "hljs-title class_",
+        "module" | "namespace" | "package" => "hljs-namespace",
         "number" => "hljs-number",
         "operator" => "hljs-operator",
-        "property" | "property.builtin" | "variable.member" => "hljs-property",
+        "property" | "property.builtin" | "variable.member" | "field" => "hljs-property",
         "punctuation" | "punctuation.bracket" | "punctuation.delimiter" | "punctuation.special" => {
             "hljs-punctuation"
         }
-        "string" | "string.regexp" | "string.special" => "hljs-string",
-        "tag" => "hljs-tag",
-        "type" | "type.builtin" => "hljs-type",
-        "variable" | "variable.builtin" | "variable.parameter" => "hljs-variable",
+        "string" | "string.special" => "hljs-string",
+        "string.regexp" => "hljs-regexp",
+        "tag" => "hljs-name",
+        "type" | "type.builtin" | "type.parameter" | "interface" | "enum" | "struct" => "hljs-type",
+        "variable" => "hljs-variable",
+        "variable.builtin" => "hljs-variable language_",
+        "variable.parameter" | "argument" => "hljs-params",
+        "decorator" | "annotation" => "hljs-decorator",
+        "enummember" | "event" => "hljs-variable constant_",
+        "label" => "hljs-keyword",
         _ => "hljs",
     }
 }

@@ -1511,6 +1511,7 @@ import GuaxiOrgTaskPreview from './GuaxiOrgTaskPreview.vue'
 import { validateTaskBlocks, parseTaskBlocks, serializeBlock, replaceBlockInContent, buildNewBlock } from '../../utils/guaxiTaskParser'
 import GuaxiTerminalPanel from './GuaxiTerminalPanel.vue'
 import { EXPORT_SHELL_CSS, EXPORT_PYCELL_CSS, buildExportCodeThemeCss } from './guaxiExportStyles'
+import { upgradeHtmlCodeBlocks } from '../../monaco/previewTokenHighlight'
 import { NTooltip, NIcon, useMessage, NDropdown, NPopover, NInputNumber, NBreadcrumb, NBreadcrumbItem, NSelect } from 'naive-ui'
 import { Icon } from '@iconify/vue'
 import { EyeOutline, LogoVimeo, CloseOutline, ExitOutline, SaveOutline, ArrowBackOutline, ArrowForwardOutline, AddOutline, BugOutline, DocumentAttachOutline, MicOutline } from '@vicons/ionicons5'
@@ -23271,8 +23272,10 @@ const renderMarkdownForExportHtml = async (context) => {
     },
     'export-rendered-html',
   )
-  const bodyHtml = stripInteractiveExportArtifacts(
-    await materializeChartEmbedsInHtml(rawBodyHtml, context),
+  const bodyHtml = await upgradeHtmlCodeBlocks(
+    stripInteractiveExportArtifacts(
+      await materializeChartEmbedsInHtml(rawBodyHtml, context),
+    ),
   )
   const html = buildPrintHtml(bodyHtml, context.title, { baseHref: context.baseHref })
 
@@ -27331,15 +27334,18 @@ onUnmounted(() => {
 .guaxi-editor :deep(.md-fence-token-base) { color: var(--guaxi-syntax-base); }
 .guaxi-editor :deep(.md-fence-token-keyword) { color: var(--guaxi-syntax-keyword); }
 .guaxi-editor :deep(.md-fence-token-string) { color: var(--guaxi-syntax-string); }
+.guaxi-editor :deep(.md-fence-token-escape) { color: var(--guaxi-syntax-escape); }
 .guaxi-editor :deep(.md-fence-token-number) { color: var(--guaxi-syntax-number); }
 .guaxi-editor :deep(.md-fence-token-boolean) { color: var(--guaxi-syntax-boolean); }
 .guaxi-editor :deep(.md-fence-token-comment) { color: var(--guaxi-syntax-comment); }
 .guaxi-editor :deep(.md-fence-token-type) { color: var(--guaxi-syntax-type); }
 .guaxi-editor :deep(.md-fence-token-class) { color: var(--guaxi-syntax-class); }
+.guaxi-editor :deep(.md-fence-token-inherit) { color: var(--guaxi-syntax-inherit); }
 .guaxi-editor :deep(.md-fence-token-function) { color: var(--guaxi-syntax-function); }
 .guaxi-editor :deep(.md-fence-token-method) { color: var(--guaxi-syntax-method); }
 .guaxi-editor :deep(.md-fence-token-parameter) { color: var(--guaxi-syntax-parameter); }
 .guaxi-editor :deep(.md-fence-token-variable) { color: var(--guaxi-syntax-variable); }
+.guaxi-editor :deep(.md-fence-token-variable-language) { color: var(--guaxi-syntax-variable-language); }
 .guaxi-editor :deep(.md-fence-token-constant) { color: var(--guaxi-syntax-constant); }
 .guaxi-editor :deep(.md-fence-token-regexp) { color: var(--guaxi-syntax-regexp); }
 .guaxi-editor :deep(.md-fence-token-property) { color: var(--guaxi-syntax-property); }
@@ -27349,6 +27355,7 @@ onUnmounted(() => {
 .guaxi-editor :deep(.md-fence-token-attribute) { color: var(--guaxi-syntax-attribute); }
 .guaxi-editor :deep(.md-fence-token-builtin) { color: var(--guaxi-syntax-builtin); }
 .guaxi-editor :deep(.md-fence-token-decorator) { color: var(--guaxi-syntax-decorator); }
+.guaxi-editor :deep(.md-fence-token-label) { color: var(--guaxi-syntax-label); }
 .guaxi-editor :deep(.md-fence-token-operator) { color: var(--guaxi-syntax-operator); }
 .guaxi-editor :deep(.md-fence-token-delimiter) { color: var(--guaxi-syntax-punctuation); }
 
@@ -28526,15 +28533,18 @@ body.guaxi-tab-dragging * {
 .guaxi-editor .monaco-editor .md-fence-token-base { color: var(--guaxi-syntax-base) !important; }
 .guaxi-editor .monaco-editor .md-fence-token-keyword { color: var(--guaxi-syntax-keyword) !important; }
 .guaxi-editor .monaco-editor .md-fence-token-string { color: var(--guaxi-syntax-string) !important; }
+.guaxi-editor .monaco-editor .md-fence-token-escape { color: var(--guaxi-syntax-escape) !important; }
 .guaxi-editor .monaco-editor .md-fence-token-number { color: var(--guaxi-syntax-number) !important; }
 .guaxi-editor .monaco-editor .md-fence-token-boolean { color: var(--guaxi-syntax-boolean) !important; }
 .guaxi-editor .monaco-editor .md-fence-token-comment { color: var(--guaxi-syntax-comment) !important; }
 .guaxi-editor .monaco-editor .md-fence-token-type { color: var(--guaxi-syntax-type) !important; }
 .guaxi-editor .monaco-editor .md-fence-token-class { color: var(--guaxi-syntax-class) !important; }
+.guaxi-editor .monaco-editor .md-fence-token-inherit { color: var(--guaxi-syntax-inherit) !important; }
 .guaxi-editor .monaco-editor .md-fence-token-function { color: var(--guaxi-syntax-function) !important; }
 .guaxi-editor .monaco-editor .md-fence-token-method { color: var(--guaxi-syntax-method) !important; }
 .guaxi-editor .monaco-editor .md-fence-token-parameter { color: var(--guaxi-syntax-parameter) !important; }
 .guaxi-editor .monaco-editor .md-fence-token-variable { color: var(--guaxi-syntax-variable) !important; }
+.guaxi-editor .monaco-editor .md-fence-token-variable-language { color: var(--guaxi-syntax-variable-language) !important; }
 .guaxi-editor .monaco-editor .md-fence-token-constant { color: var(--guaxi-syntax-constant) !important; }
 .guaxi-editor .monaco-editor .md-fence-token-regexp { color: var(--guaxi-syntax-regexp) !important; }
 .guaxi-editor .monaco-editor .md-fence-token-property { color: var(--guaxi-syntax-property) !important; }
@@ -28544,6 +28554,7 @@ body.guaxi-tab-dragging * {
 .guaxi-editor .monaco-editor .md-fence-token-attribute { color: var(--guaxi-syntax-attribute) !important; }
 .guaxi-editor .monaco-editor .md-fence-token-builtin { color: var(--guaxi-syntax-builtin) !important; }
 .guaxi-editor .monaco-editor .md-fence-token-decorator { color: var(--guaxi-syntax-decorator) !important; }
+.guaxi-editor .monaco-editor .md-fence-token-label { color: var(--guaxi-syntax-label) !important; }
 .guaxi-editor .monaco-editor .md-fence-token-operator { color: var(--guaxi-syntax-operator) !important; }
 .guaxi-editor .monaco-editor .md-fence-token-delimiter { color: var(--guaxi-syntax-punctuation) !important; }
 
