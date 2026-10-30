@@ -51,7 +51,7 @@ test('图片控制框：裁剪在编辑区里，滚动时也跟着走', () => {
 test('图片可拖动：禁掉浏览器的原生图片拖拽', () => {
   assert.ok(/\.mail-compose-editor img \{[\s\S]{0,120}-webkit-user-drag: none/.test(css), '关掉原生拖拽')
   assert.ok(/@dragstart\.prevent/.test(composer), '编辑器里拦下 dragstart')
-  assert.ok(/function onEditorMouseDown/.test(composer), '位置改由指针逻辑处理')
+  assert.ok(/function onEditorPointerDown/.test(composer), '位置改由指针逻辑处理')
 })
 
 test('快捷键删除：与行内删除按钮一致（整条会话）', () => {

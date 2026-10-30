@@ -35,6 +35,12 @@ test('POP3 本地移动尽量保留 uid，换号时把 UIDL 映射一起挪', ()
   const at = mod.indexOf('fn move_locally')
   assert.ok(at >= 0)
   const body = mod.slice(at).match(/^[\s\S]*?\r?\n\}\r?\n/)?.[0] || ''
+  // 同文件夹「移动」必须直接返回：下面是「先写目标行、再删来源行」，
+  // 同文件夹时删的就是刚写进去的那一封。
+  assert.ok(
+    /if folder == target \{\s*return Ok\(\(\)\);/.test(body),
+    '原地移动要早退，不能走下去把邮件删掉',
+  )
   // 保留原号是主路径：映射记的就是这个号。
   assert.ok(/else \{\s*\*uid\s*\}/.test(body), '目标夹没占用时就该沿用原 uid')
   // 只有确实撞号才换新号，并且必须同步改映射。

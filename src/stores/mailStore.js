@@ -1581,11 +1581,19 @@ export const useMailStore = defineStore('mail', {
      * 以前失败只写进日志，用户看到的就是「我明明关了，草稿箱里什么都没有」，
      * 只能自己猜（真实反馈：收件人为空的草稿被后端拒绝，界面上一点动静都没有）。
      */
-    /** 用户明确选择「直接放弃」：不写草稿箱，直接关掉（本地暂存由编辑器删）。 */
-    discardCompose() {
+    /** 用户明确选择「直接放弃」：不写新草稿，且把自动保存的那一份也清掉。 */
+    async discardCompose() {
       const draft = this.composing
       this.composing = null
-      return draft
+      if (!draft) return true
+      // 编辑器每 30 秒会自动写一份进草稿箱。只清编辑状态的话，用户点了「放弃」
+      // 之后仍然能在草稿箱里看到这封信（真实反馈），所以这里必须一起删掉。
+      const cleaned = await this._discardMailboxDraft(draft)
+      await this.loadFolders(draft.accountId).catch(() => {})
+      await this.reloadUnread().catch(() => {})
+      // 列表跟着刷新：用户往往正停在草稿箱里看这一封。
+      await this.loadMessages({ silent: true }).catch(() => {})
+      return cleaned
     },
 
     async closeCompose({ saveDraft = true } = {}) {
@@ -1714,7 +1722,7 @@ export const useMailStore = defineStore('mail', {
      */
     async _discardMailboxDraft(draft) {
       const saved = draft?.mailboxDraft
-      if (!saved?.uid || !saved?.folder) return
+      if (!saved?.uid || !saved?.folder) return true
       draft.mailboxDraft = null
       try {
         await invoke('mail_discard_draft', {
@@ -1722,8 +1730,13 @@ export const useMailStore = defineStore('mail', {
           folder: saved.folder,
           uid: saved.uid,
         })
+        return true
       } catch (error) {
+        // 没删掉就把记录放回去：下一次保存 / 放弃还要再试一次，不能让草稿箱里
+        // 悄悄留着一封「已经放弃」的信。
+        draft.mailboxDraft = saved
         logger.warn('删除自动保存的草稿失败', error)
+        return false
       }
     },
 

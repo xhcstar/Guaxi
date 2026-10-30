@@ -21,10 +21,10 @@ const mod = read('src-tauri/src/commands/mail/mod.rs')
 test('图片移动：按坐标算落点，不依赖命中测试', () => {
   // 以前用 elementFromPoint 找块：指针落在图片上/内边距上/末尾空白时都命中不到块，
   // 表现就是「拖了没反应」。改成按鼠标纵向位置插到第一个中线在指针下方的块前面。
-  assert.ok(/function placeImageAtY/.test(composer), '按 Y 坐标决定插到哪')
+  assert.ok(/function updateDropTarget/.test(composer), '按 Y 坐标决定插到哪')
   assert.ok(!/document\.elementFromPoint/.test(composer), '不再依赖命中测试')
   assert.ok(
-    /for \(const el of blocks\)[\s\S]{0,200}clientY < rect\.top \+ rect\.height \/ 2/.test(composer),
+    /for \(const child of editor\.children\)[\s\S]{0,200}clientY < rect\.top \+ rect\.height \/ 2/.test(composer),
     '用块的中线判断插在前面还是后面',
   )
   // 控制框上有专门的拖动把手，不必正好按在图片上。

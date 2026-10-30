@@ -835,9 +835,12 @@ onBeforeUnmount(() => {
  * 草稿箱里能不能看到那封，看不见就当没存（真实反馈）。
  */
 /** 编辑器里点了「直接放弃」：不写草稿箱，也不留在本地暂存。 */
-function onDiscardCompose() {
-  store.discardCompose()
-  notify('已放弃这次编辑，没有写入草稿箱')
+async function onDiscardCompose() {
+  // 编辑器每 30 秒会自动往草稿箱写一份；放弃时 store 会把那一份一起删掉。
+  // 删不掉要如实说，否则用户会看到「明明点了放弃，草稿箱里还有」。
+  const cleaned = await store.discardCompose()
+  if (cleaned) notify('已放弃这次编辑，没有写入草稿箱')
+  else notify('已放弃这次编辑，但草稿箱里那份没能删掉，请稍后重试', true)
 }
 
 async function onCloseCompose() {

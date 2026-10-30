@@ -1388,12 +1388,16 @@ pub async fn mail_move_messages(
 /// 同一封邮件按同步轮次越攒越多（真实反馈：SSL 里 1400 行只有 200 封不同的邮件）。
 /// 只有目标文件夹确实已经占着这个 uid 时才换新号，并把映射一起挪过去。
 fn move_locally(account_id: &str, folder: &str, uids: &[u32], target: &str) -> Result<(), String> {
+    // 原地移动没有意义，而且下面的「先写目标行、再删来源行」在同文件夹里
+    // 会把刚写下的那一份删掉——直接返回。
+    if folder == target {
+        return Ok(());
+    }
     for uid in uids {
         let Some(mut summary) = store::get_summary(account_id, folder, *uid)? else {
             continue;
         };
-        let moved_uid = if folder != target && store::get_summary(account_id, target, *uid)?.is_some()
-        {
+        let moved_uid = if store::get_summary(account_id, target, *uid)?.is_some() {
             let free = store::next_free_uid(account_id)?;
             let _ = store::pop3_remap_uid(account_id, *uid, free);
             free

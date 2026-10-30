@@ -220,6 +220,44 @@ async function discardDraftsOf(draft) {
 }
 
 /**
+ * 删掉编辑器自动保存的那一份（`draft.mailboxDraft`）。
+ *
+ * 「直接放弃」时只删这一份：它盯着的是本次编辑写进草稿箱的进度，
+ * 与续写来源的原始草稿（`draftUid`）无关——那份是用户之前就存下的，不该被顺手删掉。
+ */
+async function discardAutoDraft(draft) {
+  const auto = draft?.mailboxDraft
+  if (!auto?.uid || !auto?.folder) return
+  draft.mailboxDraft = null
+  try {
+    await invoke('mail_discard_draft', {
+      accountId: draft.accountId,
+      folder: auto.folder,
+      uid: auto.uid,
+    })
+  } catch (err) {
+    logger.warn('删除自动草稿失败', err)
+  }
+}
+
+/**
+ * 「直接放弃」：不存草稿，先把自动保存进草稿箱的那份删掉，再关窗。
+ *
+ * 以前这里直接调 `closeWindow({ save: false })`：关窗本身没存，但编辑器
+ * 30 秒一次自动保存早已在草稿箱里留了一份（真实反馈：点了放弃，草稿箱里还有）。
+ */
+export async function discardWindow() {
+  const draft = composeDraft.value
+  await discardAutoDraft(draft)
+  composeDraft.value = null
+  await invoke('mail_compose_closed', { label: currentLabel, saved: false }).catch(() => {})
+  await invoke('mail_drop_compose_request', { label: currentLabel }).catch(() => {})
+  await invoke('mail_close_compose_window', { label: currentLabel }).catch(() => {
+    window.close()
+  })
+}
+
+/**
  * 关闭窗口。
  *
  * 先把内容存进草稿箱（有内容时），再通知主窗口刷新，最后真正关窗。

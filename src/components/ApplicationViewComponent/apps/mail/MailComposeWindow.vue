@@ -45,6 +45,7 @@ import {
   checkAttachments,
   closeWindow,
   composeDraft as windowDraft,
+  discardWindow,
   error,
   loadComposeWindow,
   loading,
@@ -114,9 +115,9 @@ async function onSaveDraft() {
   }
 }
 
-/** 编辑器里点了「直接放弃」：不存草稿，直接关窗。 */
+/** 编辑器里点了「直接放弃」：不存草稿，并把自动保存进草稿箱的那份删掉再关窗。 */
 async function onDiscard() {
-  await closeWindow({ save: false })
+  await discardWindow()
 }
 
 /** 编辑器里点了「存为草稿并关闭」：走正常的关窗流程（先存再关）。 */

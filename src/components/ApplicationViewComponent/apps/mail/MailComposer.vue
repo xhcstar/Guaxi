@@ -675,7 +675,7 @@
           contenteditable="true"
           data-placeholder="写点什么…"
           @contextmenu="onEditorContextMenu"
-          @mousedown="onEditorMouseDown"
+          @pointerdown="onEditorPointerDown"
           @mouseup="onEditorMouseUp"
           @click="onEditorClick"
           @input="onEditorInput"
@@ -747,9 +747,27 @@
         <span class="mail-image-handle is-bl" @mousedown.prevent.stop="onFrameMouseDown"></span>
         <span class="mail-image-handle is-br" @mousedown.prevent.stop="onFrameMouseDown"></span>
         <!-- 拖动把手：按住它就能把图片挪到别的段落前后，不用正好按在图片上。 -->
-        <span class="mail-image-move" title="按住拖动，移动图片位置" @mousedown.prevent.stop="startFrameMove">⠿</span>
+        <span class="mail-image-move" title="按住拖动，移动图片位置" @pointerdown.prevent.stop="startFrameMove">⠿</span>
       </div>
     </div>
+
+    <!-- 拖动图片 / 表格时的落点线：只画一条线，松手才真正移动，
+         否则被拖的那块会边拖边挤版式，指针永远追不上。 -->
+    <div
+      v-if="dropIndicator"
+      class="mail-drop-indicator"
+      :style="dropIndicatorStyle"
+    ></div>
+
+    <!-- 表格左上角的拖动把手（Outlook 的位置）：按住上下左右都能挪。 -->
+    <button
+      v-if="tableHandle"
+      class="mail-table-move"
+      :style="{ left: `${tableHandle.left}px`, top: `${tableHandle.top}px` }"
+      title="按住拖动，移动表格位置"
+      aria-label="拖动表格"
+      @pointerdown.prevent.stop="startTableHandleDrag"
+    >⠿</button>
 
     <!-- 选中图片 / 光标停在表格里时，贴着目标上沿浮出的一条小工具：只放最常用的
          几项，其余收进右键菜单（Outlook 就是这个分工）。fixed 定位挂在视口上，
@@ -787,7 +805,13 @@
           <MailIcon :name="align.icon" :size="15" />
         </button>
         <span class="mail-edit-bar-sep"></span>
-        <!-- 位置：整块上移 / 下移。拖拽被浏览器手势吃掉时也能挪。 -->
+        <!-- 位置：直接按住把手拖到任意段落之间；也可以用上下移按钮一格一格挪。 -->
+        <button
+          class="mail-edit-bar-btn is-grip"
+          title="按住拖动，移动图片位置"
+          aria-label="拖动图片"
+          @pointerdown.prevent.stop="startBarDrag('image', $event)"
+        >⠿</button>
         <button class="mail-edit-bar-btn" title="上移一位（与上一段交换位置）" aria-label="上移" @click="moveImageStep(-1)">
           <MailIcon name="moveUp" :size="15" />
         </button>
@@ -806,6 +830,20 @@
           @click="tableBarAction(item.action)"
         >
           <MailIcon :name="item.icon" :size="15" />
+        </button>
+        <span class="mail-edit-bar-sep"></span>
+        <!-- 表格同样可以整块拖动：把手以外的地方还要用来选中单元格文字。 -->
+        <button
+          class="mail-edit-bar-btn is-grip"
+          title="按住拖动，移动表格位置"
+          aria-label="拖动表格"
+          @pointerdown.prevent.stop="startBarDrag('table', $event)"
+        >⠿</button>
+        <button class="mail-edit-bar-btn" title="上移一位（与上一段交换位置）" aria-label="上移" @click="moveTableStep(-1)">
+          <MailIcon name="moveUp" :size="15" />
+        </button>
+        <button class="mail-edit-bar-btn" title="下移一位（与下一段交换位置）" aria-label="下移" @click="moveTableStep(1)">
+          <MailIcon name="moveDown" :size="15" />
         </button>
       </template>
       <span class="mail-edit-bar-sep"></span>
@@ -1710,6 +1748,8 @@ const discardOpen = ref(false)
 const discardBtnRef = ref(null)
 /** 面板的视口坐标（fixed 定位，见模板里的注释）。 */
 const discardPos = ref({ left: 0, top: 0 })
+/** 用户已经选了「直接放弃」：之后的自动暂存一律不再写。 */
+let discarded = false
 
 function toggleDiscardPanel() {
   if (discardOpen.value) {
@@ -1736,6 +1776,10 @@ function discardWithDraft() {
 /** 什么都不留：把本地暂存也删掉，免得下次启动又被「恢复」出来。 */
 async function discardForget() {
   discardOpen.value = false
+  // 先立旗：这之后的自动保存 / 卸载暂存都不许再写，否则刚删掉的草稿会在
+  // 关窗口那一刻又被补回去（自动保存是 15 秒一跳，正好撞上就白删了）。
+  discarded = true
+  stopAutosave()
   try {
     await invoke('mail_delete_stashed_draft', { id: draftId.value })
   } catch (error) {
@@ -1946,6 +1990,7 @@ function viewportRect(el) {
 function refreshEditBar() {
   const spot = editTargetSpot()
   refreshImageFrame()
+  refreshTableHandle()
   if (!spot) {
     editBar.value = null
     return
@@ -1988,6 +2033,34 @@ function clamp(value, low, high) {
   return Math.max(low, Math.min(value, high))
 }
 
+/**
+ * 表格左上角的拖动把手。
+ *
+ * Outlook 把「挪表格」的把手钉在表格左上角，用户的肌肉记忆就在那儿；放在浮条里
+ * 既不好找、也离表格太远。这里跟着表格矩形走，滚出可视区就收起。
+ */
+function refreshTableHandle() {
+  const editor = editorRef.value
+  const table = tableTools.value?.tableEl
+  if (!editor || !table || !editor.contains(table) || sourceMode.value || blockDrag?.active) {
+    tableHandle.value = null
+    return
+  }
+  const rect = table.getBoundingClientRect()
+  // 可视范围取滚动容器：编辑区本身的高度是整篇正文，拿它算会让把手跑到工具栏上。
+  const scroller = dragScroller() || editor
+  const view = scroller.getBoundingClientRect()
+  if (rect.bottom <= view.top + 4 || rect.top >= view.bottom - 4) {
+    tableHandle.value = null
+    return
+  }
+  const left = Math.round(Math.max(view.left + 2, rect.left - 18))
+  const top = Math.round(Math.max(view.top + 2, rect.top - 18))
+  const previous = tableHandle.value
+  if (previous && previous.left === left && previous.top === top) return
+  tableHandle.value = { left, top }
+}
+
 /** 浮条上的「更多」：把整张右键菜单开到目标下面（同一个菜单，不另做一份）。 */
 function openEditMenu() {
   const bar = editBar.value
@@ -2022,9 +2095,69 @@ watch([selectedImage, tableTools, sourceMode], refreshEditBar)
 const imageFrame = ref(null)
 /** 正在拖框改宽度：`{ startX, startWidth, boxWidth }`。 */
 let resizing = null
-/** 正在拖动图片换位置：`{ x, y, img }` / `{ img }`（已越过阈值）。 */
-let pendingImageMove = null
-let movingImage = null
+/**
+ * 正在拖动（或准备拖动）的整块：`{ kind, el, fromParent, pointerId, startX, startY, grabX, grabY, active }`。
+ *
+ * 图片与表格共用同一套拖动：按下时把指针捕获到被拖的块上，之后即使指针离开
+ * 元素本身也仍然收得到 pointermove。以前把监听挂在 window 的 mousemove 上，
+ * webview 里一旦手势被浏览器原生拖拽接管就彻底收不到，表现就是「拖了没反应」。
+ */
+let blockDrag = null
+/** 松手后插到哪个顶层块前面；null 表示追加到末尾。 */
+let dropRef = null
+/** 指针还停在被拖块自己的段落里：纵向不动，只改水平位置。 */
+let dropKeep = false
+let dropValid = false
+/** 拖动过程中画在落点上的那条线（视口坐标）。 */
+const dropIndicator = ref(null)
+const dropIndicatorStyle = computed(() =>
+  dropIndicator.value
+    ? {
+        left: `${dropIndicator.value.left}px`,
+        top: `${dropIndicator.value.y}px`,
+        width: `${dropIndicator.value.width}px`,
+      }
+    : null,
+)
+/** 表格左上角的拖动把手（Outlook 同款位置）：`{ left, top }`。 */
+const tableHandle = ref(null)
+
+/** 跟着指针走的浮层（被拖块的副本）：只在拖动时存在。 */
+let ghostEl = null
+let ghostContentEl = null
+let lastPointer = { x: 0, y: 0 }
+let autoScrollFrame = null
+const AUTO_SCROLL_EDGE = 56
+
+/** 离被拖块最近的「正文直接子元素」：图片常被浏览器包在段落里，位置要按这层算。 */
+function topLevelAncestor(el) {
+  const editor = editorRef.value
+  if (!editor || !el) return null
+  let node = el
+  while (node && node.parentElement !== editor) node = node.parentElement
+  return node && node.parentElement === editor ? node : null
+}
+
+/**
+ * 拖动时该滚谁。
+ *
+ * 弹层模式里滚的是 `.mail-compose-body`；阅读区里的内联回复卡片没有固定高度，
+ * 真正滚动的是外层阅读窗格，所以这里往上找第一个「确实能滚」的祖先。
+ */
+function dragScroller() {
+  const editor = editorRef.value
+  if (!editor) return null
+  let node = editor.parentElement
+  while (node && node !== document.body && node !== document.documentElement) {
+    const style = getComputedStyle(node)
+    if (/(auto|scroll)/.test(style.overflowY) && node.scrollHeight > node.clientHeight + 1) {
+      return node
+    }
+    node = node.parentElement
+  }
+  return document.scrollingElement || null
+}
+
 
 function refreshImageFrame() {
   const img = selectedImage.value
@@ -2086,111 +2219,359 @@ function onFrameMouseUp() {
   refreshImageFrame()
 }
 
-/** 在正文里按下鼠标：图片上是「准备拖动换位置」，别的地方交给浏览器。 */
-function onEditorMouseDown(event) {
+/** 在正文里按下指针：图片上是「拖动换位置」，其余位置交给浏览器处理文字。 */
+function onEditorPointerDown(event) {
+  if (event.button !== 0) return
   const img = event.target?.closest?.('img')
   if (!img || !editorRef.value?.contains(img)) return
-  // 图片上按下鼠标：拦掉默认行为（选文字 / 浏览器原生图片拖拽）。不拦的话
-  // 这次手势会被浏览器接管，我们在 window 上根本收不到 mousemove。
+  // 拦掉默认行为（选文字 / 浏览器原生图片拖拽）。不拦的话这次手势会被浏览器
+  // 接管，后续的 pointermove 就回不到我们手里。
   event.preventDefault()
-  pendingImageMove = { x: event.clientX, y: event.clientY, img }
+  // 按下即选中：pointerdown 被拦掉后，兼容的 click 事件不一定还会派发，
+  // 不能指望 onEditorClick 来点亮控制框。
+  selectImage(img)
+  beginBlockDrag('image', img, event)
 }
 
 /** 从控制框上的把手开始拖动：不依赖「正好按在图片上」。 */
 function startFrameMove(event) {
   const img = selectedImage.value
-  if (!img) return
+  if (img) beginBlockDrag('image', img, event)
+}
+
+/** 浮条上的把手：图片 / 表格都用它开始拖动。 */
+function startBarDrag(kind, event) {
+  const el = kind === 'image' ? selectedImage.value : tableTools.value?.tableEl
+  if (el) beginBlockDrag(kind, el, event)
+}
+
+/** 表格左上角的把手：按住它拖，就是 Outlook 里那个「挪表格」的手势。 */
+function startTableHandleDrag(event) {
+  const table = tableTools.value?.tableEl
+  if (table) beginBlockDrag('table', table, event)
+}
+
+function beginBlockDrag(kind, el, event) {
+  const editor = editorRef.value
+  if (!el || !editor?.contains(el)) return
   event.preventDefault?.()
-  movingImage = { img }
-  document.body.classList.add('mail-image-dragging')
-  placeImageAtY(img, event.clientY)
+  const rect = el.getBoundingClientRect()
+  const editorStyle = getComputedStyle(editor)
+  const padLeft = parseFloat(editorStyle.paddingLeft) || 0
+  const padRight = parseFloat(editorStyle.paddingRight) || 0
+  const editorRect = editor.getBoundingClientRect()
+  blockDrag = {
+    kind,
+    el,
+    fromParent: el.parentElement,
+    pointerId: event.pointerId,
+    startX: event.clientX,
+    startY: event.clientY,
+    startLeft: rect.left,
+    startWidth: rect.width,
+    // 正文可用的水平范围（缓存一次，拖动中每帧都要用）。
+    available: Math.max(1, editorRect.width - padLeft - padRight),
+    contentLeft: editorRect.left + padLeft,
+    // 抓取点在块内的位置：浮层与松手后的水平位置都按它对齐，块不会「跳」到指针下。
+    grabX: event.clientX - rect.left,
+    grabY: event.clientY - rect.top,
+    active: false,
+  }
+  // 指针捕获：拖出元素范围（拖到段落之间、正文空白处）也持续收到事件。
+  try {
+    el.setPointerCapture?.(event.pointerId)
+  } catch {
+    /* 不支持捕获的环境退回 window 上的监听 */
+  }
+  window.addEventListener('pointermove', onBlockDragMove)
+  window.addEventListener('pointerup', onBlockDragEnd)
+  window.addEventListener('pointercancel', onBlockDragCancel)
+}
+
+function onBlockDragMove(event) {
+  if (!blockDrag) return
+  lastPointer = { x: event.clientX, y: event.clientY }
+  if (!blockDrag.active) {
+    const moved = Math.hypot(event.clientX - blockDrag.startX, event.clientY - blockDrag.startY)
+    if (moved < 4) return
+    activateBlockDrag()
+  }
+  event.preventDefault()
+  moveGhost()
+  updateDropTarget(event.clientY)
+}
+
+function activateBlockDrag() {
+  if (!blockDrag) return
+  blockDrag.active = true
+  document.body.classList.add('mail-block-dragging')
+  // 原位留一个半透明的「占位」：用户能看出它原本在哪。
+  blockDrag.el.setAttribute('data-drag-source', '')
+  tableHandle.value = null
+  createGhost()
+  if (!autoScrollFrame) autoScrollFrame = requestAnimationFrame(runAutoScroll)
+}
+
+/** 克隆一份跟着指针走的浮层：表格 / 图片在拖动过程中就有实时反馈，不再是「松手才动」。 */
+function createGhost() {
+  const drag = blockDrag
+  if (!drag) return
+  const rect = drag.el.getBoundingClientRect()
+  const wrap = document.createElement('div')
+  wrap.className = 'mail-block-ghost'
+  // 里面套一层编辑区类名：表格的格线、图片的块级排版都复用编译区同一套样式。
+  const inner = document.createElement('div')
+  inner.className = 'mail-compose-editor'
+  inner.style.cssText =
+    'padding:0;min-height:0;flex:0 0 auto;background:transparent;color:inherit;line-height:inherit'
+  const clone = drag.el.cloneNode(true)
+  clone.removeAttribute('data-drag-source')
+  clone.style.margin = '0'
+  clone.style.width = `${Math.round(rect.width)}px`
+  clone.style.maxWidth = '100%'
+  if (clone.tagName === 'IMG') clone.style.height = 'auto'
+  inner.appendChild(clone)
+  wrap.appendChild(inner)
+  wrap.style.width = `${Math.round(rect.width)}px`
+  ;(editorRef.value?.closest?.('.mail-composer') || document.body).appendChild(wrap)
+  ghostEl = wrap
+  ghostContentEl = clone
+  moveGhost()
+}
+
+function moveGhost() {
+  if (!ghostEl || !blockDrag) return
+  const left = Math.round(lastPointer.x - blockDrag.grabX)
+  ghostEl.style.left = `${left}px`
+  ghostEl.style.top = `${Math.round(lastPointer.y - blockDrag.grabY)}px`
+  // 整行宽的块往右拖时会收窄：浮层同步收，落点看起来才和结果一致。
+  if (blockDrag.startWidth >= blockDrag.available - 1) {
+    const offset = clamp(left - blockDrag.contentLeft, 0, blockDrag.available * 0.7)
+    const width = Math.round(blockDrag.available - offset)
+    ghostEl.style.width = `${width}px`
+    if (ghostContentEl) ghostContentEl.style.width = `${width}px`
+  }
+}
+
+function removeGhost() {
+  ghostEl?.remove()
+  ghostEl = null
+  ghostContentEl = null
 }
 
 /**
- * 整块上移 / 下移图片。
+ * 拖到正文上下边缘时自动滚动。
  *
- * 拖拽在某些输入设备 / webview 上会被浏览器手势吃掉（已经踩过几次），这里给一个
- * 确定性的入口：按当前图片所在的位置，找它前一个 / 后一个顶层块，插到对应的边。
+ * 以前只能把内容拖到当前这一屏里，想挪到上面 / 下面几段得先松手、滚动、再拖一次。
+ * 指针停在边缘就一直滚，并且每滚一帧都重算一次落点（内容和指针的相对位置变了）。
  */
-function moveImageStep(delta) {
-  const img = selectedImage.value
-  const editor = editorRef.value
-  if (!img || !editor?.contains(img)) return
-  const box = img.getBoundingClientRect()
-  const blocks = [...editor.children].filter((el) => el !== img && !el.contains(img))
-  if (!blocks.length) return
-  if (delta > 0) {
-    const after = blocks.find((el) => el.getBoundingClientRect().top >= box.bottom - 2)
-    if (!after) return
-    placeImageAtY(img, after.getBoundingClientRect().bottom + 1)
-  } else {
-    const before = [...blocks].reverse().find((el) => el.getBoundingClientRect().bottom <= box.top + 2)
-    if (!before) return
-    placeImageAtY(img, before.getBoundingClientRect().top + 1)
+function runAutoScroll() {
+  autoScrollFrame = null
+  if (!blockDrag?.active) return
+  const scroller = dragScroller()
+  if (scroller) {
+    const box = scroller.getBoundingClientRect()
+    let delta = 0
+    if (lastPointer.y < box.top + AUTO_SCROLL_EDGE) {
+      delta = -Math.max(4, Math.round((box.top + AUTO_SCROLL_EDGE - lastPointer.y) / 3))
+    } else if (lastPointer.y > box.bottom - AUTO_SCROLL_EDGE) {
+      delta = Math.max(4, Math.round((lastPointer.y - (box.bottom - AUTO_SCROLL_EDGE)) / 3))
+    }
+    if (delta) {
+      const before = scroller.scrollTop
+      scroller.scrollTop = before + delta
+      if (scroller.scrollTop !== before) updateDropTarget(lastPointer.y)
+    }
   }
-  refreshImageFrame()
-  refreshEditBar()
-  onEditorInput()
+  autoScrollFrame = requestAnimationFrame(runAutoScroll)
 }
 
-function onWindowMouseMoveForImage(event) {
-  if (resizing) return
-  if (!pendingImageMove && !movingImage) return
-  if (!movingImage) {
-    const dx = event.clientX - pendingImageMove.x
-    const dy = event.clientY - pendingImageMove.y
-    if (Math.hypot(dx, dy) < 6) return
-    movingImage = { img: pendingImageMove.img }
-    pendingImageMove = null
-    document.body.classList.add('mail-image-dragging')
+/**
+ * 松手后块插到哪：
+ * - 指针还在块自己所在的那一段里 → 纵向不动（只调左右位置），否则图片会被从
+ *   所在段落里硬拽出来，稍微一晃就换个段落，很难用；
+ * - 指针已经离开这一段 → 找第一个「中线在指针下方」的顶层块，插到它前面。
+ */
+function updateDropTarget(clientY) {
+  const editor = editorRef.value
+  const target = blockDrag?.el
+  if (!editor || !target) return
+  const box = editor.getBoundingClientRect()
+  dropValid = clientY >= box.top - 80 && clientY <= box.bottom + 80
+  if (!dropValid) {
+    dropRef = null
+    dropKeep = false
+    dropIndicator.value = null
     return
   }
-  const img = movingImage.img
-  const editor = editorRef.value
-  if (!editor) return
-  placeImageAtY(img, event.clientY)
-  refreshImageFrame()
-  refreshEditBar()
-}
-
-/**
- * 按鼠标的纵向位置决定图片插到哪：找第一个「中线在指针下方」的顶层块，插到它前面；
- * 一个都没有就放到末尾。
- *
- * 不再用 elementFromPoint：编辑区四周有内边距、末尾有空白，指针落在这些地方时
- * 命中不到任何块，表现就是「拖了没反应」，而光标停在图片上时命中的又是图片本身。
- * 按坐标算位置，整块区域都能拖。
- */
-function placeImageAtY(img, clientY) {
-  const editor = editorRef.value
-  if (!editor || !img) return
-  const box = editor.getBoundingClientRect()
-  if (clientY < box.top - 40 || clientY > box.bottom + 40) return
-  const blocks = [...editor.children].filter((el) => el !== img && !el.contains(img))
-  let before = null
-  for (const el of blocks) {
-    const rect = el.getBoundingClientRect()
+  const anchor = topLevelAncestor(target)
+  dropKeep = false
+  if (anchor) {
+    const rect = anchor.getBoundingClientRect()
+    // 上下各放宽一点：拖动把手本身就长在块的边角上，按在把手上时指针并不在块内。
+    dropKeep = clientY >= rect.top - 24 && clientY <= rect.bottom + 24
+  }
+  if (dropKeep) {
+    dropRef = anchor
+    dropIndicator.value = null
+    return
+  }
+  let ref = null
+  for (const child of editor.children) {
+    const rect = child.getBoundingClientRect()
     if (clientY < rect.top + rect.height / 2) {
-      before = el
+      ref = child
       break
     }
   }
-  if (before) before.insertAdjacentElement('beforebegin', img)
-  else editor.appendChild(img)
+  const last = editor.lastElementChild
+  let y = ref ? ref.getBoundingClientRect().top : last ? last.getBoundingClientRect().bottom : box.top + 8
+  // 落点滚到可视区外时，线贴在滚动容器的边缘，不画到工具栏上。
+  const scroller = dragScroller()
+  if (scroller) {
+    const view = scroller.getBoundingClientRect()
+    y = clamp(y, view.top + 2, view.bottom - 2)
+  }
+  dropRef = ref
+  dropIndicator.value = {
+    left: Math.round(box.left),
+    width: Math.round(box.width),
+    y: Math.round(y),
+  }
 }
 
-function onWindowMouseUpForImage() {
-  pendingImageMove = null
-  if (!movingImage) return
-  const img = movingImage.img
-  movingImage = null
-  document.body.classList.remove('mail-image-dragging')
-  // 换完位置重新选中它，控制框跟着走（不然框还停在旧地方）。
-  if (editorRef.value?.contains(img)) selectImage(img)
+function onBlockDragEnd() {
+  const drag = blockDrag
+  if (!drag) return
+  const active = drag.active
+  const ref = dropRef
+  const keep = dropKeep
+  const valid = dropValid
+  const pointer = lastPointer
+  finishBlockDrag()
+  if (!active || !valid) return
+  const editor = editorRef.value
+  if (!editor?.contains(drag.el)) return
+  if (!keep) {
+    if (ref && ref !== drag.el) ref.insertAdjacentElement('beforebegin', drag.el)
+    else if (!ref) editor.appendChild(drag.el)
+  }
+  // 左右：把块的左缘对到浮层左缘，写成 margin-left（收件端同样有效）。
+  applyHorizontalDrop(drag.el, drag, pointer.x)
+  cleanupEmptyWrapper(drag.fromParent)
+  // 换完位置重新选中它：控制框 / 浮条跟着走，而不是停在旧地方。
+  if (drag.kind === 'image') selectImage(drag.el)
+  onEditorInput()
+  refreshImageFrame()
+  refreshEditBar()
+  if (drag.kind === 'table') nextTick(refreshTableTools)
+  refreshFormatState()
+}
+
+function onBlockDragCancel() {
+  finishBlockDrag()
+}
+
+function finishBlockDrag() {
+  window.removeEventListener('pointermove', onBlockDragMove)
+  window.removeEventListener('pointerup', onBlockDragEnd)
+  window.removeEventListener('pointercancel', onBlockDragCancel)
+  if (blockDrag) {
+    try {
+      blockDrag.el.releasePointerCapture?.(blockDrag.pointerId)
+    } catch {
+      /* 捕获可能已经随 pointerup 自动释放 */
+    }
+    blockDrag.el.removeAttribute('data-drag-source')
+  }
+  if (autoScrollFrame) {
+    cancelAnimationFrame(autoScrollFrame)
+    autoScrollFrame = null
+  }
+  removeGhost()
+  blockDrag = null
+  dropRef = null
+  dropKeep = false
+  dropValid = false
+  dropIndicator.value = null
+  document.body.classList.remove('mail-block-dragging')
+}
+
+/**
+ * 水平位置：把块的左缘对上松手时的位置。
+ *
+ * 邮件正文没有「自由画布」，能表达的水平位移只有缩进（margin-left）。块比正文窄
+ * 时左右挪就是改缩进；整行宽的块没有空位，往右拖时把右缘钉住、宽度按百分比收窄
+ * ——否则表格会比正文还宽，收件端直接横向溢出。
+ *
+ * 只是上下拖、手指抖了几像素的时候不动外边距：否则居中 / 靠右的图片会被顺手
+ * 改成靠左（真实反馈里最难解释的一类「我没让它动」）。
+ */
+function applyHorizontalDrop(el, drag, pointerX) {
+  if (!editorRef.value) return
+  const available = drag.available
+  const contentLeft = drag.contentLeft
+  const startWidth = Math.min(drag.startWidth, available)
+  const fullWidth = startWidth >= available - 1
+  // 整行宽的块允许收窄到 30%（再窄就不像一张表了）；本来就窄的只挪不缩。
+  const maxOffset = fullWidth
+    ? Math.max(0, available - Math.max(96, available * 0.3))
+    : Math.max(0, available - startWidth)
+  const offset = clamp(pointerX - drag.grabX - contentLeft, 0, maxOffset)
+  const startOffset = clamp(drag.startLeft - contentLeft, 0, maxOffset)
+  if (Math.abs(offset - startOffset) < 16) return
+  if (fullWidth && offset > 0) {
+    // 百分比宽度收件端也认；px 宽度在窄窗口里会把正文顶横。
+    el.style.width = `${Math.round(((available - offset) / available) * 100)}%`
+  }
+  el.style.marginLeft = offset ? `${Math.round(offset)}px` : ''
+  el.style.marginRight = '0'
+  if (/^TABLE$/i.test(el.tagName)) el.setAttribute('align', 'left')
+}
+
+/** 图片被从段落里拖出来后，别在正文里留下一个空段落。 */
+function cleanupEmptyWrapper(parent) {
+  const editor = editorRef.value
+  if (!parent || !editor || parent === editor || !parent.isConnected) return
+  if (parent.querySelector?.('img, table, hr, video, audio, iframe')) return
+  if ((parent.textContent || '').trim()) return
+  parent.remove()
+}
+
+/** 整块上移 / 下移一格：拖拽之外的确定性入口（键盘 / 触控板也顺手）。 */
+function moveBlockStep(target, delta) {
+  const editor = editorRef.value
+  const anchor = topLevelAncestor(target)
+  if (!editor || !target || !anchor) return false
+  const fromParent = target.parentElement
+  if (delta > 0) {
+    const next = anchor.nextElementSibling
+    if (next) next.insertAdjacentElement('afterend', target)
+    // 已经在最后一个块里：至少把它从所在段落里挪到段落之后。
+    else if (anchor !== target) anchor.insertAdjacentElement('afterend', target)
+    else return false
+  } else {
+    const prev = anchor.previousElementSibling
+    if (prev) prev.insertAdjacentElement('beforebegin', target)
+    else if (anchor !== target) anchor.insertAdjacentElement('beforebegin', target)
+    else return false
+  }
+  cleanupEmptyWrapper(fromParent)
+  return true
+}
+
+function moveImageStep(delta) {
+  if (!moveBlockStep(selectedImage.value, delta)) return
   refreshImageFrame()
   refreshEditBar()
   onEditorInput()
-  refreshFormatState()
+}
+
+function moveTableStep(delta) {
+  if (!moveBlockStep(tableTools.value?.tableEl, delta)) return
+  refreshEditBar()
+  nextTick(refreshTableTools)
+  onEditorInput()
 }
 
 // 浮条要跟着目标走：正文滚动、窗口改尺寸都得重算位置（一帧最多算一次）。
@@ -2209,15 +2590,11 @@ function onEditBarReflow() {
 onMounted(() => {
   document.addEventListener('scroll', onEditBarReflow, true)
   window.addEventListener('resize', onEditBarReflow)
-  window.addEventListener('mousemove', onWindowMouseMoveForImage)
-  window.addEventListener('mouseup', onWindowMouseUpForImage)
 })
 onBeforeUnmount(() => {
   document.removeEventListener('scroll', onEditBarReflow, true)
   window.removeEventListener('resize', onEditBarReflow)
-  window.removeEventListener('mousemove', onWindowMouseMoveForImage)
-  window.removeEventListener('mouseup', onWindowMouseUpForImage)
-  document.body.classList.remove('mail-image-dragging')
+  finishBlockDrag()
 })
 
 // ---------------- 编辑器右键菜单 ----------------
@@ -2600,6 +2977,8 @@ function serializeEditorHtml() {
   const host = document.createElement('template')
   host.innerHTML = editorRef.value.innerHTML
   const clone = host.content
+  // 拖动中的临时标记（半透明的占位样式）不能写进草稿 / 发出去。
+  clone.querySelectorAll('[data-drag-source]').forEach((el) => el.removeAttribute('data-drag-source'))
   // 引用卡片的配色映射只为本机编辑区服务（见 scheduleQuoteTheme）：
   // 交给草稿 / 发送之前先还原成邮件原值，不能把深色主题的映射结果发出去。
   const themed = quoteThemeTargets(clone)
@@ -3296,6 +3675,8 @@ function mailboxSignature(html) {
 }
 
 async function stashNow({ toMailbox = true } = {}) {
+  // 用户已经点了「直接放弃」：连本地暂存都不该再写回去。
+  if (discarded) return null
   // 不判断有没有内容：只要这封还在编辑，就留一份可以继续写的草稿。
   if (stashInflight) return null
   const html = editorRef.value && !sourceMode.value ? serializeEditorHtml() : htmlSource.value
@@ -3307,6 +3688,11 @@ async function stashNow({ toMailbox = true } = {}) {
       lastSavedAt.value = Date.now()
     } catch (error) {
       logger.warn('自动暂存失败', error)
+    }
+    // 放弃和这一轮自动保存撞在一起：刚写进去的本地暂存要立刻撤掉。
+    if (discarded) {
+      await invoke('mail_delete_stashed_draft', { id: draftId.value }).catch(() => {})
+      return draftId.value
     }
 
     if (!toMailbox || !props.saveMailboxDraft) return draftId.value
@@ -3339,6 +3725,18 @@ async function stashNow({ toMailbox = true } = {}) {
       if (saved?.uid) {
         mailboxDraft.uid = saved.uid
         mailboxDraft.folder = saved.folder || mailboxDraft.folder
+      }
+      // 同上：这一轮写进草稿箱的同时用户点了放弃，这份也要立刻删掉，
+      // 否则「放弃了，草稿箱里却还多出一封」。
+      if (discarded) {
+        if (saved?.uid && saved?.folder) {
+          await invoke('mail_discard_draft', {
+            accountId: props.draft.accountId,
+            folder: saved.folder,
+            uid: saved.uid,
+          }).catch(() => {})
+        }
+        return draftId.value
       }
       // 新草稿写成功之后才删旧的那份：中途失败也不会把内容弄丢。
       if (previous?.uid && previous.folder && previous.uid !== mailboxDraft.uid) {
@@ -3397,7 +3795,8 @@ onBeforeUnmount(() => {
   stopAutosave()
   // 关闭时立刻存一次本地暂存（不写草稿箱）：真正写进草稿箱由父级在
   // closeCompose / closeWindow 里做，这里再写一次只会在草稿箱里多出一份重复草稿。
-  stashNow({ toMailbox: false })
+  // 「直接放弃」时不能再存：那份暂存刚刚才被删掉。
+  if (!discarded) stashNow({ toMailbox: false })
 })
 
 defineExpose({ appendBodyText, addPaths, stashNow, rememberMailboxDraft })

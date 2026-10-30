@@ -35,7 +35,7 @@ test('新窗口的引用历史：与阅读区共用同一套配色映射，且�
   assert.ok(composer.includes('applyBodyThemeToElements'), '写信区应复用 colors.js 的映射')
   assert.ok(/data-guaxi-quote-card/.test(composer), '只对引用卡片做映射，不动用户自己写的内容')
   assert.ok(
-    /function serializeEditorHtml[\s\S]{0,600}applyBodyThemeToElements\(themed, 'light'\)/.test(composer),
+    /function serializeEditorHtml[\s\S]{0,900}applyBodyThemeToElements\(themed, 'light'\)/.test(composer),
     '序列化草稿前要把映射结果还原成邮件原值',
   )
   assert.ok(

@@ -41,9 +41,9 @@ test('放弃：发送旁边有入口，关之前让用户选存草稿还是直�
   assert.ok(/discardForget/.test(composer) && /直接放弃/.test(composer), '可选「直接放弃」')
   assert.ok(/mail_delete_stashed_draft/.test(composer), '直接放弃要把本地暂存也删掉')
   assert.ok(/'discard'/.test(composer), '要能通知父级「不保存」')
-  assert.ok(/function onDiscardCompose[\s\S]{0,200}store\.discardCompose\(\)/.test(mailApp), '主界面收到放弃就清掉编辑状态')
-  assert.ok(/discardCompose\(\) \{/.test(store), 'store 要有不落库的放弃路径')
-  assert.ok(/async function onDiscard\(\)[\s\S]{0,120}closeWindow\(\{ save: false \}\)/.test(shell), '独立窗口放弃时关窗且不存')
+  assert.ok(/async function onDiscardCompose[\s\S]{0,240}await store\.discardCompose\(\)/.test(mailApp), '主界面收到放弃就清掉编辑状态')
+  assert.ok(/async discardCompose\(\) \{/.test(store), 'store 要有不落库的放弃路径')
+  assert.ok(/async function onDiscard\(\)[\s\S]{0,120}discardWindow\(\)/.test(shell), '独立窗口放弃时删掉自动草稿再关窗')
   assert.ok(/@close="onSaveAndClose"/.test(shell), '独立窗口里「存为草稿并关闭」也要真的存')
 })
 

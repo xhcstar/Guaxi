@@ -2461,10 +2461,64 @@
   pointer-events: auto;
   cursor: move;
 }
-body.mail-image-dragging,
-body.mail-image-dragging * {
-  cursor: move !important;
+/* 拖动整块（图片 / 表格）时：整个正文都切成「抓着」的手势，且不许划选文字。 */
+body.mail-block-dragging,
+body.mail-block-dragging * {
+  cursor: grabbing !important;
   user-select: none !important;
+}
+
+/* 落点线：拖动中只画一条线，松手才真正把块移过去，避免边拖边挤版式。 */
+.mail-drop-indicator {
+  position: fixed;
+  z-index: 63;
+  height: 2px;
+  margin-top: -1px;
+  border-radius: 2px;
+  background: var(--mail-accent);
+  box-shadow: 0 0 0 1px var(--mail-accent-soft);
+  pointer-events: none;
+}
+
+/* 拖动中的原件：留一个半透明占位，让人看得出它原本在哪。 */
+.mail-compose-editor [data-drag-source] {
+  opacity: 0.26;
+}
+
+/* 跟手的浮层：被拖块的实时副本，不参与版面（松手才真正移动）。
+   类名避开列表拖拽用的 .mail-drag-ghost（那是另一套胶囊样式）。 */
+.mail-block-ghost {
+  position: fixed;
+  z-index: 90;
+  max-height: 70vh;
+  overflow: hidden;
+  border: 1px solid var(--mail-accent);
+  border-radius: 8px;
+  background: var(--mail-panel);
+  box-shadow: var(--mail-shadow);
+  opacity: 0.95;
+  pointer-events: none;
+}
+
+/* 表格左上角的拖动把手（Outlook 同款位置）：按住上下左右都能挪。 */
+.mail-table-move {
+  position: fixed;
+  z-index: 62;
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid var(--mail-accent);
+  border-radius: 4px;
+  background: var(--mail-panel);
+  color: var(--mail-accent);
+  font-size: 11px;
+  line-height: 1;
+  cursor: grab;
+}
+.mail-table-move:active {
+  cursor: grabbing;
 }
 
 /* 图片 / 表格的浮动工具条：贴着选中的目标浮出，只放最常用的几项，其余收进右键菜单。
@@ -2510,6 +2564,14 @@ body.mail-image-dragging * {
 .mail-edit-bar-btn.is-on {
   background: var(--mail-accent-soft);
   color: var(--mail-accent);
+}
+/* 浮条上的拖动把手：按住它能把图片 / 表格整块挪到别的段落之间。 */
+.mail-edit-bar-btn.is-grip {
+  cursor: grab;
+  letter-spacing: 1px;
+}
+.mail-edit-bar-btn.is-grip:active {
+  cursor: grabbing;
 }
 .mail-edit-bar-btn.is-danger {
   color: var(--mail-danger);

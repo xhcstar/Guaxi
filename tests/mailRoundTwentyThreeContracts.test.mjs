@@ -27,8 +27,12 @@ test('确认框要压在所有弹层之上', () => {
 })
 
 test('图片移动：拦掉浏览器手势，并提供上移/下移', () => {
-  const fn = composer.slice(composer.indexOf('function onEditorMouseDown'), composer.indexOf('function onEditorMouseDown') + 400)
-  assert.ok(/event\.preventDefault\(\)/.test(fn), '按下图片时拦掉默认行为，否则收不到 mousemove')
+  const fn = composer.slice(
+    composer.indexOf('function onEditorPointerDown'),
+    composer.indexOf('function onEditorPointerDown') + 500,
+  )
+  assert.ok(/event\.preventDefault\(\)/.test(fn), '按下图片时拦掉默认行为，否则收不到后续 pointermove')
+  assert.ok(/beginBlockDrag/.test(fn), '按下后进入整块拖动')
   assert.ok(/function moveImageStep/.test(composer), '要有确定性的上移/下移')
   assert.ok(/moveImageStep\(-1\)/.test(composer) && /moveImageStep\(1\)/.test(composer), '浮条上两个按钮')
   assert.ok(/name="moveUp"/.test(composer) && /name="moveDown"/.test(composer), '用图标 + 提示')
