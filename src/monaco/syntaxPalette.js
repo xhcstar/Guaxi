@@ -89,7 +89,10 @@ const BUCKET_SPECS = [
   { key: 'inherit', role: 'yellow', shade: -18 },
   { key: 'namespace', role: 'yellow', shade: 9 },
 
-  { key: 'variable', role: 'red', shade: 0 },
+  // 裸标识符用正文色：tree-sitter 的 python 语法有一条 `(identifier) @variable` 兜底，
+  // 把每个标识符都标成变量；跟着红族走会让整块 Python 变红，和别的语言完全不像。
+  // 红族留给更具体的桶（成员 / 参数 / self / 标签），与 VS Code 的观感一致。
+  { key: 'variable', role: 'base', shade: 0 },
   { key: 'property', role: 'red', shade: 18 },
   { key: 'parameter', role: 'red', shade: -18 },
   { key: 'variable-language', role: 'red', shade: 9 },
@@ -370,8 +373,10 @@ const readThemeBackground = (css, appearance) => {
  * 这里按桶的固定顺序再散一次：后到的往「离背景更远」的方向挪，保证同屏可区分。
  */
 const dedupePalette = (palette, background, appearance) => {
-  // punctuation 故意跟正文同色，不参与散色；base 排在最前，保证它拿到的是主题原色。
-  const order = BUCKET_SPECS.map((spec) => spec.key).filter((key) => key !== 'punctuation')
+  // punctuation / variable 故意跟正文同色，不参与散色；base 排在最前，保证它拿到的是主题原色。
+  const order = BUCKET_SPECS
+    .map((spec) => spec.key)
+    .filter((key) => key !== 'punctuation' && key !== 'variable')
   const used = []
   const resolved = { ...palette }
   // 明度上下限会卡住单向寻找（两个桶都贴到 86% 就再也分不开），所以两个方向都试；

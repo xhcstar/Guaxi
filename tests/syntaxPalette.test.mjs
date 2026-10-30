@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { GUAXI_CODE_THEME_ROLES } from '../src/monaco/codeThemeRoles.js'
 import { buildTokenHtml } from '../src/monaco/tokenHtml.js'
+import { resolvePreviewLanguage } from '../src/monaco/previewLanguages.js'
 import {
   GUAXI_SYNTAX_BUCKETS,
   buildSyntaxTokenCss,
@@ -46,10 +47,10 @@ test('细化的意义在于同色不撞车：除正文/标点外每个桶颜色�
   for (const [id, light, dark] of THEME_FILES) {
     for (const [appearance, file] of [['light', light], ['dark', dark]]) {
       const palette = resolveTheme(id, file, appearance)
-      // 标点故意与正文同色，正文本身不参与「桶」的区分。
+      // 标点、裸变量故意与正文同色，正文本身不参与「桶」的区分。
       const seen = new Map()
       for (const bucket of GUAXI_SYNTAX_BUCKETS) {
-        if (bucket === 'base' || bucket === 'punctuation') continue
+        if (bucket === 'base' || bucket === 'punctuation' || bucket === 'variable') continue
         const color = palette[bucket]
         assert.ok(!seen.has(color), `${id}/${appearance}: ${bucket} 与 ${seen.get(color)} 同色 ${color}`)
         seen.set(color, bucket)
@@ -116,4 +117,16 @@ test('token span 拼 HTML：重叠 / 越界 span 不能把后面的正文吞掉'
     { line: 0, start_column: 5, end_line: 0, end_column: 6, token_type: 'number' },
   ])
   assert.equal(html, '<span class="guaxi-tok-string">x = 1</span>')
+})
+
+test('预览语言解析：别名、大小写、不支持的都按预期落点', () => {
+  assert.equal(resolvePreviewLanguage('language-python'), 'python')
+  assert.equal(resolvePreviewLanguage('hljs language-PY'), 'python')
+  assert.equal(resolvePreviewLanguage('language-c++'), 'cpp')
+  assert.equal(resolvePreviewLanguage('language-js'), 'javascript')
+  assert.equal(resolvePreviewLanguage('language-tex'), 'latex')
+  assert.equal(resolvePreviewLanguage('language-json'), '')
+  assert.equal(resolvePreviewLanguage('language-plaintext'), '')
+  assert.equal(resolvePreviewLanguage(''), '')
+  assert.equal(resolvePreviewLanguage(undefined), '')
 })

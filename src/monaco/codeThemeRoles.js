@@ -11,7 +11,7 @@
 //   blue   = 函数 / 方法
 //   yellow = 类 / 类型 / 继承 / 命名空间
 //   orange = 数字 / 布尔 / 常量 / 属性
-//   red    = 变量 / 成员 / 参数
+//   red    = 成员 / 参数 / 标签（裸变量跟正文同色，见 syntaxPalette 的 BUCKET_SPECS）
 //   cyan   = 运算符 / 内置 / 转义
 export const GUAXI_CODE_THEME_ROLES = {
   monokai: {

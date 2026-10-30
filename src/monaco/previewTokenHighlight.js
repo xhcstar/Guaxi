@@ -1,6 +1,7 @@
 import { invoke } from '@tauri-apps/api/core'
 import { createLogger } from '../utils/logger'
 import { buildTokenHtml } from './tokenHtml.js'
+import { resolvePreviewLanguage } from './previewLanguages.js'
 
 // 设计说明：
 // 1. Markdown 预览里的代码块一直由 highlight.js 上色，但 hljs 的类名比 tree-sitter 粗：
@@ -12,50 +13,6 @@ import { buildTokenHtml } from './tokenHtml.js'
 //    所以导出、打印拿到的是原来的 `.hljs-*` 结构，不受影响。
 
 const logger = createLogger('PreviewTokens')
-
-// 与后端 HIGHLIGHT_CONFIGS 支持的语言保持一致；不在表里的语言继续用 hljs 的颜色。
-const SUPPORTED_LANGUAGES = new Set([
-  'markdown',
-  'javascript',
-  'typescript',
-  'tsx',
-  'python',
-  'rust',
-  'bash',
-  'lua',
-  'java',
-  'html',
-  'c',
-  'cpp',
-  'latex',
-])
-
-const LANGUAGE_ALIASES = {
-  md: 'markdown',
-  mdown: 'markdown',
-  js: 'javascript',
-  jsx: 'javascript',
-  mjs: 'javascript',
-  cjs: 'javascript',
-  ts: 'typescript',
-  py: 'python',
-  python3: 'python',
-  rs: 'rust',
-  sh: 'bash',
-  shell: 'bash',
-  zsh: 'bash',
-  powershell: 'bash',
-  ps1: 'bash',
-  tex: 'latex',
-  'c++': 'cpp',
-  cc: 'cpp',
-  cxx: 'cpp',
-  hpp: 'cpp',
-  hxx: 'cpp',
-  htm: 'html',
-  xml: 'html',
-  vue: 'html',
-}
 
 const CACHE_LIMIT = 240
 const MAX_CODE_LENGTH = 200_000
@@ -79,7 +36,7 @@ const isCandidate = (codeEl) => (
   && codeEl.tagName === 'CODE'
   && codeEl.dataset.guaxiTokens !== '1'
   && codeEl.dataset.guaxiTokens !== 'pending'
-  && !!resolveLanguage(codeEl)
+  && !!resolvePreviewLanguage(codeEl?.className)
 )
 
 /**
@@ -112,7 +69,7 @@ ${code}`
 
 const upgradeBlock = async (codeEl) => {
   if (!isCandidate(codeEl)) return
-  const language = resolveLanguage(codeEl)
+  const language = resolvePreviewLanguage(codeEl?.className)
   const code = codeEl.textContent || ''
   if (!language || !code.trim() || code.length > MAX_CODE_LENGTH) {
     codeEl.dataset.guaxiTokens = 'skip'
@@ -150,7 +107,7 @@ export const upgradeHtmlCodeBlocks = async (html) => {
   if (!blocks.length) return source
 
   await Promise.all(blocks.map(async (codeEl) => {
-    const language = resolveLanguage(codeEl)
+    const language = resolvePreviewLanguage(codeEl?.className)
     const code = codeEl.textContent || ''
     if (!language) return
     const tokenHtml = await fetchTokenHtml(code, language)
