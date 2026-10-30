@@ -204,58 +204,28 @@ pub async fn read_version(binary: &PathBuf) -> String {
 }
 
 
-/// 解析要交给 codex 的供应商：优先 cc-switch 本地代理，否则退回自定义 OpenAI 兼容配置。
+/// 解析要交给 codex 的供应商：cc-switch 本地代理优先，其次自定义 OpenAI 兼容配置。
 ///
-/// 走 cc-switch 时 Guaxi 只记一个入口地址，真正用哪家由 cc-switch 决定，
-/// 所以在 cc-switch 里切换供应商后这里不需要任何改动。
-///
-/// 注意 wire_api 不在这里选：codex 0.149 起已经移除对 `wire_api = "chat"` 的支持，
-/// 只接受 Responses 协议，所以生成配置时固定写 `responses`。
+/// 具体规则与普通对话共用 `llm_provider::resolve_agent`，避免设置页看到的东西和
+/// Agent 实际使用的东西对不上。wire_api 固定 Responses（codex 0.149 起不再支持 chat），
 /// 设置页里的 `cc_switch_wire_api` 只影响 Guaxi 自己的普通对话链路。
 fn resolve_provider() -> Result<CodexProvider, String> {
-    let llm = settingview::get_llm_config();
-
-    let (base_url, api_key, mut model, source) =
-        if llm.cc_switch_enabled && !llm.cc_switch_base_url.trim().is_empty() {
-            (
-                llm.cc_switch_base_url.trim().to_string(),
-                llm.cc_switch_api_key.trim().to_string(),
-                llm.cc_switch_model.trim().to_string(),
-                "cc-switch",
-            )
-        } else if !llm.custom_base_url.trim().is_empty() {
-            (
-                llm.custom_base_url.trim().to_string(),
-                llm.custom_api_key.trim().to_string(),
-                llm.custom_model.trim().to_string(),
-                "custom",
-            )
-        } else {
-            return Err(
-                "codex 没有可用的模型供应商：请在设置 → 大模型里启用 cc-switch 本地代理，或填写自定义 Base URL"
-                    .to_string(),
-            );
-        };
-
-    // 设置页显式填了 codex 专用模型时以它为准，方便 Agent 用比普通对话更强的模型。
-    if !llm.codex_model.trim().is_empty() {
-        model = llm.codex_model.trim().to_string();
-    }
-    if model.is_empty() {
-        return Err(format!(
-            "codex 缺少模型名：请在设置 → 大模型里填写 Codex 模型或 {} 的模型名",
-            source
-        ));
-    }
-
+    let provider = crate::commands::llm_provider::resolve_agent()?;
+    let api_key = if provider.api_key.is_empty() {
+        CODEX_API_KEY_PLACEHOLDER.to_string()
+    } else {
+        provider.api_key
+    };
+    // 只用于写进 config.toml 的供应商展示名（`Guaxi (cc-switch)`），保持静态字符串。
+    let source = match provider.source.as_str() {
+        "cc-switch" => "cc-switch",
+        "provider" => "provider",
+        _ => "custom",
+    };
     Ok(CodexProvider {
-        base_url,
-        api_key: if api_key.is_empty() {
-            CODEX_API_KEY_PLACEHOLDER.to_string()
-        } else {
-            api_key
-        },
-        model,
+        base_url: provider.base_url,
+        api_key,
+        model: provider.model,
         source,
     })
 }

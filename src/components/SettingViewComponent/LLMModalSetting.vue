@@ -3,134 +3,150 @@
     <n-card title="大模型" size="small">
       <n-space vertical size="large" style="width: 100%">
         <n-alert type="info" :show-icon="true">
-          配置大模型秘钥，访问秘钥用于调用对应大模型服务。
+          大模型配置分两类：直接填服务商 API Key，或启用 cc-switch 本地代理。
+          普通对话与 Agent 共用同一份配置，保存一次即全部生效。
         </n-alert>
 
-        <n-form label-placement="left" label-width="auto" :show-require-mark="false">
-          <n-form-item label="ChatGPT API Key">
-            <n-input v-model:value="form.chatgpt_api_key" :disabled="loading" type="password" show-password-on="click"
-              placeholder="sk-..." />
-          </n-form-item>
+        <n-tabs v-model:value="activeTab" type="line" animated>
+          <n-tab-pane name="providers" tab="服务商 API">
+            <n-form label-placement="left" label-width="auto" :show-require-mark="false">
+              <n-form-item label="ChatGPT API Key">
+                <n-input v-model:value="form.chatgpt_api_key" :disabled="configLoading" type="password" show-password-on="click"
+                  placeholder="sk-..." />
+              </n-form-item>
 
-          <n-form-item label="DeepSeek API Key">
-            <n-input v-model:value="form.deepseek_api_key" :disabled="loading" type="password" show-password-on="click"
-              placeholder="请输入 DeepSeek Key" />
-          </n-form-item>
+              <n-form-item label="DeepSeek API Key">
+                <n-input v-model:value="form.deepseek_api_key" :disabled="configLoading" type="password" show-password-on="click"
+                  placeholder="请输入 DeepSeek Key" />
+              </n-form-item>
 
-          <n-form-item label="Qwen API Key">
-            <n-input v-model:value="form.qwen_api_key" :disabled="loading" type="password" show-password-on="click"
-              placeholder="请输入 Qwen Key" />
-          </n-form-item>
+              <n-form-item label="Qwen API Key">
+                <n-input v-model:value="form.qwen_api_key" :disabled="configLoading" type="password" show-password-on="click"
+                  placeholder="请输入 Qwen Key" />
+              </n-form-item>
 
-          <n-form-item label="Kimi API Key">
-            <n-input v-model:value="form.kimi_api_key" :disabled="loading" type="password" show-password-on="click"
-              placeholder="请输入 Kimi Key" />
-          </n-form-item>
+              <n-form-item label="Kimi API Key">
+                <n-input v-model:value="form.kimi_api_key" :disabled="configLoading" type="password" show-password-on="click"
+                  placeholder="请输入 Kimi Key" />
+              </n-form-item>
 
-          <n-form-item label="豆包 API Key">
-            <n-input v-model:value="form.doubao_api_key" :disabled="loading" type="password" show-password-on="click"
-              placeholder="请输入 豆包 Key" />
-          </n-form-item>
+              <n-form-item label="豆包 API Key">
+                <n-input v-model:value="form.doubao_api_key" :disabled="configLoading" type="password" show-password-on="click"
+                  placeholder="请输入 豆包 Key" />
+              </n-form-item>
 
-          <n-form-item label="硅基流动 API Key">
-            <n-input v-model:value="form.siliconflow_api_key" :disabled="loading" type="password" show-password-on="click"
-              placeholder="请输入 硅基流动 Key" />
-          </n-form-item>
+              <n-form-item label="硅基流动 API Key">
+                <n-input v-model:value="form.siliconflow_api_key" :disabled="configLoading" type="password" show-password-on="click"
+                  placeholder="请输入 硅基流动 Key" />
+              </n-form-item>
 
-          <n-divider style="margin: 8px 0" />
+              <n-divider style="margin: 8px 0">自定义 OpenAI 兼容服务</n-divider>
 
-          <n-form-item label="自定义 Base URL">
-            <n-input v-model:value="form.custom_base_url" :disabled="loading"
-              placeholder="如 https://openrouter.ai/api/v1 或 https://open.bigmodel.cn/api/paas/v4" />
-          </n-form-item>
+              <n-form-item label="自定义 Base URL">
+                <n-input v-model:value="form.custom_base_url" :disabled="configLoading"
+                  placeholder="如 https://openrouter.ai/api/v1 或 https://open.bigmodel.cn/api/paas/v4" />
+              </n-form-item>
 
-          <n-form-item label="自定义 API Key">
-            <n-input v-model:value="form.custom_api_key" :disabled="loading" type="password" show-password-on="click"
-              placeholder="OpenAI 兼容服务的 API Key" />
-          </n-form-item>
+              <n-form-item label="自定义 API Key">
+                <n-input v-model:value="form.custom_api_key" :disabled="configLoading" type="password" show-password-on="click"
+                  placeholder="OpenAI 兼容服务的 API Key" />
+              </n-form-item>
 
-          <n-form-item label="自定义模型名">
-            <n-input v-model:value="form.custom_model" :disabled="loading"
-              placeholder="如 deepseek/deepseek-chat、glm-4-plus 等" />
-          </n-form-item>
+              <n-form-item label="自定义模型名">
+                <n-input v-model:value="form.custom_model" :disabled="configLoading"
+                  placeholder="如 deepseek/deepseek-chat、glm-4-plus 等" />
+              </n-form-item>
+            </n-form>
 
-          <n-divider style="margin: 8px 0" />
+            <n-alert type="default" :show-icon="false" style="margin-top: 8px; font-size: 12px">
+              服务商 API Key 只服务普通对话；Agent 走哪条路见「Agent」标签页：
+              {{ agentRoute.text }}
+            </n-alert>
+          </n-tab-pane>
 
-          <n-alert type="info" :show-icon="false" style="margin-bottom: 12px">
-            启用 cc-switch 后，Guaxi 只记住代理地址，具体用哪家供应商由 cc-switch 决定；
-            在 cc-switch 里切换供应商，普通对话与 Codex Agent 会同时跟随，无需回到这里改配置。
-          </n-alert>
+          <n-tab-pane name="cc-switch" tab="cc-switch 代理">
+            <n-alert type="info" :show-icon="false" style="margin-bottom: 12px">
+              启用 cc-switch 后，Guaxi 只记住代理地址，具体用哪家供应商由 cc-switch 决定；
+              在 cc-switch 里切换供应商，普通对话与 Agent 会同时跟随，无需回到这里改配置。
+            </n-alert>
 
-          <n-form-item label="启用 cc-switch 代理">
-            <n-space align="center">
-              <n-switch v-model:value="form.cc_switch_enabled" :disabled="loading" />
-              <n-button size="small" :disabled="loading" @click="detectCcSwitch">自动探测</n-button>
-              <n-text depth="3">{{ ccSwitchHint }}</n-text>
-            </n-space>
-          </n-form-item>
+            <n-form label-placement="left" label-width="auto" :show-require-mark="false">
+              <n-form-item label="启用 cc-switch 代理">
+                <n-space align="center">
+                  <n-switch v-model:value="form.cc_switch_enabled" :disabled="configLoading" />
+                  <n-button size="small" :loading="detecting" :disabled="detecting" @click="detectCcSwitch">自动探测</n-button>
+                  <n-text depth="3">{{ ccSwitchHint }}</n-text>
+                </n-space>
+              </n-form-item>
 
-          <n-form-item label="cc-switch 代理地址">
-            <n-input v-model:value="form.cc_switch_base_url" :disabled="loading"
-              placeholder="http://127.0.0.1:15721/v1" />
-          </n-form-item>
+              <n-form-item label="cc-switch 代理地址">
+                <n-input v-model:value="form.cc_switch_base_url" :disabled="configLoading"
+                  placeholder="http://127.0.0.1:15721/v1" />
+              </n-form-item>
 
-          <n-form-item label="cc-switch 模型名">
-            <n-input v-model:value="form.cc_switch_model" :disabled="loading"
-              placeholder="代理转发时使用的模型名，如 gpt-5.1-codex" />
-          </n-form-item>
+              <n-form-item label="cc-switch 模型名">
+                <n-input v-model:value="form.cc_switch_model" :disabled="configLoading"
+                  placeholder="代理转发时使用的模型名，如 gpt-5.1-codex" />
+              </n-form-item>
 
-          <n-form-item label="cc-switch API Key">
-            <n-input v-model:value="form.cc_switch_api_key" :disabled="loading" type="password"
-              show-password-on="click" placeholder="留空即可，代理会用上游供应商的密钥" />
-          </n-form-item>
+              <n-form-item label="cc-switch API Key">
+                <n-input v-model:value="form.cc_switch_api_key" :disabled="configLoading" type="password"
+                  show-password-on="click" placeholder="留空即可，代理会用上游供应商的密钥" />
+              </n-form-item>
 
-          <n-form-item label="cc-switch 协议">
-            <n-select v-model:value="form.cc_switch_wire_api" :disabled="loading" :options="wireApiOptions"
-              style="max-width: 260px" />
-          </n-form-item>
-          <n-text depth="3" style="display: block; margin: -8px 0 12px 0; font-size: 12px">
-            该选项只影响“对话”模式；Codex Agent 固定使用 Responses 协议（codex 0.149 起不再支持 chat）。
-          </n-text>
+              <n-form-item label="cc-switch 协议">
+                <n-select v-model:value="form.cc_switch_wire_api" :disabled="configLoading" :options="wireApiOptions"
+                  style="max-width: 260px" />
+              </n-form-item>
+              <n-text depth="3" style="display: block; margin: -8px 0 12px 0; font-size: 12px">
+                该选项只影响“对话”模式；Agent 固定使用 Responses 协议（codex 0.149 起不再支持 chat）。
+              </n-text>
+            </n-form>
+          </n-tab-pane>
 
-          <n-divider style="margin: 8px 0" />
+          <n-tab-pane name="agent" tab="Agent">
+            <n-alert :type="agentRoute.type" :show-icon="true" style="margin-bottom: 12px">
+              {{ agentRoute.text }}
+            </n-alert>
 
-          <n-form-item label="Agent 引擎">
-            <n-select v-model:value="form.agent_engine" :disabled="loading" :options="agentEngineOptions"
-              style="max-width: 260px" />
-          </n-form-item>
+            <n-form label-placement="left" label-width="auto" :show-require-mark="false">
+              <n-form-item label="Agent 引擎">
+                <n-select v-model:value="form.agent_engine" :disabled="configLoading" :options="agentEngineOptions"
+                  style="max-width: 260px" />
+              </n-form-item>
 
-          <n-form-item label="Codex 模型名">
-            <n-input v-model:value="form.codex_model" :disabled="loading"
-              placeholder="留空则沿用上面的供应商模型名" />
-          </n-form-item>
+              <n-form-item label="Agent 模型名">
+                <n-input v-model:value="form.codex_model" :disabled="configLoading"
+                  placeholder="留空则沿用 Agent 供应商的模型名" />
+              </n-form-item>
 
-          <n-form-item label="Codex 沙箱">
-            <n-select v-model:value="form.codex_sandbox" :disabled="loading" :options="codexSandboxOptions"
-              style="max-width: 300px" />
-          </n-form-item>
+              <n-form-item label="Agent 沙箱">
+                <n-select v-model:value="form.codex_sandbox" :disabled="configLoading" :options="codexSandboxOptions"
+                  style="max-width: 300px" />
+              </n-form-item>
 
-          <n-form-item label="Codex 配置目录">
-            <n-input :value="codexStatus.codex_home" readonly placeholder="首次运行 Agent 后生成" />
-          </n-form-item>
+              <n-form-item label="Agent 配置目录">
+                <n-input :value="codexStatus.codex_home" readonly placeholder="首次运行 Agent 后生成" />
+              </n-form-item>
+            </n-form>
+          </n-tab-pane>
+        </n-tabs>
 
-          <n-form-item label="操作">
-            <n-space>
-              <n-button :disabled="loading" @click="loadConfig">刷新</n-button>
-              <n-button :disabled="loading" type="primary" @click="saveConfig">保存</n-button>
-            </n-space>
-          </n-form-item>
-        </n-form>
+        <n-space justify="end">
+          <n-button :disabled="saving" @click="loadConfig">刷新</n-button>
+          <n-button :disabled="saving || configLoading" :loading="saving" type="primary" @click="saveConfig">保存</n-button>
+        </n-space>
 
         <n-divider />
 
         <n-form label-placement="left" label-width="auto" :show-require-mark="false">
           <n-form-item label="ChatRecord 保存路径">
-            <n-input v-model:value="chatRecordRoot" :disabled="loading" placeholder="默认：软件同级目录\ChatRecord" />
+            <n-input v-model:value="chatRecordRoot" :disabled="configLoading" placeholder="默认：软件同级目录\ChatRecord" />
           </n-form-item>
           <n-form-item label="操作">
             <n-space>
-              <n-button :disabled="loading" @click="pickChatRecordRoot">浏览文件夹...</n-button>
-              <n-button :disabled="loading" type="primary" @click="saveChatRecordRoot">保存</n-button>
+              <n-button :disabled="savingChatRecord" @click="pickChatRecordRoot">浏览文件夹...</n-button>
+              <n-button :disabled="savingChatRecord" :loading="savingChatRecord" type="primary" @click="saveChatRecordRoot">保存</n-button>
             </n-space>
           </n-form-item>
         </n-form>
@@ -196,7 +212,7 @@
                 style="width: 150px"
                 :value="markerReadingOrder"
                 :options="markerReadingOrderOptions"
-                :disabled="loading || savingMarkerReadingOrder"
+                :disabled="configLoading || savingMarkerReadingOrder"
                 @update:value="changeMarkerReadingOrder"
               />
               <n-select
@@ -204,7 +220,7 @@
                 style="width: 168px"
                 :value="markerOcrMode"
                 :options="markerOcrModeOptions"
-                :disabled="loading || savingMarkerOcr"
+                :disabled="configLoading || savingMarkerOcr"
                 @update:value="changeMarkerOcrMode"
               />
               <n-button
@@ -212,7 +228,7 @@
                 type="primary"
                 ghost
                 :loading="preparingMarkerEnv"
-                :disabled="loading || preparingMarkerEnv"
+                :disabled="configLoading || preparingMarkerEnv"
                 @click="prepareMarkerEnv"
               >
                 准备 / 重试
@@ -249,7 +265,7 @@
                 type="primary"
                 ghost
                 :loading="downloadingLocalDeepseek"
-                :disabled="loading || downloadingLocalDeepseek || localDeepseekStatus.installed"
+                :disabled="configLoading || downloadingLocalDeepseek || localDeepseekStatus.installed"
                 @click="downloadLocalDeepseekModel"
               >
                 下载
@@ -257,7 +273,7 @@
               <n-button
                 size="tiny"
                 ghost
-                :disabled="loading || downloadingLocalDeepseek"
+                :disabled="configLoading || downloadingLocalDeepseek"
                 @click="importLocalDeepseekModel"
               >
                 导入
@@ -290,7 +306,7 @@
                 type="primary"
                 ghost
                 :loading="downloadingLocalQwen"
-                :disabled="loading || downloadingLocalQwen || localQwenStatus.installed"
+                :disabled="configLoading || downloadingLocalQwen || localQwenStatus.installed"
                 @click="downloadLocalQwenModel"
               >
                 下载
@@ -298,7 +314,7 @@
               <n-button
                 size="tiny"
                 ghost
-                :disabled="loading || downloadingLocalQwen"
+                :disabled="configLoading || downloadingLocalQwen"
                 @click="importLocalQwenModel"
               >
                 导入
@@ -330,7 +346,7 @@
                 style="width: 190px"
                 :value="translateLocalStatus.active_model"
                 :options="translateModelOptions"
-                :disabled="loading || downloadingTranslateModel"
+                :disabled="configLoading || downloadingTranslateModel"
                 @update:value="changeTranslateModel"
               />
               <n-button
@@ -338,7 +354,7 @@
                 type="primary"
                 ghost
                 :loading="downloadingTranslateModel || translateLocalStatus.downloading"
-                :disabled="loading || downloadingTranslateModel || translateLocalStatus.installed"
+                :disabled="configLoading || downloadingTranslateModel || translateLocalStatus.installed"
                 @click="downloadTranslateModel"
               >
                 下载
@@ -346,7 +362,7 @@
               <n-button
                 size="tiny"
                 ghost
-                :disabled="loading || downloadingTranslateModel"
+                :disabled="configLoading || downloadingTranslateModel"
                 @click="importTranslateModel"
               >
                 导入
@@ -383,7 +399,7 @@
                 size="tiny"
                 ghost
                 :loading="clearingTranslateCache"
-                :disabled="loading || clearingTranslateCache || (!translateCacheStats.rows && !translateCacheStats.word_rows)"
+                :disabled="configLoading || clearingTranslateCache || (!translateCacheStats.rows && !translateCacheStats.word_rows)"
                 @click="clearTranslateCache"
               >
                 清空
@@ -413,14 +429,19 @@
 <script setup>
 import { createLogger } from '../../utils/logger'
 import { reactive, ref, onMounted, computed } from 'vue'
-import { NCard, NSpace, NAlert, NForm, NFormItem, NInput, NButton, NDivider, NIcon, NText, NSwitch, NSelect, useMessage } from 'naive-ui'
+import { NCard, NSpace, NAlert, NForm, NFormItem, NInput, NButton, NDivider, NIcon, NText, NSwitch, NSelect, NTabs, NTabPane, useMessage } from 'naive-ui'
 import { CheckmarkCircleOutline, CloseCircleOutline, ConstructOutline, CubeOutline, InformationCircleOutline, KeyOutline, TimeOutline } from '@vicons/ionicons5'
 import { invoke } from '@tauri-apps/api/core'
 import { open } from '@tauri-apps/plugin-dialog'
 
 const logger = createLogger('LLMModalSetting')
 
-const loading = ref(false)
+// 配置读写只锁自己那一小段：读/写配置时禁用表单，状态探测全程在后台跑。
+const configLoading = ref(false)
+const saving = ref(false)
+const savingChatRecord = ref(false)
+const detecting = ref(false)
+const activeTab = ref('providers')
 const message = useMessage()
 
 const chatRecordRoot = ref('')
@@ -615,7 +636,7 @@ const statusItems = computed(() => {
     }
   }
 
-  const modelsState = loading.value ? 'info' : (markdownModelsStatus.value.installed ? 'ok' : 'warn')
+  const modelsState = configLoading.value ? 'info' : (markdownModelsStatus.value.installed ? 'ok' : 'warn')
 
   return [
     keyItem('chatgpt', 'ChatGPT', form.chatgpt_api_key),
@@ -629,8 +650,8 @@ const statusItems = computed(() => {
       name: 'Markdown模型',
       icon: CubeOutline,
       state: modelsState,
-      badgeText: loading.value ? '检测中' : (markdownModelsStatus.value.installed ? '已加载' : '未加载'),
-      badgeIcon: loading.value ? TimeOutline : (markdownModelsStatus.value.installed ? CheckmarkCircleOutline : CloseCircleOutline),
+      badgeText: configLoading.value ? '检测中' : (markdownModelsStatus.value.installed ? '已加载' : '未加载'),
+      badgeIcon: configLoading.value ? TimeOutline : (markdownModelsStatus.value.installed ? CheckmarkCircleOutline : CloseCircleOutline),
       tipTitle: 'Markdown 转换模型',
       tipLines: [
         `期望路径：${markdownModelsStatus.value.expected_path || '-'}`,
@@ -708,6 +729,30 @@ const codexSandboxOptions = [
   { value: 'danger-full-access', label: 'danger-full-access（不设限，慎用）' },
 ]
 
+// Agent 与普通对话共用同一份配置，但只认 cc-switch 或自定义 Base URL
+// （codex 只支持 Responses 协议，内置服务商多半只有 Chat Completions）。
+// 这里把“Agent 现在实际会走哪条路”直接算出来，避免设置页看起来比实际能做的一团乱。
+const agentRoute = computed(() => {
+  if (form.cc_switch_enabled && form.cc_switch_base_url.trim()) {
+    const model = form.codex_model.trim() || form.cc_switch_model.trim()
+    return {
+      type: 'success',
+      text: `Agent 走 cc-switch 代理：${form.cc_switch_base_url.trim()}（模型 ${model || '未填写'}）`,
+    }
+  }
+  if (form.custom_base_url.trim()) {
+    const model = form.codex_model.trim() || form.custom_model.trim()
+    return {
+      type: 'success',
+      text: `Agent 走自定义供应商：${form.custom_base_url.trim()}（模型 ${model || '未填写'}）`,
+    }
+  }
+  return {
+    type: 'warning',
+    text: 'Agent 当前没有可用供应商：需要启用 cc-switch 代理，或填写自定义 Base URL。服务商 API Key 只服务普通对话。',
+  }
+})
+
 const refreshCodexStatus = async () => {
   try {
     const status = await invoke('codex_agent_status')
@@ -727,9 +772,60 @@ const refreshCodexStatus = async () => {
   }
 }
 
+const refreshChatRecordRoot = async () => {
+  try {
+    const root = await invoke('get_chat_record_root')
+    chatRecordRoot.value = typeof root === 'string' ? root : ''
+  } catch (e) {
+    logger.error('读取 ChatRecord 路径失败:', e)
+  }
+}
+
+const refreshMarkdownModelsStatus = async () => {
+  try {
+    const modelsStatus = await invoke('get_markdown_models_status')
+    markdownModelsStatus.value = {
+      installed: Boolean(modelsStatus?.installed),
+      expected_path: typeof modelsStatus?.expected_path === 'string' ? modelsStatus.expected_path : '',
+    }
+  } catch (e) {
+    logger.error('读取 Markdown 转换模型状态失败:', e)
+  }
+}
+
+const refreshLocalDeepseekStatus = async () => {
+  try {
+    const localStatus = await invoke('get_local_deepseek_status')
+    localDeepseekStatus.value = {
+      installed: Boolean(localStatus?.installed),
+      expected_path: typeof localStatus?.expected_path === 'string' ? localStatus.expected_path : '',
+      llama_server_exists: Boolean(localStatus?.llama_server_exists),
+      llama_server_path: typeof localStatus?.llama_server_path === 'string' ? localStatus.llama_server_path : '',
+    }
+  } catch (e) {
+    logger.error('读取 LocalDeepseek 状态失败:', e)
+  }
+}
+
+const refreshLocalQwenStatus = async () => {
+  try {
+    const localQwen = await invoke('get_local_qwen_status')
+    localQwenStatus.value = {
+      installed: Boolean(localQwen?.installed),
+      expected_path: typeof localQwen?.expected_path === 'string' ? localQwen.expected_path : '',
+      llama_server_exists: Boolean(localQwen?.llama_server_exists),
+      llama_server_path: typeof localQwen?.llama_server_path === 'string' ? localQwen.llama_server_path : '',
+    }
+  } catch (e) {
+    logger.error('读取 LocalQwen 状态失败:', e)
+  }
+}
+
 // 只读探测本机 cc-switch：回填代理地址，并提示当前激活的供应商。
-// 探测失败不阻塞任何流程，用户仍可手填地址。
+// 探测本身在后端的 blocking 线程里跑，这里只负责按钮 loading，不锁表单。
 const detectCcSwitch = async () => {
+  if (detecting.value) return
+  detecting.value = true
   try {
     const detection = await invoke('detect_cc_switch_config')
     ccSwitchDetection.value = {
@@ -750,11 +846,14 @@ const detectCcSwitch = async () => {
   } catch (e) {
     logger.error('探测 cc-switch 配置失败:', e)
     message.error('探测 cc-switch 配置失败')
+  } finally {
+    detecting.value = false
   }
 }
 
+// 先读配置本身：这段结束就解锁表单，状态类探测全部丢到后台并行跑。
 const loadConfig = async () => {
-  loading.value = true
+  configLoading.value = true
   try {
     const cfg = await invoke('get_llm_config')
     form.chatgpt_api_key = typeof cfg?.chatgpt_api_key === 'string' ? cfg.chatgpt_api_key : ''
@@ -781,52 +880,34 @@ const loadConfig = async () => {
     form.agent_engine = ['app-server', 'codex', 'builtin'].includes(cfg?.agent_engine)
       ? cfg.agent_engine
       : 'app-server'
-
-    const root = await invoke('get_chat_record_root')
-    chatRecordRoot.value = typeof root === 'string' ? root : ''
-
-    const modelsStatus = await invoke('get_markdown_models_status')
-    markdownModelsStatus.value = {
-      installed: Boolean(modelsStatus?.installed),
-      expected_path: typeof modelsStatus?.expected_path === 'string' ? modelsStatus.expected_path : '',
-    }
-
-    // 转换引擎（marker 运行环境 / 模型）的装配状态由后端统一提供；
-    // 运行环境不再走离线压缩包，改由启动时后台自动装配。
-    await refreshEngineStatus()
-    await refreshMarkerOcrMode()
-    await refreshMarkerReadingOrder()
-
-    const localStatus = await invoke('get_local_deepseek_status')
-    localDeepseekStatus.value = {
-      installed: Boolean(localStatus?.installed),
-      expected_path: typeof localStatus?.expected_path === 'string' ? localStatus.expected_path : '',
-      llama_server_exists: Boolean(localStatus?.llama_server_exists),
-      llama_server_path: typeof localStatus?.llama_server_path === 'string' ? localStatus.llama_server_path : '',
-    }
-
-    const localQwen = await invoke('get_local_qwen_status')
-    localQwenStatus.value = {
-      installed: Boolean(localQwen?.installed),
-      expected_path: typeof localQwen?.expected_path === 'string' ? localQwen.expected_path : '',
-      llama_server_exists: Boolean(localQwen?.llama_server_exists),
-      llama_server_path: typeof localQwen?.llama_server_path === 'string' ? localQwen.llama_server_path : '',
-    }
-
-    await refreshTranslateLocalStatus()
-    await refreshTranslateCacheStats()
   } catch (e) {
     logger.error('加载大模型配置失败:', e)
   } finally {
-    loading.value = false
+    configLoading.value = false
   }
 
-  // Codex 状态要在 loading 复位后再取：读版本号会拉起一次子进程，不该把整个表单锁住。
-  await refreshCodexStatus()
+  // 状态探测互不依赖，并行刷新；慢或失败都不该再锁住表单。
+  void refreshAllStatus()
+}
+
+const refreshAllStatus = async () => {
+  await Promise.allSettled([
+    refreshCodexStatus(),
+    refreshChatRecordRoot(),
+    refreshMarkdownModelsStatus(),
+    refreshEngineStatus(),
+    refreshMarkerOcrMode(),
+    refreshMarkerReadingOrder(),
+    refreshLocalDeepseekStatus(),
+    refreshLocalQwenStatus(),
+    refreshTranslateLocalStatus(),
+    refreshTranslateCacheStats(),
+  ])
 }
 
 const saveConfig = async () => {
-  loading.value = true
+  if (saving.value) return
+  saving.value = true
   try {
     await invoke('set_llm_config', {
       llmConfig: {
@@ -850,13 +931,14 @@ const saveConfig = async () => {
         agent_engine: form.agent_engine,
       },
     })
-    message.success('已保存大模型秘钥')
-    await refreshCodexStatus()
+    message.success('已保存大模型配置')
+    // Agent 读到的是同一份配置，保存后顺手刷新它的状态，避免显示停留在旧供应商。
+    void refreshCodexStatus()
   } catch (e) {
     logger.error('保存大模型配置失败:', e)
-    message.error('保存大模型秘钥失败')
+    message.error('保存大模型配置失败')
   } finally {
-    loading.value = false
+    saving.value = false
   }
 }
 
@@ -870,17 +952,17 @@ const pickChatRecordRoot = async () => {
 }
 
 const saveChatRecordRoot = async () => {
-  loading.value = true
+  if (savingChatRecord.value) return
+  savingChatRecord.value = true
   try {
     await invoke('set_chat_record_root', { path: chatRecordRoot.value })
-    const root = await invoke('get_chat_record_root')
-    chatRecordRoot.value = typeof root === 'string' ? root : chatRecordRoot.value
+    await refreshChatRecordRoot()
     message.success('已保存 ChatRecord 路径')
   } catch (e) {
     logger.error('保存 ChatRecord 路径失败:', e)
     message.error('保存 ChatRecord 路径失败')
   } finally {
-    loading.value = false
+    savingChatRecord.value = false
   }
 }
 
@@ -1101,13 +1183,7 @@ const downloadLocalDeepseekModel = async () => {
     const installedTo = await invoke('download_local_deepseek_model')
     message.success(`模型已下载到: ${installedTo}`)
 
-    const localStatus = await invoke('get_local_deepseek_status')
-    localDeepseekStatus.value = {
-      installed: Boolean(localStatus?.installed),
-      expected_path: typeof localStatus?.expected_path === 'string' ? localStatus.expected_path : '',
-      llama_server_exists: Boolean(localStatus?.llama_server_exists),
-      llama_server_path: typeof localStatus?.llama_server_path === 'string' ? localStatus.llama_server_path : '',
-    }
+    await refreshLocalDeepseekStatus()
   } catch (e) {
     logger.error('下载 LocalDeepseek 模型失败:', e)
     message.error('下载 LocalDeepseek 模型失败')
@@ -1130,13 +1206,7 @@ const importLocalDeepseekModel = async () => {
     })
     message.success(`模型已导入到: ${installedTo}`)
 
-    const localStatus = await invoke('get_local_deepseek_status')
-    localDeepseekStatus.value = {
-      installed: Boolean(localStatus?.installed),
-      expected_path: typeof localStatus?.expected_path === 'string' ? localStatus.expected_path : '',
-      llama_server_exists: Boolean(localStatus?.llama_server_exists),
-      llama_server_path: typeof localStatus?.llama_server_path === 'string' ? localStatus.llama_server_path : '',
-    }
+    await refreshLocalDeepseekStatus()
   } catch (e) {
     logger.error('导入 LocalDeepseek 模型失败:', e)
     message.error('导入 LocalDeepseek 模型失败')
@@ -1158,13 +1228,7 @@ const downloadLocalQwenModel = async () => {
     const installedTo = await invoke('download_local_qwen_model')
     message.success(`模型已下载到: ${installedTo}`)
 
-    const localQwen = await invoke('get_local_qwen_status')
-    localQwenStatus.value = {
-      installed: Boolean(localQwen?.installed),
-      expected_path: typeof localQwen?.expected_path === 'string' ? localQwen.expected_path : '',
-      llama_server_exists: Boolean(localQwen?.llama_server_exists),
-      llama_server_path: typeof localQwen?.llama_server_path === 'string' ? localQwen.llama_server_path : '',
-    }
+    await refreshLocalQwenStatus()
   } catch (e) {
     logger.error('下载 LocalQwen 模型失败:', e)
     message.error('下载 LocalQwen 模型失败')
@@ -1187,13 +1251,7 @@ const importLocalQwenModel = async () => {
     })
     message.success(`模型已导入到: ${installedTo}`)
 
-    const localQwen = await invoke('get_local_qwen_status')
-    localQwenStatus.value = {
-      installed: Boolean(localQwen?.installed),
-      expected_path: typeof localQwen?.expected_path === 'string' ? localQwen.expected_path : '',
-      llama_server_exists: Boolean(localQwen?.llama_server_exists),
-      llama_server_path: typeof localQwen?.llama_server_path === 'string' ? localQwen.llama_server_path : '',
-    }
+    await refreshLocalQwenStatus()
   } catch (e) {
     logger.error('导入 LocalQwen 模型失败:', e)
     message.error('导入 LocalQwen 模型失败')

@@ -4,6 +4,10 @@ pub mod rsshub_server;
 /// cc-switch（第三方供应商切换工具）的只读探测，用于把 base_url 指向它的本地代理。
 pub mod cc_switch;
 pub mod chatview;
+/// 大模型供应商的统一清单与解析：对话、Codex Agent、Python Agent 共用一份。
+pub mod llm_provider;
+/// 智能助手联网检索：多引擎并发 + 正文摘录，给模型提供可读的联网资料。
+pub mod web_search;
 /// Codex Agent 引擎：以打包进安装包的 codex sidecar 驱动智能助手的 Agent 模式。
 pub mod codex_agent;
 /// Codex App-Server 引擎：常驻 JSON-RPC 进程，提供 steer / 审批 / 计划 / diff / 用量，

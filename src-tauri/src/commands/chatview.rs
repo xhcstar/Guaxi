@@ -1,3 +1,4 @@
+use crate::commands::llm_provider;
 use crate::commands::settingview;
 use base64::{engine::general_purpose, Engine as _};
 use chrono::Utc;
@@ -5,10 +6,8 @@ use futures_util::StreamExt;
 use rand::Rng;
 use reqwest::multipart::{Form, Part};
 use reqwest::{Client, ClientBuilder};
-use scraper::{Html, Selector};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::HashSet;
 use std::convert::TryFrom;
 use std::env;
 use std::fs;
@@ -36,8 +35,6 @@ const LOCAL_DEEPSEEK_CHAT_COMPLETIONS_URL: &str = "http://127.0.0.1:18080/v1/cha
 const LOCAL_QWEN_MODEL_FILENAME: &str = "Qwen3.6-35B-A3B-UD-Q4_K_M.gguf";
 const LOCAL_QWEN_SERVER_URL: &str = "http://127.0.0.1:18082";
 const LOCAL_QWEN_CHAT_COMPLETIONS_URL: &str = "http://127.0.0.1:18082/v1/chat/completions";
-const SILICONFLOW_CHAT_COMPLETIONS_URL: &str = "https://api.siliconflow.cn/v1/chat/completions";
-const SILICONFLOW_DEEPSEEK_QWEN_MODEL: &str = "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B";
 const SILICONFLOW_AUDIO_SPEECH_URL: &str = "https://api.siliconflow.cn/v1/audio/speech";
 const SILICONFLOW_AUDIO_TRANSCRIPTIONS_URL: &str = "https://api.siliconflow.cn/v1/audio/transcriptions";
 const SILICONFLOW_AUDIO_TTS_DEFAULT_MODEL: &str = "FunAudioLLM/CosyVoice2-0.5B";
@@ -210,10 +207,7 @@ pub async fn get_answer_from_siliconflow(
         question, sessionid
     );
 
-    let api_key = settingview::get_llm_config().siliconflow_api_key;
-    if api_key.trim().is_empty() {
-        return Err("硅基流动 API Key 未配置".to_string());
-    }
+    let provider = llm_provider::resolve_chat(5)?;
 
     let session_id = if sessionid.is_empty() {
         generate_session_id()
@@ -222,9 +216,9 @@ pub async fn get_answer_from_siliconflow(
     };
 
     let answer_content = openai_compat_chat(
-        SILICONFLOW_CHAT_COMPLETIONS_URL,
-        &api_key,
-        SILICONFLOW_DEEPSEEK_QWEN_MODEL,
+        &provider.endpoint,
+        &provider.api_key,
+        &provider.model,
         question,
         history,
     )
@@ -242,10 +236,7 @@ pub async fn get_answer_from_siliconflow_stream(
     history: &[ChatMsg],
     sessionid: &str,
 ) -> Result<(), String> {
-    let api_key = settingview::get_llm_config().siliconflow_api_key;
-    if api_key.trim().is_empty() {
-        return Err("硅基流动 API Key 未配置".to_string());
-    }
+    let provider = llm_provider::resolve_chat(5)?;
 
     info!(
         "get_answer_from_siliconflow_stream: Received request: {:?} {}",
@@ -253,42 +244,12 @@ pub async fn get_answer_from_siliconflow_stream(
     );
 
     let request_body = json!({
-        "model": SILICONFLOW_DEEPSEEK_QWEN_MODEL,
+        "model": provider.model,
         "messages": build_chat_messages(history, question),
         "stream": true,
     });
 
-    openai_compat_sse_stream(&app, SILICONFLOW_CHAT_COMPLETIONS_URL, &api_key, request_body).await
-}
-
-/// 将用户填写的 base_url 规整为完整的 chat/completions 端点。
-/// 兼容三种写法：填到根(https://x.com)、填到 /v1、填完整 /v1/chat/completions。
-fn normalize_openai_base_url(base: &str) -> String {
-    let b = base.trim().trim_end_matches('/');
-    if b.is_empty() {
-        return String::new();
-    }
-    if b.ends_with("/chat/completions") {
-        b.to_string()
-    } else if b.ends_with("/v1") {
-        format!("{}/chat/completions", b)
-    } else {
-        format!("{}/v1/chat/completions", b)
-    }
-}
-
-/// 读取自定义供应商配置（base_url/api_key/model），校验非空并规整 URL。
-fn custom_provider_config() -> Result<(String, String, String), String> {
-    let cfg = settingview::get_llm_config();
-    let url = normalize_openai_base_url(&cfg.custom_base_url);
-    if url.is_empty() {
-        return Err("自定义供应商 Base URL 未配置".to_string());
-    }
-    let model = cfg.custom_model.trim().to_string();
-    if model.is_empty() {
-        return Err("自定义供应商模型名未配置".to_string());
-    }
-    Ok((url, cfg.custom_api_key, model))
+    openai_compat_sse_stream(&app, &provider.endpoint, &provider.api_key, request_body).await
 }
 
 pub async fn get_answer_from_custom_stream(
@@ -297,17 +258,17 @@ pub async fn get_answer_from_custom_stream(
     history: &[ChatMsg],
     sessionid: &str,
 ) -> Result<(), String> {
-    let (url, api_key, model) = custom_provider_config()?;
+    let provider = llm_provider::resolve_chat(10)?;
     info!(
         "get_answer_from_custom_stream: url={} model={} sid={}",
-        url, model, sessionid
+        provider.endpoint, provider.model, sessionid
     );
     let request_body = json!({
-        "model": model,
+        "model": provider.model,
         "messages": build_chat_messages(history, question),
         "stream": true,
     });
-    openai_compat_sse_stream(&app, &url, &api_key, request_body).await
+    openai_compat_sse_stream(&app, &provider.endpoint, &provider.api_key, request_body).await
 }
 
 pub async fn get_answer_from_custom(
@@ -315,44 +276,24 @@ pub async fn get_answer_from_custom(
     history: &[ChatMsg],
     sessionid: &str,
 ) -> Result<ChatResponse, String> {
-    let (url, api_key, model) = custom_provider_config()?;
+    let provider = llm_provider::resolve_chat(10)?;
     let session_id = if sessionid.is_empty() {
         generate_session_id()
     } else {
         sessionid.to_string()
     };
-    let answer_content = openai_compat_chat(&url, &api_key, &model, question, history).await?;
+    let answer_content = openai_compat_chat(
+        &provider.endpoint,
+        &provider.api_key,
+        &provider.model,
+        question,
+        history,
+    )
+    .await?;
     Ok(ChatResponse {
         answer: answer_content,
         sessionid: session_id,
     })
-}
-
-/// 读取 cc-switch 本地代理配置。
-///
-/// 设计说明：cc-switch 已经在本地代理里做完了供应商选择、故障转移与用量统计，
-/// 所以 Guaxi 侧只保存一个入口地址 + 模型名，用户在 cc-switch 里换供应商时这里无需改动。
-/// 代理只暴露 Responses 协议（`cc_switch_wire_api = "responses"`）时，普通对话链路走不了
-/// Chat Completions，这里直接给出可读提示，让用户改用自定义供应商或改代理设置。
-fn cc_switch_provider_config() -> Result<(String, String, String), String> {
-    let cfg = settingview::get_llm_config();
-    if !cfg.cc_switch_enabled {
-        return Err("cc-switch supplier 未启用：请在设置 → 大模型里勾选启用".to_string());
-    }
-    if cfg.cc_switch_wire_api.trim() == "responses" {
-        return Err(
-            "cc-switch 代理当前配置为 responses 协议，普通对话需要 Chat Completions；请把协议改为 chat".to_string(),
-        );
-    }
-    let url = normalize_openai_base_url(&cfg.cc_switch_base_url);
-    if url.is_empty() {
-        return Err("cc-switch 代理地址未配置".to_string());
-    }
-    let model = cfg.cc_switch_model.trim().to_string();
-    if model.is_empty() {
-        return Err("cc-switch 模型名未配置".to_string());
-    }
-    Ok((url, cfg.cc_switch_api_key, model))
 }
 
 pub async fn get_answer_from_cc_switch_stream(
@@ -361,17 +302,17 @@ pub async fn get_answer_from_cc_switch_stream(
     history: &[ChatMsg],
     sessionid: &str,
 ) -> Result<(), String> {
-    let (url, api_key, model) = cc_switch_provider_config()?;
+    let provider = llm_provider::resolve_chat(11)?;
     info!(
         "get_answer_from_cc_switch_stream: url={} model={} sid={}",
-        url, model, sessionid
+        provider.endpoint, provider.model, sessionid
     );
     let request_body = json!({
-        "model": model,
+        "model": provider.model,
         "messages": build_chat_messages(history, question),
         "stream": true,
     });
-    openai_compat_sse_stream(&app, &url, &api_key, request_body).await
+    openai_compat_sse_stream(&app, &provider.endpoint, &provider.api_key, request_body).await
 }
 
 pub async fn get_answer_from_cc_switch(
@@ -379,13 +320,20 @@ pub async fn get_answer_from_cc_switch(
     history: &[ChatMsg],
     sessionid: &str,
 ) -> Result<ChatResponse, String> {
-    let (url, api_key, model) = cc_switch_provider_config()?;
+    let provider = llm_provider::resolve_chat(11)?;
     let session_id = if sessionid.is_empty() {
         generate_session_id()
     } else {
         sessionid.to_string()
     };
-    let answer_content = openai_compat_chat(&url, &api_key, &model, question, history).await?;
+    let answer_content = openai_compat_chat(
+        &provider.endpoint,
+        &provider.api_key,
+        &provider.model,
+        question,
+        history,
+    )
+    .await?;
     Ok(ChatResponse {
         answer: answer_content,
         sessionid: session_id,
@@ -2658,255 +2606,54 @@ pub async fn ensure_local_qwen_service() -> Result<LocalDeepseekServiceStatus, S
     })
 }
 
-fn collect_duckduckgo_topics(items: &Vec<Value>, out: &mut Vec<WebSearchItem>, limit: usize) {
-    for item in items {
-        if out.len() >= limit {
-            return;
+/// 联网检索（智能助手 / 认知层工具共用）。
+///
+/// 真正的实现在 `commands::web_search`：多引擎并发 + 正文摘录。这里只保留命令名与
+/// 返回类型，兼容既有调用方。所有引擎都空时才退回本地 Python Agent 的 web_search
+/// （它能用用户配置的 Tavily/Brave key 或 ddgs）。
+#[tauri::command]
+pub async fn search_web_duckduckgo(
+    app: AppHandle,
+    query: String,
+    limit: Option<usize>,
+) -> Result<Vec<WebSearchItem>, String> {
+    let q = query.trim().to_string();
+    if q.is_empty() {
+        return Ok(vec![]);
+    }
+    let cap = limit.unwrap_or(5).clamp(1, 8);
+
+    let items = crate::commands::web_search::search(&q, cap).await;
+    if !items.is_empty() {
+        return Ok(items
+            .into_iter()
+            .map(|item| WebSearchItem {
+                title: item.title,
+                snippet: item.snippet,
+                url: item.url,
+            })
+            .collect());
+    }
+
+    match search_web_agent_server_fallback(&app, &q, cap).await {
+        Ok(fallback) if !fallback.is_empty() => {
+            info!("search_web: agent_server fallback produced results");
+            Ok(fallback)
         }
-
-        if let Some(nested) = item.get("Topics").and_then(|v| v.as_array()) {
-            collect_duckduckgo_topics(&nested.to_vec(), out, limit);
-            continue;
+        Ok(_) => Ok(vec![]),
+        Err(err) => {
+            warn!("search_web: agent_server fallback failed: {}", err);
+            Ok(vec![])
         }
-
-        let title = item
-            .get("Text")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .trim()
-            .to_string();
-        let url = item
-            .get("FirstURL")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .trim()
-            .to_string();
-
-        if title.is_empty() || url.is_empty() {
-            continue;
-        }
-
-        out.push(WebSearchItem {
-            title: title.clone(),
-            snippet: title,
-            url,
-        });
     }
 }
 
-fn normalize_text(input: &str) -> String {
-    input
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .trim()
-        .to_string()
-}
-
-fn is_cjk(ch: char) -> bool {
-    ('\u{4E00}'..='\u{9FFF}').contains(&ch)
-        || ('\u{3400}'..='\u{4DBF}').contains(&ch)
-        || ('\u{F900}'..='\u{FAFF}').contains(&ch)
-}
-
-fn flush_cjk_token_buf(buf: &mut String, token_set: &mut HashSet<String>) {
-    if buf.chars().count() >= 3 {
-        let full = buf.to_lowercase();
-        token_set.insert(full.clone());
-        let chars: Vec<char> = full.chars().collect();
-        if chars.len() >= 4 {
-            for window in chars.windows(3) {
-                let part: String = window.iter().collect();
-                token_set.insert(part);
-            }
-        }
-    }
-    buf.clear();
-}
-
-fn flush_ascii_token_buf(buf: &mut String, token_set: &mut HashSet<String>) {
-    let cleaned = buf.trim_matches(|c: char| !c.is_ascii_alphanumeric());
-    if cleaned.len() >= 4 {
-        token_set.insert(cleaned.to_lowercase());
-    }
-    buf.clear();
-}
-
-#[derive(Default)]
-struct RelevanceTokens {
-    strong: Vec<String>,
-    weak: Vec<String>,
-}
-
-fn unique_relevance_tokens(query: &str) -> RelevanceTokens {
-    let mut strong_set = HashSet::new();
-    let mut weak_set = HashSet::new();
-    let mut cjk_buf = String::new();
-    let mut ascii_buf = String::new();
-
-    for ch in query.chars() {
-        if is_cjk(ch) {
-            if !ascii_buf.is_empty() {
-                flush_ascii_token_buf(&mut ascii_buf, &mut strong_set);
-            }
-            cjk_buf.push(ch);
-            continue;
-        }
-        if ch.is_ascii_alphanumeric() {
-            if !cjk_buf.is_empty() {
-                flush_cjk_token_buf(&mut cjk_buf, &mut strong_set);
-            }
-            ascii_buf.push(ch);
-            continue;
-        }
-        if !cjk_buf.is_empty() {
-            flush_cjk_token_buf(&mut cjk_buf, &mut strong_set);
-        }
-        if !ascii_buf.is_empty() {
-            flush_ascii_token_buf(&mut ascii_buf, &mut strong_set);
-        }
-    }
-    if !cjk_buf.is_empty() {
-        flush_cjk_token_buf(&mut cjk_buf, &mut strong_set);
-    }
-    if !ascii_buf.is_empty() {
-        flush_ascii_token_buf(&mut ascii_buf, &mut strong_set);
-    }
-
-    let compact = query
-        .chars()
-        .filter(|c| is_cjk(*c) || c.is_ascii_alphanumeric())
-        .collect::<String>()
-        .to_lowercase();
-    if compact.chars().count() >= 4 {
-        strong_set.insert(compact);
-    }
-
-    for token in strong_set.clone() {
-        if token.chars().all(is_cjk) {
-            let chars: Vec<char> = token.chars().collect();
-            if chars.len() >= 3 {
-                for window in chars.windows(2) {
-                    weak_set.insert(window.iter().collect::<String>());
-                }
-            }
-        }
-    }
-    let weak = weak_set
-        .into_iter()
-        .filter(|x| !strong_set.contains(x))
-        .collect::<Vec<_>>();
-    RelevanceTokens {
-        strong: strong_set.into_iter().collect(),
-        weak,
-    }
-}
-
-fn web_result_relevance_score(item: &WebSearchItem, query: &str, tokens: &RelevanceTokens) -> (i32, usize, usize) {
-    let text = format!("{} {} {}", item.title, item.snippet, item.url).to_lowercase();
-    let compact_query = query
-        .chars()
-        .filter(|c| is_cjk(*c) || c.is_ascii_alphanumeric())
-        .collect::<String>()
-        .to_lowercase();
-
-    let mut score = 0i32;
-    let mut strong_hits = 0usize;
-    let mut weak_hits = 0usize;
-    if compact_query.len() >= 4 && text.contains(&compact_query) {
-        score += 12;
-        strong_hits += 1;
-    }
-    for token in &tokens.strong {
-        if token.len() >= 3 && text.contains(token) {
-            score += if token.chars().all(|c| is_cjk(c)) { 3 } else { 2 };
-            strong_hits += 1;
-        }
-    }
-    for token in &tokens.weak {
-        if token.len() >= 2 && text.contains(token) {
-            score += 1;
-            weak_hits += 1;
-        }
-    }
-    (score, strong_hits, weak_hits)
-}
-
-fn is_preferred_host(host: &str) -> bool {
-    const PREFERRED: [&str; 28] = [
-        "microsoft.com",
-        "learn.microsoft.com",
-        "stackoverflow.com",
-        "github.com",
-        "docs.github.com",
-        "mozilla.org",
-        "developer.mozilla.org",
-        "wikipedia.org",
-        "arxiv.org",
-        "python.org",
-        "pypi.org",
-        "nodejs.org",
-        "npmjs.com",
-        "rust-lang.org",
-        "crates.io",
-        "golang.org",
-        "go.dev",
-        "kubernetes.io",
-        "docker.com",
-        "openai.com",
-        "deepseek.com",
-        "qwenlm.ai",
-        "moonshot.cn",
-        "cloudflare.com",
-        "aws.amazon.com",
-        "cloud.google.com",
-        "azure.microsoft.com",
-        "tauri.app",
-    ];
-    PREFERRED.iter().any(|suffix| host == *suffix || host.ends_with(&format!(".{}", suffix)))
-}
-
-fn rank_and_filter_web_results(items: Vec<WebSearchItem>, query: &str, limit: usize) -> Vec<WebSearchItem> {
-    let tokens = unique_relevance_tokens(query);
-    let mut ranked_items: Vec<(WebSearchItem, i32, bool)> = Vec::new();
-
-    for item in items {
-        let url_text = item.url.trim().to_lowercase();
-        if url_text.is_empty() {
-            continue;
-        }
-        if url_text.contains("baidu.com") || url_text.contains("m.baidu.com") {
-            continue;
-        }
-        let host = Url::parse(&url_text)
-            .ok()
-            .and_then(|u| u.host_str().map(|x| x.to_lowercase()))
-            .unwrap_or_default();
-        let preferred = !host.is_empty() && is_preferred_host(&host);
-        let (score, strong_hits, weak_hits) = web_result_relevance_score(&item, query, &tokens);
-        if strong_hits == 0 && weak_hits < 3 {
-            continue;
-        }
-        ranked_items.push((item, score, preferred));
-    }
-
-    ranked_items.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| b.2.cmp(&a.2)));
-    let mut out = ranked_items
-        .into_iter()
-        .map(|(item, _, _)| item)
-        .collect::<Vec<_>>();
-    out.truncate(limit);
-    out
-}
-
+/// 所有引擎都没抓到时，复用本地 Python Agent 的 web_search 工具兜底。
 async fn search_web_agent_server_fallback(
     app: &AppHandle,
     query: &str,
     limit: usize,
 ) -> Result<Vec<WebSearchItem>, String> {
-    // 设计说明：普通聊天的联网搜索原先直接抓 Bing/Google/Instant Answer，容易被页面结构
-    // 或反爬策略影响。这里仅在原链路失败后启动本地 Python agent_server，复用更可维护的
-    // web_search 工具作为兜底，同时保留用户“联网”开关在前端控制是否会走到这里。
     info!(
         "search_web: trying agent_server fallback query_len={} limit={}",
         query.len(),
@@ -2916,7 +2663,7 @@ async fn search_web_agent_server_fallback(
 
     let client = ClientBuilder::new()
         .no_proxy()
-        .timeout(StdDuration::from_secs(35))
+        .timeout(StdDuration::from_secs(25))
         .build()
         .map_err(|e| format!("build agent search client failed: {}", e))?;
     let payload = json!({
@@ -2989,245 +2736,6 @@ async fn search_web_agent_server_fallback(
     Ok(items)
 }
 
-async fn search_web_bing(
-    client: &Client,
-    query: &str,
-    limit: usize,
-) -> Result<Vec<WebSearchItem>, String> {
-    let params = url::form_urlencoded::Serializer::new(String::new())
-        .append_pair("q", query)
-        .append_pair("setlang", "zh-Hans")
-        .finish();
-    let request_url = format!("https://www.bing.com/search?{}", params);
-
-    let response = client
-        .get(&request_url)
-        .header(
-            "User-Agent",
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36",
-        )
-        .send()
-        .await
-        .map_err(|e| format!("bing request failed: {}", e))?;
-    let html = response
-        .text()
-        .await
-        .map_err(|e| format!("bing response parse failed: {}", e))?;
-
-    let document = Html::parse_document(&html);
-    let item_sel = Selector::parse("li.b_algo").map_err(|e| format!("bing selector parse failed: {}", e))?;
-    let link_sel = Selector::parse("h2 a").map_err(|e| format!("bing link selector parse failed: {}", e))?;
-    let snippet_sel = Selector::parse("p").map_err(|e| format!("bing snippet selector parse failed: {}", e))?;
-
-    let mut items = Vec::new();
-    for item in document.select(&item_sel) {
-        if items.len() >= limit {
-            break;
-        }
-        let Some(link) = item.select(&link_sel).next() else {
-            continue;
-        };
-        let url = link.value().attr("href").unwrap_or("").trim().to_string();
-        if url.is_empty() || !url.starts_with("http") {
-            continue;
-        }
-        let title = normalize_text(&link.text().collect::<Vec<_>>().join(" "));
-        if title.is_empty() {
-            continue;
-        }
-        let snippet = item
-            .select(&snippet_sel)
-            .next()
-            .map(|node| normalize_text(&node.text().collect::<Vec<_>>().join(" ")))
-            .unwrap_or_default();
-
-        items.push(WebSearchItem { title, snippet, url });
-    }
-    Ok(items)
-}
-
-async fn search_web_google(
-    client: &Client,
-    query: &str,
-    limit: usize,
-) -> Result<Vec<WebSearchItem>, String> {
-    let params = url::form_urlencoded::Serializer::new(String::new())
-        .append_pair("q", query)
-        .append_pair("hl", "zh-CN")
-        .append_pair("num", &limit.to_string())
-        .finish();
-    let request_url = format!("https://www.google.com/search?{}", params);
-
-    let response = client
-        .get(&request_url)
-        .header(
-            "User-Agent",
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36",
-        )
-        .send()
-        .await
-        .map_err(|e| format!("google request failed: {}", e))?;
-    let html = response
-        .text()
-        .await
-        .map_err(|e| format!("google response parse failed: {}", e))?;
-
-    let document = Html::parse_document(&html);
-    let item_sel = Selector::parse("div.g, div.MjjYud")
-        .map_err(|e| format!("google selector parse failed: {}", e))?;
-    let link_sel = Selector::parse("a[href]").map_err(|e| format!("google link selector parse failed: {}", e))?;
-    let h3_sel = Selector::parse("h3").map_err(|e| format!("google title selector parse failed: {}", e))?;
-    let snippet_sel = Selector::parse("div.VwiC3b, span.aCOpRe, div.IsZvec")
-        .map_err(|e| format!("google snippet selector parse failed: {}", e))?;
-
-    let mut items = Vec::new();
-    for item in document.select(&item_sel) {
-        if items.len() >= limit {
-            break;
-        }
-
-        let Some(link) = item.select(&link_sel).next() else {
-            continue;
-        };
-        let url = link.value().attr("href").unwrap_or("").trim().to_string();
-        if url.is_empty() || !url.starts_with("http") {
-            continue;
-        }
-
-        let title = item
-            .select(&h3_sel)
-            .next()
-            .map(|node| normalize_text(&node.text().collect::<Vec<_>>().join(" ")))
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| normalize_text(&link.text().collect::<Vec<_>>().join(" ")));
-        if title.is_empty() {
-            continue;
-        }
-
-        let snippet = item
-            .select(&snippet_sel)
-            .next()
-            .map(|node| normalize_text(&node.text().collect::<Vec<_>>().join(" ")))
-            .unwrap_or_default();
-
-        items.push(WebSearchItem { title, snippet, url });
-    }
-    Ok(items)
-}
-
-#[tauri::command]
-pub async fn search_web_duckduckgo(
-    app: AppHandle,
-    query: String,
-    limit: Option<usize>,
-) -> Result<Vec<WebSearchItem>, String> {
-    let q = query.trim().to_string();
-    if q.is_empty() {
-        return Ok(vec![]);
-    }
-
-    let cap = limit.unwrap_or(5).clamp(1, 8);
-    let client = ClientBuilder::new()
-        .no_proxy()
-        .timeout(StdDuration::from_secs(10))
-        .build()
-        .map_err(|e| format!("build web search client failed: {}", e))?;
-    info!("search_web: query_len={} limit={}", q.len(), cap);
-
-    let mut errors: Vec<String> = Vec::new();
-
-    match search_web_bing(&client, &q, cap).await {
-        Ok(items) if !items.is_empty() => {
-            let ranked = rank_and_filter_web_results(items, &q, cap);
-            if !ranked.is_empty() {
-                return Ok(ranked);
-            }
-            errors.push("bing filtered empty result".to_string());
-        }
-        Ok(_) => errors.push("bing empty result".to_string()),
-        Err(e) => errors.push(e),
-    }
-
-    match search_web_google(&client, &q, cap).await {
-        Ok(items) if !items.is_empty() => {
-            let ranked = rank_and_filter_web_results(items, &q, cap);
-            if !ranked.is_empty() {
-                return Ok(ranked);
-            }
-            errors.push("google filtered empty result".to_string());
-        }
-        Ok(_) => errors.push("google empty result".to_string()),
-        Err(e) => errors.push(e),
-    }
-
-    let params = url::form_urlencoded::Serializer::new(String::new())
-        .append_pair("q", &q)
-        .append_pair("format", "json")
-        .append_pair("no_html", "1")
-        .append_pair("skip_disambig", "1")
-        .finish();
-    let request_url = format!("https://api.duckduckgo.com/?{}", params);
-
-    match client.get(&request_url).send().await {
-        Ok(resp) => match resp.json::<Value>().await {
-            Ok(payload) => {
-                let mut hits = vec![];
-                if let Some(items) = payload.get("RelatedTopics").and_then(|v| v.as_array()) {
-                    collect_duckduckgo_topics(&items.to_vec(), &mut hits, cap);
-                }
-
-                if hits.is_empty() {
-                    if let Some(text) = payload.get("AbstractText").and_then(|v| v.as_str()) {
-                        let abstract_text = text.trim().to_string();
-                        if !abstract_text.is_empty() {
-                            hits.push(WebSearchItem {
-                                title: payload
-                                    .get("Heading")
-                                    .and_then(|v| v.as_str())
-                                    .unwrap_or("搜索摘要")
-                                    .to_string(),
-                                snippet: abstract_text,
-                                url: payload
-                                    .get("AbstractURL")
-                                    .and_then(|v| v.as_str())
-                                    .unwrap_or("")
-                                    .to_string(),
-                            });
-                        }
-                    }
-                }
-
-                if !hits.is_empty() {
-                    let ranked = rank_and_filter_web_results(hits, &q, cap);
-                    if !ranked.is_empty() {
-                        return Ok(ranked);
-                    }
-                    errors.push("duckduckgo filtered empty result".to_string());
-                }
-                errors.push("duckduckgo empty result".to_string());
-            }
-            Err(e) => errors.push(format!("duckduckgo parse failed: {}", e)),
-        },
-        Err(e) => errors.push(format!("duckduckgo request failed: {}", e)),
-    }
-
-    match search_web_agent_server_fallback(&app, &q, cap).await {
-        Ok(items) if !items.is_empty() => {
-            let ranked = rank_and_filter_web_results(items, &q, cap);
-            if !ranked.is_empty() {
-                info!("search_web: agent_server fallback produced ranked results");
-                return Ok(ranked);
-            }
-            errors.push("agent_server fallback filtered empty result".to_string());
-        }
-        Ok(_) => errors.push("agent_server fallback empty result".to_string()),
-        Err(e) => errors.push(format!("agent_server fallback failed: {}", e)),
-    }
-
-    warn!("search_web all engines failed: {}", errors.join(" | "));
-    Ok(vec![])
-}
-
 #[tauri::command]
 pub async fn cancel_chat_stream() -> Result<(), String> {
     request_stream_cancel();
@@ -3242,12 +2750,9 @@ pub async fn get_answer_from_deepseek(
     history: &[ChatMsg],
     sessionid: &str,
 ) -> Result<ChatResponse, String> {
-    let api_key = settingview::get_llm_config().deepseek_api_key;
-    if api_key.trim().is_empty() {
-        return Err("DeepSeek API Key 未配置".to_string());
-    }
-
-    let url = "https://api.deepseek.com/chat/completions";
+    let provider = llm_provider::resolve_chat(1)?;
+    let api_key = &provider.api_key;
+    let url = &provider.endpoint;
     let session_id;
 
     info!(
@@ -3264,7 +2769,7 @@ pub async fn get_answer_from_deepseek(
     }
 
     let request_body = json!({
-        "model": "deepseek-chat",
+        "model": provider.model,
         "messages": build_chat_messages(history, question),
         // "session_id": session_id
     });
@@ -3878,10 +3383,7 @@ pub async fn get_answer_from_chatgpt(
         question, sessionid
     );
 
-    let api_key = settingview::get_llm_config().chatgpt_api_key;
-    if api_key.trim().is_empty() {
-        return Err("ChatGPT API Key 未配置".to_string());
-    }
+    let provider = llm_provider::resolve_chat(0)?;
 
     let session_id = if sessionid.is_empty() {
         generate_session_id()
@@ -3890,9 +3392,9 @@ pub async fn get_answer_from_chatgpt(
     };
 
     let answer_content = openai_compat_chat(
-        "https://api.openai.com/v1/chat/completions",
-        &api_key,
-        "gpt-4o-mini",
+        &provider.endpoint,
+        &provider.api_key,
+        &provider.model,
         question,
         history,
     )
@@ -3910,10 +3412,7 @@ pub async fn get_answer_from_kimi(question: &str, history: &[ChatMsg], sessionid
         question, sessionid
     );
 
-    let api_key = settingview::get_llm_config().kimi_api_key;
-    if api_key.trim().is_empty() {
-        return Err("Kimi API Key 未配置".to_string());
-    }
+    let provider = llm_provider::resolve_chat(3)?;
 
     let session_id = if sessionid.is_empty() {
         generate_session_id()
@@ -3922,9 +3421,9 @@ pub async fn get_answer_from_kimi(question: &str, history: &[ChatMsg], sessionid
     };
 
     let answer_content = openai_compat_chat(
-        "https://api.moonshot.cn/v1/chat/completions",
-        &api_key,
-        "moonshot-v1-8k",
+        &provider.endpoint,
+        &provider.api_key,
+        &provider.model,
         question,
         history,
     )
@@ -3942,10 +3441,7 @@ pub async fn get_answer_from_qwen(question: &str, history: &[ChatMsg], sessionid
         question, sessionid
     );
 
-    let api_key = settingview::get_llm_config().qwen_api_key;
-    if api_key.trim().is_empty() {
-        return Err("Qwen API Key 未配置".to_string());
-    }
+    let provider = llm_provider::resolve_chat(2)?;
 
     let session_id = if sessionid.is_empty() {
         generate_session_id()
@@ -3954,9 +3450,9 @@ pub async fn get_answer_from_qwen(question: &str, history: &[ChatMsg], sessionid
     };
 
     let answer_content = openai_compat_chat(
-        "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
-        &api_key,
-        "qwen-plus",
+        &provider.endpoint,
+        &provider.api_key,
+        &provider.model,
         question,
         history,
     )
@@ -3978,10 +3474,7 @@ pub async fn get_answer_from_doubao(
         question, sessionid
     );
 
-    let api_key = settingview::get_llm_config().doubao_api_key;
-    if api_key.trim().is_empty() {
-        return Err("豆包 API Key 未配置".to_string());
-    }
+    let provider = llm_provider::resolve_chat(4)?;
 
     let session_id = if sessionid.is_empty() {
         generate_session_id()
@@ -3990,9 +3483,9 @@ pub async fn get_answer_from_doubao(
     };
 
     let answer_content = openai_compat_chat(
-        "https://ark.cn-beijing.volces.com/api/v3/chat/completions",
-        &api_key,
-        "doubao-pro-32k",
+        &provider.endpoint,
+        &provider.api_key,
+        &provider.model,
         question,
         history,
     )
@@ -4091,24 +3584,15 @@ pub async fn get_answer_from_chatgpt_stream(
         question, sessionid
     );
 
-    let api_key = settingview::get_llm_config().chatgpt_api_key;
-    if api_key.trim().is_empty() {
-        return Err("ChatGPT API Key 未配置".to_string());
-    }
+    let provider = llm_provider::resolve_chat(0)?;
 
     let request_body = json!({
-        "model": "gpt-4o-mini",
+        "model": provider.model,
         "messages": build_chat_messages(history, question),
         "stream": true,
     });
 
-    openai_compat_sse_stream(
-        &app,
-        "https://api.openai.com/v1/chat/completions",
-        &api_key,
-        request_body,
-    )
-    .await
+    openai_compat_sse_stream(&app, &provider.endpoint, &provider.api_key, request_body).await
 }
 pub async fn get_answer_from_deepseek_stream(
     app: AppHandle,
@@ -4116,10 +3600,7 @@ pub async fn get_answer_from_deepseek_stream(
     history: &[ChatMsg],
     sessionid: &str,
 ) -> Result<(), String> {
-    let api_key = settingview::get_llm_config().deepseek_api_key;
-    if api_key.trim().is_empty() {
-        return Err("DeepSeek API Key 未配置".to_string());
-    }
+    let provider = llm_provider::resolve_chat(1)?;
 
     info!(
         "get_answer_from_deepseek_stream: Received request: {:?} {}",
@@ -4127,18 +3608,12 @@ pub async fn get_answer_from_deepseek_stream(
     );
 
     let request_body = json!({
-        "model": "deepseek-chat",
+        "model": provider.model,
         "messages": build_chat_messages(history, question),
         "stream": true,
     });
 
-    openai_compat_sse_stream(
-        &app,
-        "https://api.deepseek.com/chat/completions",
-        &api_key,
-        request_body,
-    )
-    .await
+    openai_compat_sse_stream(&app, &provider.endpoint, &provider.api_key, request_body).await
 }
 
 pub async fn get_answer_from_kimi_stream(
@@ -4147,10 +3622,7 @@ pub async fn get_answer_from_kimi_stream(
     history: &[ChatMsg],
     sessionid: &str,
 ) -> Result<(), String> {
-    let api_key = settingview::get_llm_config().kimi_api_key;
-    if api_key.trim().is_empty() {
-        return Err("Kimi API Key 未配置".to_string());
-    }
+    let provider = llm_provider::resolve_chat(3)?;
 
     info!(
         "get_answer_from_kimi_stream: Received request: {:?} {}",
@@ -4158,19 +3630,13 @@ pub async fn get_answer_from_kimi_stream(
     );
 
     let request_body = json!({
-        "model": "moonshot-v1-8k",
+        "model": provider.model,
         "messages": build_chat_messages(history, question),
         "temperature": 0.3,
         "stream": true,
     });
 
-    openai_compat_sse_stream(
-        &app,
-        "https://api.moonshot.cn/v1/chat/completions",
-        &api_key,
-        request_body,
-    )
-    .await
+    openai_compat_sse_stream(&app, &provider.endpoint, &provider.api_key, request_body).await
 }
 
 pub async fn get_answer_from_doubao_stream(

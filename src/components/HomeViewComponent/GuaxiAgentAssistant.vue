@@ -291,7 +291,7 @@
             </div>
           </div>
           <div
-            v-if="message.role === 'web' && !message.meta?.agentStep"
+            v-if="message.role === 'web' && !message.meta?.agentStep && !message.meta?.webSearchPending"
             class="assistant-web-toggle-wrap"
           >
             <button
@@ -599,7 +599,7 @@ import alertTriangleIcon from '@iconify-icons/lucide/alert-triangle'
 import chevronRightIcon from '@iconify-icons/lucide/chevron-right'
 import xIcon from '@iconify-icons/lucide/x'
 import trash2Icon from '@iconify-icons/lucide/trash-2'
-import { addCopyButtons, addMediaViewerButtons, renderMarkdown } from '../GuaxiMarkdownRender/GuaxiMarker'
+import { addCopyButtons, addMediaViewerButtons, detectIncompleteMathSyntax, renderMarkdown } from '../GuaxiMarkdownRender/GuaxiMarker'
 import { useRightSiderStore } from '../../stores/rightSiderStore'
 import { useChatStore } from '../../stores/chatStore'
 import { useEditorStore } from '../../stores/editorStore'
@@ -617,7 +617,7 @@ const WEB_PUSH_EVENT = 'web-model-chat-push'
 const WEB_MODEL_IDS = new Set([7, 8])
 // 历史消息会把渲染后的 HTML 一并持久化。版本号用于识别旧版错误配置生成的 HTML，
 // 进入会话时只迁移旧消息一次，避免每次切换都重复执行 MathJax / Mermaid 渲染。
-const ASSISTANT_MARKDOWN_RENDER_VERSION = 2
+const ASSISTANT_MARKDOWN_RENDER_VERSION = 3
 const AGENT_TOOL_LABELS = {
   kb_semantic_search: '检索知识库',
   read_file: '读取文件',
@@ -1701,10 +1701,10 @@ const buildWebContextPrompt = (rawQuestion, webItems) => {
     return rawQuestion
   }
 
-  // 控制拼入 prompt 的联网上下文体量：最多取前 5 条，每条摘要截断到 200 字，
-  // 避免 prompt 过长拖慢本地模型 prefill。参考来源卡片展示不受影响（走 webReferences 链路）。
-  const MAX_WEB_CONTEXT_ITEMS = 5
-  const MAX_WEB_SNIPPET_CHARS = 200
+  // 控制拼入 prompt 的联网上下文体量：最多取前 4 条，每条摘要截断到 400 字。
+  // 后端现在会带回正文摘录，给足字数模型才答得准；4×400 仍在常见上下文预算内。
+  const MAX_WEB_CONTEXT_ITEMS = 4
+  const MAX_WEB_SNIPPET_CHARS = 400
   const lines = webItems.slice(0, MAX_WEB_CONTEXT_ITEMS).map((item, idx) => {
     const title = String(item?.title || '').trim()
     let snippet = String(item?.snippet || '').trim()
@@ -1924,7 +1924,8 @@ const filterRelevantWebItems = (items, rawQuestion, queries) => {
     .filter((x) => x.metrics.strongHits >= 1 || x.metrics.weakHits >= 3)
     .sort((a, b) => b.metrics.score - a.metrics.score)
   if (!scored.length) {
-    return []
+    // 词面不重合不等于不相关（中文长问句、同义改写很常见），原样返回让模型自己判断。
+    return items.slice(0, 6)
   }
   return scored.map((x) => x.item)
 }
@@ -1984,88 +1985,199 @@ const normalizeWebSearchQuery = (rawQuestion) => {
   return optimized || compact
 }
 
+const withTimeout = (promise, ms, fallbackValue) => Promise.race([
+  promise,
+  new Promise((resolve) => setTimeout(() => resolve(fallbackValue), ms)),
+])
+
+const runWebSearchQueries = async (queries) => {
+  const list = Array.isArray(queries) ? queries.filter(Boolean) : []
+  if (!list.length) return []
+  // allSettled：单条查询失败不该让整轮联网失败。
+  const settled = await Promise.allSettled(
+    list.map((query) => invoke('search_web_duckduckgo', { query, limit: 4 })),
+  )
+  return settled.flatMap((x) => (x.status === 'fulfilled' && Array.isArray(x.value) ? x.value : []))
+}
+
+// 设计说明：AI 规划一次检索意图要额外走一轮模型调用，串在搜索前面会让首字延迟翻倍。
+// 现在改成“启发式查询先搜、规划并行跑最多 2.5s”：规划按时回来就补它多出来的查询，
+// 超时就直接用启发式结果，避免为了规划白等。
 const queryWebSearch = async (rawQuestion, selectedModelId, shouldSearch = true) => {
   if (!shouldSearch) {
     return { items: [], queries: [], reason: '', plannedByAi: false }
   }
-  const plan = await buildWebSearchPlanWithAi(rawQuestion, selectedModelId)
-  const plannedQueries = Array.isArray(plan?.queries) ? plan.queries : []
-  const queries = sanitizePlannedQueries(plannedQueries, rawQuestion).slice(0, 4)
-  const needSearch = Boolean(plan?.needSearch) && queries.length > 0
+
+  const heuristicQuery = normalizeWebSearchQuery(rawQuestion)
+  const heuristicQueries = heuristicQuery ? [heuristicQuery] : []
+  const planPromise = withTimeout(
+    buildWebSearchPlanWithAi(rawQuestion, selectedModelId),
+    2500,
+    null,
+  )
+  const basePromise = runWebSearchQueries(heuristicQueries)
+  const [plan, baseItems] = await Promise.all([planPromise, basePromise])
+
+  const plannedQueries = plan ? sanitizePlannedQueries(plan.queries, rawQuestion).slice(0, 4) : []
+  const needSearch = plan ? (Boolean(plan.needSearch) && plannedQueries.length > 0) : true
   logger.info('[assistant] web search plan prepared', {
     rawQuestion,
-    queries,
-    reason: plan?.reason || '',
+    heuristicQueries,
+    plannedQueries,
     needSearch,
+    planTimedOut: plan === null,
   })
   if (!needSearch) {
     return {
       items: [],
-      queries,
+      queries: plannedQueries,
       reason: String(plan?.reason || ''),
       plannedByAi: true,
     }
   }
 
-  try {
-    const settled = await Promise.all(queries.map((query) => invoke('search_web_duckduckgo', { query, limit: 4 })))
-    const all = settled.flatMap((items) => (Array.isArray(items) ? items : []))
-    const mergedItems = mergeWebSearchItems(all)
-    const filteredItems = filterRelevantWebItems(mergedItems, rawQuestion, queries)
-    logger.info('[assistant] web search relevance filtered', {
-      before: mergedItems.length,
-      after: filteredItems.length,
-    })
-    return {
-      items: filteredItems,
-      queries,
-      reason: String(plan?.reason || ''),
-      plannedByAi: true,
+  const queries = Array.from(new Set([...heuristicQueries, ...plannedQueries])).slice(0, 4)
+  let items = baseItems
+
+  // 启发式查询已经够用时不再补查，省一轮往返。
+  const extraQueries = plannedQueries.filter((q) => !heuristicQueries.includes(q))
+  if (extraQueries.length && items.length < 3) {
+    try {
+      const extraItems = await runWebSearchQueries(extraQueries)
+      items = mergeWebSearchItems([...items, ...extraItems])
+    } catch (err) {
+      logger.warn('[assistant] extra web search failed', err)
     }
-  } catch (err) {
-    logger.warn('[assistant] web search failed', err)
-    message.warning('联网搜索失败，已自动使用离线问答')
-    return {
-      items: [],
-      queries,
-      reason: String(plan?.reason || ''),
-      plannedByAi: true,
-    }
+  }
+
+  const mergedItems = mergeWebSearchItems(items)
+  const filteredItems = filterRelevantWebItems(mergedItems, rawQuestion, queries)
+  logger.info('[assistant] web search relevance filtered', {
+    before: mergedItems.length,
+    after: filteredItems.length,
+  })
+  return {
+    // 过滤后为空也要保留原始结果：宁可给模型少一点上下文，也不要把整轮联网判成“没搜到”。
+    items: filteredItems.length ? filteredItems : mergedItems.slice(0, 5),
+    queries,
+    reason: String(plan?.reason || ''),
+    plannedByAi: Boolean(plan),
   }
 }
 
 // 设计说明：智能助手的所有回复必须共用同一套 Markdown 配置。
 // 之前普通回复、结构化任务和流式结束各自调用 renderMarkdown，导致 Mermaid、数学预处理配置漂移。
 // 这里统一启用 Mermaid、MathJax、代码高亮和聊天专用预处理；调用方只控制是否处于流式未完成状态。
+
+const escapeHtmlText = (text) => String(text || '').replace(/[&<>"']/g, (c) => (
+  { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+))
+
+// 把代码围栏遮起来再修数学定界符：围栏里的 `$`、`\[` 属于代码，不能改。
+const transformOutsideCodeFences = (source, transform) => {
+  const fences = []
+  const masked = String(source || '').replace(
+    /(^|\n)(```[\s\S]*?(?:\n```|$)|~~~[\s\S]*?(?:\n~~~|$))/g,
+    (match, prefix) => {
+      const index = fences.push(match.slice(prefix.length)) - 1
+      return `${prefix}\u0000GF${index}\u0000`
+    },
+  )
+  return transform(masked).replace(/\u0000GF(\d+)\u0000/g, (_, i) => fences[Number(i)] ?? '')
+}
+
+// 各家模型输出的数学定界符不统一，而 markdown-it-mathjax3 只认 `$` / `$$`：
+// - `\(...\)`、`\[...\]` 会整段原样显示；
+// - 夹在句子中间的 `$$...$$` 不会被识别成块级公式；
+// - 只有开头没有结尾的 `$$` 会把后文全部吞进公式里，MathJax 解析失败后整段变成转义文本
+//   （截图里“后面所有条目挤成一行、加粗星号裸露”就是这一种）。
+// 这里在渲染前统一改写，保证公式要么正常渲染、要么退化成行内公式，绝不吞正文。
+//
+// `closeUnclosedBlocks` 只在收尾渲染时打开：流式阶段文本天然是不完整的，
+// 这时交给 renderer 自己暂缓数学更稳。
+const repairAssistantMath = (source, { closeUnclosedBlocks = true } = {}) => transformOutsideCodeFences(source, (text) => {
+  let out = text
+
+  // \[ ... \]：独占一行时按块级公式处理，夹在句子里则退化为行内公式。
+  out = out.replace(/\\\[([\s\S]+?)\\\]/g, (match, body, offset, whole) => {
+    const lineStart = whole.lastIndexOf('\n', offset) + 1
+    const prefix = whole.slice(lineStart, offset)
+    const content = String(body || '').trim()
+    return prefix.trim() === '' ? `\n$$\n${content}\n$$\n` : `$${content}$`
+  })
+  // \( ... \) -> 行内数学
+  out = out.replace(/\\\(([\s\S]+?)\\\)/g, (_match, body) => `$${String(body || '').trim()}$`)
+
+  // 行内出现的成对 $$...$$ 改成行内 $...$；行首的块级公式保持原样。
+  out = out.split('\n').map((line) => {
+    if (!line.includes('$$') || /^\s*\$\$/.test(line)) return line
+    return line.replace(/\$\$([^\n]+?)\$\$/g, (_match, body) => `$${String(body || '').trim()}$`)
+  }).join('\n')
+
+  if (!closeUnclosedBlocks) return out
+
+  // 未闭合的块级公式：在“下一个分节起点”之前补 `$$`，而不是把后文全算进公式。
+  // 找不到下一个分节才追加到文末；这样公式能正常渲染，后面的列表/标题也不会被吞。
+  const openers = Array.from(out.matchAll(/(^|[^\\])\$\$/g))
+  if (openers.length % 2 === 1) {
+    const last = openers[openers.length - 1]
+    const markerIndex = (last.index ?? 0) + (last[1] ? last[1].length : 0)
+    const before = out.slice(0, markerIndex)
+    const after = out.slice(markerIndex + 2)
+    const lines = after.split('\n')
+    let cut = lines.length
+    for (let i = 1; i < lines.length; i += 1) {
+      const line = lines[i].trim()
+      if (!line) continue
+      if (/^(\d+[.)]|[-*+]\s|#{1,6}\s|>)/.test(line)) {
+        cut = i
+        break
+      }
+    }
+    const head = lines.slice(0, cut).join('\n').replace(/\s+$/, '')
+    const tail = lines.slice(cut).join('\n')
+    // `$` 在这里必须转义：`$${head}` 会被解析成 `$` + 插值，公式定界符就少了一个。
+    out = `${before}\$\$${head}\n$$\n${tail}`
+  }
+  return out
+})
+
 const renderAssistantMarkdown = async (content, {
-  deferMathUntilComplete = false,
+  streaming = false,
   reason = 'assistant-message',
 } = {}) => {
-  const source = String(content || '')
+  const source = repairAssistantMath(content, { closeUnclosedBlocks: !streaming })
   try {
+    // 公式不完整时宁可不渲染数学，也不能让 MathJax 失败把正文一起吃掉。
+    // 流式阶段交给 renderer 自带的 deferMathUntilComplete 逐帧判断；
+    // 收尾渲染用修复后的文本再判一次，仍不平衡就整篇关掉数学。
+    const mathIncomplete = detectIncompleteMathSyntax(source).hasIncompleteMath
     const html = await renderMarkdown(source, {
       basePath: '',
-      mermaid: true,
-      math: true,
+      // 流式阶段代码围栏大多没闭合，跳过 Mermaid 与图表块，收尾再完整渲染。
+      mermaid: !streaming,
+      math: streaming ? true : !mathIncomplete,
       codeHighlight: true,
       chatPreprocess: true,
       includeNotes: false,
-      // 如果未来恢复流式 Markdown 预览，可在公式闭合前暂缓 MathJax；最终渲染固定传 false。
-      deferMathUntilComplete,
+      deferMathUntilComplete: streaming,
+      chartEmbeds: !streaming,
       // 把 `\Phi_E`、`I_{enc}` 这类“写在反引号里的数学符号”恢复成行内数学。
       smartInlineMathFromCode: true,
     })
     logger.info('[assistant] markdown render completed', {
       reason,
+      streaming,
       textLength: source.length,
       htmlLength: String(html || '').length,
+      mathIncomplete,
       containsMermaid: /```\s*mermaid\b/i.test(source),
-      containsMath: /\$\$|\\\[|\\\(|\\(?:oint|int|sum|frac)\b/.test(source),
     })
     return html
   } catch (err) {
     logger.warn('[assistant] render markdown failed', { reason, error: err })
-    return source
+    // 兜底：按纯文本展示（保留换行），不要把 Markdown 源码当 HTML 塞回页面。
+    return `<pre class="assistant-markdown-fallback">${escapeHtmlText(source)}</pre>`
   }
 }
 
@@ -2130,8 +2242,7 @@ const ensureStreamingAssistantMessage = () => {
   return currentStreamingMessageId.value
 }
 
-const appendWebSearchMessage = (references, queries = [], plannedByAi = false) => {
-  if (!webSearchEnabled.value) return
+const buildWebSearchMessagePayload = (references, queries = [], plannedByAi = false) => {
   const refs = Array.isArray(references) ? references : []
   const queryList = Array.isArray(queries) ? queries : []
   const content = refs.length
@@ -2139,10 +2250,11 @@ const appendWebSearchMessage = (references, queries = [], plannedByAi = false) =
       ? `AI已规划 ${queryList.length} 个检索需求，检索到 ${refs.length} 条联网结果`
       : `已检索到 ${refs.length} 条联网结果`)
     : (plannedByAi
-      ? `AI已规划 ${queryList.length} 个检索需求，未检索到可用结果`
+      ? (queryList.length
+        ? `AI已规划 ${queryList.length} 个检索需求，未检索到可用结果`
+        : '本次问题无需联网，已直接回答')
       : '联网搜索已启用')
-  rightSiderStore.addAssistantMessage({
-    role: 'web',
+  return {
     content,
     meta: {
       webSearchTriggered: true,
@@ -2150,8 +2262,58 @@ const appendWebSearchMessage = (references, queries = [], plannedByAi = false) =
       webReferences: refs,
       webQueries: queryList,
       webPlannedByAi: plannedByAi,
+      webSearchPending: false,
     },
+  }
+}
+
+// 先插一条“正在检索”的占位消息：联网要几秒，用户至少能看到进度而不是干等。
+const createWebSearchPlaceholder = () => {
+  if (!webSearchEnabled.value) return ''
+  return rightSiderStore.addAssistantMessage({
+    role: 'web',
+    content: '正在联网检索…',
+    meta: { webSearchTriggered: true, webContextCount: 0, webSearchPending: true },
   })
+}
+
+const updateWebSearchMessage = (messageId, references, queries = [], plannedByAi = false) => {
+  if (!webSearchEnabled.value) return
+  const payload = buildWebSearchMessagePayload(references, queries, plannedByAi)
+  if (messageId) {
+    rightSiderStore.updateAssistantMessage(messageId, payload)
+  } else {
+    rightSiderStore.addAssistantMessage({ role: 'web', ...payload })
+  }
+}
+
+// 流式 Markdown 的节流状态：文本每 60ms 更新一次，Markdown 每 120ms（长文 400ms）
+// 重渲染一次，并且同一时刻只允许一个渲染任务在跑，避免高频解析拖慢输入与滚动。
+const streamingMarkdownState = { lastAt: 0, lastText: '', busy: false, seq: 0 }
+
+const resetStreamingMarkdownState = () => {
+  streamingMarkdownState.lastAt = 0
+  streamingMarkdownState.lastText = ''
+  streamingMarkdownState.busy = false
+  streamingMarkdownState.seq += 1
+}
+
+const renderStreamingMarkdown = async (messageId, raw) => {
+  if (!messageId || !raw || streamingMarkdownState.busy) return
+  if (raw === streamingMarkdownState.lastText) return
+  streamingMarkdownState.busy = true
+  const seq = ++streamingMarkdownState.seq
+  try {
+    const html = await renderAssistantMarkdown(raw, { streaming: true, reason: 'stream-partial' })
+    // 渲染期间可能已经收尾/切会话，序号对不上就丢弃这次结果。
+    if (seq !== streamingMarkdownState.seq || !html) return
+    streamingMarkdownState.lastText = raw
+    rightSiderStore.updateAssistantMessage(messageId, { html }, { persist: false })
+  } catch (err) {
+    logger.warn('[assistant] streaming markdown render failed', err)
+  } finally {
+    streamingMarkdownState.busy = false
+  }
 }
 
 const scheduleStreamingRender = () => {
@@ -2167,12 +2329,17 @@ const scheduleStreamingRender = () => {
       messageId,
       textLength: raw.length,
     })
-    // 流式期间仅做纯文本增量更新（不渲染 Markdown、不触网），
-    // 由 finishAssistantStreaming 在结束时做一次完整 Markdown 渲染。
+    // 文本立即可见；Markdown 版本按节流节奏补上，结束时会再完整渲染一次（含 Mermaid/数学）。
     rightSiderStore.updateAssistantMessage(messageId, {
       content: raw,
       streaming: true,
     })
+    const now = Date.now()
+    const interval = raw.length > 12000 ? 400 : 120
+    if (now - streamingMarkdownState.lastAt >= interval) {
+      streamingMarkdownState.lastAt = now
+      void renderStreamingMarkdown(messageId, raw)
+    }
     maybeScrollToBottom('streaming-render')
   }, 60)
 }
@@ -2215,13 +2382,14 @@ const finishAssistantStreaming = async ({ fallbackText = '', keepPending = false
     clearTimeout(streamRenderTimer.value)
     streamRenderTimer.value = null
   }
+  // 收尾渲染会给出最终版本，取消掉还在路上的流式渲染结果。
+  resetStreamingMarkdownState()
 
   const messageId = ensureStreamingAssistantMessage()
   const text = String(currentStreamText.value || '').trim() || String(fallbackText || '').trim()
   if (messageId) {
     const finalText = text || '模型未返回内容。'
     const html = await renderAssistantMarkdown(finalText, {
-      deferMathUntilComplete: false,
       reason: 'stream-complete',
     })
     logger.info('[assistant] finish streaming render', {
@@ -2605,6 +2773,7 @@ const sendQuestion = async () => {
   currentRequestSessionId.value = sessionId
   currentStreamText.value = ''
   currentStreamingMessageId.value = ''
+  resetStreamingMarkdownState()
   if (typedQuestion) {
     pushInputHistory(typedQuestion)
   }
@@ -2707,6 +2876,7 @@ const sendQuestion = async () => {
       return
     }
 
+    const webMessageId = shouldUseWebSearch ? createWebSearchPlaceholder() : ''
     const searchOutcome = await queryWebSearch(rawQuestion, selectedModelId, shouldUseWebSearch)
     const webItems = Array.isArray(searchOutcome?.items) ? searchOutcome.items : []
     const withAttachments = buildQuestionWithAttachments(rawQuestion, sentAttachments)
@@ -2718,7 +2888,8 @@ const sendQuestion = async () => {
     const mergedQuestion = await appendReferencesByMode(baseQuestion, currentTask, sentMentions)
     const webReferences = normalizeWebReferences(webItems)
     if (shouldUseWebSearch) {
-      appendWebSearchMessage(
+      updateWebSearchMessage(
+        webMessageId,
         webReferences,
         Array.isArray(searchOutcome?.queries) ? searchOutcome.queries : [],
         Boolean(searchOutcome?.plannedByAi),
@@ -3116,6 +3287,15 @@ const sendQuestion = async () => {
 .assistant-message-plain {
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+/* Markdown 渲染整体失败时的兜底：保留换行，至少能完整阅读原文。 */
+.assistant-markdown-fallback {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font: inherit;
+  background: transparent;
 }
 
 .assistant-message-context-list {

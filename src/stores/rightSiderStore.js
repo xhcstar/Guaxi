@@ -268,7 +268,7 @@ export const useRightSiderStore = defineStore("rightSider", {
       this.syncCurrentAssistantSession();
       return next.id;
     },
-    updateAssistantMessage(messageId, payload) {
+    updateAssistantMessage(messageId, payload, { persist = true } = {}) {
       const id = String(messageId || "");
       if (!id || !payload || typeof payload !== "object") return;
       const index = this.assistant.messages.findIndex((x) => x.id === id);
@@ -279,7 +279,10 @@ export const useRightSiderStore = defineStore("rightSider", {
         ...payload,
       };
       this.assistant.messages.splice(index, 1, next);
-      this.syncCurrentAssistantSession();
+      // 流式 Markdown 的中间版本只进内存：每次都落盘会让长回答的 localStorage 写入变成瓶颈。
+      if (persist) {
+        this.syncCurrentAssistantSession();
+      }
     },
     clearAssistantMessages() {
       this.assistant.messages = [];

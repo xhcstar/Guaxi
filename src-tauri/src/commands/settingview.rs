@@ -1795,13 +1795,15 @@ pub fn set_webrtc_signal_url(url: String) {
     save_config(&config);
 }
 
-#[tauri::command]
+/// 读配置会访问系统钥匙串并做 AES 解密，必须离开 UI 主线程执行。
+#[tauri::command(async)]
 pub fn get_llm_config() -> LlmConfig {
     let config = load_config();
     config.llm_config
 }
 
-#[tauri::command]
+/// 写配置同样涉及钥匙串与加密落盘；`(async)` 保证设置页点保存时界面不冻结。
+#[tauri::command(async)]
 pub fn set_llm_config(llm_config: LlmConfig) {
     let mut config = load_config();
     config.llm_config = llm_config;
@@ -1939,7 +1941,7 @@ pub fn set_terminal_config(terminal_config: TerminalConfig) {
     save_config(&config);
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn get_chat_record_root() -> String {
     if let Err(e) = init_chat_record_root() {
         warn!(error = e.as_str(), "init_chat_record_root failed");
@@ -1948,7 +1950,7 @@ pub fn get_chat_record_root() -> String {
     config.chat_record_root
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn set_chat_record_root(path: String) -> Result<(), String> {
     let mut root_path = PathBuf::from(path);
     if root_path.as_os_str().is_empty() {
@@ -1984,12 +1986,12 @@ pub fn marker_ocr_mode() -> String {
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn get_marker_ocr_mode() -> String {
     marker_ocr_mode()
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn set_marker_ocr_mode(mode: String) -> Result<(), String> {
     let normalized = mode.trim().to_ascii_lowercase();
     if !matches!(normalized.as_str(), "auto" | "full" | "text_only") {
@@ -2020,12 +2022,12 @@ pub fn marker_reading_order() -> String {
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn get_marker_reading_order() -> String {
     marker_reading_order()
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn set_marker_reading_order(order: String) -> Result<(), String> {
     let normalized = order.trim().to_ascii_lowercase();
     if !matches!(normalized.as_str(), "layout" | "pdftext") {

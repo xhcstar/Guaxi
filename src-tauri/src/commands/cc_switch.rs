@@ -139,8 +139,27 @@ fn read_db(home: &PathBuf, provider_id: &str) -> Option<(bool, String, u16, Stri
 }
 
 /// 探测本机 cc-switch 配置，供设置页"自动探测"按钮回填。
+///
+/// 探测要复制并查询 SQLite、读 JSON 文件，曾经以同步命令的形式跑在 UI 主线程上，
+/// 设置页点一下就会整页卡住；现在放进 blocking 线程池，界面只显示按钮 loading。
 #[tauri::command]
-pub fn detect_cc_switch_config() -> CcSwitchDetection {
+pub async fn detect_cc_switch_config() -> CcSwitchDetection {
+    match tokio::task::spawn_blocking(detect_cc_switch_config_blocking).await {
+        Ok(detection) => detection,
+        Err(err) => {
+            warn!(error = %err, "[cc_switch] detection task failed");
+            CcSwitchDetection {
+                found: false,
+                hint: format!("探测 cc-switch 配置失败: {}", err),
+                listen_port: DEFAULT_PROXY_PORT,
+                base_url: format!("http://127.0.0.1:{}/v1", DEFAULT_PROXY_PORT),
+                ..Default::default()
+            }
+        }
+    }
+}
+
+fn detect_cc_switch_config_blocking() -> CcSwitchDetection {
     let Some(home) = cc_switch_home() else {
         return CcSwitchDetection {
             found: false,

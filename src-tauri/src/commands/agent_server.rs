@@ -137,31 +137,12 @@ fn agent_server_source_dir(app: &AppHandle) -> Result<PathBuf, String> {
     ))
 }
 
-/// 构建 LLM 配置 JSON（从 settingview 读取所有模型的 API keys）
+/// 构建 LLM 配置 JSON。
+///
+/// 清单由 `llm_provider` 统一维护（与普通对话、Codex Agent 共用同一份），
+/// 这里不再另抄一套地址和模型名。
 fn build_llm_config_json() -> Value {
-    let llm = settingview::get_llm_config();
-    // 提取所有字段避免部分移动问题
-    let chatgpt = llm.chatgpt_api_key;
-    let deepseek = llm.deepseek_api_key;
-    let qwen = llm.qwen_api_key;
-    let kimi = llm.kimi_api_key;
-    let doubao = llm.doubao_api_key;
-    let sf = llm.siliconflow_api_key;
-    let custom_base = llm.custom_base_url;
-    let custom_key = llm.custom_api_key;
-    let custom_model = llm.custom_model;
-
-    json!([
-        {"id":0,"name":"ChatGPT","base_url":"https://api.openai.com/v1","api_key":chatgpt,"model_name":"gpt-4o","supports_tools":true},
-        {"id":1,"name":"DeepSeek","base_url":"https://api.deepseek.com/v1","api_key":deepseek,"model_name":"deepseek-chat","supports_tools":true},
-        {"id":2,"name":"Qwen","base_url":"https://dashscope.aliyuncs.com/compatible-mode/v1","api_key":qwen,"model_name":"qwen-plus","supports_tools":true},
-        {"id":3,"name":"Kimi","base_url":"https://api.moonshot.cn/v1","api_key":kimi,"model_name":"moonshot-v1-8k","supports_tools":true},
-        {"id":4,"name":"Doubao","base_url":"https://ark.cn-beijing.volces.com/api/v3","api_key":doubao,"model_name":"doubao-pro-32k","supports_tools":true},
-        {"id":5,"name":"SiliconFlow","base_url":"https://api.siliconflow.cn/v1","api_key":sf,"model_name":"deepseek-ai/DeepSeek-R1-0528-Qwen3-8B","supports_tools":true},
-        {"id":6,"name":"LocalDeepSeek","base_url":"http://127.0.0.1:18080/v1","api_key":"not-needed","model_name":"local-deepseek","supports_tools":true},
-        {"id":9,"name":"LocalQwen3","base_url":"http://127.0.0.1:18082/v1","api_key":"not-needed","model_name":"local-qwen3","supports_tools":true},
-        {"id":10,"name":"Custom","base_url":custom_base,"api_key":custom_key,"model_name":custom_model,"supports_tools":true}
-    ])
+    crate::commands::llm_provider::agent_model_registry()
 }
 
 /// 启动 agent server 进程
