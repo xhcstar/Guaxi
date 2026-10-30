@@ -617,7 +617,7 @@ const WEB_PUSH_EVENT = 'web-model-chat-push'
 const WEB_MODEL_IDS = new Set([7, 8])
 // 历史消息会把渲染后的 HTML 一并持久化。版本号用于识别旧版错误配置生成的 HTML，
 // 进入会话时只迁移旧消息一次，避免每次切换都重复执行 MathJax / Mermaid 渲染。
-const ASSISTANT_MARKDOWN_RENDER_VERSION = 3
+const ASSISTANT_MARKDOWN_RENDER_VERSION = 4
 const AGENT_TOOL_LABELS = {
   kb_semantic_search: '检索知识库',
   read_file: '读取文件',
@@ -2097,6 +2097,15 @@ const transformOutsideCodeFences = (source, transform) => {
 // 这时交给 renderer 自己暂缓数学更稳。
 const repairAssistantMath = (source, { closeUnclosedBlocks = true } = {}) => transformOutsideCodeFences(source, (text) => {
   let out = text
+
+  // 旧版后端会把句中的 `$$...$$` 拆成三行（`文字 $$\n内容\n$$ 后续`），
+  // 导致后续正文被并进块级公式。这里把这种形态并回行内公式，历史消息重渲染即可恢复。
+  // 行首独占的 `$$` 是正常块级公式，`head` 为空时原样保留。
+  out = out.replace(/([^\n]*?)\$\$\n([\s\S]*?)\n\$\$/g, (match, head, body) => {
+    if (!String(head || '').trim()) return match
+    const content = String(body || '').replace(/\s*\n\s*/g, ' ').trim()
+    return `${head}$${content}$`
+  })
 
   // \[ ... \]：独占一行时按块级公式处理，夹在句子里则退化为行内公式。
   out = out.replace(/\\\[([\s\S]+?)\\\]/g, (match, body, offset, whole) => {

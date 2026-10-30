@@ -4,6 +4,8 @@ import hljs from 'highlight.js'
 import { allowFileProtocolLinks } from '../utils/markdownFileLink'
 // MathJax 3.2.2 的解析崩溃补丁：必须在建出 TeX 输入 jax 之前生效，本模块求值时即安装。
 import '../components/GuaxiMarkdownRender/mathjaxNullSafeCharacter'
+// 与主线程共用同一份 TeX 宏表（\bm 等缺失宏的别名）。
+import { GUAXI_TEX_MACROS } from '../components/GuaxiMarkdownRender/mathMacros'
 // 记忆层与主线程共用同一套键与上限（持久缓存由主线程负责，Worker 里没有 invoke）。
 import {
   drainMathBackfill,
@@ -423,7 +425,7 @@ const buildWorkerMarkdownRenderer = (sourceContent, options = {}) => {
   }
 
   if (enableMath) {
-    md.use(markdownItMathjax)
+    md.use(markdownItMathjax, { tex: { macros: GUAXI_TEX_MACROS } })
     const originalInlineMath = md.renderer.rules.math_inline
     const originalBlockMath = md.renderer.rules.math_block
 

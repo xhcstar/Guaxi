@@ -138,10 +138,26 @@ export const useMailStore = defineStore('mail', {
     unlisten: [],
     /** 已加载的页码（「加载更多」按页累加，不再硬编码 300 条）。 */
     pageCount: 1,
+    /**
+     * 已经从后端取回的**原始邮件**条数，也就是下一页的 SQL offset。
+     *
+     * 不能用 `messages.length` 当游标：那是会话聚合之后的行数。一页 100 封
+     * 常常收成 10 行，于是下一页从第 10 封开始重新查，取回来的还是同一批邮件，
+     * 聚合完仍然是那 10 行——点「加载更多」看着毫无反应（真实反馈）。
+     */
+    rawLoaded: 0,
     hasMore: false,
     loadingMore: false,
     /** 搜索序号：快速输入时丢弃过期结果。 */
     searchSeq: 0,
+    /**
+     * 列表请求序号：每次「换一份列表」都 +1，在途的旧请求回来时按它判过期。
+     *
+     * 切文件夹时同时有「立刻查一次本地库」和「同步完再查一次」两条请求在跑，
+     * 谁后落地谁覆盖列表；期间再切一次文件夹，前一个文件夹的结果就会盖到新文件夹上
+     * ——表现为「列表没跟着刷新，还是上一个文件夹的信」（真实反馈）。
+     */
+    listToken: 0,
     /** 离线队列条数 / 待发邮件数（顶栏状态条）。 */
     offlineQueued: 0,
     pendingSend: 0,
@@ -673,7 +689,10 @@ export const useMailStore = defineStore('mail', {
         this.scope === 'all'
 
       const pageSize = Math.max(20, Number(this.settings.pageSize) || 100)
-      const offset = append ? this.messages.length : 0
+      const offset = append ? this.rawLoaded : 0
+      // 在任何 await 之前占号：下面还要先查一次通讯录同义词，两条请求如果在
+      // await 之后才占号，落地顺序就可能和发起顺序不一致。
+      const token = append ? this.listToken : ++this.listToken
       // 增量请求多要一条：用来判断「还有没有下一页」，
       // 否则用户要一直点「加载更多」直到点出一个空列表才知道到底了。
       const query = {
@@ -695,12 +714,17 @@ export const useMailStore = defineStore('mail', {
         const rows = await invoke('mail_search', { query })
         // 过期请求：整批结果丢掉，不能覆盖更新的一次搜索。
         if (seq !== null && seq !== this.searchSeq) return
+        // 旧文件夹的结果不能落到新文件夹上——切文件夹时「列表没跟着刷新，还是上一个
+        // 文件夹的信」就是这么来的（真实反馈）。切账户 / 改搜索词 / 自动续页同样适用。
+        if (token !== this.listToken) return
         const list = rows || []
         const hasMore = list.length > pageSize
         const page = hasMore ? list.slice(0, pageSize) : list
         const grouped = await this.groupThreadsIfNeeded(append ? [...this.messages, ...page] : page)
         this.messages = grouped
         this.hasMore = hasMore
+        // 游标按原始条数走，跟聚合后的行数无关。
+        this.rawLoaded = offset + page.length
         this.pageCount = append ? this.pageCount + 1 : 1
         this.searchError = ''
       } catch (error) {
@@ -709,7 +733,10 @@ export const useMailStore = defineStore('mail', {
         // 现在如实把错误暴露到列表头部，并且**不再**用全量列表冒充搜索结果。
         logger.error('检索失败', error)
         this.searchError = String(error?.message || error)
-        if (!append) this.messages = []
+        if (!append) {
+          this.messages = []
+          this.rawLoaded = 0
+        }
       }
     },
 

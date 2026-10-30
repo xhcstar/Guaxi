@@ -1132,6 +1132,54 @@ pub fn pop3_forget_uidl(account_id: &str, uidl: &str) -> Result<(), String> {
     .map_err(|e| e.to_string())
 }
 
+/// 本地移动换了 uid 之后，把 UIDL 映射跟着挪到新号上。
+///
+/// 不跟着挪，`pop3_uids` 还指着那条已经删掉的旧行，同步时「这封还在不在本地」
+/// 就查不到，于是当成用户删掉了 → 忘记 UIDL → 下一轮重新下载一份。
+pub fn pop3_remap_uid(account_id: &str, from: u32, to: u32) -> Result<(), String> {
+    let conn = open()?;
+    conn.execute(
+        "UPDATE pop3_uids SET uid=?3 WHERE account_id=?1 AND uid=?2",
+        params![account_id, from, to],
+    )
+    .map(|_| ())
+    .map_err(|e| e.to_string())
+}
+
+/// 这个 uid 在本账户的**任意**文件夹里还存在吗。
+///
+/// POP3 的 uid 实际是账户内全局唯一的（`pop3_uid_for` 就按全局 MAX+1 分配），
+/// 所以「按 uid 找这封邮件」不该限定文件夹：规则自动归类、手动移动、移入垃圾箱
+/// 都会换文件夹，只查收件箱就会把「搬走了」误判成「删掉了」。
+pub fn message_exists_any_folder(account_id: &str, uid: u32) -> Result<bool, String> {
+    let conn = open()?;
+    let count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM messages WHERE account_id=?1 AND uid=?2",
+            params![account_id, uid],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    Ok(count > 0)
+}
+
+/// 该账户下一个没人占用的 uid：`messages` 与 `pop3_uids` 两张表一起看。
+///
+/// 需要新号时必须按 [`pop3_uid_for`] 同一套规则来，否则可能撞上别的文件夹里的
+/// 邮件，或撞上 `pop3_uids` 的 UNIQUE(account_id, uid)。
+pub fn next_free_uid(account_id: &str) -> Result<u32, String> {
+    let conn = open()?;
+    let max_of = |table: &str| -> i64 {
+        conn.query_row(
+            &format!("SELECT COALESCE(MAX(uid), 0) FROM {table} WHERE account_id=?1"),
+            params![account_id],
+            |r| r.get(0),
+        )
+        .unwrap_or(0)
+    };
+    Ok(max_of("messages").max(max_of("pop3_uids")).saturating_add(1) as u32)
+}
+
 /// 文件夹里本地已知的最大 UID（增量同步的起点）。
 pub fn last_uid(account_id: &str, folder: &str) -> Result<u32, String> {
     let conn = open()?;
@@ -1466,10 +1514,13 @@ pub fn cache_raw_body_on(
     conn.execute(
         // 只写 raw 这一列：正文（html / text）与 body_fetched 由 `upsert_body` 负责，
         // 这里既不能把它们清空，也不能谎报「正文已取」。
+        // 参数顺序必须和列顺序一一对应：以前把 payload 放在第一位，
+        // 整段加密原文就被写进了 account_id，(account_id, folder, uid) 永远撞不上已有行，
+        // 于是每次缓存都新插一行垃圾（库里堆出几千行、几个 G），而真正的 raw 一列没存进去。
         r#"INSERT INTO message_bodies (account_id, folder, uid, raw)
            VALUES (?1,?2,?3,?4)
            ON CONFLICT(account_id, folder, uid) DO UPDATE SET raw=excluded.raw"#,
-        params![payload, account_id, folder, uid],
+        params![account_id, folder, uid, payload],
     )
     .map_err(|e| format!("缓存邮件原文失败: {e}"))?;
     Ok(())

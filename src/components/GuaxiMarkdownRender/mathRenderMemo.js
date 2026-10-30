@@ -16,10 +16,10 @@ export const MATH_RENDER_CACHE_LIMIT = 4000
 
 /**
  * 引擎版本，参与后端缓存主键。
- * **MathJax / markdown-it-mathjax3 升级时必须改这里**，否则会把旧引擎产出的 SVG
- * 当成新引擎的结果继续用。
+ * **MathJax / markdown-it-mathjax3 升级、或改动了 TeX 宏表时必须改这里**，
+ * 否则会把旧引擎产出的 SVG（例如 `\bm` 被 noundefined 画成红色的版本）当成新结果继续用。
  */
-export const MATH_ENGINE_VERSION = 'mathjax-full@3.2.2|markdown-it-mathjax3@4.3.2'
+export const MATH_ENGINE_VERSION = 'mathjax-full@3.2.2|markdown-it-mathjax3@4.3.2|macros-bm-v1'
 
 const mathRenderCache = new Map()
 const pendingBackfill = new Map()

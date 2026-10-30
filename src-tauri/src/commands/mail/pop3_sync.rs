@@ -221,20 +221,23 @@ fn apply_server_deletions(
             let _ = store::pop3_forget_uidl(&account.id, &uidl);
             continue;
         };
+        if keep_on_server {
+            // 「服务器上保留副本」：本地删掉或搬走都不碰服务器，那这条 UIDL 就必须留着。
+            // 一清掉，下一轮这封又成了「没收过的新邮件」，会被原样再下一遍；
+            // 规则自动归类的邮件每封都走这条路，同一个文件夹里同一封能攒到十几份。
+            continue;
+        }
+        // 只有要在服务器上动手删除时，才需要判断「这封本地还在不在」。
+        // 注意不能只查收件箱：自动归类、手动移动、移进垃圾箱都算「还在本地」。
         let uid = store::pop3_uid_for(&account.id, &uidl).ok();
         let still_local = uid
-            .and_then(|uid| store::get_summary(&account.id, INBOX, uid).ok().flatten())
-            .is_some();
+            .and_then(|uid| store::message_exists_any_folder(&account.id, uid).ok())
+            .unwrap_or(false);
         if !still_local {
             pending.push((uidl, number));
         }
     }
     for (uidl, number) in pending {
-        if keep_on_server {
-            // 用户选择「在服务器上保留副本」：本地删除只影响本机。
-            let _ = store::pop3_forget_uidl(&account.id, &uidl);
-            continue;
-        }
         if let Err(error) = session.delete(number) {
             warn!(
                 account = %account.email,

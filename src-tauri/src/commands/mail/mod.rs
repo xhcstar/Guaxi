@@ -1382,23 +1382,32 @@ pub async fn mail_move_messages(
 
 /// POP3 账户的本地移动：把（摘要 + 正文）复制到目标文件夹，再删掉原行。
 ///
-/// uid 只在同一文件夹内唯一，换文件夹后沿用同一个 uid 是安全的；
-/// 目标文件夹里已经有同 uid 时顺延，避免覆盖别的邮件。
+/// uid 尽量原样带走：POP3 的 UIDL→uid 映射记的就是这个号，换号之后同步时查不到
+/// 「这封还在不在本地」，就被当成用户删掉了 → 忘记 UIDL → 下一轮重新下载一份。
+/// 规则自动归类的邮件每封都会走一次这里，所以不保留原号就会让每个自定义文件夹里的
+/// 同一封邮件按同步轮次越攒越多（真实反馈：SSL 里 1400 行只有 200 封不同的邮件）。
+/// 只有目标文件夹确实已经占着这个 uid 时才换新号，并把映射一起挪过去。
 fn move_locally(account_id: &str, folder: &str, uids: &[u32], target: &str) -> Result<(), String> {
-    let mut next_uid = store::last_uid(account_id, target)?.saturating_add(1).max(1);
     for uid in uids {
         let Some(mut summary) = store::get_summary(account_id, folder, *uid)? else {
             continue;
         };
+        let moved_uid = if folder != target && store::get_summary(account_id, target, *uid)?.is_some()
+        {
+            let free = store::next_free_uid(account_id)?;
+            let _ = store::pop3_remap_uid(account_id, *uid, free);
+            free
+        } else {
+            *uid
+        };
         summary.folder = target.to_string();
-        summary.uid = next_uid;
-        next_uid += 1;
+        summary.uid = moved_uid;
         store::upsert_summaries(std::slice::from_ref(&summary))?;
         if let Some((html, text, attachments, _)) = store::get_body(account_id, folder, *uid)? {
             store::upsert_body(
                 account_id,
                 target,
-                summary.uid,
+                moved_uid,
                 html.as_deref(),
                 &text,
                 &attachments,

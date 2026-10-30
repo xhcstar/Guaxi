@@ -2927,31 +2927,79 @@ fn normalize_math_symbols(content: String) -> String {
         return content;
     }
 
+    // 设计说明（为什么不再是一串全文正则）：
+    // 旧实现在**流式的每一个分片**上跑「把每个 $$ 前后都补换行」的规则，
+    // 于是一句 “块级公式使用 $$...$$ 开启新行” 会被拆成跨行块，后半句变成块级公式的
+    // 同行尾随文字，markdown-it 找不到闭合就一路吞到下一个 $$，整段正文变成一条
+    // MathJax 失败后的转义文本（用户看到的就是“后面所有条目挤成一行”）。
+    //
+    // 现在的规则按「整行」判断，且只在真正属于数学定界符时改写：
+    // - 行首 `$$ ... $$`（单行）与独占一行的 `$$` 视为块级公式，原样保留；
+    // - 句中成对的 `$$...$$` 收敛为行内 `$...$`（markdown-it 只认行首的块级 $$）；
+    // - 行内 `$ ... $` 去掉内侧空白，否则 mathjax3 不会接管；
+    // - 代码围栏与块级公式内部一律不动。
     let raw = content;
-    let out = raw
-        .replace("\\[", "$$")
-        .replace("\\]", "$$")
-        .replace("\\(", "$")
-        .replace("\\)", "$");
-    let tightened = tighten_math_spacing(&out);
-    let layout = soften_block_math_boundaries(&tightened);
-    let dedented = normalize_block_math_indentation(&layout);
+    let mut out_lines: Vec<String> = Vec::new();
+    let mut in_fence = false;
+    let mut in_block_math = false;
 
-    if raw.contains("\\[")
-        || raw.contains("\\]")
-        || raw.contains("\\(")
-        || raw.contains("\\)")
-        || raw.contains("```")
-        || out != tightened
-        || tightened != layout
-        || layout != dedented
-    {
+    for line in raw.split('\n') {
+        let trimmed = line.trim_start();
+
+        if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
+            in_fence = !in_fence;
+            out_lines.push(line.to_string());
+            continue;
+        }
+        if in_fence {
+            out_lines.push(line.to_string());
+            continue;
+        }
+
+        if trimmed == "$$" {
+            in_block_math = !in_block_math;
+            out_lines.push(line.to_string());
+            continue;
+        }
+        if in_block_math {
+            out_lines.push(line.to_string());
+            continue;
+        }
+
+        // 整行的 \[ ... \] 收敛成块级公式。
+        if trimmed.starts_with(r"\[") && trimmed.ends_with(r"\]") && trimmed.len() >= 4 {
+            let body = trimmed[2..trimmed.len() - 2].trim();
+            let indent = " ".repeat(line.len() - trimmed.len());
+            out_lines.push(format!("{indent}$$"));
+            out_lines.push(body.to_string());
+            out_lines.push(format!("{indent}$$"));
+            continue;
+        }
+
+        // 行首 $$ 后直接跟内容、本行又没有闭合：拆成块首 + 内容行。
+        if trimmed.starts_with("$$") {
+            let rest = &trimmed[2..];
+            let rest_trim = rest.trim();
+            if rest_trim.is_empty() || rest_trim.ends_with("$$") {
+                out_lines.push(line.to_string());
+                continue;
+            }
+            let indent = " ".repeat((line.len() - trimmed.len()).min(3));
+            out_lines.push(format!("{indent}$$"));
+            out_lines.push(rest.to_string());
+            continue;
+        }
+
+        out_lines.extend(normalize_math_line(line));
+    }
+
+    let normalized = out_lines.join("\n");
+    let dedented = normalize_block_math_indentation(&normalized);
+
+    if dedented != raw {
         info!(
-            "normalize_math_symbols: raw={} out={} tightened={} layout={} dedented={}",
+            "normalize_math_symbols: raw={} norm={}",
             excerpt_for_log(&raw),
-            excerpt_for_log(&out),
-            excerpt_for_log(&tightened),
-            excerpt_for_log(&layout),
             excerpt_for_log(&dedented)
         );
     }
@@ -2959,17 +3007,20 @@ fn normalize_math_symbols(content: String) -> String {
     dedented
 }
 
-fn trim_output_whitespace(out: &mut String) {
-    while out
-        .chars()
-        .last()
-        .map(|ch| ch.is_whitespace())
-        .unwrap_or(false)
-    {
-        out.pop();
+/// 把一行里「反引号代码段之外」的部分做定界符收敛。
+fn normalize_math_line(line: &str) -> Vec<String> {
+    let mut rebuilt = String::new();
+    for (is_code, text) in split_inline_code(line) {
+        if is_code {
+            rebuilt.push_str(&text);
+        } else {
+            rebuilt.push_str(&normalize_math_text(&text));
+        }
     }
+    vec![rebuilt]
 }
 
+/// 判断某个位置上的字符是否被奇数个反斜杠转义（`\$` 不是数学定界符）。
 fn is_math_delimiter_escaped(chars: &[char], index: usize) -> bool {
     if index == 0 {
         return false;
@@ -2987,144 +3038,128 @@ fn is_math_delimiter_escaped(chars: &[char], index: usize) -> bool {
     backslashes % 2 == 1
 }
 
-fn tighten_math_spacing(input: &str) -> String {
-    if input.is_empty() {
+/// 把一段行内文本里的 LaTeX 定界符统一成 `$` / `$$`：
+/// - `\(...\)` -> `$...$`，`\[...\]` -> `$$...$$`
+/// - 句中成对的 `$$...$$` 收敛成行内 `$...$`
+/// - 行内 `$ ... $` 去掉内侧空白（否则 mathjax3 不会接管）
+fn normalize_math_text(text: &str) -> String {
+    if text.is_empty() {
         return String::new();
     }
 
-    let chars: Vec<char> = input.chars().collect();
-    let mut out = String::with_capacity(input.len());
+    let converted = text
+        .replace(r"\(", "$")
+        .replace(r"\)", "$")
+        .replace(r"\[", "$$")
+        .replace(r"\]", "$$");
+    let chars: Vec<char> = converted.chars().collect();
+    let mut out = String::with_capacity(converted.len());
     let mut i = 0usize;
-    let mut state = 0u8;
 
     while i < chars.len() {
         let ch = chars[i];
-        if ch == '$' && !is_math_delimiter_escaped(&chars, i) {
-            let next_is_dollar = i + 1 < chars.len() && chars[i + 1] == '$';
-
-            if state == 0 {
-                if next_is_dollar {
-                    out.push('$');
-                    out.push('$');
-                    i += 2;
-                    while i < chars.len() && chars[i].is_whitespace() {
-                        i += 1;
-                    }
-                    state = 2;
-                    continue;
-                }
-
-                out.push('$');
-                i += 1;
-                while i < chars.len() && chars[i].is_whitespace() {
-                    i += 1;
-                }
-                state = 1;
-                continue;
-            }
-
-            if state == 1 && !next_is_dollar {
-                trim_output_whitespace(&mut out);
-                out.push('$');
-                i += 1;
-                state = 0;
-                continue;
-            }
-
-            if state == 2 && next_is_dollar {
-                trim_output_whitespace(&mut out);
-                out.push('$');
-                out.push('$');
-                i += 2;
-                state = 0;
-                continue;
-            }
+        if ch != '$' || is_math_delimiter_escaped(&chars, i) {
+            out.push(ch);
+            i += 1;
+            continue;
         }
 
-        out.push(ch);
-        i += 1;
+        let is_double = i + 1 < chars.len() && chars[i + 1] == '$';
+        let open_len = if is_double { 2 } else { 1 };
+        let closer = find_math_closer(&chars, i + open_len, is_double);
+
+        match closer {
+            Some(end) => {
+                let body: String = chars[i + open_len..end].iter().collect();
+                let body = body.trim();
+                if body.is_empty() {
+                    out.push('$');
+                    i += 1;
+                    continue;
+                }
+                out.push('$');
+                out.push_str(body);
+                out.push('$');
+                i = end + open_len;
+            }
+            None => {
+                out.push('$');
+                i += 1;
+            }
+        }
     }
 
     out
 }
 
-fn soften_block_math_boundaries(input: &str) -> String {
-    if input.is_empty() || !input.contains("$$") {
-        return input.to_string();
+/// 从 `from` 开始找匹配的 `$` / `$$`；块级只认 `$$` 闭合，行内跳过成对的 `$$`。
+fn find_math_closer(chars: &[char], from: usize, double: bool) -> Option<usize> {
+    let mut i = from;
+    while i < chars.len() {
+        if chars[i] == '$' && !is_math_delimiter_escaped(chars, i) {
+            let is_double = i + 1 < chars.len() && chars[i + 1] == '$';
+            if double {
+                if is_double {
+                    return Some(i);
+                }
+                i += 1;
+                continue;
+            }
+            if is_double {
+                i += 2;
+                continue;
+            }
+            return Some(i);
+        }
+        i += 1;
     }
+    None
+}
 
-    let chars: Vec<char> = input.chars().collect();
-    let mut out = String::with_capacity(input.len() + 8);
-    let mut i = 0usize;
-    let mut in_fence = false;
-    let mut at_line_start = true;
-    let mut leading_spaces = 0usize;
+/// 把一行按反引号拆成「代码段 / 普通文本」片段；未闭合的反引号按代码段处理（不改写）。
+fn split_inline_code(line: &str) -> Vec<(bool, String)> {
+    let mut segments: Vec<(bool, String)> = Vec::new();
+    let mut current = String::new();
+    let mut in_code = false;
     let mut tick_run = 0usize;
-
-    let is_line_break = |ch: char| ch == '\n' || ch == '\r';
+    let chars: Vec<char> = line.chars().collect();
+    let mut i = 0usize;
 
     while i < chars.len() {
-        let ch = chars[i];
-
-        if ch == '\n' || ch == '\r' {
-            out.push(ch);
-            at_line_start = true;
-            leading_spaces = 0;
-            tick_run = 0;
+        if chars[i] != '`' {
+            current.push(chars[i]);
             i += 1;
             continue;
         }
 
-        if at_line_start {
-            if ch == ' ' && leading_spaces < 3 {
-                leading_spaces += 1;
-                out.push(ch);
-                i += 1;
-                continue;
-            }
-
-            if ch == '`' {
-                tick_run += 1;
-                out.push(ch);
-                i += 1;
-                if tick_run == 3 {
-                    in_fence = !in_fence;
-                    at_line_start = false;
-                }
-                continue;
-            }
-
-            at_line_start = false;
-            tick_run = 0;
+        let mut run = 0usize;
+        while i + run < chars.len() && chars[i + run] == '`' {
+            run += 1;
         }
 
-        if !in_fence && ch == '$' && i + 1 < chars.len() && chars[i + 1] == '$' {
-            let prev = out.chars().last();
-            if let Some(p) = prev {
-                if !p.is_whitespace() && !is_line_break(p) {
-                    out.push('\n');
-                }
+        if !in_code {
+            if !current.is_empty() {
+                segments.push((false, std::mem::take(&mut current)));
             }
-
-            out.push('$');
-            out.push('$');
-            i += 2;
-
-            if i < chars.len() {
-                let next = chars[i];
-                if !next.is_whitespace() && !is_line_break(next) {
-                    out.push('\n');
-                }
-            }
-
+            in_code = true;
+            tick_run = run;
+        } else if run == tick_run {
+            current.push_str(&"`".repeat(run));
+            segments.push((true, std::mem::take(&mut current)));
+            in_code = false;
+            tick_run = 0;
+            i += run;
             continue;
         }
 
-        out.push(ch);
-        i += 1;
+        current.push_str(&"`".repeat(run));
+        i += run;
     }
 
-    out
+    if !current.is_empty() {
+        segments.push((in_code, current));
+    }
+    segments
 }
 
 fn normalize_block_math_indentation(input: &str) -> String {

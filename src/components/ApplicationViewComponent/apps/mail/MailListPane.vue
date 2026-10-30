@@ -174,7 +174,7 @@
       </template>
 
       <div v-if="hasMore" class="mail-load-more">
-        <button class="mail-btn" :disabled="loadingMore" @click="$emit('load-more')">
+        <button class="mail-btn" :disabled="loadingMore" @click="onLoadMoreClick">
           {{ loadingMore ? '加载中…' : '加载更多' }}
         </button>
       </div>
@@ -280,6 +280,30 @@ const windowRows = computed(() => {
 
 function onScroll(event) {
   scrollTop.value = event.target.scrollTop
+  // 快到底就把下一页取回来，用户不用每次去点「加载更多」。
+  if (nearBottom(event.target)) requestMore()
+}
+
+/** 还有下一页、且没有在途请求时才续页；「加载更多」按钮留着当兜底。 */
+function requestMore() {
+  if (!props.hasMore || props.loadingMore) return
+  emit('load-more')
+}
+
+/** 距底部不足一屏就算「快到底了」，提前一页取，滚过去时数据已经在了。 */
+function nearBottom(el) {
+  return el.scrollHeight - el.scrollTop - el.clientHeight < el.clientHeight
+}
+
+/**
+ * 内容是否还装得下整个可视区。
+ *
+ * 装得下就没有可滚动的余地，也就触发不了上面的续页：一屏只放得下 10 行，
+ * 而文件夹里有六百多封，用户既滚不动也看不到后面的信（真实反馈）。
+ * 这种时候要主动再要一页，直到列表能滚动。
+ */
+function fitsViewport(el) {
+  return el.scrollHeight - el.clientHeight <= 8
 }
 
 let resizeObserver = null
@@ -313,13 +337,18 @@ onBeforeUnmount(() => {
  * 列表变化之后该停在哪。
  *
  * 换文件夹 / 换账户 / 改搜索词是「换了一份列表」，回到顶部理所当然。
- * 但点「加载更多」是在同一份列表末尾追加一页：以前这里也一律回顶部，
- * 于是每点一次都要把刚看过的那一屏重新翻一遍（真实反馈）。
- * 追加时把视口停在新一页的第一封——也就是刚加载出来的那批历史邮件的最上面一封，
- * 接着往下看就行。收件箱、其他文件夹与「全部邮件」共用这个组件，行为一致。
+ * 同一份列表末尾追加一页时不能再动：以前这里一律回顶部，用户每点一次
+ * 「加载更多」都要把刚看过的那一屏重新翻一遍（真实反馈）。
+ * 只有用户点按钮要的那一页才把视口移到新一页的第一封；自动补齐（下面
+ * fillViewport）是「把这一屏填满」，位置本来就在顶部，动它反而莫名其妙。
+ * 收件箱、其他文件夹与「全部邮件」共用这个组件，行为一致。
  */
 let seenKeys = new Set()
 let seenFirstKey = ''
+/** 上一次自动续页时的行数：页数没涨就说明这一页没带来新东西，别再要了。 */
+let lastFillLength = -1
+/** 这一页是用户点按钮要的吗？只有手动的才把视口移到新一页的第一封。 */
+let manualMore = false
 
 watch(
   () => [props.title, props.searchQuery, props.messages.length && props.messages[0]?.uid],
@@ -328,13 +357,36 @@ watch(
     const keys = visible.value.map(rowKey)
     const firstKey = keys[0] || ''
     // 按 key 比对而不是「原来有多少封」：会话聚合会把新加载的一封并进已有的行。
-    const firstNew =
-      firstKey === seenFirstKey ? keys.findIndex((key) => !seenKeys.has(key)) : -1
+    const appended = firstKey === seenFirstKey
+    const firstNew = appended ? keys.findIndex((key) => !seenKeys.has(key)) : -1
     seenKeys = new Set(keys)
     seenFirstKey = firstKey
-    scrollToIndex(firstNew > 0 ? firstNew : 0)
+    if (!appended) {
+      // 换了一份列表：回到顶部，并允许重新自动补齐。
+      lastFillLength = -1
+      scrollToIndex(0)
+    } else if (firstNew > 0 && manualMore) {
+      scrollToIndex(firstNew)
+    }
+    manualMore = false
+    fillViewport()
   },
 )
+
+/** 一页取回来仍然不满一屏就继续取，直到能滚动 / 没有下一页 / 行数不再增长。 */
+function fillViewport() {
+  const el = scrollRef.value
+  if (!el || !fitsViewport(el)) return
+  if (visible.value.length === lastFillLength) return
+  lastFillLength = visible.value.length
+  requestMore()
+}
+
+/** 点按钮要的那一页：看完当前这一屏，下一封正好从视口顶部开始。 */
+function onLoadMoreClick() {
+  manualMore = true
+  requestMore()
+}
 
 /** 把第 index 行摆到视口顶部。 */
 function scrollToIndex(index) {

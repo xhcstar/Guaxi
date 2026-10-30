@@ -21,6 +21,7 @@ const sidebar = read('src/components/ApplicationViewComponent/apps/mail/MailSide
 const reader = read('src/components/ApplicationViewComponent/apps/mail/MailReader.vue')
 const listPane = read('src/components/ApplicationViewComponent/apps/mail/MailListPane.vue')
 const css = read('src/components/ApplicationViewComponent/apps/mail/mail.css')
+const store = read('src/stores/mailStore.js')
 
 test('右键菜单：只有一个「移动」入口，文件夹收进子菜单', () => {
   // 以前是「移到「X」」一长串按钮，文件夹多了会把删除等动作挤出屏幕。
@@ -192,23 +193,60 @@ test('写信编辑区：不叠焦点环，插入的表格跟随主题', () => {
     '不应对编辑区里所有表格（含引用原文）统一套样式',
   )
 })
-// 点「加载更多」之后不该被拽回列表顶部（真实反馈）：追加一页时列表开头并没有变，
-// 应该把视口停在刚加载出来的那批历史邮件的第一封上，接着往下看就行。
-test('加载更多：停在新一页第一封，而不是回到列表顶部', () => {
+// 一页 100 封常常被会话聚合成 10 行，所以分页游标不能用聚合后的行数：
+// 以前 offset = messages.length，下一页又从第 10 封开始查，取回来还是同一批信，
+// 聚合完仍是那 10 行——点「加载更多」看着毫无反应（真实反馈）。
+test('加载更多：游标按原始邮件数推进，一页真的是一页', () => {
   assert.ok(
-    /scrollToIndex\(firstNew > 0 \? firstNew : 0\)/.test(listPane),
-    '要区分「同一份列表追加一页」和「换了一份列表」',
+    /const offset = append \? this\.rawLoaded : 0/.test(store),
+    '下一页的 SQL offset 要用已取回的原始条数，不能用聚合后的行数',
   )
   assert.ok(
-    /keys\.findIndex\(\(key\) => !seenKeys\.has\(key\)\)/.test(listPane),
-    '按行 key 找第一封新加载的：会话聚合会把新邮件并进已有的行，不能按「原来有几封」算下标',
+    /this\.rawLoaded = offset \+ page\.length/.test(store),
+    '取回一页之后要把游标推上去',
+  )
+})
+
+// 一屏只放得下 10 行时列表根本没有可滚动的余地：既滚不动，也看不到后面的信。
+// 所以滚到接近底部要自动续页，内容不满一屏也要主动补齐；只有用户点按钮要的那一页
+// 才把视口移到新一页的第一封，自动补齐不动位置。
+test('列表：滚到附近自动续页，不满一屏自动补齐', () => {
+  assert.ok(
+    /if \(nearBottom\(event\.target\)\) requestMore\(\)/.test(listPane),
+    '滚动接近底部就续下一页',
   )
   assert.ok(
-    /if \(props\.virtual\) return index \* props\.rowHeight/.test(listPane),
-    '虚拟滚动只有视口附近的行在 DOM 里，偏移必须按行高算出来',
+    /el\.scrollHeight - el\.scrollTop - el\.clientHeight < el\.clientHeight/.test(listPane),
+    '「接近底部」按还差一屏算，滚过去时数据已经在',
+  )
+  assert.ok(/function fillViewport\(\)/.test(listPane), '不满一屏要主动再要一页')
+  assert.ok(
+    /if \(visible\.value\.length === lastFillLength\) return/.test(listPane),
+    '这一页没带来新行就停，不能空转刷请求',
   )
   assert.ok(
-    !/scrollRef\.value\.scrollTop = 0/.test(listPane),
-    '不再无条件回顶部',
+    /\} else if \(firstNew > 0 && manualMore\) \{/.test(listPane),
+    '只有点按钮要的那一页才移动视口',
+  )
+  assert.ok(
+    /if \(!props\.hasMore \|\| props\.loadingMore\) return/.test(listPane),
+    '没有下一页或有在途请求时不再触发',
+  )
+})
+// 切文件夹时同时跑着两条列表请求（先查本地库、同步完再查一次），谁后落地谁覆盖列表；
+// 期间再切一次文件夹，上一个文件夹的结果就会盖到新文件夹上——表现为「列表没跟着刷新，
+// 还是刚才那个文件夹的信」（真实反馈）。所以每条请求都要带号，过期的整批丢掉。
+test('列表请求带序号：旧文件夹的结果不能落到新文件夹上', () => {
+  assert.ok(
+    /const token = append \? this\.listToken : \+\+this\.listToken/.test(store),
+    '每次「换一份列表」都要占一个新号，续页沿用当前号',
+  )
+  assert.ok(
+    store.indexOf('const token = append') < store.indexOf('await this.searchAlternativesFor'),
+    '占号必须发生在任何 await 之前，否则落地顺序可能和发起顺序不一致',
+  )
+  assert.ok(
+    /if \(token !== this\.listToken\) return/.test(store),
+    '结果落地前要再核对一次号',
   )
 })

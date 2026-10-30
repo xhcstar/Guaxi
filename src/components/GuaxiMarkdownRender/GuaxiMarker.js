@@ -12,6 +12,7 @@ import "./guaxiMarkdownExtras.css";
 // 新围栏（```chart / ```excalidraw）的容器样式。只新增选择器，不覆盖任何既有规则。
 import "./guaxiChartEmbeds.css";
 import { initMathJax, renderMath } from "./mathjaxConfig";
+import { GUAXI_TEX_MACROS } from "./mathMacros";
 // MathJax 3.2.2 的解析崩溃补丁：必须在 markdown-it-mathjax3 建出 TeX 输入 jax 之前生效，
 // 本模块求值时即安装（见该文件里的完整说明）。
 import "./mathjaxNullSafeCharacter";
@@ -2735,7 +2736,9 @@ export const renderMarkdown = async (content, options) => {
 
     // 添加数学公式支持（完整修改部分）
     if (shouldEnableMath) {
-      md.use(markdownItMathjax);
+      // MathJax 3 不含 LaTeX `bm` 宏包，模型写 `\bm{D}` 时会被 noundefined 渲染成红色。
+      // 宏表集中在 mathMacros，主线程与公式 Worker 共用。
+      md.use(markdownItMathjax, { tex: { macros: GUAXI_TEX_MACROS } });
 
       // 保存原始渲染函数
       const originalInlineMath = md.renderer.rules.math_inline;

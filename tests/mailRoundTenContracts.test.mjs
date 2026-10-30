@@ -80,8 +80,12 @@ test('侧栏角标：存完草稿要重算草稿夹的计数', () => {
   assert.ok(/adjustFolderCount\(accountId, target, \{ total, unread: unseen \}\)/.test(store), '目标夹角标先加')
   assert.ok(/scheduleFolderRefresh\(this, accountId\)/.test(store), '随后用服务端计数校正')
   // POP3 的邮件全在本机：移动 / 删除后就地重算，重启后不会读回旧数字。
+  // 取「函数体」范围而不是「往后数 N 个字符」：函数体一长就会假失败。
+  const moveStart = mod.indexOf('fn move_locally')
+  assert.ok(moveStart >= 0, 'move_locally 必须还在')
+  const moveBody = mod.slice(moveStart).match(/^[\s\S]*?\r?\n\}\r?\n/)?.[0] || ''
   assert.ok(
-    /fn move_locally[\s\S]{0,1200}refresh_folder_totals\(account_id, target\)/.test(mod),
+    /refresh_folder_totals\(account_id, target\)/.test(moveBody),
     'POP3 本地移动后目标夹也要重算',
   )
   assert.ok(
