@@ -21,6 +21,45 @@ export const DARK_PAPER = { r: 0x23, g: 0x26, b: 0x2b }
 /** 纸面的色相：中性色映射时借用它，让深浅层次落在同一套冷调里。 */
 const PAPER_HUE = 0.62
 
+/**
+ * Windows 系统色关键字。
+ *
+ * Word / Outlook 写表格时不写十六进制，直接写 `border: 1pt solid windowtext`
+ * （实测用户邮箱里 132 处边框色是 windowtext）。这些关键字过去解析不出来，
+ * 映射层对整个属性直接跳过，边框就交给浏览器按系统主题去解释——
+ * 系统浅色主题下它是黑色，落在暗色纸面上等于没有：表格看起来「缺边框」。
+ * 这里按邮件当初设计时的浅色纸面给出它们的取值，交给后面的映射统一改写。
+ *
+ * `currentColor` 不在其列：它跟着元素自己的文字色走，而文字色已经被映射过了，
+ * 再解析一次会把两者绑死在不同的层级上。
+ */
+const SYSTEM_COLORS = {
+  windowtext: { r: 0, g: 0, b: 0, a: 1 },
+  window: { r: 255, g: 255, b: 255, a: 1 },
+  threedface: { r: 240, g: 240, b: 240, a: 1 },
+  threedshadow: { r: 128, g: 128, b: 128, a: 1 },
+  threeddarkshadow: { r: 64, g: 64, b: 64, a: 1 },
+  threedhighlight: { r: 255, g: 255, b: 255, a: 1 },
+  threedlight: { r: 227, g: 227, b: 227, a: 1 },
+  buttonface: { r: 240, g: 240, b: 240, a: 1 },
+  buttonhighlight: { r: 255, g: 255, b: 255, a: 1 },
+  buttonshadow: { r: 160, g: 160, b: 160, a: 1 },
+  buttondarkshadow: { r: 105, g: 105, b: 105, a: 1 },
+  activeborder: { r: 181, g: 181, b: 181, a: 1 },
+  inactiveborder: { r: 232, g: 232, b: 232, a: 1 },
+  appworkspace: { r: 240, g: 240, b: 240, a: 1 },
+  scrollbar: { r: 232, g: 232, b: 232, a: 1 },
+  field: { r: 255, g: 255, b: 255, a: 1 },
+  fieldtext: { r: 0, g: 0, b: 0, a: 1 },
+  menu: { r: 240, g: 240, b: 240, a: 1 },
+  menutext: { r: 0, g: 0, b: 0, a: 1 },
+  captiontext: { r: 0, g: 0, b: 0, a: 1 },
+  infobackground: { r: 255, g: 255, b: 225, a: 1 },
+  infotext: { r: 0, g: 0, b: 0, a: 1 },
+  highlight: { r: 0, g: 120, b: 215, a: 1 },
+  highlighttext: { r: 255, g: 255, b: 255, a: 1 },
+}
+
 const NAMED_COLORS = {
   transparent: { r: 0, g: 0, b: 0, a: 0 },
   white: { r: 255, g: 255, b: 255, a: 1 },
@@ -36,6 +75,7 @@ const NAMED_COLORS = {
   dimgray: { r: 105, g: 105, b: 105, a: 1 },
   darkslategray: { r: 47, g: 79, b: 79, a: 1 },
   navy: { r: 0, g: 0, b: 128, a: 1 },
+  ...SYSTEM_COLORS,
 }
 
 /** 解析 CSS 颜色；认不出的形态返回 null（宁可不动，也不要写坏一处颜色）。 */

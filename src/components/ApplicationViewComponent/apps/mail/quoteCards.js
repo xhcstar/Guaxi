@@ -59,6 +59,33 @@ function dropEmptyBody(card) {
   body.remove()
 }
 
+/** 这个元素里还剩点能看见的东西吗？只剩空白、`<br>` 或一张描边的空表就算没有。 */
+function hasVisibleContent(el) {
+  if (!el) return false
+  // 表格不用单独判断：单元格里有字就被 textContent 收到，只剩个空框则不该留着。
+  return Boolean(
+    (el.textContent || '').trim() ||
+      el.querySelector('img, video, audio, iframe, object, embed, input'),
+  )
+}
+
+/**
+ * 收掉没有任何内容的 `<blockquote>`，就地修改传入的 DOM 子树。
+ *
+ * 回信套回信时，每往下一层就多一个 blockquote：mail.css 给每一层画一条 2px 左竖线、
+ * 再缩进 14px。历史卡片被摘走（会话视图）或本身就是空壳（别的客户端的引用格式）之后，
+ * 这些壳还留在原地——于是正文底部出现一片由深到浅、一层比一层短的竖线，
+ * 嵌套几十封就是一整块「栅栏」（用户反馈的「多次回复的邮件底部有大量竖线」）。
+ * 空引用块本身不承载任何信息，直接收掉；从最里层往外收，
+ * 因为外层往往只是包着一串空的内层。
+ */
+export function pruneEmptyQuotes(root) {
+  if (!root?.querySelectorAll) return
+  for (const block of [...root.querySelectorAll('blockquote')].reverse()) {
+    if (!hasVisibleContent(block)) block.remove()
+  }
+}
+
 /**
  * 把嵌套的引用卡片提到同一层，就地修改传入的 DOM 子树。
  *

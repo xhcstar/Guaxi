@@ -309,15 +309,51 @@ onBeforeUnmount(() => {
   resizeObserver?.disconnect()
 })
 
-/** 列表切换（换文件夹 / 换账户 / 搜索）时回到顶部。 */
+/**
+ * 列表变化之后该停在哪。
+ *
+ * 换文件夹 / 换账户 / 改搜索词是「换了一份列表」，回到顶部理所当然。
+ * 但点「加载更多」是在同一份列表末尾追加一页：以前这里也一律回顶部，
+ * 于是每点一次都要把刚看过的那一屏重新翻一遍（真实反馈）。
+ * 追加时把视口停在新一页的第一封——也就是刚加载出来的那批历史邮件的最上面一封，
+ * 接着往下看就行。收件箱、其他文件夹与「全部邮件」共用这个组件，行为一致。
+ */
+let seenKeys = new Set()
+let seenFirstKey = ''
+
 watch(
   () => [props.title, props.searchQuery, props.messages.length && props.messages[0]?.uid],
   async () => {
     await nextTick()
-    if (scrollRef.value) scrollRef.value.scrollTop = 0
-    scrollTop.value = 0
+    const keys = visible.value.map(rowKey)
+    const firstKey = keys[0] || ''
+    // 按 key 比对而不是「原来有多少封」：会话聚合会把新加载的一封并进已有的行。
+    const firstNew =
+      firstKey === seenFirstKey ? keys.findIndex((key) => !seenKeys.has(key)) : -1
+    seenKeys = new Set(keys)
+    seenFirstKey = firstKey
+    scrollToIndex(firstNew > 0 ? firstNew : 0)
   },
 )
+
+/** 把第 index 行摆到视口顶部。 */
+function scrollToIndex(index) {
+  const el = scrollRef.value
+  if (!el) return
+  el.scrollTop = Math.max(0, rowOffsetTop(index, el))
+  scrollTop.value = el.scrollTop
+}
+
+/**
+ * 第 index 行在滚动内容里的偏移。
+ * 虚拟滚动只有视口附近几行在 DOM 里，按行高算；整列渲染时直接量，避免行高不定时算偏。
+ */
+function rowOffsetTop(index, el) {
+  if (props.virtual) return index * props.rowHeight
+  const row = el.querySelectorAll('.mail-row')[index]
+  if (!row) return index * props.rowHeight
+  return row.getBoundingClientRect().top - el.getBoundingClientRect().top + el.scrollTop
+}
 
 /** 键盘导航：把「当前行」滚进视口。老机器上平滑滚动会掉帧，这里用自动。 */
 function ensureVisible(key) {

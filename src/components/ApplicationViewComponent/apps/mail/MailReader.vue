@@ -341,7 +341,7 @@ import { useMailReaderTools } from './useMailReaderTools'
 import MailAddressCard from './MailAddressCard.vue'
 import { useMailSelectionTranslate } from './useMailSelectionTranslate'
 import { clearHighlight, highlightHtml, searchTokens } from './highlight'
-import { collectQuoteCards, flattenQuoteCards } from './quoteCards'
+import { collectQuoteCards, flattenQuoteCards, pruneEmptyQuotes } from './quoteCards'
 
 // 翻译面板是邮件页里唯一依赖 naive-ui 的组件：只在真正划词时加载。
 const GuaxiSelectionTranslatePanel = defineAsyncComponent(
@@ -630,10 +630,11 @@ function upgradeQuoteCards(html, { dropQuotes = false } = {}) {
     flattenQuoteCards(doc.body)
     const cards = collectQuoteCards(doc.body)
     // 会话视图：历史邮件已经是上方的独立卡片，正文里的引用块直接去掉，避免重复。
-    if (dropQuotes) {
-      for (const card of cards) card.remove()
-      return doc.body.innerHTML
-    }
+    if (dropQuotes) for (const card of cards) card.remove()
+    // 卡片摘走之后，外面那几层 `<blockquote>` 壳会留在原地，每层一条引用竖线；
+    // 回信套回信攒出的几十层嵌套，就是正文底部那一片竖线。空壳收掉。
+    pruneEmptyQuotes(doc.body)
+    if (dropQuotes) return doc.body.innerHTML
     for (const card of cards) {
       card.classList.add('mail-quote--card')
       delete card.dataset.guaxiQuoteCard

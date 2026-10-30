@@ -192,3 +192,23 @@ test('写信编辑区：不叠焦点环，插入的表格跟随主题', () => {
     '不应对编辑区里所有表格（含引用原文）统一套样式',
   )
 })
+// 点「加载更多」之后不该被拽回列表顶部（真实反馈）：追加一页时列表开头并没有变，
+// 应该把视口停在刚加载出来的那批历史邮件的第一封上，接着往下看就行。
+test('加载更多：停在新一页第一封，而不是回到列表顶部', () => {
+  assert.ok(
+    /scrollToIndex\(firstNew > 0 \? firstNew : 0\)/.test(listPane),
+    '要区分「同一份列表追加一页」和「换了一份列表」',
+  )
+  assert.ok(
+    /keys\.findIndex\(\(key\) => !seenKeys\.has\(key\)\)/.test(listPane),
+    '按行 key 找第一封新加载的：会话聚合会把新邮件并进已有的行，不能按「原来有几封」算下标',
+  )
+  assert.ok(
+    /if \(props\.virtual\) return index \* props\.rowHeight/.test(listPane),
+    '虚拟滚动只有视口附近的行在 DOM 里，偏移必须按行高算出来',
+  )
+  assert.ok(
+    !/scrollRef\.value\.scrollTop = 0/.test(listPane),
+    '不再无条件回顶部',
+  )
+})

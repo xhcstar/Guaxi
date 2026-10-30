@@ -54,3 +54,25 @@ test('阅读侧：渲染时同样拍平（老邮件与别的客户端的嵌套�
   )
   assert.ok(cards.includes('写道|wrote'), '识别线索本身要保留在共用实现里')
 })
+
+// 现象（用户截图）：多次回复的邮件，正文底部一片由长到短的竖线，像一排栅栏。
+// 原因：会话视图把历史卡片摘走之后，外面那几层 <blockquote> 壳还留在原地，
+// 而 mail.css 给每一层都画一条引用竖线并缩进 14px——嵌套几十层就是几十条线。
+test('空引用壳要收掉，否则正文底部只剩一排引用竖线', () => {
+  assert.ok(/export function pruneEmptyQuotes/.test(cards), '应导出空引用清理')
+  assert.ok(
+    /querySelectorAll\('blockquote'\)\]\.reverse\(\)/.test(cards),
+    '要从最里层往外收：外层往往只包着一串空的内层',
+  )
+  // 有文字、有图/媒体的引用块不能误删，那是邮件内容；只剩一个空表格框则不算。
+  assert.ok(/img, video, audio, iframe, object, embed, input/.test(cards))
+  assert.ok(
+    /pruneEmptyQuotes\(doc\.body\)/.test(reader),
+    '阅读侧摘完卡片（或拍平后）要收一次空壳',
+  )
+  assert.ok(
+    reader.indexOf('card.remove()') < reader.indexOf('pruneEmptyQuotes(doc.body)'),
+    '必须先摘卡片再收空壳，顺序反了壳里还有内容、收不掉',
+  )
+})
+

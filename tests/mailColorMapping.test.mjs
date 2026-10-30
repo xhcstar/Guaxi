@@ -89,6 +89,29 @@ test('压在仍偏亮的色块上的文字不动', () => {
   assert.equal(mapTextColor('rgb(29, 29, 31)', 0.6), null)
 })
 
+// Word / Outlook 的表格边框不写十六进制，直接写 `border: 1pt solid windowtext`。
+// 这个关键字过去解析不出来，映射层整个跳过，边框留给浏览器按系统主题解释：
+// 系统浅色主题下它是黑色，落在暗色纸面上就等于没有——用户看到的「表格边框缺失」。
+test('Outlook 的系统色边框参与暗色映射，不再落成黑色', async () => {
+  const { mapBorderColor } = await import(
+    '../src/components/ApplicationViewComponent/apps/mail/colors.js'
+  )
+  assert.deepEqual(parseCssColor('windowtext'), { r: 0, g: 0, b: 0, a: 1 })
+  assert.deepEqual(parseCssColor('WindowText'), { r: 0, g: 0, b: 0, a: 1 })
+  const line = mapBorderColor('windowtext')
+  assert.ok(line, 'windowtext 必须给出映射结果，否则边框会留给系统主题')
+  // 结果要和「邮件里本来就写 #ccc」的那类边框落在同一档，表格才不会出现断线。
+  const gray = mapBorderColor('rgb(204, 204, 204)')
+  assert.ok(gray)
+  assert.ok(Math.abs(lumOf(line) - lumOf(gray)) < 0.06, `${line} 与 ${gray} 亮度差太多`)
+  // 比纸面亮一点才有分隔感，但又不能亮成一条白线。
+  assert.ok(lumOf(line) > luminance(DARK_PAPER), `边框比纸面还暗：${line}`)
+  assert.ok(lumOf(line) < 0.2, `边框太扎眼：${line}`)
+  // currentColor 跟着元素自己的文字色走，不能提前定值。
+  assert.equal(parseCssColor('currentcolor'), null)
+})
+
+
 test('亮色主题不做任何改写', () => {
   assert.equal(mapBackgroundColor('#ffffff', 'light'), null)
   assert.equal(mapTextColor('rgb(29, 29, 31)', 0.9, 'light'), null)
