@@ -227,6 +227,11 @@ export const buildGuaxiMonacoThemeRules = (themeOrPalette) => {
     identifier: 'base',
     tag: 'tag',
     'attribute.name': 'attribute',
+    // LaTeX / Typst 的 Monarch 直接产出裸 `attribute`（`[可选参数]`）、`strong`/`emphasis`。
+    // 缺了这几项，Monaco 会回落到 inherit 来的 VS Code 内置主题色——表现为「这两个文件不跟代码主题走」。
+    attribute: 'attribute',
+    strong: 'keyword',
+    emphasis: 'decorator',
     'meta.embedded': 'comment',
     operator: 'operator',
     punctuation: 'punctuation',

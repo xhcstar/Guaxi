@@ -189,7 +189,7 @@ import { debounce } from 'lodash-es'
 import { invoke } from '@tauri-apps/api/core'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { createLogger } from '../../utils/logger'
-import { GUAXI_MONACO_SEMANTIC_TOKEN_COLORS, GUAXI_MONACO_THEME_RULES, onGuaxiMonacoCodeThemeReapply } from '../../monaco/guaxiMonacoThemes'
+import { GUAXI_MONACO_EDITOR_FOREGROUND, GUAXI_MONACO_SEMANTIC_TOKEN_COLORS, GUAXI_MONACO_THEME_RULES, onGuaxiMonacoCodeThemeReapply } from '../../monaco/guaxiMonacoThemes'
 import {
   attachSharedEditorFeatures,
   formatMarkdownEditor,
@@ -301,7 +301,7 @@ const ensureGuaxiMonacoThemes = (force = false) => {
     semanticTokenColors: GUAXI_MONACO_SEMANTIC_TOKEN_COLORS.light,
     colors: {
       'editor.background': '#fafafa',
-      'editor.foreground': '#383a42',
+      'editor.foreground': GUAXI_MONACO_EDITOR_FOREGROUND.light,
       'editorLineNumber.foreground': '#a0a1a7',
       'editorLineNumber.activeForeground': '#383a42',
       'editorCursor.foreground': '#4078f2',
@@ -350,7 +350,7 @@ const ensureGuaxiMonacoThemes = (force = false) => {
     semanticTokenColors: GUAXI_MONACO_SEMANTIC_TOKEN_COLORS.dark,
     colors: {
       'editor.background': '#282c34',
-      'editor.foreground': '#abb2bf',
+      'editor.foreground': GUAXI_MONACO_EDITOR_FOREGROUND.dark,
       'editorLineNumber.foreground': '#5c6370',
       'editorLineNumber.activeForeground': '#abb2bf',
       'editorCursor.foreground': '#528bff',

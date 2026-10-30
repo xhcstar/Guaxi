@@ -26,6 +26,13 @@ export const GUAXI_MONACO_SEMANTIC_TOKEN_COLORS = {
   dark: buildGuaxiSemanticTokenColors(getCodeThemePalette(DEFAULT_CODE_THEME_ID, 'dark')),
 }
 
+// `editor.foreground` 是「没被任何 token 规则命中的字符」的颜色。以前写死 #383a42/#abb2bf，
+// 换主题后正文、LaTeX 可选参数、Typst 强调这些落不到规则上的字符就纹丝不动。
+export const GUAXI_MONACO_EDITOR_FOREGROUND = {
+  light: getCodeThemePalette(DEFAULT_CODE_THEME_ID, 'light').base,
+  dark: getCodeThemePalette(DEFAULT_CODE_THEME_ID, 'dark').base,
+}
+
 /** 按代码主题 + 明暗重算共享色板（就地替换，保持对象引用不变）。 */
 export const refreshGuaxiMonacoThemePalettes = (codeThemeId) => {
   const active = setActiveCodeThemeId(codeThemeId)
@@ -33,6 +40,8 @@ export const refreshGuaxiMonacoThemePalettes = (codeThemeId) => {
   GUAXI_MONACO_THEME_RULES.dark = buildGuaxiMonacoThemeRules(getCodeThemePalette(active, 'dark'))
   GUAXI_MONACO_SEMANTIC_TOKEN_COLORS.light = buildGuaxiSemanticTokenColors(getCodeThemePalette(active, 'light'))
   GUAXI_MONACO_SEMANTIC_TOKEN_COLORS.dark = buildGuaxiSemanticTokenColors(getCodeThemePalette(active, 'dark'))
+  GUAXI_MONACO_EDITOR_FOREGROUND.light = getCodeThemePalette(active, 'light').base
+  GUAXI_MONACO_EDITOR_FOREGROUND.dark = getCodeThemePalette(active, 'dark').base
   return active
 }
 
@@ -99,7 +108,7 @@ export function defineGuaxiMonacoThemes(monaco) {
     semanticTokenColors: GUAXI_MONACO_SEMANTIC_TOKEN_COLORS.light,
     colors: {
       'editor.background': '#fafafa',
-      'editor.foreground': '#383a42',
+      'editor.foreground': GUAXI_MONACO_EDITOR_FOREGROUND.light,
       'editorLineNumber.foreground': '#a0a1a7',
       'editorLineNumber.activeForeground': '#383a42',
       'editorCursor.foreground': '#4078f2',
@@ -143,7 +152,7 @@ export function defineGuaxiMonacoThemes(monaco) {
     semanticTokenColors: GUAXI_MONACO_SEMANTIC_TOKEN_COLORS.dark,
     colors: {
       'editor.background': '#282c34',
-      'editor.foreground': '#abb2bf',
+      'editor.foreground': GUAXI_MONACO_EDITOR_FOREGROUND.dark,
       'editorLineNumber.foreground': '#5c6370',
       'editorLineNumber.activeForeground': '#abb2bf',
       'editorCursor.foreground': '#61afef',

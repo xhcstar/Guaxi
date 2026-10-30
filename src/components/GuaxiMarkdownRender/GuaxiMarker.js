@@ -2,7 +2,10 @@ import MarkdownIt from "markdown-it";
 import markdownItMathjax from "markdown-it-mathjax3";
 import mermaid from "mermaid";
 import hljs from "highlight.js";
-import "highlight.js/styles/atom-one-light.css";
+// `.hljs-*` 的颜色只来自代码主题注入的那一张样式表（见 src/monaco/codeThemes.js）。
+// 这里在模块求值时先按当前主题注入一次，取代原先 import 的 atom-one-light 兜底表 ——
+// 文档里同时只可能存在一张 hljs 样式表，切换主题才不会被 <head> 的先后顺序顶掉。
+import { applyCodeThemeToDocument, getActiveCodeThemeId } from "../../monaco/codeThemes";
 // 暗色 One Dark 代码配色 + 纯图片段落布局（作用域限定，详见文件内说明）。
 import "./guaxiMarkdownExtras.css";
 // 新围栏（```chart / ```excalidraw）的容器样式。只新增选择器，不覆盖任何既有规则。
@@ -23,6 +26,8 @@ import { createLogger } from '../../utils/logger'
 
 const logger = createLogger('GuaxiMarker')
 let mermaidRenderCounter = 0
+
+applyCodeThemeToDocument(getActiveCodeThemeId(), document.documentElement?.dataset?.guaxiTheme)
 
 const renderPlainFenceBlock = (code, md) => {
   const escaped = md.utils.escapeHtml(code);

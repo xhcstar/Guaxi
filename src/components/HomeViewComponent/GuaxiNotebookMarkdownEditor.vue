@@ -29,6 +29,7 @@ import 'monaco-editor/esm/vs/editor/contrib/clipboard/browser/clipboard.js'
 import 'monaco-editor/esm/vs/editor/standalone/browser/quickAccess/standaloneCommandsQuickAccess.js'
 import { createLogger } from '../../utils/logger'
 import { attachSharedEditorFeatures, resolveSharedEditorDisplayOptions } from '../../monaco/editorFeatures'
+import { createMarkdownFenceHighlighter } from '../../monaco/markdownFenceHighlight'
 import { initLspClient, setLspImeComposing } from '../../monaco/lspClient'
 import {
   replaceModelContentPreserveUndo,
@@ -79,6 +80,7 @@ let savedQuickSuggestionsDuringIme
 let lastEmittedModelValue = null
 let currentAppliedTheme = ''
 let featuresDisposable = null
+let fenceHighlighter = null
 let mountMonacoEditorPromise = null
 let usesVscodeModelBridge = false
 
@@ -349,6 +351,9 @@ const mountMonacoEditor = async () => {
             enableLsp: false,
           })
         }
+        if (!fenceHighlighter) {
+          fenceHighlighter = createMarkdownFenceHighlighter(editor)
+        }
         editorReady.value = true
         ensureHostHeight()
         logger.warn('[NotebookMarkdownEditor] reused existing Monaco editor bound to current host', {
@@ -507,6 +512,8 @@ const mountMonacoEditor = async () => {
           enableLsp: false,
         })
       }
+      // 围栏代码块与主编辑器走同一套上色，否则这里只能吃 Markdown 层的语义 token，整块被染成单色。
+      fenceHighlighter = createMarkdownFenceHighlighter(editor)
 
       editorReady.value = true
       await nextTick()
@@ -544,6 +551,8 @@ const mountMonacoEditor = async () => {
 const disposeMonacoEditor = () => {
   featuresDisposable?.()
   featuresDisposable = null
+  fenceHighlighter?.dispose?.()
+  fenceHighlighter = null
   const currentModelUri = model?.uri || null
   contentChangeDisposable?.dispose?.()
   contentChangeDisposable = null
