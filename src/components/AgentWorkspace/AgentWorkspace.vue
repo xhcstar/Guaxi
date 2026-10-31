@@ -763,7 +763,8 @@ onBeforeUnmount(() => {
 
 .composer-zone :deep(.composer-root) {
   width: 100%;
-  max-width: 808px;
+  /* 808px 是输入区自身的可见宽度，再加上组件左右各 28px 内边距（border-box）。 */
+  max-width: calc(808px + 28px * 2);
   margin: 0 auto;
   border-top: none;
 }

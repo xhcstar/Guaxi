@@ -763,6 +763,9 @@ onBeforeUnmount(() => {
 .composer-root {
   position: relative;
   flex: 0 0 auto;
+  /* 宽度由外层给 100%，横向 padding 必须算进宽度里，否则整块会向右溢出约 56px，
+     被 workspace-main 的 overflow:hidden 在右侧栏边界处截断（发送按钮被切掉）。 */
+  box-sizing: border-box;
   padding: 8px 28px 12px;
   background: var(--guaxi-content-bg);
 }
@@ -1021,12 +1024,20 @@ onBeforeUnmount(() => {
   min-width: 0;
 }
 
+/* 窗口收窄时让 chip 先缩（文字走省略号），发送按钮始终留在可视区内。 */
+.bar-left {
+  flex: 1 1 auto;
+  overflow: hidden;
+}
+
 .bar-right {
+  flex: 0 1 auto;
   margin-left: auto;
 }
 
 .icon-btn {
   display: inline-flex;
+  flex: 0 0 auto;
   align-items: center;
   justify-content: center;
   width: 26px;
@@ -1047,6 +1058,8 @@ onBeforeUnmount(() => {
 
 .bar-chip {
   display: inline-flex;
+  flex: 0 1 auto;
+  min-width: 0;
   align-items: center;
   gap: 5px;
   max-width: 190px;
@@ -1085,6 +1098,7 @@ onBeforeUnmount(() => {
 
 .send-btn {
   display: inline-flex;
+  flex: 0 0 auto;
   align-items: center;
   justify-content: center;
   width: 28px;

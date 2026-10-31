@@ -344,7 +344,11 @@ const engineText = computed(() => {
   const e = store.engine
   if (!e) return '正在检测引擎'
   if (!e.binary_exists) return '未找到 codex'
-  return e.running ? `codex ${e.binary_version || ''}`.trim() : 'codex 待启动'
+  if (!e.running) return 'codex 待启动'
+  const version = String(e.binary_version || '').trim()
+  if (!version) return 'codex'
+  // binary_version 本身常常就是「codex-cli x.y.z」，别再叠一个 codex 前缀。
+  return /^codex/i.test(version) ? version : `codex ${version}`
 })
 const engineTitle = computed(() => {
   if (store.engineError) return `${store.engineError}\n点击重试连接`
@@ -775,6 +779,8 @@ onBeforeUnmount(() => {
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
+  /* 会话很多出现滚动条时，列表宽度不要跳一下，底部按钮也跟着抖。 */
+  scrollbar-gutter: stable;
   padding: 2px 6px 12px;
   scrollbar-width: thin;
 }
@@ -1119,6 +1125,7 @@ onBeforeUnmount(() => {
 
 .foot-btn {
   display: inline-flex;
+  flex: 0 0 auto;
   align-items: center;
   gap: 5px;
   height: 24px;
@@ -1129,6 +1136,7 @@ onBeforeUnmount(() => {
   color: var(--guaxi-text-secondary);
   font-size: 11px;
   font-family: inherit;
+  white-space: nowrap;
   cursor: pointer;
   transition: background 120ms ease, color 120ms ease;
 }
