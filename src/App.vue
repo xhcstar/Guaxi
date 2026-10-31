@@ -194,6 +194,8 @@ const themeOverrides = computed(() => {
   --guaxi-text-color: var(--guaxi-text-primary);
   --guaxi-hover-bg: rgba(15, 23, 42, 0.05);
   --guaxi-header-shadow: 0px 1px 2px rgba(0, 0, 0, 0.06);
+  /* Markdown 渲染出来的代码块字号；与 styles/guaxiBase.css 的值保持一致。 */
+  --guaxi-markdown-code-font-size: 19px;
   --guaxi-syntax-base: #383a42;
   --guaxi-syntax-comment: #6a737d;
   --guaxi-syntax-string: #22863a;

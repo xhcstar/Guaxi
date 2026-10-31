@@ -29535,7 +29535,7 @@ body.guaxi-tab-dragging * {
   position: relative;
   border-radius: 6px;
   padding: 1.5em 1em !important;
-  font-size: 17px;
+  font-size: var(--guaxi-markdown-code-font-size, 19px);
   font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace;
   background: #ffffff !important;
   border: 1px solid #e1e4e8;
