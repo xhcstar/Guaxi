@@ -14,7 +14,7 @@
   --guaxi-editor-font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei', 'Courier New';
   /* Markdown 渲染出来的代码块字号（正文 17px，代码块比正文大一档）。
      与 App.vue 的 :root 保持同一份约定，改的时候两处都要动。 */
-  --guaxi-markdown-code-font-size: 19px;
+  --guaxi-markdown-code-font-size: 17px;
   --guaxi-app-bg: #ffffff;
   --guaxi-header-bg: #ffffff;
   --guaxi-content-bg: #ffffff;
@@ -228,5 +228,5 @@ textarea {
 
 /* Markdown 渲染出的代码块：字号比正文大一档，全应用统一（编辑器预览、阅读器、聊天面板共用）。 */
 .hljs {
-  font-size: var(--guaxi-markdown-code-font-size, 19px);
+  font-size: var(--guaxi-markdown-code-font-size, 17px);
 }
