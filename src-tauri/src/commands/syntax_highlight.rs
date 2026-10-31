@@ -298,6 +298,22 @@ static HIGHLIGHT_CONFIGS: Lazy<HashMap<&'static str, HighlightConfiguration>> = 
     configs
 });
 
+/// C++ 语法是 C 的超集，但 tree-sitter-cpp 0.23 自带的 highlights 查询非常薄
+/// （只覆盖函数名、大写命名空间、关键字和 raw string），`#include`、头文件、
+/// 数字、普通字符串、类型标识符全都没有 capture——表现为同一份代码里 C 五颜六色、
+/// C++ 几乎全白。这里把 C 的查询并进来，C++ 才能拿到完整的一套。
+fn cpp_highlight_query() -> &'static str {
+    static MERGED: Lazy<String> = Lazy::new(|| {
+        format!(
+            "{}
+{}",
+            tree_sitter_c::HIGHLIGHT_QUERY,
+            tree_sitter_cpp::HIGHLIGHT_QUERY
+        )
+    });
+    MERGED.as_str()
+}
+
 fn language_specs() -> Vec<LanguageSpec> {
     vec![
         LanguageSpec {
@@ -391,7 +407,7 @@ fn language_specs() -> Vec<LanguageSpec> {
         LanguageSpec {
             id: "cpp",
             language: tree_sitter_cpp::LANGUAGE.into(),
-            highlights_query: tree_sitter_cpp::HIGHLIGHT_QUERY,
+            highlights_query: cpp_highlight_query(),
             injections_query: "",
             locals_query: "",
         },
@@ -1394,6 +1410,46 @@ pub fn syntax_analyze_document(content: String, language: Option<String>) -> Res
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// C++ 的查询是「C + C++」拼出来的。这条用例同时守住两件事：
+    /// 1. 合并后的查询在 cpp 语法上能编译通过（编译失败会让整个语言没有高亮）；
+    /// 2. `#include` / 注释 / 字符串 / 数字这些只由 C 查询提供的 capture 确实出现了。
+    #[test]
+    fn cpp_inherits_c_highlights() {
+        let config = HIGHLIGHT_CONFIGS
+            .get("cpp")
+            .expect("cpp highlight configuration failed to compile");
+
+        let code = "// note\n#include <iostream>\nint main() { return 42; }\n";
+
+        let mut highlighter = Highlighter::new();
+        let events = highlighter
+            .highlight(config, code.as_bytes(), None, |_| None)
+            .expect("cpp highlight failed");
+
+        let mut active: Vec<&'static str> = Vec::new();
+        let mut found: Vec<&'static str> = Vec::new();
+        for event in events {
+            match event.expect("cpp highlight event failed") {
+                HighlightEvent::HighlightStart(highlight) => {
+                    active.push(HIGHLIGHT_NAMES.get(highlight.0).copied().unwrap_or(""));
+                }
+                HighlightEvent::HighlightEnd => {
+                    active.pop();
+                }
+                HighlightEvent::Source { .. } => {
+                    if let Some(name) = active.last() {
+                        found.push(name);
+                    }
+                }
+            }
+        }
+
+        assert!(found.iter().any(|name| name.contains("comment")), "no comment: {found:?}");
+        assert!(found.iter().any(|name| name.contains("string")), "no string: {found:?}");
+        assert!(found.iter().any(|name| name.contains("number")), "no number: {found:?}");
+        assert!(found.iter().any(|name| *name == "keyword"), "no keyword/preproc: {found:?}");
+    }
 
     /// 独立参考实现：直接从「目标偏移之前的那段文本」推导行列，不复用被测逻辑。
     /// 语义与前端原实现一致——列是 1 基 UTF-16 码元数；偏移落在换行符上时停在上一行行尾。
