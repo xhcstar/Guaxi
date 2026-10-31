@@ -48,7 +48,26 @@ pub fn evaluate(rules: &[MailRule], ctx: &RuleContext<'_>) -> Vec<(MailRule, Rul
     hits
 }
 
+/// 只按「不需要正文」的条件先过一遍：都不可能是命中的邮件，就不必解密正文。
+///
+/// 「对已有邮件执行规则」要扫几千封：先按发件人 / 收件人 / 主题筛掉绝大多数，
+/// 真正要解的正文从几 GB 降到几十 MB（真实反馈：按钮一直卡在「正在对已有邮件执行…」）。
+pub fn body_relevant(rules: &[MailRule], ctx: &RuleContext<'_>) -> bool {
+    rules
+        .iter()
+        .filter(|rule| rule.enabled)
+        .any(|rule| conditions_match_inner(&rule.condition, ctx, false))
+}
+
 fn conditions_match(cond: &RuleCondition, ctx: &RuleContext<'_>) -> bool {
+    conditions_match_inner(cond, ctx, true)
+}
+
+fn conditions_match_inner(
+    cond: &RuleCondition,
+    ctx: &RuleContext<'_>,
+    with_body: bool,
+) -> bool {
     let msg = ctx.message;
 
     if !cond.account_ids.is_empty() && !cond.account_ids.iter().any(|id| id == &msg.account_id) {
@@ -96,21 +115,23 @@ fn conditions_match(cond: &RuleCondition, ctx: &RuleContext<'_>) -> bool {
     {
         return false;
     }
-    if !cond.body_contains.is_empty()
+    if with_body && !cond.body_contains.is_empty()
         && !any_contains(&ctx.body_preview.to_lowercase(), &cond.body_contains)
     {
         return false;
     }
-    if let Some(pattern) = cond.any_matches_regex.as_ref().filter(|p| !p.trim().is_empty()) {
-        // 用户写的正则可能不合法；不合法时整条规则判为不匹配，而不是让同步线程崩掉。
-        match Regex::new(pattern) {
-            Ok(re) => {
-                let hay = format!("{} {} {}", msg.subject, ctx.body_preview, from_lower);
-                if !re.is_match(&hay) {
-                    return false;
+    if with_body {
+        if let Some(pattern) = cond.any_matches_regex.as_ref().filter(|p| !p.trim().is_empty()) {
+            // 用户写的正则可能不合法；不合法时整条规则判为不匹配，而不是让同步线程崩掉。
+            match Regex::new(pattern) {
+                Ok(re) => {
+                    let hay = format!("{} {} {}", msg.subject, ctx.body_preview, from_lower);
+                    if !re.is_match(&hay) {
+                        return false;
+                    }
                 }
+                Err(_) => return false,
             }
-            Err(_) => return false,
         }
     }
     if let Some(want) = cond.has_attachment {

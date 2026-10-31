@@ -17,6 +17,7 @@ use model::{
     AddressCard, Contact, ContactGroup, ContactMessage, ContactQuery, ContactSuggestion,
     ExpandedMember, ImportReport,
 };
+use rusqlite::OptionalExtension;
 use tauri::command;
 
 #[command]
@@ -144,6 +145,38 @@ pub async fn mail_export_contacts(path: String, group_id: Option<String>) -> Res
 #[command]
 pub async fn mail_contacts_rebuild_from_mail(app: tauri::AppHandle) -> Result<u32, String> {
     let _ = app;
+    rebuild_from_mail_sync()
+}
+
+/// 一次性补齐通讯录里的「收件人」。
+///
+/// 老版本把 `to_json` 当成通讯录的 `{label,value}` 解析，必然失败——结果通讯录里
+/// 只有发件人，邮件组 / 分发列表地址（常常只出现在收件人里）永远收不进来
+/// （真实反馈）。解析修好后，升级时自动扫一遍，用户不用自己去找「从邮件重建」。
+pub fn backfill_recipients_once() -> Result<u32, String> {
+    let conn = crate::commands::mail::store::connection()?;
+    let done: Option<String> = conn
+        .query_row(
+            "SELECT value FROM meta WHERE key='contacts_recipients_v1'",
+            [],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+    if done.as_deref() == Some("1") {
+        return Ok(0);
+    }
+    // 先落标记再扫：中途失败不会每次启动都全量重扫；用户仍可手动「从邮件重建」。
+    let _ = conn.execute(
+        "INSERT INTO meta (key, value) VALUES ('contacts_recipients_v1', '1')
+         ON CONFLICT(key) DO UPDATE SET value='1'",
+        [],
+    );
+    drop(conn);
+    rebuild_from_mail_sync()
+}
+
+fn rebuild_from_mail_sync() -> Result<u32, String> {
     let conn = crate::commands::mail::store::connection()?;
     let accounts = crate::commands::mail::store::list_accounts()?;
     let own: Vec<String> = accounts
@@ -153,8 +186,10 @@ pub async fn mail_contacts_rebuild_from_mail(app: tauri::AppHandle) -> Result<u3
 
     let mut stmt = conn
         .prepare(
+            // 已发送也要扫：邮件组 / 分发列表地址常常只出现在发出的邮件里。
+            // 草稿不算（还没发出去的收件人不是「往来过」）。
             "SELECT from_name, from_addr, to_json, cc_json, date FROM messages
-             WHERE folder NOT IN (SELECT name FROM folders WHERE role IN ('sent','drafts'))",
+             WHERE folder NOT IN (SELECT name FROM folders WHERE role = 'drafts')",
         )
         .map_err(|e| e.to_string())?;
     let rows = stmt
@@ -172,8 +207,10 @@ pub async fn mail_contacts_rebuild_from_mail(app: tauri::AppHandle) -> Result<u3
     let mut touched = 0u32;
     for row in rows.flatten() {
         let (from_name, from_addr, to_json, cc_json, date) = row;
-        let to: Vec<model::LabeledValue> = serde_json::from_str(&to_json).unwrap_or_default();
-        let cc: Vec<model::LabeledValue> = serde_json::from_str(&cc_json).unwrap_or_default();
+        // to_json / cc_json 是 `[{"name","address"}]`（MailAddress），不是
+        // 通讯录的 {label,value}：按 LabeledValue 解析会整段失败，收件人全丢。
+        let to = recipients_of(&to_json);
+        let cc = recipients_of(&cc_json);
         if store::touch_from_message(&own, &from_name, &from_addr, &to, &cc, date).is_ok() {
             touched += 1;
         }
@@ -181,3 +218,39 @@ pub async fn mail_contacts_rebuild_from_mail(app: tauri::AppHandle) -> Result<u3
     Ok(touched)
 }
 
+fn recipients_of(json: &str) -> Vec<model::LabeledValue> {
+    serde_json::from_str::<Vec<crate::commands::mail::model::MailAddress>>(json)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|item| !item.address.trim().is_empty())
+        .map(|item| model::LabeledValue {
+            label: item.name,
+            value: item.address,
+        })
+        .collect()
+}
+
+
+#[cfg(test)]
+mod recipients_tests {
+    use super::recipients_of;
+
+    #[test]
+    fn reads_recipients_from_message_json() {
+        // messages.to_json 存的是解析 MIME 时的 MailAddress（name/address），
+        // 不是通讯录的 {label,value}：以前按后者解析整段失败，收件人全丢。
+        let json = r#"[{"name":"R&D Department","address":"team@example.com"},{"name":"","address":"a@b.cn"}]"#;
+        let items = recipients_of(json);
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].label, "R&D Department");
+        assert_eq!(items[0].value, "team@example.com");
+        assert_eq!(items[1].value, "a@b.cn");
+    }
+
+    #[test]
+    fn skips_empty_and_broken_json() {
+        assert!(recipients_of("[]").is_empty());
+        assert!(recipients_of("not json").is_empty());
+        assert!(recipients_of(r#"[{"name":"x","address":"  "}]"#).is_empty());
+    }
+}

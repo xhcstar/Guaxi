@@ -890,6 +890,27 @@ pub fn update_folder_counts(
     Ok(())
 }
 
+/// 一个文件夹的（总封数, 未读数）。
+///
+/// 以前重算角标是把整个文件夹的行都读出来再数一遍：规则一次搬几百封时，
+/// 每搬一封就要再来两遍全表读取，几百万行的物化让「对已有邮件执行」看起来像卡死。
+/// 计数交给 SQLite，一条索引查询就够。
+pub fn folder_counts(account_id: &str, name: &str) -> Result<(u32, u32), String> {
+    let conn = open()?;
+    conn.query_row(
+        "SELECT COUNT(*), COALESCE(SUM(CASE WHEN seen=0 THEN 1 ELSE 0 END), 0)
+         FROM messages WHERE account_id=?1 AND folder=?2 AND deleted=0",
+        params![account_id, name],
+        |row| {
+            Ok((
+                row.get::<_, i64>(0)? as u32,
+                row.get::<_, i64>(1)? as u32,
+            ))
+        },
+    )
+    .map_err(|e| e.to_string())
+}
+
 /// 未读总数（左侧账户徽标）。
 pub fn unread_counts() -> Result<Vec<(String, u32)>, String> {
     let conn = open()?;
@@ -1640,6 +1661,30 @@ pub fn get_body(
 
     let html = html.map(|value| unseal(&value)).filter(|value| !value.is_empty());
     Ok(Some((html, unseal(&text), unseal(&attachments), fetched)))
+}
+
+/// 只取正文纯文本（规则匹配用）。
+///
+/// 规则只看 `text`，但 `get_body` 会连 HTML 和附件清单一起读、一起解密：
+/// 对几万封已有邮件跑规则时，多解出来的那一大坨 HTML 才是真正的瓶颈。
+pub fn get_body_text(account_id: &str, folder: &str, uid: u32) -> Result<String, String> {
+    let conn = open()?;
+    let text: Option<String> = conn
+        .query_row(
+            "SELECT text FROM message_bodies WHERE account_id=?1 AND folder=?2 AND uid=?3",
+            params![account_id, folder, uid],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+    let Some(text) = text else {
+        return Ok(String::new());
+    };
+    match super::crypto::decrypt(account_id, &text) {
+        Ok(Some(plain)) => Ok(plain),
+        Ok(None) => Ok(text),
+        Err(_) => Ok(String::new()),
+    }
 }
 
 pub fn get_summary(

@@ -52,6 +52,7 @@ use model::{
     Account, FolderRole, MailAddress, MailFolder, MailRule, MailSettings, MessageDetail,
     MessageSummary, OutboxItem, ProxyConfig, SearchQuery, SendRequest,
 };
+use std::collections::HashMap;
 use std::sync::OnceLock;
 use tauri::{command, AppHandle, Emitter};
 use tracing::{error, info, warn};
@@ -72,7 +73,17 @@ fn ensure_init(app: &AppHandle) -> Result<(), String> {
     store::init(app)?;
     contacts::store::init()?;
     offline::init_table()?;
-    let _ = INITED.set(());
+    if INITED.set(()).is_ok() {
+        // 后台补一次「收件人」通讯录：老版本只收进了发件人，邮件组地址一直缺。
+        // 放到后台跑，不和首屏抢时间；它全是同步 SQL，别占 async 工作线程。
+        tauri::async_runtime::spawn_blocking(|| {
+            match contacts::backfill_recipients_once() {
+                Ok(0) => {}
+                Ok(n) => info!(rows = n, "mail: 已补齐通讯录里的收件人"),
+                Err(e) => warn!(error = %e, "mail: 补齐通讯录收件人失败"),
+            }
+        });
+    }
     Ok(())
 }
 
@@ -758,11 +769,10 @@ fn collect_contacts(account: &Account, items: &[MessageSummary]) {
     }
     let own = vec![account.email.clone(), account.login_name()];
     for message in items {
-        if message.outgoing {
-            continue;
-        }
-        let to: Vec<contacts::model::LabeledValue> = serde_json::from_str(&message.to_json).unwrap_or_default();
-        let cc: Vec<contacts::model::LabeledValue> = serde_json::from_str(&message.cc_json).unwrap_or_default();
+        // 自己发出去的邮件也要收「收件人」：邮件组 / 分发列表地址往往只出现在
+        // 发出的邮件里。发件人那一条会被 own 过滤掉，不会把用户自己写进通讯录。
+        let to = recipients_of(&message.to_json);
+        let cc = recipients_of(&message.cc_json);
         if let Err(e) = contacts::store::touch_from_message(
             &own,
             &message.from_name,
@@ -775,6 +785,21 @@ fn collect_contacts(account: &Account, items: &[MessageSummary]) {
             return;
         }
     }
+}
+
+/// `to_json` / `cc_json` 存的是 `[{"name","address"}]`（解析 MIME 时的 MailAddress），
+/// 不是通讯录的 `{label,value}`。以前按 LabeledValue 反序列化必然失败，收件人一个都
+/// 收不进来——邮件组地址永远进不了通讯录就是这么来的（真实反馈）。
+fn recipients_of(json: &str) -> Vec<contacts::model::LabeledValue> {
+    serde_json::from_str::<Vec<MailAddress>>(json)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|item| !item.address.trim().is_empty())
+        .map(|item| contacts::model::LabeledValue {
+            label: item.name,
+            value: item.address,
+        })
+        .collect()
 }
 
 /// 对新到邮件跑规则。只有「标读 / 星标 / 打标签」是本地即时生效的；
@@ -795,7 +820,14 @@ async fn apply_rules_to_new(
     // 1000 封新邮件 = 1000 次 AES 解密，而绝大多数规则只看发件人 / 主题。
     let body_needed = rules::needs_body(all_rules);
 
-    for msg in messages {
+    // 先把每封邮件要做的动作算出来，再按「源夹 → 目标夹」合并成批量操作。
+    // 以前每封命中都单独连一次服务器、单独重算两次文件夹计数：几百封就要跑很久，
+    // 界面上看到的就是「正在对已有邮件执行…」一直不动（真实反馈）。
+    let mut moves: HashMap<(String, String), Vec<u32>> = HashMap::new();
+    let mut flag_batches: HashMap<(String, bool, bool), Vec<u32>> = HashMap::new();
+    let mut forwards: Vec<(usize, Vec<String>)> = Vec::new();
+
+    for (index, msg) in messages.iter().enumerate() {
         if msg.outgoing {
             continue;
         }
@@ -815,7 +847,10 @@ async fn apply_rules_to_new(
             match verdict {
                 rules::SenderVerdict::Blocked => {
                     if let Some(trash) = trash.as_ref() {
-                        apply_rule_move(account, msg, trash).await;
+                        moves
+                            .entry((msg.folder.clone(), trash.clone()))
+                            .or_default()
+                            .push(msg.uid);
                     } else {
                         let _ = store::delete_message(&msg.account_id, &msg.folder, msg.uid);
                     }
@@ -827,12 +862,17 @@ async fn apply_rules_to_new(
                 }
             }
         }
-        let body = if body_needed {
-            store::get_body(&msg.account_id, &msg.folder, msg.uid)
-                .ok()
-                .flatten()
-                .map(|(_, text, _, _)| text)
-                .unwrap_or_default()
+        // 先用不需要正文的条件过一遍：命不中的邮件就不必解密正文
+        // （「对已有邮件执行」动辄几千封，这一步能把解密量降一个数量级）。
+        let cheap_ctx = rules::RuleContext {
+            message: msg,
+            body_preview: "",
+            account,
+            folder_role: &folder_role,
+        };
+        let body = if body_needed && rules::body_relevant(all_rules, &cheap_ctx) {
+            // 规则只看纯文本：只读、只解密这一列，别把 HTML 与附件清单也拖进来。
+            store::get_body_text(&msg.account_id, &msg.folder, msg.uid).unwrap_or_default()
         } else {
             String::new()
         };
@@ -863,17 +903,13 @@ async fn apply_rules_to_new(
         }
 
         if merged.mark_read || merged.star {
-            let (acc, folder_name) = (account.clone(), msg.folder.clone());
-            let uids = vec![msg.uid];
-            let seen = if merged.mark_read { Some(true) } else { None };
-            let flagged = if merged.star { Some(true) } else { None };
-            let _ = tauri::async_runtime::spawn_blocking(move || {
-                imap::set_flags(&acc, "", &folder_name, &uids, seen, flagged)
-            })
-            .await;
+            flag_batches
+                .entry((msg.folder.clone(), merged.mark_read, merged.star))
+                .or_default()
+                .push(msg.uid);
         }
 
-        // 移动 / 删除：本地先删，再在后台把服务器操作做完。
+        // 移动 / 删除：先记下来，循环结束后按文件夹一次性搬。
         let move_target = merged.move_to.clone().or_else(|| {
             if merged.delete {
                 trash.clone()
@@ -882,44 +918,84 @@ async fn apply_rules_to_new(
             }
         });
         if let Some(target) = move_target {
-            apply_rule_move(account, msg, &target).await;
+            moves
+                .entry((msg.folder.clone(), target))
+                .or_default()
+                .push(msg.uid);
         }
 
         if !merged.forward_to.is_empty() {
-            forward_by_rule(&account.clone(), msg, &merged.forward_to).await;
+            forwards.push((index, merged.forward_to));
+        }
+    }
+
+    // 转发要在搬运之前：它读的是原文件夹里的原文，邮件被搬走之后就取不到了。
+    for (index, recipients) in forwards {
+        forward_by_rule(&account.clone(), &messages[index], &recipients).await;
+    }
+    for ((folder, target), uids) in moves {
+        apply_rule_move_batch(account, &folder, &uids, &target).await;
+    }
+    // 服务器上的已读 / 星标同样按文件夹合并：一次连接改完。
+    if !pop3_sync::is_pop3(account) {
+        for ((folder, seen, flagged), uids) in flag_batches {
+            let acc = account.clone();
+            let _ = tauri::async_runtime::spawn_blocking(move || {
+                imap::set_flags(
+                    &acc,
+                    "",
+                    &folder,
+                    &uids,
+                    if seen { Some(true) } else { None },
+                    if flagged { Some(true) } else { None },
+                )
+            })
+            .await;
         }
     }
 }
 
-/// 规则 / 名单触发的移动：搬完再删本地行，失败只记日志（不阻塞同步）。
-async fn apply_rule_move(account: &Account, msg: &MessageSummary, target: &str) {
+/// 规则 / 名单触发的移动：整批搬完再删本地行，失败只记日志（不阻塞同步）。
+async fn apply_rule_move_batch(account: &Account, folder: &str, uids: &[u32], target: &str) {
+    if uids.is_empty() || folder == target {
+        return;
+    }
     // POP3 的文件夹全在本机：走本地搬行，别去连 IMAP（会直接失败，
     // 表现是「规则命中但邮件没动」）。
     if pop3_sync::is_pop3(account) {
-        let moved = move_locally(
-            &msg.account_id,
-            &msg.folder,
-            &[msg.uid],
-            target,
-        );
-        if let Err(e) = moved {
-            error!(error = %e, uid = msg.uid, "mail: 规则移动邮件失败（本地）");
+        if let Err(e) = move_locally(&account.id, folder, uids, target) {
+            error!(
+                error = %e,
+                folder = %folder,
+                target = %target,
+                count = uids.len(),
+                "mail: 规则移动邮件失败（本地）"
+            );
         }
         return;
     }
-    let (acc, folder_name, target_owned) =
-        (account.clone(), msg.folder.clone(), target.to_string());
-    let uids = vec![msg.uid];
+    let acc = account.clone();
+    let folder_owned = folder.to_string();
+    let target_owned = target.to_string();
+    let uids_owned = uids.to_vec();
     let moved = tauri::async_runtime::spawn_blocking(move || {
-        imap::move_messages(&acc, "", &folder_name, &uids, &target_owned)
+        imap::move_messages(&acc, "", &folder_owned, &uids_owned, &target_owned)
     })
     .await;
     match moved {
         Ok(Ok(())) => {
-            let _ = store::delete_message(&msg.account_id, &msg.folder, msg.uid);
+            for uid in uids {
+                let _ = store::delete_message(&account.id, folder, *uid);
+            }
         }
-        Ok(Err(e)) => error!(error = %e, uid = msg.uid, "mail: 规则移动邮件失败"),
-        Err(e) => error!(error = %e, uid = msg.uid, "mail: 规则移动任务失败"),
+        Ok(Err(e)) => error!(
+            error = %e,
+            folder = %folder,
+            target = %target,
+            count = uids.len(),
+            "mail: 规则移动邮件失败"
+        ),
+        Err(e) => error!(error = %e, "mail: 规则移动任务失败"),
     }
 }
 
@@ -1416,6 +1492,11 @@ fn move_locally(account_id: &str, folder: &str, uids: &[u32], target: &str) -> R
                 &text,
                 &attachments,
             )?;
+        }
+        // 原文缓存（打开过的邮件才有）也跟着搬：POP3 没有服务器副本，
+        // 不搬的话搬到规则文件夹之后就打不开附件、另存 .eml 也会失败。
+        if let Some(raw) = store::cached_raw_body(account_id, folder, *uid) {
+            let _ = store::cache_raw_body(account_id, target, moved_uid, &raw);
         }
         let _ = store::delete_message(account_id, folder, *uid);
     }
@@ -2146,6 +2227,32 @@ async fn send_inner(app: &AppHandle, request: &SendRequest) -> Result<(), String
         }
     }
     info!(account = %account.email, "mail: 发送成功");
+
+    // 主动把收件人记进通讯录：收到的邮件由同步路径收录，但「只发不收」的邮件组 /
+    // 分发列表地址以前永远进不了通讯录（真实反馈）。自己会被 own 过滤掉。
+    let own = vec![account.email.clone(), account.login_name()];
+    let mut to_labeled: Vec<contacts::model::LabeledValue> = Vec::new();
+    let mut cc_labeled: Vec<contacts::model::LabeledValue> = Vec::new();
+    for (list, out) in [(&request.to, &mut to_labeled), (&request.cc, &mut cc_labeled)] {
+        for raw in list {
+            if let Ok(addr) = mime::parse_mailbox(raw) {
+                out.push(contacts::model::LabeledValue {
+                    label: addr.name.unwrap_or_default(),
+                    value: addr.email.to_string(),
+                });
+            }
+        }
+    }
+    if let Err(error) = contacts::store::touch_from_message(
+        &own,
+        "",
+        "",
+        &to_labeled,
+        &cc_labeled,
+        chrono::Utc::now().timestamp(),
+    ) {
+        warn!(error = %error, "mail: 收录发件收件人失败");
+    }
     Ok(())
 }
 
@@ -2401,11 +2508,12 @@ fn remove_staged_copy(request: &SendRequest) {
 /// 服务器文件夹的计数来自 IMAP STATUS；本地文件夹（发件箱、POP3 的已发送 / 草稿）
 /// 只能自己算，否则侧栏角标会一直是 0。
 fn refresh_folder_totals(account_id: &str, folder: &str) {
-    let Ok(rows) = store::list_recent(account_id, folder, u32::MAX, 0) else {
+    // 只查两个数，不再把整个文件夹的行都读出来物化一遍：规则批量搬运时
+    // 这个函数会在每封邮件上被调用，全表读取会让「对已有邮件执行」卡上几十分钟。
+    let Ok((total, unread)) = store::folder_counts(account_id, folder) else {
         return;
     };
-    let unread = rows.iter().filter(|row| !row.seen).count() as u32;
-    let _ = store::update_folder_counts(account_id, folder, unread, rows.len() as u32, 0, 0);
+    let _ = store::update_folder_counts(account_id, folder, unread, total, 0, 0);
 }
 
 /// POP3 账户的草稿：落到本地 `Drafts` 文件夹，与「已发送」副本同一套写库路径。
@@ -2706,12 +2814,14 @@ pub async fn mail_apply_rules_to_existing(
             if msg.outgoing {
                 continue;
             }
-            let body = if body_needed {
-                store::get_body(&msg.account_id, &msg.folder, msg.uid)
-                    .ok()
-                    .flatten()
-                    .map(|(_, text, _, _)| text)
-                    .unwrap_or_default()
+            let cheap_ctx = rules::RuleContext {
+                message: &msg,
+                body_preview: "",
+                account: &account,
+                folder_role: folder.role.as_str(),
+            };
+            let body = if body_needed && rules::body_relevant(&picked, &cheap_ctx) {
+                store::get_body_text(&msg.account_id, &msg.folder, msg.uid).unwrap_or_default()
             } else {
                 String::new()
             };
