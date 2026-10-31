@@ -768,22 +768,27 @@ fn collect_contacts(account: &Account, items: &[MessageSummary]) {
         return;
     }
     let own = vec![account.email.clone(), account.login_name()];
+    let mut entries: Vec<(String, String, i64)> = Vec::new();
     for message in items {
         // 自己发出去的邮件也要收「收件人」：邮件组 / 分发列表地址往往只出现在
         // 发出的邮件里。发件人那一条会被 own 过滤掉，不会把用户自己写进通讯录。
-        let to = recipients_of(&message.to_json);
-        let cc = recipients_of(&message.cc_json);
-        if let Err(e) = contacts::store::touch_from_message(
-            &own,
-            &message.from_name,
-            &message.from_addr,
-            &to,
-            &cc,
-            message.date,
-        ) {
-            warn!(error = %e, uid = message.uid, "mail: 自动收录联系人失败");
-            return;
+        if !message.from_addr.trim().is_empty() {
+            entries.push((
+                message.from_name.clone(),
+                message.from_addr.clone(),
+                message.date,
+            ));
         }
+        for item in recipients_of(&message.to_json) {
+            entries.push((item.label, item.value, message.date));
+        }
+        for item in recipients_of(&message.cc_json) {
+            entries.push((item.label, item.value, message.date));
+        }
+    }
+    // 整批一次写库：一封一个连接会让同步在通讯录上白花一截时间。
+    if let Err(e) = contacts::store::touch_addresses(&own, &entries) {
+        warn!(error = %e, "mail: 自动收录联系人失败");
     }
 }
 
@@ -2203,33 +2208,33 @@ async fn send_inner(app: &AppHandle, request: &SendRequest) -> Result<(), String
 
     if save_to_sent {
         if pop3_sync::is_pop3(&account) {
-            // POP3 没有服务器端的「已发送」：把副本落到本地库的 Sent 文件夹。
-            // 发送本身已经成功，这里失败只留日志——不该反过来告诉用户「发送失败」。
+            // POP3 没有服务器端的「已发送」：副本落到本地库的 Sent。
+            // 不再等它写完——SMTP 已经成功，副本晚几百毫秒出现比让用户多等一秒更好。
             let acc = account.clone();
             let raw_clone = raw.clone();
-            if let Err(error) = tauri::async_runtime::spawn_blocking(move || {
-                pop3_sync::save_sent_copy(&acc, &raw_clone)
-            })
-            .await
-            .map_err(|e| e.to_string())
-            .and_then(|r| r)
-            {
-                warn!(account = %account.email, error = %error, "mail: 保存 POP3 已发送副本失败");
-            }
+            let _ = tauri::async_runtime::spawn_blocking(move || {
+                if let Err(error) = pop3_sync::save_sent_copy(&acc, &raw_clone) {
+                    warn!(account = %acc.email, error = %error, "mail: 保存 POP3 已发送副本失败");
+                }
+            });
         } else if let Some(sent) = imap::sent_folder_name(&account) {
+            // IMAP 的已发送要再连一次服务器（TCP + TLS + 登录 + APPEND）。
+            // 以前这一趟串在发送路径里等：用户看到「发送中」多转好几秒。
             let acc = account.clone();
             let pw = password.clone();
             let raw_clone = raw.clone();
             let _ = tauri::async_runtime::spawn_blocking(move || {
-                imap::append_to_folder(&acc, &pw, &sent, &raw_clone, &["seen"])
-            })
-            .await;
+                if let Err(error) = imap::append_to_folder(&acc, &pw, &sent, &raw_clone, &["seen"]) {
+                    warn!(account = %acc.email, error = %error, "mail: 追加到已发送失败");
+                }
+            });
         }
     }
     info!(account = %account.email, "mail: 发送成功");
 
     // 主动把收件人记进通讯录：收到的邮件由同步路径收录，但「只发不收」的邮件组 /
     // 分发列表地址以前永远进不了通讯录（真实反馈）。自己会被 own 过滤掉。
+    // 写库放到后台：发送结果已经确定，不该让通讯录的几十次查询拖慢「已发送」。
     let own = vec![account.email.clone(), account.login_name()];
     let mut to_labeled: Vec<contacts::model::LabeledValue> = Vec::new();
     let mut cc_labeled: Vec<contacts::model::LabeledValue> = Vec::new();
@@ -2243,16 +2248,14 @@ async fn send_inner(app: &AppHandle, request: &SendRequest) -> Result<(), String
             }
         }
     }
-    if let Err(error) = contacts::store::touch_from_message(
-        &own,
-        "",
-        "",
-        &to_labeled,
-        &cc_labeled,
-        chrono::Utc::now().timestamp(),
-    ) {
-        warn!(error = %error, "mail: 收录发件收件人失败");
-    }
+    let when = chrono::Utc::now().timestamp();
+    let _ = tauri::async_runtime::spawn_blocking(move || {
+        if let Err(error) =
+            contacts::store::touch_from_message(&own, "", "", &to_labeled, &cc_labeled, when)
+        {
+            warn!(error = %error, "mail: 收录发件收件人失败");
+        }
+    });
     Ok(())
 }
 

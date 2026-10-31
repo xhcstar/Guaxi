@@ -71,7 +71,7 @@ const emptySettings = () => ({
   density: 'comfortable',
   readingFont: 'system',
   monoFont: 'Maple Mono NF CN',
-  readingSize: 15,
+  readingSize: 16,
   accentOverride: '',
   showHeaders: false,
   fetchMode: 'poll',

@@ -393,64 +393,104 @@ pub fn touch_from_message(
     cc: &[LabeledValue],
     when: i64,
 ) -> Result<(), String> {
-    let mut seen: Vec<(String, String)> = Vec::new();
+    let mut entries: Vec<(String, String, i64)> = Vec::new();
     if !from_addr.trim().is_empty() {
-        seen.push((from_name.to_string(), from_addr.to_string()));
+        entries.push((from_name.to_string(), from_addr.to_string(), when));
     }
     for list in [to, cc] {
         for item in list {
             if !item.value.trim().is_empty() {
-                seen.push((item.label.clone(), item.value.clone()));
+                entries.push((item.label.clone(), item.value.clone(), when));
             }
         }
     }
+    touch_addresses(own_addresses, &entries)
+}
 
-    let conn = store::connection()?;
-    for (name, addr) in seen {
-        let email = normalize_email(&addr);
+/// 批量收录：一次连接，同一批里按地址合并。
+///
+/// 一次同步可能收几十封、每封十几个收件人；以前一封一个连接、每个地址各查两次库，
+/// 光通讯录就能占掉收信的一截时间。合并之后只查一次、每个地址只写一次。
+pub fn touch_addresses(
+    own_addresses: &[String],
+    entries: &[(String, String, i64)],
+) -> Result<(), String> {
+    if entries.is_empty() {
+        return Ok(());
+    }
+    let own: Vec<String> = own_addresses
+        .iter()
+        .map(|addr| normalize_email(addr))
+        .collect();
+    let mut merged: std::collections::HashMap<String, (String, i64)> =
+        std::collections::HashMap::new();
+    for (name, addr, when) in entries {
+        let email = normalize_email(addr);
         if email.is_empty() {
             continue;
         }
-        if own_addresses.iter().any(|own| normalize_email(own) == email) {
+        let slot = merged
+            .entry(email)
+            .or_insert_with(|| (String::new(), 0));
+        if slot.0.trim().is_empty() && !name.trim().is_empty() {
+            slot.0 = name.trim().to_string();
+        }
+        slot.1 = slot.1.max(*when);
+    }
+    if merged.is_empty() {
+        return Ok(());
+    }
+    let conn = store::connection()?;
+    for (email, (name, when)) in merged {
+        if own.iter().any(|own| own == &email) {
             continue;
         }
         if is_robot_address(&email) {
             continue;
         }
-        let existing: Option<String> = conn
-            .query_row(
-                "SELECT contact_id FROM contact_emails WHERE email=?1",
-                params![email],
-                |r| r.get(0),
-            )
-            .optional()
-            .map_err(|e| e.to_string())?;
-        if let Some(id) = existing {
-            conn.execute(
-                "UPDATE contacts SET last_seen_at=MAX(last_seen_at, ?1),
-                     display_name=CASE WHEN display_name='' THEN ?2 ELSE display_name END,
-                     first_seen_at=CASE WHEN first_seen_at=0 THEN ?1 ELSE first_seen_at END
-                 WHERE id=?3",
-                params![when, name.trim(), id],
-            )
-            .ok();
-            continue;
-        }
-        let contact = Contact {
-            id: Uuid::new_v4().to_string(),
-            display_name: name.trim().to_string(),
-            emails: vec![LabeledValue {
-                label: "work".into(),
-                value: email.clone(),
-            }],
-            source: "auto".into(),
-            first_seen_at: when,
-            last_seen_at: when,
-            ..Default::default()
-        };
-        write_contact(&conn, &contact)?;
+        touch_one(&conn, &name, &email, when)?;
     }
     Ok(())
+}
+
+fn touch_one(
+    conn: &rusqlite::Connection,
+    name: &str,
+    email: &str,
+    when: i64,
+) -> Result<(), String> {
+    let existing: Option<String> = conn
+        .query_row(
+            "SELECT contact_id FROM contact_emails WHERE email=?1",
+            params![email],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+    if let Some(id) = existing {
+        conn.execute(
+            "UPDATE contacts SET last_seen_at=MAX(last_seen_at, ?1),
+                 display_name=CASE WHEN display_name='' THEN ?2 ELSE display_name END,
+                 first_seen_at=CASE WHEN first_seen_at=0 THEN ?1 ELSE first_seen_at END
+             WHERE id=?3",
+            params![when, name.trim(), id],
+        )
+        .ok();
+        return Ok(());
+    }
+    let contact = Contact {
+        id: Uuid::new_v4().to_string(),
+        display_name: name.trim().to_string(),
+        emails: vec![LabeledValue {
+            label: "work".into(),
+            value: email.to_string(),
+        }],
+        source: "auto".into(),
+        first_seen_at: when,
+        last_seen_at: when,
+        ..Default::default()
+    };
+    write_contact(conn, &contact)
 }
 
 fn is_robot_address(email: &str) -> bool {

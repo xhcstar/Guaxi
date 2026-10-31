@@ -18,6 +18,14 @@
 /** 暗色纸面（与 mail.css 的 .mail-doc-dark .mail-body 一致）。 */
 export const DARK_PAPER = { r: 0x23, g: 0x26, b: 0x2b }
 
+/**
+ * 深色纸面上的链接色。
+ *
+ * 正文的 accent 已经偏亮，但链接在深蓝表头、深灰小卡片上也常出现，
+ * 这里再提到接近 #9ab4ff：深色底上对比度足够，又不会像纯白那样抢正文。
+ */
+const DARK_LINK = 'rgb(154, 180, 255)'
+
 /** 纸面的色相：中性色映射时借用它，让深浅层次落在同一套冷调里。 */
 const PAPER_HUE = 0.62
 
@@ -638,4 +646,36 @@ export function applyBodyThemeToElements(targets, mode = 'dark') {
       el.style.color = next
     }
   }
+
+  // 链接兜底：一部分链接的颜色既不在内联样式里、也不是我们写的 CSS（UA 默认蓝、
+  // 或从父元素继承 / 映射时被误判为「压着浅色卡片」），深色纸面上就是一条看不清的深蓝。
+  // 这里按「实际渲染出来的颜色」判断，并且只信真正的浅色底（半透明浮层不算），
+  // 够亮就不动；浅色卡片上的深蓝链接保持原样（那本来就是可读的）。
+  for (const el of elements) {
+    if (!el.matches?.('a')) continue
+    const computed = parseCssColor(getComputedStyle(el).color)
+    if (!computed) continue
+    if (solidLightBackdrop(el)) continue
+    if (contrastRatio(luminance(computed), paperLum) >= 4.5) continue
+    if (!el.hasAttribute(ORIG.fg)) el.setAttribute(ORIG.fg, el.style.color || '')
+    el.style.color = DARK_LINK
+  }
+}
+
+/**
+ * 这个元素是否压在一块真正看得见的浅色底上。
+ *
+ * 只认不透明（或接近不透明）且足够亮的底色：邮件里常见的 `rgba(...,0.07)`
+ * 浮层、被我们透掉的近白色卡片都不算，否则会把「深色纸面」误判成浅底，
+ * 从而放过一条深蓝色链接（真实反馈：暗色下链接看不清）。
+ */
+function solidLightBackdrop(el) {
+  let node = el
+  while (node) {
+    const bg = parseCssColor(getComputedStyle(node).backgroundColor)
+    if (bg && bg.a >= 0.5) return luminance(bg) >= 0.45
+    if (node.classList?.contains('mail-body')) break
+    node = node.parentElement
+  }
+  return false
 }

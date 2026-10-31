@@ -2551,8 +2551,39 @@ pub fn load_settings() -> MailSettings {
         .optional()
         .ok()
         .flatten();
-    raw.and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default()
+    let mut settings: MailSettings = raw
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default();
+
+    // 一次性把老默认字号 15 抬到 16（真实反馈：正文偏小）。
+    // 只改动「仍是老默认值」的设置——用户自己调过的字号保持原样。
+    let migrated: Option<String> = conn
+        .query_row(
+            "SELECT value FROM meta WHERE key='settings_reading_size_v1'",
+            [],
+            |r| r.get(0),
+        )
+        .optional()
+        .ok()
+        .flatten();
+    if migrated.is_none() {
+        if settings.reading_size == 15 {
+            settings.reading_size = 16;
+            if let Ok(json) = serde_json::to_string(&settings) {
+                let _ = conn.execute(
+                    "INSERT INTO meta (key, value) VALUES (?1, ?2)
+                     ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                    params![META_SETTINGS_KEY, json],
+                );
+            }
+        }
+        let _ = conn.execute(
+            "INSERT INTO meta (key, value) VALUES ('settings_reading_size_v1', '1')
+             ON CONFLICT(key) DO UPDATE SET value='1'",
+            [],
+        );
+    }
+    settings
 }
 
 pub fn save_settings(settings: &MailSettings) -> Result<(), String> {

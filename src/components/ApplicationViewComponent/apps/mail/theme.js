@@ -41,9 +41,9 @@ export const THEME_TOKENS = [
 
 /** 密度 → 行高与间距。 */
 export const DENSITY_PRESETS = {
-  compact: { rowHeight: 56, gap: 6, pad: 10, fontDelta: -1 },
-  comfortable: { rowHeight: 74, gap: 8, pad: 14, fontDelta: 0 },
-  spacious: { rowHeight: 92, gap: 10, pad: 18, fontDelta: 1 },
+  compact: { rowHeight: 60, gap: 6, pad: 10, fontDelta: -1 },
+  comfortable: { rowHeight: 78, gap: 8, pad: 14, fontDelta: 0 },
+  spacious: { rowHeight: 96, gap: 10, pad: 18, fontDelta: 1 },
 }
 
 /** 后端不可用时的两套内置主题（与 backend theme.rs 同步维护）。 */
@@ -152,7 +152,7 @@ export function densityMetrics(density, readingSize) {
     rowHeight: `${preset.rowHeight}px`,
     gap: `${preset.gap}px`,
     pad: `${preset.pad}px`,
-    readingFontSize: `${Math.max(11, Number(readingSize || 15) + preset.fontDelta)}px`,
+    readingFontSize: `${Math.max(11, Number(readingSize || 16) + preset.fontDelta)}px`,
   }
 }
 

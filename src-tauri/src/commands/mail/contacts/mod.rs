@@ -204,17 +204,25 @@ fn rebuild_from_mail_sync() -> Result<u32, String> {
         })
         .map_err(|e| e.to_string())?;
 
+    let mut entries: Vec<(String, String, i64)> = Vec::new();
     let mut touched = 0u32;
     for row in rows.flatten() {
         let (from_name, from_addr, to_json, cc_json, date) = row;
         // to_json / cc_json 是 `[{"name","address"}]`（MailAddress），不是
         // 通讯录的 {label,value}：按 LabeledValue 解析会整段失败，收件人全丢。
-        let to = recipients_of(&to_json);
-        let cc = recipients_of(&cc_json);
-        if store::touch_from_message(&own, &from_name, &from_addr, &to, &cc, date).is_ok() {
-            touched += 1;
+        if !from_addr.trim().is_empty() {
+            entries.push((from_name, from_addr, date));
         }
+        for item in recipients_of(&to_json) {
+            entries.push((item.label, item.value, date));
+        }
+        for item in recipients_of(&cc_json) {
+            entries.push((item.label, item.value, date));
+        }
+        touched += 1;
     }
+    // 一次性写库：重建要扫上万封，一封一个连接会明显拖慢。
+    store::touch_addresses(&own, &entries)?;
     Ok(touched)
 }
 

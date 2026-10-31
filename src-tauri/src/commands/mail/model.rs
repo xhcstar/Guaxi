@@ -681,7 +681,8 @@ fn default_mono_font() -> String {
     "Maple Mono NF CN".to_string()
 }
 fn default_reading_size() -> u32 {
-    15
+    // 15 在 1080p / 高分屏上偏小（真实反馈），默认抬到 16；用户仍可在设置里改。
+    16
 }
 fn default_fetch_mode() -> String {
     "poll".to_string()

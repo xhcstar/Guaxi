@@ -495,15 +495,6 @@
           >
             <MailIcon name="search" :size="15" />
           </button>
-          <!-- Markdown：把写好的 Markdown 一次性转成邮件可显示的 HTML。 -->
-          <button
-            class="mail-fmt-btn"
-            title="把正文里的 Markdown 转成富文本（表格会转成真表格）"
-            aria-label="把正文里的 Markdown 转成富文本"
-            @mousedown.prevent="convertMarkdown"
-          >
-            <span class="mail-md-mark">M↓</span>
-          </button>
           <!-- 格式刷：先把光标处的格式复制下来，再刷到别的文字上（Outlook 的习惯）。 -->
           <button
             class="mail-fmt-btn"
@@ -1123,7 +1114,7 @@ import {
   TEXT_COLOR_LIST,
   pushRecent,
 } from './palette'
-import { buildTableHtml, markdownToEmailHtml } from './composeTable'
+import { buildTableHtml } from './composeTable'
 import { flattenQuoteCards } from './quoteCards'
 import { applyBodyThemeToElements } from './colors'
 import { useMailSelectionTranslate } from './useMailSelectionTranslate'
@@ -3081,31 +3072,7 @@ function insertTable(rows = tableRows.value, cols = tableCols.value) {
 }
 
 /**
- * 把正文里的 Markdown 转成富文本。
- *
- * 只在「源码模式」或正文本身像 Markdown 时才做——用户直接用工具栏排版时，
- * 正文已经是 HTML 了，再跑一遍转换只会破坏排版。
- */
-function convertMarkdown() {
-  closePalette()
-  const editor = editorRef.value
-  if (!editor) return
-  const source = editor.innerText || ''
-  if (!source.trim()) return
-  const looksLikeMarkdown =
-    /(^|\n)\s*(#{1,6}\s|[-*+]\s|\d+[.)]\s|>|```)/.test(source) ||
-    /\|.*\|/.test(source) ||
-    /\*\*[^*]+\*\*/.test(source)
-  if (!looksLikeMarkdown) {
-    window.alert('正文里没有检测到 Markdown 语法（标题、列表、粗体、表格等）。')
-    return
-  }
-  const html = markdownToEmailHtml(source)
-  editor.innerHTML = html
-  onEditorInput()
-}
-
-/** 应用突出显示颜色。 */
+ * 应用突出显示颜色。 */
 function applyHiliteColor(color) {
   closePalette()
   if (!color) return

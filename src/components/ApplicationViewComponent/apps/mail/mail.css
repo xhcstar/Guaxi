@@ -332,7 +332,7 @@
 
 .mail-section-label {
   /* 侧栏字号整体偏小是真实反馈：分区标题 11 → 12，条目 12.5 → 13.5。 */
-  font-size: 12px;
+  font-size: 12.5px;
   color: var(--mail-text-muted);
   padding: 12px 6px 6px;
   user-select: none;
@@ -365,7 +365,7 @@
   padding: 4px 6px;
 }
 .mail-folder-create .mail-input {
-  font-size: 13px;
+  font-size: 13.5px;
   padding: 4px 8px;
 }
 
@@ -375,7 +375,7 @@
   gap: 8px;
   width: 100%;
   padding: 7px 8px;
-  font-size: 13px;
+  font-size: 13.5px;
   border: 0;
   border-radius: var(--mail-radius-sm);
   background: transparent;
@@ -405,7 +405,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 13px;
+  font-size: 13.5px;
 }
 
 .mail-badge {
@@ -435,7 +435,7 @@
   background: transparent;
   color: var(--mail-text-secondary);
   font: inherit;
-  font-size: 13.5px;
+  font-size: 14.5px;
   text-align: left;
   cursor: pointer;
 }
@@ -517,13 +517,13 @@
   gap: 8px;
 }
 .mail-list-title {
-  font-size: 15px;
+  font-size: 16px;
   font-weight: 650;
   letter-spacing: 0;
   margin: 0;
 }
 .mail-list-meta {
-  font-size: 11.5px;
+  font-size: 12.5px;
   color: var(--mail-text-muted);
   font-variant-numeric: tabular-nums;
 }
@@ -558,7 +558,7 @@
   background: transparent;
   color: var(--mail-text);
   font: inherit;
-  font-size: 13px;
+  font-size: 14px;
   padding: 0;
 }
 .mail-search input::placeholder {
@@ -595,7 +595,7 @@
   background: transparent;
   color: var(--mail-text-secondary);
   font: inherit;
-  font-size: 11.5px;
+  font-size: 12.5px;
   padding: 2px 9px;
   cursor: pointer;
   white-space: nowrap;
@@ -618,7 +618,7 @@
   background: transparent;
   color: var(--mail-text-secondary);
   font: inherit;
-  font-size: 11.5px;
+  font-size: 12.5px;
   padding: 0 4px;
 }
 
@@ -736,13 +736,13 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 12.5px;
+  font-size: 13.5px;
   color: var(--mail-text-secondary);
 }
 .mail-row-date {
   margin-left: auto;
   flex: 0 0 auto;
-  font-size: 11px;
+  font-size: 12px;
   color: var(--mail-text-muted);
   font-variant-numeric: tabular-nums;
 }
@@ -752,7 +752,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 13.5px;
+  font-size: 14.5px;
   color: var(--mail-text);
 }
 /* 搜索命中：列表行与正文共用同一个标记（Outlook 也是把关键词直接标在原位，
@@ -773,7 +773,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 11.5px;
+  font-size: 12.5px;
   color: var(--mail-text-muted);
 }
 .mail-row-markers {
@@ -856,7 +856,7 @@
 
 .mail-reader-subject {
   flex: 1 1 100%;
-  font-size: 17px;
+  font-size: 18px;
   font-weight: 650;
   line-height: 1.35;
   margin: 2px 0 0;
@@ -921,7 +921,7 @@
   border: 0;
   background: transparent;
   font: inherit;
-  font-size: 12.5px;
+  font-size: 13.5px;
   color: var(--mail-text);
   text-align: left;
   cursor: default;
@@ -933,14 +933,14 @@
 .mail-addr-raw {
   margin-left: 4px;
   color: var(--mail-text-muted);
-  font-size: 11.5px;
+  font-size: 12.5px;
 }
 .mail-addr-more {
   padding: 0;
   border: 0;
   background: transparent;
   font: inherit;
-  font-size: 11.5px;
+  font-size: 12.5px;
   color: var(--mail-accent);
   cursor: pointer;
 }
@@ -983,7 +983,7 @@
   margin: auto;
   text-align: center;
   color: var(--mail-text-muted);
-  font-size: 12.5px;
+  font-size: 13.5px;
   max-width: 280px;
   line-height: 1.7;
 }
@@ -1076,13 +1076,13 @@
   min-width: 0;
 }
 .mail-thread-name {
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 600;
   color: var(--mail-text);
 }
 .mail-thread-subject,
 .mail-thread-to {
-  font-size: 11.5px;
+  font-size: 12.5px;
   color: var(--mail-text-muted);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1090,7 +1090,7 @@
 }
 .mail-thread-date {
   margin-left: auto;
-  font-size: 11.5px;
+  font-size: 12.5px;
   color: var(--mail-text-muted);
   white-space: nowrap;
 }
@@ -1509,7 +1509,7 @@
   background: transparent;
   color: var(--mail-text-secondary);
   font: inherit;
-  font-size: 12px;
+  font-size: 13px;
   cursor: pointer;
   white-space: nowrap;
 }
@@ -1656,7 +1656,7 @@
   border-bottom: 1px solid var(--mail-border);
 }
 .mail-modal-title {
-  font-size: 15px;
+  font-size: 16px;
   font-weight: 650;
   margin: 0;
 }
@@ -1732,7 +1732,7 @@
 }
 .mail-flabel {
   display: block;
-  font-size: 11.5px;
+  font-size: 12.5px;
   color: var(--mail-text-muted);
   line-height: 1.5;
 }
@@ -1745,7 +1745,7 @@
   background: var(--mail-bg-sunken);
   color: var(--mail-text);
   font: inherit;
-  font-size: 12.5px;
+  font-size: 13.5px;
   outline: 0;
   transition: border-color 0.15s ease;
 }
@@ -1764,7 +1764,7 @@
   line-height: 1.6;
 }
 .mail-hint {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--mail-text-muted);
   line-height: 1.6;
 }
@@ -1819,7 +1819,7 @@
 .mail-account-confirm-title {
   margin: 0;
   color: var(--mail-text);
-  font-size: 12.5px;
+  font-size: 13.5px;
 }
 .mail-account-confirm-actions {
   display: flex;
@@ -1828,7 +1828,7 @@
 .mail-account-confirm-error {
   margin: 0;
   color: var(--mail-danger);
-  font-size: 12px;
+  font-size: 13.5px;
 }
 .mail-account-row .meta {
   min-width: 0;
@@ -1838,11 +1838,11 @@
   gap: 2px;
 }
 .mail-account-row .email {
-  font-size: 12.5px;
+  font-size: 13.5px;
   font-weight: 600;
 }
 .mail-account-row .servers {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--mail-text-muted);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1888,7 +1888,7 @@
   font-weight: 600;
 }
 .mail-rule-desc {
-  font-size: 11.5px;
+  font-size: 12.5px;
   color: var(--mail-text-muted);
   margin-top: 2px;
   line-height: 1.6;
@@ -2363,7 +2363,7 @@
   background: transparent;
   color: var(--mail-text);
   font: inherit;
-  font-size: 12.5px;
+  font-size: 13.5px;
 }
 
 .mail-compose-toolbar {
@@ -2383,7 +2383,7 @@
   background: transparent;
   color: var(--mail-text-secondary);
   font: inherit;
-  font-size: 12px;
+  font-size: 12.5px;
   cursor: pointer;
 }
 .mail-fmt-btn:hover {
@@ -2907,14 +2907,6 @@ body.mail-block-dragging * {
   background: var(--mail-border);
 }
 
-/* Markdown 按钮：图标是文字缩写，缩到与线性图标同高。 */
-.mail-md-mark {
-  display: block;
-  font-size: 12.5px;
-  font-weight: 650;
-  letter-spacing: -0.02em;
-}
-
 /* 工具栏图标：统一居中，不撑高按钮。 */
 .mail-fmt-btn .mail-icon,
 .mail-btn .mail-icon {
@@ -3118,6 +3110,26 @@ body.mail-block-dragging * {
 .mail-compose-editor ::selection {
   background: var(--mail-selection);
 }
+/* 选区在阅读区与编辑器里统一成主题色，而不是浏览器默认的深蓝：
+   深色纸面上默认蓝几乎看不出边界，浅色纸面上又太刺眼。 */
+.mail-body ::selection,
+.mail-compose-editor ::selection {
+  background: color-mix(in srgb, var(--mail-accent) 34%, transparent);
+  color: inherit;
+}
+/* 光标用主题蓝：正文默认跟随文字色，落在亮色图片 / 白底引用块上就完全看不见。
+   主题蓝在深浅两种纸面上都足够显眼。 */
+.mail-body,
+.mail-compose-editor,
+.mail-compose-source {
+  caret-color: var(--mail-accent);
+}
+/* 编辑器里的链接（包括自己插入的）用主题色；引用原文的深色链接由
+   colors.js 按对比度映射，不在这里硬覆盖。 */
+.mail-compose-editor a {
+  color: var(--mail-accent);
+  text-decoration-color: var(--mail-accent-soft);
+}
 .mail-compose-editor blockquote {
   margin: 10px 0;
   padding-left: 12px;
@@ -3139,7 +3151,7 @@ body.mail-block-dragging * {
   background: var(--mail-code-bg);
   color: var(--mail-text);
   font-family: var(--mail-font-mono, 'Maple Mono NF CN', monospace);
-  font-size: 12.5px;
+  font-size: 13.5px;
   line-height: 1.65;
   resize: vertical;
   outline: 0;
@@ -3380,7 +3392,7 @@ body.mail-dragging * {
 /* 「新建文件夹」入口：作为列表里的一项，而不是只藏在分区标题的 ＋ 里。 */
 .mail-folder-add {
   color: var(--mail-text-muted);
-  font-size: 13px;
+  font-size: 14px;
 }
 
 .mail-folder-add:hover {
@@ -3587,7 +3599,7 @@ body.mail-dragging * {
 }
 .mail-folder-more-count {
   margin-left: auto;
-  font-size: 11px;
+  font-size: 12px;
   color: var(--mail-text-muted);
 }
 
@@ -3613,7 +3625,7 @@ body.mail-dragging * {
   background: var(--mail-panel, #1a1e25);
   color: var(--mail-text, #e2e6ec);
   box-shadow: var(--mail-shadow, 0 12px 32px rgba(0, 0, 0, 0.45));
-  font-size: 12.5px;
+  font-size: 13.5px;
   line-height: 1.5;
   /* 卡片自己也要声明配色方案，否则里面的原生控件按系统主题画。 */
   color-scheme: dark;
@@ -3631,7 +3643,7 @@ body.mail-dragging * {
   width: 32px;
   height: 32px;
   flex: 0 0 auto;
-  font-size: 13px;
+  font-size: 13.5px;
 }
 .mail-addr-card-who {
   display: flex;
@@ -3640,14 +3652,14 @@ body.mail-dragging * {
   gap: 1px;
 }
 .mail-addr-card-name {
-  font-size: 13px;
+  font-size: 13.5px;
   font-weight: 600;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .mail-addr-card-addr {
-  font-size: 11.5px;
+  font-size: 12.5px;
   color: var(--mail-text-muted, #6f7885);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -3667,12 +3679,12 @@ body.mail-dragging * {
 .mail-addr-card-org {
   margin-top: 6px;
   color: var(--mail-text-secondary, #a4adba);
-  font-size: 11.5px;
+  font-size: 12.5px;
 }
 .mail-addr-card-stats {
   margin-top: 6px;
   color: var(--mail-text-muted, #6f7885);
-  font-size: 11.5px;
+  font-size: 12.5px;
 }
 .mail-addr-card-tag {
   margin-left: 6px;
@@ -3680,7 +3692,7 @@ body.mail-dragging * {
   border-radius: 999px;
   background: var(--mail-accent-soft);
   color: var(--mail-accent);
-  font-size: 10.5px;
+  font-size: 11.5px;
 }
 .mail-addr-card-actions {
   display: flex;
@@ -3693,7 +3705,7 @@ body.mail-dragging * {
   height: 26px;
   border-color: var(--mail-border-strong, #3a424d);
   color: var(--mail-text-secondary, #a4adba);
-  font-size: 11.5px;
+  font-size: 12.5px;
 }
 .mail-addr-card .mail-btn:hover {
   background: var(--mail-panel-hover, #222730);
