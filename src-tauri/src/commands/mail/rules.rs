@@ -1,6 +1,7 @@
 //! 收信规则引擎与「撤回发送」。
 //!
-//! 规则模型对齐 Outlook 的规则向导：条件全满足（AND）后执行一组动作。
+//! 规则模型对齐 Outlook 的规则向导：条件按「与 / 或」组合（`match_mode` = `all` / `any`），
+//! 每一项还能选「不包含」（非）；命中后执行一组动作。
 //! 差别在于这里**不依赖服务器端 Sieve**——国内邮箱基本不开放 Sieve，
 //! 所以规则在本地同步到新邮件后执行：打标签、自动归档、标已读、转发、删除。
 //! 其中「移动 / 删除 / 转发」需要服务器操作，由调用方（commands 层）拿动作清单去执行；
@@ -30,14 +31,16 @@ pub fn needs_body(rules: &[MailRule]) -> bool {
             return false;
         }
         let cond = &rule.condition;
-        !cond.body_contains.is_empty() || cond.any_matches_regex.is_some()
+        !cond.body_contains.is_empty()
+            || !cond.body_not_contains.is_empty()
+            || cond.any_matches_regex.is_some()
     })
 }
 
 pub fn evaluate(rules: &[MailRule], ctx: &RuleContext<'_>) -> Vec<(MailRule, RuleAction)> {
     let mut hits: Vec<(MailRule, RuleAction)> = Vec::new();
     for rule in rules.iter().filter(|r| r.enabled) {
-        if !conditions_match(&rule.condition, ctx) {
+        if !conditions_match(&rule.condition, &rule.match_mode, ctx) {
             continue;
         }
         hits.push((rule.clone(), rule.action.clone()));
@@ -56,20 +59,45 @@ pub fn body_relevant(rules: &[MailRule], ctx: &RuleContext<'_>) -> bool {
     rules
         .iter()
         .filter(|rule| rule.enabled)
-        .any(|rule| conditions_match_inner(&rule.condition, ctx, false))
+        .any(|rule| conditions_match_inner(&rule.condition, &rule.match_mode, ctx, false))
 }
 
-fn conditions_match(cond: &RuleCondition, ctx: &RuleContext<'_>) -> bool {
-    conditions_match_inner(cond, ctx, true)
+fn conditions_match(cond: &RuleCondition, match_mode: &str, ctx: &RuleContext<'_>) -> bool {
+    conditions_match_inner(cond, match_mode, ctx, true)
+}
+
+/// `all` / `any`（也认 `and` / `or`）；认不出来的按「全部满足」处理，保持老规则行为。
+fn is_any_mode(match_mode: &str) -> bool {
+    matches!(
+        match_mode.trim().to_ascii_lowercase().as_str(),
+        "any" | "or"
+    )
+}
+
+/// 一项「包含 / 不包含」条件的结果；这一项没填就返回 None（不参与与或）。
+fn list_term(needles: &[String], haystack_lower: &str, negate: bool) -> Option<bool> {
+    let needles: Vec<String> = needles
+        .iter()
+        .map(|item| item.trim().to_lowercase())
+        .filter(|item| !item.is_empty())
+        .collect();
+    if needles.is_empty() {
+        return None;
+    }
+    let hit = needles.iter().any(|item| haystack_lower.contains(item));
+    Some(if negate { !hit } else { hit })
 }
 
 fn conditions_match_inner(
     cond: &RuleCondition,
+    match_mode: &str,
     ctx: &RuleContext<'_>,
     with_body: bool,
 ) -> bool {
     let msg = ctx.message;
 
+    // 作用域不是筛选条件：它决定这条规则管哪一批邮件，所以永远按「与」处理，
+    // 不能被「任一满足」拿去凑命中。
     if !cond.account_ids.is_empty() && !cond.account_ids.iter().any(|id| id == &msg.account_id) {
         return false;
     }
@@ -87,53 +115,7 @@ fn conditions_match_inner(
     {
         return false;
     }
-
-    let subject_lower = msg.subject.to_lowercase();
-    let from_lower = format!("{} {}", msg.from_addr, msg.from_name).to_lowercase();
-    let to_lower = format!("{} {}", msg.to_json, msg.cc_json).to_lowercase();
-
-    let any_contains = |haystack: &str, needles: &[String]| {
-        needles.iter().any(|n| {
-            let n = n.trim().to_lowercase();
-            !n.is_empty() && haystack.contains(&n)
-        })
-    };
-
-    if !cond.from_contains.is_empty() && !any_contains(&from_lower, &cond.from_contains) {
-        return false;
-    }
-    if !cond.to_contains.is_empty() && !any_contains(&to_lower, &cond.to_contains) {
-        return false;
-    }
-    if !cond.subject_contains.is_empty() && !any_contains(&subject_lower, &cond.subject_contains) {
-        return false;
-    }
-    if cond
-        .subject_not_contains
-        .iter()
-        .any(|n| !n.trim().is_empty() && subject_lower.contains(&n.trim().to_lowercase()))
-    {
-        return false;
-    }
-    if with_body && !cond.body_contains.is_empty()
-        && !any_contains(&ctx.body_preview.to_lowercase(), &cond.body_contains)
-    {
-        return false;
-    }
-    if with_body {
-        if let Some(pattern) = cond.any_matches_regex.as_ref().filter(|p| !p.trim().is_empty()) {
-            // 用户写的正则可能不合法；不合法时整条规则判为不匹配，而不是让同步线程崩掉。
-            match Regex::new(pattern) {
-                Ok(re) => {
-                    let hay = format!("{} {} {}", msg.subject, ctx.body_preview, from_lower);
-                    if !re.is_match(&hay) {
-                        return false;
-                    }
-                }
-                Err(_) => return false,
-            }
-        }
-    }
+    // 「只处理带附件的邮件」和大小下限同样只是范围限定。
     if let Some(want) = cond.has_attachment {
         if msg.has_attachments != want {
             return false;
@@ -144,8 +126,75 @@ fn conditions_match_inner(
             return false;
         }
     }
+
+    let subject_lower = msg.subject.to_lowercase();
+    let from_lower = format!("{} {}", msg.from_addr, msg.from_name).to_lowercase();
+    let to_lower = format!("{} {}", msg.to_json, msg.cc_json).to_lowercase();
+
+    // 每一项是一个「词」：发件人 / 收件人 / 主题 / 正文，各自可正向或反向。
+    let mut terms: Vec<bool> = Vec::new();
+    if let Some(hit) = list_term(&cond.from_contains, &from_lower, false) {
+        terms.push(hit);
+    }
+    if let Some(hit) = list_term(&cond.from_not_contains, &from_lower, true) {
+        terms.push(hit);
+    }
+    if let Some(hit) = list_term(&cond.to_contains, &to_lower, false) {
+        terms.push(hit);
+    }
+    if let Some(hit) = list_term(&cond.to_not_contains, &to_lower, true) {
+        terms.push(hit);
+    }
+    if let Some(hit) = list_term(&cond.subject_contains, &subject_lower, false) {
+        terms.push(hit);
+    }
+    if let Some(hit) = list_term(&cond.subject_not_contains, &subject_lower, true) {
+        terms.push(hit);
+    }
+
+    let body_dependent = !cond.body_contains.is_empty()
+        || !cond.body_not_contains.is_empty()
+        || cond
+            .any_matches_regex
+            .as_ref()
+            .is_some_and(|pattern| !pattern.trim().is_empty());
+
+    if with_body {
+        let body_lower = ctx.body_preview.to_lowercase();
+        if let Some(hit) = list_term(&cond.body_contains, &body_lower, false) {
+            terms.push(hit);
+        }
+        if let Some(hit) = list_term(&cond.body_not_contains, &body_lower, true) {
+            terms.push(hit);
+        }
+        if let Some(pattern) = cond
+            .any_matches_regex
+            .as_ref()
+            .filter(|pattern| !pattern.trim().is_empty())
+        {
+            // 用户写的正则可能不合法；不合法时这一项判为不命中，而不是让同步线程崩掉。
+            match Regex::new(pattern) {
+                Ok(re) => {
+                    let hay = format!("{} {} {}", msg.subject, ctx.body_preview, from_lower);
+                    terms.push(re.is_match(&hay));
+                }
+                Err(_) => terms.push(false),
+            }
+        }
+    } else if body_dependent {
+        // 预筛阶段：正文相关条件按「可能命中」处理——宁可多解一次正文，也不能漏。
+        terms.push(true);
+    }
+
     let _ = ctx.account;
-    true
+    if terms.is_empty() {
+        return true;
+    }
+    if is_any_mode(match_mode) {
+        terms.iter().any(|hit| *hit)
+    } else {
+        terms.iter().all(|hit| *hit)
+    }
 }
 
 /// 合并多个命中规则的动作：标签取并集，移动取第一条，布尔动作取或。
@@ -503,4 +552,159 @@ mod tests {
         assert_eq!(apply_label_delta("", &["x".into()], &[]), "x");
     }
 
+}
+
+#[cfg(test)]
+mod logic_tests {
+    use super::*;
+    use crate::commands::mail::model::{Account, MessageSummary, Security};
+    use std::collections::BTreeMap;
+
+    fn account() -> Account {
+        Account {
+            id: "acc".into(),
+            email: "me@example.com".into(),
+            display_name: String::new(),
+            imap_host: String::new(),
+            imap_port: 993,
+            imap_security: Security::Ssl,
+            protocol: "imap".into(),
+            pop3_host: String::new(),
+            pop3_port: 995,
+            pop3_security: Security::None,
+            pop3_leave_on_server: true,
+            smtp_host: String::new(),
+            smtp_port: 465,
+            smtp_security: Security::Ssl,
+            username: String::new(),
+            auth_kind: "password".into(),
+            oauth_provider: String::new(),
+            oauth_expires: 0,
+            proxy: None,
+            accent: String::new(),
+            signature: String::new(),
+            folder_map: BTreeMap::new(),
+            delegate: Vec::new(),
+            sieve: None,
+            created_at: 0,
+            last_sync_at: 0,
+        }
+    }
+
+    fn message(subject: &str, from: &str) -> MessageSummary {
+        MessageSummary {
+            account_id: "acc".into(),
+            folder: "INBOX".into(),
+            uid: 1,
+            message_id: None,
+            subject: subject.into(),
+            from_name: String::new(),
+            from_addr: from.into(),
+            to_json: "[]".into(),
+            cc_json: "[]".into(),
+            date: 0,
+            size: 1000,
+            snippet: String::new(),
+            seen: false,
+            flagged: false,
+            answered: false,
+            draft: false,
+            deleted: false,
+            has_attachments: false,
+            thread_key: String::new(),
+            labels: String::new(),
+            outgoing: false,
+        }
+    }
+
+    fn ctx<'a>(msg: &'a MessageSummary, acc: &'a Account) -> RuleContext<'a> {
+        RuleContext {
+            message: msg,
+            body_preview: "",
+            account: acc,
+            folder_role: "inbox",
+        }
+    }
+
+    fn rule(mode: &str, cond: RuleCondition) -> MailRule {
+        MailRule {
+            id: "r".into(),
+            name: "t".into(),
+            enabled: true,
+            priority: 0,
+            match_mode: mode.into(),
+            condition: cond,
+            action: RuleAction::default(),
+            stop_processing: false,
+            created_at: 0,
+        }
+    }
+
+    #[test]
+    fn any_mode_needs_only_one_condition() {
+        let acc = account();
+        let msg = message("季度报告", "boss@corp.com");
+        let ctx = ctx(&msg, &acc);
+        let cond = RuleCondition {
+            from_contains: vec!["nobody@corp.com".into()],
+            subject_contains: vec!["报告".into()],
+            ..Default::default()
+        };
+        assert!(evaluate(&[rule("all", cond.clone())], &ctx).is_empty(), "与：一条不满足就不命中");
+        assert_eq!(evaluate(&[rule("any", cond)], &ctx).len(), 1, "或：任一满足即命中");
+    }
+
+    #[test]
+    fn not_contains_acts_as_negation() {
+        let acc = account();
+        let cond = RuleCondition {
+            from_not_contains: vec!["bad.example".into()],
+            ..Default::default()
+        };
+        let spam = message("hi", "someone@bad.example");
+        assert!(evaluate(&[rule("all", cond.clone())], &ctx(&spam, &acc)).is_empty());
+        let friend = message("hi", "someone@good.example");
+        assert_eq!(evaluate(&[rule("all", cond)], &ctx(&friend, &acc)).len(), 1);
+    }
+
+    #[test]
+    fn scope_conditions_do_not_participate_in_any() {
+        let acc = account();
+        let msg = message("hi", "a@b.c");
+        let mut r = rule(
+            "any",
+            RuleCondition {
+                subject_contains: vec!["hi".into()],
+                ..Default::default()
+            },
+        );
+        r.condition.has_attachment = Some(true);
+        assert!(evaluate(&[r], &ctx(&msg, &acc)).is_empty(), "附件是范围，不能被「或」绕过");
+    }
+
+    #[test]
+    fn body_prefilter_only_skips_when_other_terms_already_fail() {
+        let acc = account();
+        let cond = RuleCondition {
+            from_contains: vec!["boss@corp.com".into()],
+            body_contains: vec!["发票".into()],
+            ..Default::default()
+        };
+        let other = message("hi", "other@corp.com");
+        assert!(!body_relevant(&[rule("all", cond.clone())], &ctx(&other, &acc)), "与模式下不可能命中，不必解正文");
+        let boss = message("hi", "boss@corp.com");
+        assert!(body_relevant(&[rule("all", cond)], &ctx(&boss, &acc)), "还可能命中，需要正文");
+    }
+
+    #[test]
+    fn recipient_matching_reads_to_and_cc_json() {
+        let acc = account();
+        let mut msg = message("hi", "a@b.c");
+        msg.cc_json = r#"[{"name":"R&D Department","address":"team@example.com"}]"#.into();
+        let cond = RuleCondition {
+            to_contains: vec!["team@example.com".into()],
+            ..Default::default()
+        };
+        assert_eq!(evaluate(&[rule("all", cond)], &ctx(&msg, &acc)).len(), 1);
+    }
 }

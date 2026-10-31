@@ -71,7 +71,25 @@
               </div>
             </div>
 
-            <div class="mail-flabel" style="margin-bottom: 6px">满足以下条件（全部满足）</div>
+            <!-- 与 Outlook 一致：条件之间可以选「与 / 或」；每一项还能填「不包含」当作「非」。 -->
+            <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px">
+              <span class="mail-flabel" style="margin: 0">满足以下条件</span>
+              <select
+                v-model="draft.matchMode"
+                class="mail-select"
+                title="条件之间的组合方式"
+                aria-label="条件组合方式"
+              >
+                <option value="all">全部满足（与）</option>
+                <option value="any">任一满足（或）</option>
+              </select>
+            </div>
+            <!-- 真实反馈：列表里最醒目的通常是「发件人显示名」，很容易被当成主题填进主题条件。
+                 主题只匹配 Subject 头，发件人条件才同时匹配地址与显示名。 -->
+            <p class="mail-hint" style="margin: 0 0 8px">
+              发件人条件同时匹配地址与显示名（例如「PLM系统发送」）；主题只匹配邮件标题，正文只匹配正文。
+              「不包含」就是「非」；要同时满足用「全部满足」，命中其中任意一条即可用「任一满足」。
+            </p>
             <div class="mail-field-row">
               <div class="mail-field">
                 <label class="mail-flabel">
@@ -122,6 +140,38 @@
                 </div>
               </div>
             </div>
+            <!-- 「非」：Outlook 的规则向导本身不允许取反，但「不是 X 的邮件」是常见需求；
+                 单独一列，和「包含」一样参与与 / 或。 -->
+            <div class="mail-field-row">
+              <div class="mail-field">
+                <label class="mail-flabel">
+                  发件人不包含
+                  <span v-if="tokenCount('fromNot')" class="mail-rule-count">{{ tokenCount('fromNot') }} 个</span>
+                </label>
+                <textarea
+                  v-model="cond.fromNot"
+                  class="mail-input mail-rule-grow"
+                  rows="1"
+                  :title="cond.fromNot"
+                  placeholder="用逗号分隔多个"
+                  @input="autoGrow"
+                ></textarea>
+              </div>
+              <div class="mail-field">
+                <label class="mail-flabel">
+                  收件人不包含
+                  <span v-if="tokenCount('toNot')" class="mail-rule-count">{{ tokenCount('toNot') }} 个</span>
+                </label>
+                <textarea
+                  v-model="cond.toNot"
+                  class="mail-input mail-rule-grow"
+                  rows="1"
+                  :title="cond.toNot"
+                  placeholder="用逗号分隔多个"
+                  @input="autoGrow"
+                ></textarea>
+              </div>
+            </div>
             <!-- 内联展开而不是浮层：弹层正文自带滚动容器，浮层会被裁掉一截。 -->
             <div v-if="pickerTarget" class="mail-rule-picker">
               <div class="mail-rule-picker-head">
@@ -157,9 +207,15 @@
                 ></textarea>
               </div>
             </div>
-            <div class="mail-field">
-              <label class="mail-flabel">正文包含</label>
-              <input v-model="cond.body" class="mail-input" placeholder="匹配正文内容" />
+            <div class="mail-field-row">
+              <div class="mail-field">
+                <label class="mail-flabel">正文包含</label>
+                <input v-model="cond.body" class="mail-input" placeholder="匹配正文内容" />
+              </div>
+              <div class="mail-field">
+                <label class="mail-flabel">正文不包含</label>
+                <input v-model="cond.bodyNot" class="mail-input" placeholder="命中这一类就排除" />
+              </div>
             </div>
             <div class="mail-field-row">
               <div class="mail-field">
@@ -410,10 +466,13 @@ const blankDraft = () => ({
 const draft = reactive(blankDraft())
 const cond = reactive({
   from: '',
+  fromNot: '',
   to: '',
+  toNot: '',
   subject: '',
   subjectNot: '',
   body: '',
+  bodyNot: '',
   regex: '',
   folder: 'inbox',
   attachmentOnly: false,
@@ -555,10 +614,13 @@ function describeRule(rule) {
   const a = rule.action || {}
   const parts = []
   if (c.fromContains?.length) parts.push(`发件人含 ${c.fromContains.join(' / ')}`)
+  if (c.fromNotContains?.length) parts.push(`发件人不含 ${c.fromNotContains.join(' / ')}`)
   if (c.toContains?.length) parts.push(`收件人含 ${c.toContains.join(' / ')}`)
+  if (c.toNotContains?.length) parts.push(`收件人不含 ${c.toNotContains.join(' / ')}`)
   if (c.subjectContains?.length) parts.push(`主题含 ${c.subjectContains.join(' / ')}`)
   if (c.subjectNotContains?.length) parts.push(`主题不含 ${c.subjectNotContains.join(' / ')}`)
   if (c.bodyContains?.length) parts.push(`正文含 ${c.bodyContains.join(' / ')}`)
+  if (c.bodyNotContains?.length) parts.push(`正文不含 ${c.bodyNotContains.join(' / ')}`)
   if (c.anyMatchesRegex) parts.push(`正则 ${c.anyMatchesRegex}`)
   if (c.hasAttachment) parts.push('带附件')
   const actions = []
@@ -571,7 +633,9 @@ function describeRule(rule) {
   const where = (rule.condition?.folderRoles || []).length
     ? `【${rule.condition.folderRoles.join('/')}】`
     : '【收件箱】'
-  return `${where}${parts.join('，') || '（无条件）'} → ${actions.join('，') || '（无动作）'}`
+  // 「或」写进条件之间，一眼能看出这条规则不是「全部满足」。
+  const joiner = rule.matchMode === 'any' ? ' 或 ' : '，'
+  return `${where}${parts.join(joiner) || '（无条件）'} → ${actions.join('，') || '（无动作）'}`
 }
 
 function startNew() {
@@ -579,10 +643,13 @@ function startNew() {
   Object.assign(draft, blankDraft())
   Object.assign(cond, {
     from: '',
+    fromNot: '',
     to: '',
+    toNot: '',
     subject: '',
     subjectNot: '',
     body: '',
+    bodyNot: '',
     regex: '',
     folder: 'inbox',
     attachmentOnly: false,
@@ -608,10 +675,13 @@ function editRule(rule) {
   const c = rule.condition || {}
   Object.assign(cond, {
     from: joinList(c.fromContains),
+    fromNot: joinList(c.fromNotContains),
     to: joinList(c.toContains),
+    toNot: joinList(c.toNotContains),
     subject: joinList(c.subjectContains),
     subjectNot: joinList(c.subjectNotContains),
     body: joinList(c.bodyContains),
+    bodyNot: joinList(c.bodyNotContains),
     regex: c.anyMatchesRegex || '',
     folder: (c.folderRoles || []).includes('*') ? '*' : 'inbox',
     attachmentOnly: Boolean(c.hasAttachment),
@@ -638,10 +708,13 @@ async function saveDraft() {
     ...draft,
     condition: {
       fromContains: splitList(cond.from),
+      fromNotContains: splitList(cond.fromNot),
       toContains: splitList(cond.to),
+      toNotContains: splitList(cond.toNot),
       subjectContains: splitList(cond.subject),
       subjectNotContains: splitList(cond.subjectNot),
       bodyContains: splitList(cond.body),
+      bodyNotContains: splitList(cond.bodyNot),
       anyMatchesRegex: cond.regex.trim() || null,
       hasAttachment: cond.attachmentOnly ? true : null,
       accountIds: [],

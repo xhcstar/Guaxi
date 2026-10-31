@@ -35,7 +35,9 @@ pub fn generate(account: &Account, rules: &[MailRule], trash_folder: Option<&str
         .collect();
 
     for rule in &applicable {
-        let mut conditions: Vec<String> = Vec::new();
+        // 「与 / 或」只有筛选词参与；附件 / 大小 / 账户 / 文件夹是范围限定，永远按与处理。
+        let mut terms: Vec<String> = Vec::new();
+        let mut scope: Vec<String> = Vec::new();
         let cond = &rule.condition;
         if !cond.folder_roles.is_empty()
             && !cond.folder_roles.iter().any(|r| r == "inbox")
@@ -49,6 +51,7 @@ pub fn generate(account: &Account, rules: &[MailRule], trash_folder: Option<&str
             continue;
         }
         if !cond.body_contains.is_empty()
+            || !cond.body_not_contains.is_empty()
             || cond
                 .any_matches_regex
                 .as_ref()
@@ -60,35 +63,59 @@ pub fn generate(account: &Account, rules: &[MailRule], trash_folder: Option<&str
 
         for value in &cond.from_contains {
             if !value.trim().is_empty() {
-                conditions.push(format!("address :contains \"From\" \"{}\"", escape(value)));
+                terms.push(format!("address :contains \"From\" \"{}\"", escape(value)));
+            }
+        }
+        for value in &cond.from_not_contains {
+            if !value.trim().is_empty() {
+                terms.push(format!("not address :contains \"From\" \"{}\"", escape(value)));
             }
         }
         for value in &cond.to_contains {
             if !value.trim().is_empty() {
-                conditions.push(format!("address :contains [\"To\",\"Cc\"] \"{}\"", escape(value)));
+                terms.push(format!("address :contains [\"To\",\"Cc\"] \"{}\"", escape(value)));
+            }
+        }
+        for value in &cond.to_not_contains {
+            if !value.trim().is_empty() {
+                terms.push(format!("not address :contains [\"To\",\"Cc\"] \"{}\"", escape(value)));
             }
         }
         for value in &cond.subject_contains {
             if !value.trim().is_empty() {
-                conditions.push(format!("header :contains \"Subject\" \"{}\"", escape(value)));
+                terms.push(format!("header :contains \"Subject\" \"{}\"", escape(value)));
             }
         }
         for value in &cond.subject_not_contains {
             if !value.trim().is_empty() {
-                conditions.push(format!("not header :contains \"Subject\" \"{}\"", escape(value)));
+                terms.push(format!("not header :contains \"Subject\" \"{}\"", escape(value)));
             }
         }
         if let Some(true) = cond.has_attachment {
             requires.push("foreverypart");
             // 简化：用 Content-Type 是 multipart/mixed 近似「有附件」。
             // 精确判定需要解析 multipart 结构，Sieve 的基础语法做不到。
-            conditions.push("header :contains \"Content-Type\" \"multipart/mixed\"".to_string());
+            scope.push("header :contains \"Content-Type\" \"multipart/mixed\"".to_string());
         }
         if let Some(min) = cond.min_size {
             requires.push("size");
             let kb = (min.max(1024) as f64 / 1024.0).ceil() as u64;
-            conditions.push(format!("size :over {kb}K"));
+            scope.push(format!("size :over {kb}K"));
         }
+
+        let any_mode = matches!(
+            rule.match_mode.trim().to_ascii_lowercase().as_str(),
+            "any" | "or"
+        );
+        let mut parts: Vec<String> = Vec::new();
+        if !terms.is_empty() {
+            parts.push(if any_mode {
+                format!("anyof ({})", terms.join(", "))
+            } else {
+                format!("allof ({})", terms.join(", "))
+            });
+        }
+        parts.extend(scope);
 
         let mut actions: Vec<String> = Vec::new();
         let move_target = rule
@@ -112,10 +139,10 @@ pub fn generate(account: &Account, rules: &[MailRule], trash_folder: Option<&str
             continue;
         }
 
-        let condition = if conditions.is_empty() {
-            "anyof (true, false)".to_string()
-        } else {
-            format!("allof ({})", conditions.join(", "))
+        let condition = match parts.len() {
+            0 => "anyof (true, false)".to_string(),
+            1 => parts.remove(0),
+            _ => format!("allof ({})", parts.join(", ")),
         };
         lines.push(format!(
             "# {} (优先级 {})\nif {condition} {{\n    {}\n}}",

@@ -472,22 +472,32 @@ pub struct SearchQuery {
     pub offset: Option<u32>,
 }
 
-/// 规则条件：全部满足才命中（AND）。与 Outlook 的规则向导同一套心智模型。
+/// 规则条件：按 `MailRule.match_mode` 组合（`all` = 全部满足 / `any` = 任一满足），
+/// 每一项可用对应的 `*_not_contains` 取反。与 Outlook 的规则向导同一套心智模型。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RuleCondition {
     /// 发件人地址或显示名包含（不区分大小写）。
     #[serde(default)]
     pub from_contains: Vec<String>,
+    /// 发件人地址或显示名 **不** 包含（「非」）。
+    #[serde(default)]
+    pub from_not_contains: Vec<String>,
     /// 收件人（To/Cc）包含。
     #[serde(default)]
     pub to_contains: Vec<String>,
+    /// 收件人（To/Cc）**不** 包含。
+    #[serde(default)]
+    pub to_not_contains: Vec<String>,
     #[serde(default)]
     pub subject_contains: Vec<String>,
     #[serde(default)]
     pub subject_not_contains: Vec<String>,
     #[serde(default)]
     pub body_contains: Vec<String>,
+    /// 正文 **不** 包含。
+    #[serde(default)]
+    pub body_not_contains: Vec<String>,
     /// 主题 / 正文 / 发件人合一的正则（Rust regex 语法）。
     #[serde(default)]
     pub any_matches_regex: Option<String>,
