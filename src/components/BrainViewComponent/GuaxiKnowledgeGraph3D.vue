@@ -16,6 +16,12 @@
             placeholder="搜索 / 语义检索…"
             @keyup.enter="runSearch"
           />
+          <select v-model="levelFilter" class="tb-sel" @change="onLevelChange" title="只看某一层级的节点">
+            <option value="all">全部层级</option>
+            <option value="dir">仅目录</option>
+            <option value="file">到文件</option>
+            <option value="section">到章节</option>
+          </select>
           <select v-model="view" class="tb-sel" @change="switchView" title="换一种方式摆放知识点">
             <option value="relation">按关联摆放</option>
             <option value="tag">按主题分组</option>
@@ -68,6 +74,7 @@
     <!-- 时间轴:拖动按修改时间过滤,回放知识增长 -->
     <div class="kg3d-timeline">
       <button class="tl-play" @click="toggleTimelinePlay">{{ timelinePlaying ? "⏸" : "▶" }}</button>
+      <span class="tl-edge" :title="timelineRangeLabel.min">{{ shortDate(timelineRangeLabel.min) }}</span>
       <input
         type="range"
         min="0"
@@ -76,6 +83,7 @@
         class="tl-range"
         @input="applyTimeline"
       />
+      <span class="tl-edge" :title="timelineRangeLabel.max">{{ shortDate(timelineRangeLabel.max) }}</span>
       <span class="tl-label">{{ timelineLabel }}</span>
     </div>
 
@@ -89,6 +97,8 @@
       <div class="pn-meta">
         <span v-if="selected.rel_path">{{ selected.rel_path }}</span>
         <span>度 {{ selected.degree }} · PR {{ (selected.pagerank || 0).toFixed(4) }}</span>
+        <span v-if="selected.created_at">创建 {{ formatDate(selected.created_at) }}</span>
+        <span v-if="selected.modified_at">修改 {{ formatDate(selected.modified_at) }}</span>
       </div>
       <div v-if="selected.tags && selected.tags.length" class="pn-tags">
         <span v-for="tg in selected.tags" :key="tg" class="pn-tag">
@@ -155,7 +165,7 @@ import { useFileTreeStore } from "../../stores/fileTreeStore";
 import { useEditorStore } from "../../stores/editorStore";
 import { createLogger } from "../../utils/logger";
 import { onKgIndexChanged } from "../../utils/kgIndexEvents";
-import { resolveLayout, disposeLayoutWorker } from "./kgLayout";
+import { resolveLayout, resolveLayoutImmediate, disposeLayoutWorker } from "./kgLayout";
 
 const props = defineProps({
   kbName: { type: String, default: "" },
@@ -216,6 +226,14 @@ const tagSuggestions = ref([]);
 const nodeRelations = ref([]);
 const statusText = ref("");
 const visibleTypes = shallowRef(new Set(["directory", "file", "section", "paragraph", "concept"]));
+// 层级过滤:只显示到某一层为止的节点(目录/文件/章节/全部),用于在不同粒度间快速切换
+const levelFilter = ref("all");
+const LEVEL_TYPES = {
+  all: null,
+  dir: new Set(["knowledge-base", "directory"]),
+  file: new Set(["knowledge-base", "directory", "file"]),
+  section: new Set(["knowledge-base", "directory", "file", "section"]),
+};
 // 标签过滤:为空=不按标签过滤;非空=只显示带任一所选标签的节点
 const selectedTagFilter = ref([]);
 const tagFilterOptions = ref([]); // [{ label, value }],来自当前图的所有标签
@@ -223,6 +241,7 @@ const tagDropdownOpen = ref(false);
 const breadcrumb = ref([{ id: "kb_root", label: "全库" }]);
 const timelineValue = ref(100);
 const timelineLabel = ref("全部");
+const timelineRangeLabel = ref({ min: "", max: "" });
 const timelinePlaying = ref(false);
 let timelinePlayTimer = null;
 let timeBounds = { min: 0, max: 1 };
@@ -335,6 +354,21 @@ const toolButtons = [
 
 function typeColor(t) {
   return "#" + (TYPE_COLORS[t] ?? TYPE_COLORS.unknown).toString(16).padStart(6, "0");
+}
+
+// 节点时间展示(时间轴范围、选中面板共用)
+function shortDate(v) {
+  if (!v) return "";
+  const d = new Date(v);
+  if (!Number.isFinite(d.getTime())) return "";
+  return `${d.getFullYear()}/${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+
+function formatDate(v) {
+  if (!v) return "";
+  const d = new Date(v);
+  if (!Number.isFinite(d.getTime())) return v;
+  return d.toLocaleString();
 }
 
 // 读取主题色:根据 --guaxi-content-bg 亮度判断深/浅色,适配亮色模式
@@ -742,8 +776,7 @@ function buildMeshes() {
   buildEdges();
   buildStarField();
   applyNodeThemeAppearance(); // 按当前主题校正节点材质/配色(修复亮色发黑)
-  applyTypeVisibility();
-  rebuildLabels();
+  applyTypeVisibility(); // 内部会重建标签,无需再单独调用
   requestRender();
 }
 
@@ -904,9 +937,11 @@ function updateLabelLod() {
   }
 }
 
-// 节点是否通过当前过滤(类型 + 标签)。知识库根节点始终保留为骨架。
+// 节点是否通过当前过滤(层级 + 类型 + 标签)。知识库根节点始终保留为骨架。
 function nodePassesFilter(n) {
   if (n.type === "knowledge-base") return true;
+  const levelTypes = LEVEL_TYPES[levelFilter.value];
+  if (levelTypes && !levelTypes.has(n.type)) return false;
   if (!visibleTypes.value.has(n.type)) return false;
   const tags = selectedTagFilter.value;
   if (tags.length) {
@@ -963,6 +998,10 @@ function rebuildEdgesForVisible(visIds) {
 
 // ───────── 数据加载 ─────────
 function resetGraphStateForKnowledgeBase(kbName) {
+  if (morphTween) {
+    morphTween.kill();
+    morphTween = null;
+  }
   if (timelinePlayTimer) {
     clearInterval(timelinePlayTimer);
     timelinePlayTimer = null;
@@ -983,9 +1022,11 @@ function resetGraphStateForKnowledgeBase(kbName) {
   tagFilterOptions.value = [];
   tagDropdownOpen.value = false;
   visibleTypes.value = new Set(["directory", "file", "section", "paragraph", "concept"]);
+  levelFilter.value = "all";
   breadcrumb.value = [{ id: "kb_root", label: "全库" }];
   timelineValue.value = 100;
   timelineLabel.value = "全部";
+  timelineRangeLabel.value = { min: "", max: "" };
   timelinePlaying.value = false;
   evolutionActive = false;
   prevVisibleIds = new Set();
@@ -1011,44 +1052,57 @@ function resetGraphStateForKnowledgeBase(kbName) {
 }
 
 // opts.ensureIndex:是否在查询前强制全量重建索引(kg_build_index)。
-// 手动动作保持 true;索引变更引发的自动重载传 false —— 后端 kg_query_graph 自带
-// build_if_needed 惰性重建,只在真脏时重建一次,避免频繁保存触发重复全量重建。
+// 默认 false:交给后端 build_if_needed 惰性判断 —— 索引干净时直接命中缓存。
+// 只有「重新扫描」按钮才值得无条件全量重建(数千个文件时要好几秒)。
 async function loadGraph(rootId = "kb_root", maxDepth = 99, options = {}) {
-  const { ensureIndex = true } = options;
+  const { ensureIndex = false } = options;
   const name = props.kbName || store.selectedKnowledgeBase?.knowledge_base_name;
   const loadSeq = ++graphLoadSeq;
   if (!name) {
     resetGraphStateForKnowledgeBase("");
     return;
   }
-  statusText.value = "加载图数据…";
+  const t0 = performance.now();
+  statusText.value = ensureIndex ? "重新扫描索引…" : "加载图数据…";
   logger.info("[kg3d] start loading graph", { kbName: name, rootId, maxDepth, ensureIndex, loadSeq });
   try {
-    if (ensureIndex) await store.kgEnsureIndex(name).catch(() => {});
-    if (loadSeq !== graphLoadSeq) return;
+    if (ensureIndex) {
+      await store.kgEnsureIndex(name).catch(() => {});
+      if (loadSeq !== graphLoadSeq) return;
+      statusText.value = "加载图数据…";
+    }
     const opts = { root_id: rootId, max_depth: maxDepth, limit: 6000 };
-    const data = await store.kgQueryGraph(name, opts);
+    // 图数据与社区配色互不依赖,并行请求缩短首屏等待。
+    const [data, comms] = await Promise.all([
+      store.kgQueryGraph(name, opts),
+      store.kgCommunities(name).catch(() => []),
+    ]);
     if (loadSeq !== graphLoadSeq) return;
 
     // 社区色
     const nextCommunityColors = new Map();
-    try {
-      const comms = await store.kgCommunities(name);
-      if (loadSeq !== graphLoadSeq) return;
-      for (const c of comms || []) {
-        if (c.color) nextCommunityColors.set(c.community_id, c.color);
-      }
-    } catch (e) {
-      /* 无社区数据 */
+    for (const c of comms || []) {
+      if (c.color) nextCommunityColors.set(c.community_id, c.color);
     }
 
     const nextNodeList = (data.nodes || []).map((n) => ({ ...n }));
     const nextNodeById = new Map(nextNodeList.map((n) => [n.id, n]));
     const nextEdgeList = (data.edges || []).filter((e) => nextNodeById.has(e.from) && nextNodeById.has(e.to));
 
-    const nextPositions = await resolveLayout(store, name, view.value, { nodes: nextNodeList, edges: nextEdgeList });
+    // 先用缓存/本地补位把图立刻画出来;力导向细化放到后台,首屏不再等布局计算。
+    const { pos: nextPositions, needsForce } = await resolveLayoutImmediate(
+      store,
+      name,
+      view.value,
+      { nodes: nextNodeList, edges: nextEdgeList }
+    );
     if (loadSeq !== graphLoadSeq) return;
 
+    // 新数据即将接管画布:停掉上一张图的布局转场,避免旧 tween 覆盖新坐标。
+    if (morphTween) {
+      morphTween.kill();
+      morphTween = null;
+    }
     communityColors = nextCommunityColors;
     nodeList = nextNodeList;
     nodeById = nextNodeById;
@@ -1061,21 +1115,44 @@ async function loadGraph(rootId = "kb_root", maxDepth = 99, options = {}) {
     computeTimeBounds();
     refreshTagFilterOptions();
     buildMeshes();
-    statusText.value = `节点 ${nodeList.length} · 边 ${edgeList.length}${data.truncated ? " (已截断)" : ""}`;
     fitCamera();
     drawMinimap();
+    const ms = Math.round(performance.now() - t0);
+    statusText.value = `节点 ${nodeList.length} · 边 ${edgeList.length} · ${ms} ms${data.truncated ? " (已截断)" : ""}`;
     logger.info("[kg3d] graph loaded", {
       kbName: name,
       nodes: nodeList.length,
       edges: edgeList.length,
       truncated: Boolean(data.truncated),
+      ms,
+      needsForce,
       loadSeq
     });
+    if (needsForce) optimizeLayoutInBackground(name, loadSeq);
   } catch (e) {
     if (loadSeq !== graphLoadSeq) return;
     statusText.value = "加载失败: " + (e?.message || e);
     logger.error("[kg3d] load graph failed", { kbName: name, error: e });
   }
+}
+
+// 首屏已用缓存/补位坐标渲染,这里只把更规整的力导向结果补上并平滑过渡。
+function optimizeLayoutInBackground(name, loadSeq) {
+  statusText.value += " · 后台优化布局…";
+  store.kgComputeLayout(name, "relation", false)
+    .then((points) => {
+      if (loadSeq !== graphLoadSeq || view.value !== "relation") return;
+      if (!Array.isArray(points) || !points.length) return;
+      const target = new Map();
+      for (const p of points) {
+        const id = p.node_id ?? p.id;
+        if (id != null) target.set(id, { x: p.x, y: p.y, z: p.z });
+      }
+      morphTo(target, `布局优化完成 · 节点 ${nodeList.length}`);
+    })
+    .catch(() => {
+      /* 后台优化失败不影响已渲染的图 */
+    });
 }
 
 // ───────── 索引变更自动跟随 ─────────
@@ -1134,9 +1211,11 @@ function fitCamera() {
   if (!nodeList.length) return;
   const box = new THREE.Box3();
   for (const n of nodeList) {
+    if (n._hidden) continue; // 只看当前层级/过滤后真正可见的节点
     const p = curPositions.get(n.id);
     if (p) box.expandByPoint(tmpVec.set(p.x, p.y, p.z));
   }
+  if (box.isEmpty()) return;
   const center = box.getCenter(new THREE.Vector3());
   const size = box.getSize(new THREE.Vector3()).length() || 200;
   sceneScale = size; // 记录当前图谱尺度,供退出飞行时设定合理的缩放支点距离
@@ -1154,15 +1233,32 @@ async function switchView() {
   const name = props.kbName || store.selectedKnowledgeBase?.knowledge_base_name;
   if (!name) return;
   statusText.value = "切换视角…";
-  // force 重算:避免历史缓存的旧布局导致节点挤作一团
+  if (view.value === "relation") {
+    // 按关联视角:先用既有布局/补位立刻换过去,力导向细化交给后台
+    const { pos, needsForce } = await resolveLayoutImmediate(store, name, view.value, {
+      nodes: nodeList,
+      edges: edgeList,
+    });
+    morphTo(pos);
+    if (needsForce) optimizeLayoutInBackground(name, graphLoadSeq);
+    return;
+  }
+  // 其它视角的布点很轻,直接本地算完
   const target = await resolveLayout(store, name, view.value, { nodes: nodeList, edges: edgeList }, {}, { force: true });
   morphTo(target);
 }
 
-function morphTo(target) {
+// 布局转场 tween(后台力导向结果可能在切换视角动画中途返回,先停掉上一段避免两份坐标互相打架)
+let morphTween = null;
+
+function morphTo(target, doneText = "") {
+  if (morphTween) {
+    morphTween.kill();
+    morphTween = null;
+  }
   const from = new Map(curPositions);
   const prog = { t: 0 };
-  gsap.to(prog, {
+  morphTween = gsap.to(prog, {
     t: 1,
     duration: 1.1,
     ease: "power2.inOut",
@@ -1179,12 +1275,13 @@ function morphTo(target) {
       syncInstancePositions();
     },
     onComplete() {
+      morphTween = null;
       curPositions = target;
       syncInstancePositions();
       rebuildLabels();
       fitCamera(); // 视角切换后重新取景,适配新布局的尺度
       drawMinimap();
-      statusText.value = "";
+      statusText.value = doneText;
     },
   });
 }
@@ -1194,7 +1291,8 @@ function syncInstancePositions() {
     const arr = mesh.userData.nodes;
     arr.forEach((n, i) => {
       const p = curPositions.get(n.id) || { x: 0, y: 0, z: 0 };
-      const s = baseRadius(n) * (n._scaleMul ?? 1) * (n._hlMul ?? 1);
+      // 被层级/类型/时间过滤掉的节点保持隐藏,不能因为位置同步又冒出来
+      const s = n._hidden ? 0 : baseRadius(n) * (n._scaleMul ?? 1) * (n._hlMul ?? 1);
       tmpMat.compose(tmpVec.set(p.x, p.y, p.z), tmpQuat.identity(), tmpScale.set(s, s, s));
       mesh.setMatrixAt(i, tmpMat);
     });
@@ -1531,7 +1629,7 @@ function applyHighlight(idSet, opts = {}) {
       const mul = on ? (n.id === primary ? 2.6 : 1.9) : 0.55;
       n._hlMul = mul;
       const p = curPositions.get(n.id) || { x: 0, y: 0, z: 0 };
-      const s = baseRadius(n) * (n._scaleMul ?? 1) * mul;
+      const s = n._hidden ? 0 : baseRadius(n) * (n._scaleMul ?? 1) * mul;
       tmpMat.compose(tmpVec.set(p.x, p.y, p.z), tmpQuat.identity(), tmpScale.set(s, s, s));
       mesh.setMatrixAt(i, tmpMat);
     });
@@ -1625,7 +1723,7 @@ function resetHighlight() {
       n._hlMul = 1;
       mesh.setColorAt(i, colorForNode(n));
       const p = curPositions.get(n.id) || { x: 0, y: 0, z: 0 };
-      const s = baseRadius(n) * (n._scaleMul ?? 1);
+      const s = n._hidden ? 0 : baseRadius(n) * (n._scaleMul ?? 1);
       tmpMat.compose(tmpVec.set(p.x, p.y, p.z), tmpQuat.identity(), tmpScale.set(s, s, s));
       mesh.setMatrixAt(i, tmpMat);
     });
@@ -1886,6 +1984,13 @@ function toggleType(t) {
   applyTypeVisibility();
 }
 
+function onLevelChange() {
+  applyTypeVisibility();
+  fitCamera();
+  const labels = { all: "全部层级", dir: "仅目录", file: "到文件", section: "到章节" };
+  statusText.value = `层级:${labels[levelFilter.value] || levelFilter.value}`;
+}
+
 function onTagFilterChange() {
   applyTypeVisibility();
 }
@@ -1908,11 +2013,10 @@ function refreshTagFilterOptions() {
 }
 
 async function rebuildIndexAndReload() {
-  const name = props.kbName || store.selectedKnowledgeBase?.knowledge_base_name;
   statusText.value = "重建索引…";
   try {
-    await store.kgEnsureIndex(name);
-    await loadGraph(breadcrumb.value[breadcrumb.value.length - 1].id);
+    const root = breadcrumb.value[breadcrumb.value.length - 1]?.id || "kb_root";
+    await loadGraph(root, root === "kb_root" ? 99 : 3, { ensureIndex: true });
   } catch (e) {
     statusText.value = "重建失败:" + (e?.message || e);
   }
@@ -2009,6 +2113,8 @@ function drawMinimap() {
     const p = curPositions.get(n.id);
     if (!p) continue;
     if (!visibleTypes.value.has(n.type) && n.type !== "knowledge-base") continue;
+    const levelTypes = LEVEL_TYPES[levelFilter.value];
+    if (levelTypes && !levelTypes.has(n.type) && n.type !== "knowledge-base") continue;
     const q = proj(p);
     const col =
       n.community_id != null && communityColors.has(n.community_id)
@@ -2035,17 +2141,28 @@ function drawMinimap() {
 let evoTimeMode = true;
 
 function computeTimeBounds() {
-  const times = [];
+  let count = 0;
+  let min = Infinity;
+  let max = -Infinity;
   for (const n of nodeList) {
     const t = rawNodeTimeMs(n);
-    if (t != null) times.push(t);
+    if (t == null) continue;
+    count++;
+    if (t < min) min = t;
+    if (t > max) max = t;
   }
-  const min = times.length ? Math.min(...times) : 0;
-  const max = times.length ? Math.max(...times) : 1;
+  const hasRange = count > 0;
+  if (!hasRange) {
+    min = 0;
+    max = 1;
+  }
   // 有效时间需要:足够多节点有时间戳 且 时间跨度不退化(> 1 分钟)
-  const coverage = nodeList.length ? times.length / nodeList.length : 0;
+  const coverage = nodeList.length ? count / nodeList.length : 0;
   evoTimeMode = coverage >= 0.4 && max - min > 60_000;
   timeBounds = evoTimeMode ? { min, max } : { min: 0, max: 1 };
+  timelineRangeLabel.value = evoTimeMode
+    ? { min: new Date(min).toISOString(), max: new Date(max).toISOString() }
+    : { min: "", max: "" };
 
   if (evoTimeMode) {
     for (const n of nodeList) {
@@ -2639,7 +2756,7 @@ defineExpose({ reload: loadGraph });
   display: flex;
   align-items: center;
   gap: 8px;
-  width: min(46%, 420px);
+  width: min(52%, 520px);
   background: rgba(13, 17, 23, 0.6);
   padding: 5px 10px;
   border-radius: 8px;
@@ -2654,6 +2771,7 @@ defineExpose({ reload: loadGraph });
   cursor: pointer;
 }
 .tl-range { flex: 1; }
+.tl-edge { font-size: 10px; opacity: 0.6; white-space: nowrap; min-width: 42px; }
 .tl-label { font-size: 11px; opacity: 0.75; min-width: 64px; text-align: right; }
 :deep(.kg3d-label) {
   display: inline-flex;

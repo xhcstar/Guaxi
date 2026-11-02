@@ -79,6 +79,47 @@ export function disposeLayoutWorker() {
 }
 
 /**
+ * 立刻可渲染的坐标,用于首屏秒开:
+ * - relation:只读缓存(不跑力导向),缺失节点本地贴邻居补位;needsForce 表示需要后台细化。
+ * - tag/time/importance:布点本身很轻,直接本地算完并回存,无需等待后端。
+ * 与 resolveLayout 不同,这里绝不触发昂贵的力导向,调用方负责在后台补算。
+ * @returns {Promise<{pos: Map, needsForce: boolean}>}
+ */
+export async function resolveLayoutImmediate(store, kbName, view, graph) {
+  const nodes = graph.nodes || [];
+  const edges = graph.edges || [];
+  const pos = new Map();
+
+  if (view === "relation") {
+    try {
+      const cached = await store.kgLoadLayout(kbName, view);
+      for (const p of cached || []) {
+        pos.set(p.node_id, { x: p.x, y: p.y, z: p.z });
+      }
+    } catch (e) {
+      /* 无缓存:全部本地补位 */
+    }
+    const seeded = seedMissingPositions(nodes, edges, pos);
+    return { pos, needsForce: seeded > 0 };
+  }
+
+  if (view === "importance") {
+    computeRadialByMetric(nodes, pos, (n) => n.pagerank ?? 0);
+  } else if (view === "time") {
+    computeAxisByTime(nodes, pos, { timeOf: (n) => n.modified_at || n.created_at });
+  } else {
+    computeClusterByKey(nodes, pos, (n) => {
+      if (n.tags && n.tags.length) return `tag:${n.tags[0]}`;
+      if (n.community_id != null) return `c:${n.community_id}`;
+      return `type:${n.type}`;
+    });
+  }
+  seedMissingPositions(nodes, edges, pos);
+  // 这些视角是纯确定性计算(毫秒级),不走数据库回存,避免首屏多一次批量写入。
+  return { pos, needsForce: false };
+}
+
+/**
  * 取得某视角下每个节点的目标坐标 Map<node_id,{x,y,z}>。
  * @param {object} store knowledgeBaseStore 实例
  * @param {string} kbName

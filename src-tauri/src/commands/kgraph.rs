@@ -19,7 +19,8 @@ use std::sync::OnceLock;
 use tauri::{AppHandle, Emitter};
 
 /// 图索引 schema 版本。结构变更时 +1,触发重建。
-pub const KG_SCHEMA_VERSION: i64 = 1;
+/// v2:节点 created_at/modified_at 改为真实文件时间(此前是构建时间,时间轴因此退化)。
+pub const KG_SCHEMA_VERSION: i64 = 2;
 
 /// 解析 kg_index.db 路径(与 knowledge_bases.db 同目录 repos/)。
 pub fn kg_db_path() -> Result<PathBuf, String> {
@@ -691,6 +692,19 @@ struct NodeRow {
     end_line: Option<i64>,
     level: Option<i64>,
     content_hash: Option<String>,
+    created_at: Option<String>,
+    modified_at: Option<String>,
+}
+
+/// 文件系统时间戳(RFC3339)。拿不到的字段留空,由调用方回退。
+fn path_timestamps(path: &Path) -> (Option<String>, Option<String>) {
+    let Ok(meta) = fs::metadata(path) else {
+        return (None, None);
+    };
+    let to_rfc = |t: std::io::Result<std::time::SystemTime>| {
+        t.ok().map(|st| chrono::DateTime::<Local>::from(st).to_rfc3339())
+    };
+    (to_rfc(meta.created()), to_rfc(meta.modified()))
 }
 
 struct EdgeRow {
@@ -749,6 +763,7 @@ fn walk_build(
         }
         let rel = kg_rel_path(base, &path);
         let abs_str = path.to_string_lossy().to_string();
+        let (created_at, modified_at) = path_timestamps(&path);
 
         if path.is_dir() {
             let id = node_id_dir(&rel);
@@ -759,6 +774,8 @@ fn walk_build(
                 rel_path: Some(rel.clone()),
                 abs_path: Some(abs_str),
                 depth: parent_depth + 1,
+                created_at,
+                modified_at,
                 ..Default::default()
             });
             acc.edges.push(EdgeRow {
@@ -783,6 +800,8 @@ fn walk_build(
             abs_path: Some(abs_str.clone()),
             file_path: Some(abs_str.clone()),
             depth: parent_depth + 1,
+            created_at: created_at.clone(),
+            modified_at: modified_at.clone(),
             ..Default::default()
         });
         acc.edges.push(EdgeRow {
@@ -839,6 +858,8 @@ fn walk_build(
                 start_line: Some(sec.start_line as i64),
                 level: Some(sec.level as i64),
                 content_hash: Some(sha256_hex(&sec.title)),
+                created_at: created_at.clone(),
+                modified_at: modified_at.clone(),
                 ..Default::default()
             });
             acc.edges.push(EdgeRow {
@@ -874,6 +895,8 @@ fn walk_build(
                 start_line: Some(p.start_line as i64),
                 end_line: Some(p.end_line as i64),
                 content_hash: Some(p.text_hash.clone()),
+                created_at: created_at.clone(),
+                modified_at: modified_at.clone(),
                 ..Default::default()
             });
             acc.edges.push(EdgeRow {
@@ -1130,8 +1153,8 @@ fn build_into_conn(
                 n.level,
                 n.content_hash,
                 degree.get(&n.node_id).copied().unwrap_or(0),
-                now,
-                now,
+                n.created_at.as_deref().unwrap_or(now.as_str()),
+                n.modified_at.as_deref().unwrap_or(now.as_str()),
             ])
             .map_err(|e| e.to_string())?;
         }
@@ -3353,18 +3376,29 @@ pub struct LayoutOut {
 
 /// 在内存图上做 3D 力导向布局(Fruchterman-Reingold 变体,rayon 并行斥力)。
 /// 把最重的布局计算放到 Rust 后台,前端零开销直接取坐标。结果写入 kg_layout 缓存。
-fn force_layout_3d(mem: &MemGraph, iterations: usize) -> Vec<(String, f64, f64, f64)> {
+fn force_layout_3d(
+    mem: &MemGraph,
+    iterations: usize,
+    initial: &HashMap<String, (f64, f64, f64)>,
+) -> Vec<(String, f64, f64, f64)> {
     let n = mem.nodes.len();
     if n == 0 {
         return Vec::new();
     }
-    // 初始位置:黄金角球面散布(确定性,避免 Math.random;同库可复现)
+    // 初始位置:优先沿用已有坐标(重算时保持用户熟悉的形状),缺失的用黄金角球面散布
+    // (确定性,避免 Math.random;同库可复现)
     let golden = std::f64::consts::PI * (3.0 - 5.0_f64.sqrt());
     let r0 = 10.0 + (n as f64).sqrt() * 6.0;
     let mut px: Vec<f64> = Vec::with_capacity(n);
     let mut py: Vec<f64> = Vec::with_capacity(n);
     let mut pz: Vec<f64> = Vec::with_capacity(n);
     for i in 0..n {
+        if let Some(&(x, y, z)) = initial.get(&mem.nodes[i].id) {
+            px.push(x);
+            py.push(y);
+            pz.push(z);
+            continue;
+        }
         let t = i as f64 / n as f64;
         let theta = i as f64 * golden;
         let phi = (1.0 - 2.0 * t).acos();
@@ -3444,6 +3478,7 @@ fn force_layout_3d(mem: &MemGraph, iterations: usize) -> Vec<(String, f64, f64, 
         }
 
         // 限幅(温度)并更新位置
+        let mut max_move = 0.0_f64;
         for i in 0..n {
             let d = (dxv[i] * dxv[i] + dyv[i] * dyv[i] + dzv[i] * dzv[i]).sqrt();
             if d > 1e-6 {
@@ -3451,9 +3486,16 @@ fn force_layout_3d(mem: &MemGraph, iterations: usize) -> Vec<(String, f64, f64, 
                 px[i] += (dxv[i] / d) * lim;
                 py[i] += (dyv[i] / d) * lim;
                 pz[i] += (dzv[i] / d) * lim;
+                if lim > max_move {
+                    max_move = lim;
+                }
             }
         }
         temp = (temp - cool).max(k * 0.05);
+        // 已经收敛(位移远小于理想边长)就提前结束,避免大图空跑剩余迭代
+        if max_move < k * 0.01 {
+            break;
+        }
     }
 
     (0..n)
@@ -3688,12 +3730,12 @@ pub async fn kg_compute_layout(
     }
 
     // 已有缓存且非强制 → 尽量复用(必要时增量补点)
+    let cached = kg_load_layout(kb_name.clone(), view.clone()).unwrap_or_default();
     if !force.unwrap_or(false) {
-        let cached = kg_load_layout(kb_name.clone(), view.clone())?;
         if !cached.is_empty() {
             let mem = load_mem_graph(&kb_name)?;
             let mut have: HashMap<String, (f64, f64, f64)> =
-                cached.into_iter().map(|p| (p.node_id, (p.x, p.y, p.z))).collect();
+                cached.iter().map(|p| (p.node_id.clone(), (p.x, p.y, p.z))).collect();
             let missing = mem.nodes.iter().filter(|n| !have.contains_key(&n.id)).count();
             // 少量新增(新建/移动几个文件,最常见)→ 增量补点,已有布局保持稳定;
             // 缺口过大(批量导入、首次扩容)→ 落到下面全量重算,布局质量更好。
@@ -3751,14 +3793,20 @@ pub async fn kg_compute_layout(
     }
     // 规模自适应迭代次数(节点越多迭代略减,控制总耗时)
     let iterations = if n > 4000 {
-        80
+        50
     } else if n > 1500 {
-        120
+        80
     } else {
-        180
+        140
     };
 
-    let coords = force_layout_3d(&mem, iterations);
+    // 已有坐标作为初值(force 时除外):重算时不会把用户熟悉的形状彻底打乱,也更快收敛。
+    let initial: HashMap<String, (f64, f64, f64)> = if force.unwrap_or(false) {
+        HashMap::new()
+    } else {
+        cached.into_iter().map(|p| (p.node_id, (p.x, p.y, p.z))).collect()
+    };
+    let coords = force_layout_3d(&mem, iterations, &initial);
     let points: Vec<LayoutPoint> = coords
         .iter()
         .map(|(id, x, y, z)| LayoutPoint { node_id: id.clone(), x: *x, y: *y, z: *z })
