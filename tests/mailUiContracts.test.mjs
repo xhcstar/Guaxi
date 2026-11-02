@@ -142,13 +142,19 @@ test('正文表格：邮件里的 <pre> 不能撑坏表格布局', () => {
 
 test('收信规则：编辑器与弹层同底色，且条件支持从通讯录选人', () => {
   const rules = read('src/components/ApplicationViewComponent/apps/mail/MailRulesDialog.vue')
+  const ruleGroup = read('src/components/ApplicationViewComponent/apps/mail/MailRuleGroup.vue')
   assert.ok(/\.mail-rule-editor\s*\{[\s\S]*?background:\s*var\(--mail-panel\)/.test(rules), '编辑器底色应跟弹层一致')
   assert.ok(
     !/\.mail-rule-editor\s*\{[^}]*background:\s*var\(--mail-bg-sunken\)/.test(rules),
     '不应再用比面板更暗的凹陷色',
   )
-  assert.ok(rules.includes('AddressPicker'), '条件应能打开通讯录选择器')
-  assert.ok(rules.includes('togglePicker(\'from\')') && rules.includes('togglePicker(\'to\')'), '发件人和收件人都要有入口')
+  // 条件构建器拆到 MailRuleGroup 后，通讯录入口跟着条件行走。
+  assert.ok(/<MailRuleGroup/.test(rules), '规则编辑器使用条件构建器')
+  assert.ok(/<AddressPicker/.test(ruleGroup), '条件应能打开通讯录选择器')
+  assert.ok(
+    /clause\.field === 'from' \|\| clause\.field === 'to'/.test(ruleGroup),
+    '发件人和收件人都要有通讯录入口',
+  )
 })
 
 test('回复 / 转发直接长在阅读区顶部，不再弹满屏浮层', () => {
@@ -249,4 +255,33 @@ test('列表请求带序号：旧文件夹的结果不能落到新文件夹上',
     /if \(token !== this\.listToken\) return/.test(store),
     '结果落地前要再核对一次号',
   )
+})
+
+// 撤回的边界：主发送仍然立即投递；只有延迟发送能真正撤回；
+// 已投递的邮件不能被假装撤回，必须明确说明 IMAP/POP3/SMTP 无法从对方邮箱收回。
+test('发送撤回：主发送不变，延迟发送可撤回，已投递明确说明无法收回', () => {
+  const composer = read('src/components/ApplicationViewComponent/apps/mail/MailComposer.vue')
+  const app = read('src/components/ApplicationViewComponent/apps/MailApp.vue')
+  const reader = read('src/components/ApplicationViewComponent/apps/mail/MailReader.vue')
+  assert.ok(/@click="send\(false\)"/.test(composer), '主发送仍然立即投递')
+  assert.ok(/@click="send\(true\)"/.test(composer), '延迟发送保留撤回窗口')
+  assert.ok(!/send\(undoSeconds > 0\)/.test(composer), '主发送不能偷偷改成延迟队列')
+  assert.ok(reader.includes('canRecall') && reader.includes('$emit(\'recall\''), '已发送邮件有撤回入口')
+  assert.ok(app.includes('无法撤回已投递的邮件'), '已投递邮件明确说明无法撤回')
+  assert.ok(app.includes('邮件已延迟发送'), '延迟发送在主窗口显示撤回倒计时')
+})
+
+// Exchange Online / Microsoft 365：原生 Graph 通道必须从账户表单一直连到后端。
+test('Exchange Online (Graph)：账户表单、OAuth scope 与 Graph 后端都接上', () => {
+  const dialog = read('src/components/ApplicationViewComponent/apps/mail/MailAccountDialog.vue')
+  const oauth = read('src-tauri/src/commands/mail/oauth.rs')
+  const graph = read('src-tauri/src/commands/mail/graph.rs')
+  const modRs = read('src-tauri/src/commands/mail/mod.rs')
+  assert.ok(/value: 'graph'[\s\S]{0,80}Exchange（Graph）/.test(dialog), '收信协议有 Exchange（Graph）')
+  assert.ok(/label: 'Exchange Online'/.test(dialog), '有一键 Exchange Online 预设')
+  assert.ok(/form\.protocol === 'graph'[\s\S]{0,500}Graph 通道直接同步/.test(dialog), 'Graph 账户不要求 IMAP/SMTP')
+  assert.ok(/const GRAPH: Provider/.test(oauth) && /graph\.microsoft\.com\/Mail\.ReadWrite/.test(oauth), 'Graph OAuth scope')
+  assert.ok(/id: "graph"/.test(oauth) && /Mail\.Send/.test(oauth), 'Graph provider 与发信权限')
+  assert.ok(/pub mod graph;/.test(modRs), '注册 Graph 后端模块')
+  assert.ok(/graph::is_graph\(&account\)/.test(modRs), '同步 / 发信入口按 Graph 分支')
 })

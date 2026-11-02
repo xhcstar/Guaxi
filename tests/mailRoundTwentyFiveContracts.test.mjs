@@ -34,7 +34,7 @@ test('收件人 JSON 按 MailAddress 解析，邮件组地址才能进通讯录'
   assert.ok(/backfill_recipients_once\(\)/.test(mod), 'init 时后台触发补齐')
   // 发送成功后主动收录收件人（组地址只发不收时也能记住）。
   assert.ok(
-    /mail: 发送成功[\s\S]{0,900}touch_from_message/.test(mod),
+    /mail: 发送成功[\s\S]{0,2200}touch_from_message/.test(mod),
     '发送成功后把收件人写进通讯录',
   )
 })

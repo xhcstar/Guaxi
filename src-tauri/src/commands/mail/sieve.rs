@@ -50,6 +50,15 @@ pub fn generate(account: &Account, rules: &[MailRule], trash_folder: Option<&str
         if !cond.account_ids.is_empty() && !cond.account_ids.iter().any(|id| id == &account.id) {
             continue;
         }
+        // 嵌套条件组（与或非树）目前只在本地引擎实现：直接按旧字段翻译会把它
+        // 变成一条「无条件的规则」，服务器上会误伤所有邮件。宁可不传。
+        if !cond.groups.is_empty() {
+            warnings.push(format!(
+                "「{}」：使用了嵌套条件组，暂不支持同步到服务器端，已跳过",
+                rule.name
+            ));
+            continue;
+        }
         if !cond.body_contains.is_empty()
             || !cond.body_not_contains.is_empty()
             || cond

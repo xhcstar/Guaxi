@@ -104,7 +104,7 @@ fn open() -> Result<Connection, String> {
 /// 为什么必须做版本化迁移：老用户的 `mail.db` 已经存在，`CREATE TABLE IF NOT EXISTS`
 /// 只会补新表、不会补新列；一旦某天查询里用到新列，整个邮件页会直接报
 /// 「no such column」而不是「少一个功能」。
-pub const SCHEMA_VERSION: i32 = 6;
+pub const SCHEMA_VERSION: i32 = 7;
 
 pub fn init(app: &AppHandle) -> Result<(), String> {
     let path = db_path(app)?;
@@ -375,6 +375,32 @@ fn migrate(conn: &mut Connection) -> Result<(), String> {
         // 标准角色（收件箱 / 已发送…）不受影响，它们走侧栏的固定区块。
         tx.execute("UPDATE folders SET user_created = 0 WHERE role = 'custom'", [])
             .map_err(|e| format!("迁移到 v6 失败: {e}"))?;
+    }
+    if version < 7 {
+        // v7：原生 Exchange（Graph / EWS）。远端消息是字符串 ID，而本地主键仍是
+        // (account, folder, uid) 的整数 uid；这里只加一张映射表，IMAP/POP3 完全不动。
+        // sync_state 留给 Graph deltaLink / EWS SyncState，后续增量同步用。
+        tx.execute_batch(
+            r#"
+            CREATE TABLE IF NOT EXISTS remote_ids (
+                account_id TEXT NOT NULL,
+                folder TEXT NOT NULL,
+                remote_id TEXT NOT NULL,
+                uid INTEGER NOT NULL,
+                PRIMARY KEY (account_id, folder, remote_id),
+                UNIQUE (account_id, folder, uid)
+            );
+            CREATE TABLE IF NOT EXISTS sync_state (
+                account_id TEXT NOT NULL,
+                folder TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                token TEXT NOT NULL DEFAULT '',
+                updated_at INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (account_id, folder, kind)
+            );
+            "#,
+        )
+        .map_err(|e| format!("迁移到 v7 失败: {e}"))?;
     }
     tx.pragma_update(None, "user_version", SCHEMA_VERSION)
         .map_err(|e| format!("写入 schema 版本失败: {e}"))?;
@@ -689,6 +715,9 @@ pub fn delete_account(id: &str, delete_local_mail: bool) -> Result<(), String> {
             .map_err(|e| format!("删除账户失败: {e}"))?;
         tx.execute("DELETE FROM outbox WHERE account_id = ?1", params![id])
             .map_err(|e| format!("清理待发队列失败: {e}"))?;
+        // 远端 ID 映射与同步游标属于账户级元数据，无论是否保留本地邮件都要清掉。
+        let _ = tx.execute("DELETE FROM remote_ids WHERE account_id = ?1", params![id]);
+        let _ = tx.execute("DELETE FROM sync_state WHERE account_id = ?1", params![id]);
         if delete_local_mail {
             // 检索索引必须先删：它是 messages 的外部内容表，跟着主表一起清。
             if fts_available_conn(&tx) {
@@ -996,6 +1025,14 @@ pub fn delete_folder_row(account_id: &str, name: &str) -> Result<(), String> {
         params![account_id, name],
     )
     .ok();
+    let _ = tx.execute(
+        "DELETE FROM remote_ids WHERE account_id=?1 AND folder=?2",
+        params![account_id, name],
+    );
+    let _ = tx.execute(
+        "DELETE FROM sync_state WHERE account_id=?1 AND folder=?2",
+        params![account_id, name],
+    );
     tx.execute(
         "DELETE FROM folders WHERE account_id=?1 AND name=?2",
         params![account_id, name],
@@ -1188,8 +1225,146 @@ pub fn message_exists_any_folder(account_id: &str, uid: u32) -> Result<bool, Str
 ///
 /// 需要新号时必须按 [`pop3_uid_for`] 同一套规则来，否则可能撞上别的文件夹里的
 /// 邮件，或撞上 `pop3_uids` 的 UNIQUE(account_id, uid)。
-pub fn next_free_uid(account_id: &str) -> Result<u32, String> {
+/// 原生 Exchange（Graph / EWS）的远端字符串 ID → 本地 uid。
+///
+/// 同一个远端 ID 在多次同步里必须落到同一个 uid，否则列表、正文缓存、搜索
+/// 与前端选中状态都会漂移。新分配的 uid 取账户内最大值 +1，和 POP3 的映射
+/// 共用「账户内不重复」的约束，切换协议或导入历史数据时也不会撞号。
+pub fn ensure_remote_uid(
+    account_id: &str,
+    folder: &str,
+    remote_id: &str,
+) -> Result<u32, String> {
+    if remote_id.trim().is_empty() {
+        return Err("远端邮件 ID 为空".to_string());
+    }
+    let mut conn = open()?;
+    let tx = conn.transaction().map_err(|e| e.to_string())?;
+    if let Ok(uid) = tx.query_row(
+        "SELECT uid FROM remote_ids WHERE account_id=?1 AND folder=?2 AND remote_id=?3",
+        params![account_id, folder, remote_id],
+        |r| r.get::<_, i64>(0),
+    ) {
+        return Ok(uid as u32);
+    }
+    let max_of = |table: &str, scoped: bool| -> i64 {
+        let sql = if scoped {
+            format!("SELECT COALESCE(MAX(uid), 0) FROM {table} WHERE account_id=?1 AND folder=?2")
+        } else {
+            format!("SELECT COALESCE(MAX(uid), 0) FROM {table} WHERE account_id=?1")
+        };
+        if scoped {
+            tx.query_row(&sql, params![account_id, folder], |r| r.get(0))
+                .unwrap_or(0)
+        } else {
+            tx.query_row(&sql, params![account_id], |r| r.get(0))
+                .unwrap_or(0)
+        }
+    };
+    let next = (max_of("messages", true)
+        .max(max_of("remote_ids", true))
+        .max(max_of("pop3_uids", false))
+        .max(max_of("messages", false))
+        + 1)
+    .max(1);
+    tx.execute(
+        "INSERT INTO remote_ids (account_id, folder, remote_id, uid) VALUES (?1, ?2, ?3, ?4)",
+        params![account_id, folder, remote_id, next],
+    )
+    .map_err(|e| format!("分配远端邮件 uid 失败: {e}"))?;
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(next as u32)
+}
+
+pub fn remote_id_for(account_id: &str, folder: &str, uid: u32) -> Option<String> {
+    open()
+        .ok()?
+        .query_row(
+            "SELECT remote_id FROM remote_ids WHERE account_id=?1 AND folder=?2 AND uid=?3",
+            params![account_id, folder, uid],
+            |r| r.get::<_, String>(0),
+        )
+        .ok()
+}
+
+/// 一批 uid 对应的远端 ID。批量标记 / 移动前一次查完，避免每封一个连接。
+pub fn remote_ids_for(
+    account_id: &str,
+    folder: &str,
+    uids: &[u32],
+) -> std::collections::HashMap<u32, String> {
+    let mut out = std::collections::HashMap::new();
+    let Ok(conn) = open() else {
+        return out;
+    };
+    let Ok(mut stmt) = conn.prepare(
+        "SELECT uid, remote_id FROM remote_ids WHERE account_id=?1 AND folder=?2 AND uid=?3",
+    ) else {
+        return out;
+    };
+    for uid in uids {
+        if let Ok(remote_id) = stmt.query_row(params![account_id, folder, uid], |r| {
+            r.get::<_, String>(1)
+        }) {
+            out.insert(*uid, remote_id);
+        }
+    }
+    out
+}
+
+pub fn delete_remote_ids(account_id: &str, folder: &str, uids: &[u32]) -> Result<(), String> {
     let conn = open()?;
+    for uid in uids {
+        conn.execute(
+            "DELETE FROM remote_ids WHERE account_id=?1 AND folder=?2 AND uid=?3",
+            params![account_id, folder, uid],
+        )
+        .ok();
+    }
+    Ok(())
+}
+
+/// Graph deltaLink / EWS SyncState。key 例如 `graph` / `ews`。
+/// 第一版 Graph 同步是分页拉最近邮件，delta 接入后直接使用这两个函数。
+#[allow(dead_code)]
+pub fn get_sync_state(account_id: &str, folder: &str, kind: &str) -> Option<String> {
+    open()
+        .ok()?
+        .query_row(
+            "SELECT token FROM sync_state WHERE account_id=?1 AND folder=?2 AND kind=?3",
+            params![account_id, folder, kind],
+            |r| r.get::<_, String>(0),
+        )
+        .ok()
+        .filter(|token| !token.trim().is_empty())
+}
+
+#[allow(dead_code)]
+pub fn set_sync_state(
+    account_id: &str,
+    folder: &str,
+    kind: &str,
+    token: &str,
+) -> Result<(), String> {
+    let conn = open()?;
+    conn.execute(
+        "INSERT INTO sync_state (account_id, folder, kind, token, updated_at)
+         VALUES (?1,?2,?3,?4,?5)
+         ON CONFLICT(account_id, folder, kind) DO UPDATE SET
+            token=excluded.token, updated_at=excluded.updated_at",
+        params![
+            account_id,
+            folder,
+            kind,
+            token,
+            chrono::Utc::now().timestamp()
+        ],
+    )
+    .map(|_| ())
+    .map_err(|e| e.to_string())
+}
+
+pub fn next_free_uid(account_id: &str) -> Result<u32, String> {    let conn = open()?;
     let max_of = |table: &str| -> i64 {
         conn.query_row(
             &format!("SELECT COALESCE(MAX(uid), 0) FROM {table} WHERE account_id=?1"),
@@ -1726,6 +1901,11 @@ pub fn delete_message(account_id: &str, folder: &str, uid: u32) -> Result<(), St
     .ok();
     tx.execute(
         "DELETE FROM message_bodies WHERE account_id=?1 AND folder=?2 AND uid=?3",
+        params![account_id, folder, uid],
+    )
+    .ok();
+    tx.execute(
+        "DELETE FROM remote_ids WHERE account_id=?1 AND folder=?2 AND uid=?3",
         params![account_id, folder, uid],
     )
     .ok();

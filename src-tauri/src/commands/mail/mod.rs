@@ -18,6 +18,8 @@ pub mod contacts;
 /// 本地静态加密：正文与附件清单在落盘前加密，密钥存系统 keychain。
 pub mod crypto;
 pub mod export;
+/// 原生 Exchange Online / Microsoft 365（Microsoft Graph）通道。
+pub mod graph;
 pub mod imap;
 pub mod mime;
 pub mod model;
@@ -164,6 +166,26 @@ async fn fetch_raw_bytes(
         return Ok(raw);
     }
 
+    if graph::is_graph(account) {
+        let remote_id = store::remote_id_for(&account.id, folder, uid)
+            .ok_or_else(|| "这封 Graph 邮件还没有远端 ID，请先同步该文件夹".to_string())?;
+        let acc = account.clone();
+        let raw = tauri::async_runtime::spawn_blocking(move || graph::fetch_mime(&acc, &remote_id))
+            .await
+            .map_err(|e| format!("取信任务失败: {e}"))??;
+        let (account_id, folder_owned, bytes) =
+            (account.id.clone(), folder.to_string(), raw.clone());
+        if let Err(error) = tauri::async_runtime::spawn_blocking(move || {
+            store::cache_raw_body(&account_id, &folder_owned, uid, &bytes)
+        })
+        .await
+        .unwrap_or_else(|e| Err(e.to_string()))
+        {
+            warn!(error = %error, "mail: 缓存邮件原文失败");
+        }
+        return Ok(raw);
+    }
+
     let raw = if pop3_sync::is_pop3(account) {
         let acc = account.clone();
         let parsed =
@@ -251,9 +273,12 @@ pub async fn mail_save_account(
     if account.accent.trim().is_empty() {
         account.accent = "#5b7cfa".to_string();
     }
-    // 协议字段来自前端表单，可能缺失（老账户 / 手工调用）：统一成合法值，
-    // 否则 `is_pop3` 之外的每一处判断都要再兜一次。
-    account.protocol = if pop3_sync::is_pop3(&account) {
+    // Graph / EWS 是原生 Exchange 通道：不要被折叠回 imap，否则保存后
+    // 账户会悄悄去连一个不存在的 IMAP 服务器。EWS 尚未实现，先不接受该值。
+    let protocol = account.protocol.trim().to_ascii_lowercase();
+    account.protocol = if protocol == "graph" {
+        protocol
+    } else if pop3_sync::is_pop3(&account) {
         "pop3".to_string()
     } else {
         "imap".to_string()
@@ -265,6 +290,17 @@ pub async fn mail_save_account(
         account.pop3_host = account.pop3_host.trim().to_string();
     } else {
         account.pop3_host = String::new();
+    }
+    if account.protocol == "graph" {
+        // Graph 账户不经过 IMAP/POP3/SMTP：清掉表单里可能残留的旧地址，
+        // 避免设置页显示一组「填了但没用」的服务器。
+        account.imap_host = String::new();
+        account.pop3_host = String::new();
+        account.smtp_host = String::new();
+        account.auth_kind = "oauth2".to_string();
+        if account.oauth_provider.trim().is_empty() {
+            account.oauth_provider = "graph".to_string();
+        }
     }
     if let Some(secret) = secret
         .as_deref()
@@ -290,6 +326,11 @@ fn ensure_standard_folders(account: &Account) {
         (FolderRole::Archive, "Archive", "存档"),
         (FolderRole::Outbox, "Outbox", "发件箱"),
     ] {
+        // Graph 的「存档」是服务器上的 wellKnownName；本地不要先造一个同名占位，
+        // 否则第一次文件夹刷新前侧栏会出现一个点进去为空的假存档。
+        if account.protocol == "graph" && role == FolderRole::Archive {
+            continue;
+        }
         if existing.iter().any(|f| f.role == role) {
             continue;
         }
@@ -398,6 +439,21 @@ pub async fn mail_test_account(
     secret: Option<String>,
 ) -> Result<Vec<model::ConnectionProbe>, String> {
     ensure_init(&app)?;
+    if graph::is_graph(&account) {
+        let acc = account.clone();
+        let result = tauri::async_runtime::spawn_blocking(move || graph::test_account(&acc))
+            .await
+            .map_err(|e| format!("诊断任务失败: {e}"))?;
+        return Ok(vec![model::ConnectionProbe {
+            ok: result.is_ok(),
+            stage: "graph".into(),
+            detail: match result {
+                Ok(()) => "Microsoft Graph 连接正常".into(),
+                Err(error) => error,
+            },
+            capabilities: vec!["Microsoft Graph".into()],
+        }]);
+    }
     // 新建账户时表单里的口令还没落库，优先用传进来的那份。
     // OAuth2 账户的表单里没有口令字段：直接取（可能还要刷新的）访问令牌。
     let password = secret
@@ -517,7 +573,16 @@ pub async fn mail_create_folder(
         note_local_folder(&account.id, &name)?;
         return Ok(());
     }
-
+    if graph::is_graph(&account) {
+        let acc = account.clone();
+        let folder_name = name.clone();
+        tauri::async_runtime::spawn_blocking(move || graph::create_folder(&acc, &folder_name))
+            .await
+            .map_err(|e| format!("创建文件夹任务失败: {e}"))??;
+        // 重新发现一次，拿到 Graph 分配的 folder id；前端随后会刷新侧栏。
+        let _ = refresh_folders_inner(&account).await;
+        return Ok(());
+    }
     let password = account_password(&account)?;
     {
         let (acc, folder_name) = (account.clone(), name.clone());
@@ -601,6 +666,15 @@ pub async fn mail_delete_folder(
         store::delete_folder_row(&account_id, &name)?;
         return Ok(());
     }
+    if graph::is_graph(&account) {
+        let acc = account.clone();
+        let folder_id = name.clone();
+        tauri::async_runtime::spawn_blocking(move || graph::delete_folder(&acc, &folder_id))
+            .await
+            .map_err(|e| format!("删除文件夹任务失败: {e}"))??;
+        store::delete_folder_row(&account_id, &name)?;
+        return Ok(());
+    }
     let password = account_password(&account)?;
     let (acc, folder_name) = (account.clone(), name.clone());
     tauri::async_runtime::spawn_blocking(move || {
@@ -653,6 +727,10 @@ async fn sync_folder_guarded(
 
     let items = tauri::async_runtime::spawn_blocking(move || -> Result<Vec<MessageSummary>, String> {
         let _guard = sync::lock_account(&account_id);
+        // Microsoft Graph：文件夹、消息、标记都在 Graph JSON 里。
+        if graph::is_graph(&acc) {
+            return graph::sync_folder(&acc, &folder_name, settings.snippet_len as usize);
+        }
         // POP3 没有文件夹与服务器端标记：整轮同步就是「把收件箱里没见过的取下来」。
         // 已发送 / 草稿 / 删除都是本地文件夹，没有可同步的东西，直接返回空列表
         // （否则在「已发送」里点刷新会收到收件箱的行，计数与列表对不上）。
@@ -942,7 +1020,21 @@ async fn apply_rules_to_new(
         apply_rule_move_batch(account, &folder, &uids, &target).await;
     }
     // 服务器上的已读 / 星标同样按文件夹合并：一次连接改完。
-    if !pop3_sync::is_pop3(account) {
+    if graph::is_graph(account) {
+        for ((folder, seen, flagged), uids) in flag_batches {
+            let acc = account.clone();
+            let _ = tauri::async_runtime::spawn_blocking(move || {
+                graph::set_flags(
+                    &acc,
+                    &folder,
+                    &uids,
+                    if seen { Some(true) } else { None },
+                    if flagged { Some(true) } else { None },
+                )
+            })
+            .await;
+        }
+    } else if !pop3_sync::is_pop3(account) {
         for ((folder, seen, flagged), uids) in flag_batches {
             let acc = account.clone();
             let _ = tauri::async_runtime::spawn_blocking(move || {
@@ -979,6 +1071,22 @@ async fn apply_rule_move_batch(account: &Account, folder: &str, uids: &[u32], ta
         }
         return;
     }
+    if graph::is_graph(account) {
+        let acc = account.clone();
+        let (f, u, t) = (folder.to_string(), uids.to_vec(), target.to_string());
+        match tauri::async_runtime::spawn_blocking(move || graph::move_messages(&acc, &f, &u, &t))
+            .await
+        {
+            Ok(Ok(())) => {
+                for uid in uids {
+                    let _ = store::delete_message(&account.id, folder, *uid);
+                }
+            }
+            Ok(Err(e)) => error!(error = %e, "mail: 规则移动邮件失败（Graph）"),
+            Err(e) => error!(error = %e, "mail: 规则移动任务失败（Graph）"),
+        }
+        return;
+    }
     let acc = account.clone();
     let folder_owned = folder.to_string();
     let target_owned = target.to_string();
@@ -1008,7 +1116,14 @@ async fn forward_by_rule(account: &Account, msg: &MessageSummary, recipients: &[
     let (acc, folder, uid) = (account.clone(), msg.folder.clone(), msg.uid);
     let recipients = recipients.to_vec();
     let result = tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
-        let raw = imap::fetch_raw(&acc, "", &folder, uid)?;
+        let graph_mode = graph::is_graph(&acc);
+        let raw = if graph_mode {
+            let remote_id = store::remote_id_for(&acc.id, &folder, uid)
+                .ok_or_else(|| "规则转发：这封 Graph 邮件没有远端 ID".to_string())?;
+            graph::fetch_mime(&acc, &remote_id)?
+        } else {
+            imap::fetch_raw(&acc, "", &folder, uid)?
+        };
         let parsed = mime::parse(&raw, false).ok_or("无法解析原邮件")?;
         let request = SendRequest {
             account_id: acc.id.clone(),
@@ -1030,8 +1145,12 @@ async fn forward_by_rule(account: &Account, msg: &MessageSummary, recipients: &[
             address: acc.email.clone(),
         };
         let bytes = mime::build(&request, &from, "")?;
-        let secret = imap::auth_secret(&acc)?;
-        smtp::send_raw(&acc, &secret, effective_proxy(&acc), &acc.email, &recipients, &bytes)
+        if graph_mode {
+            graph::send_mime(&acc, &bytes)
+        } else {
+            let secret = imap::auth_secret(&acc)?;
+            smtp::send_raw(&acc, &secret, effective_proxy(&acc), &acc.email, &recipients, &bytes)
+        }
     })
     .await;
     match result {
@@ -1058,7 +1177,15 @@ pub async fn mail_sync_all(app: AppHandle) -> Result<serde_json::Value, String> 
     let mut errors: Vec<String> = Vec::new();
     for account in accounts {
         let folders = match store::list_folders(&account.id) {
-            Ok(f) if !f.is_empty() => f,
+            // Graph 账户保存时会先补一个本地「发件箱」占位，因此「表非空」
+            // 不代表文件夹已经发现；没有收件箱就重新从 Graph 拉一次。
+            Ok(f)
+                if !f.is_empty()
+                    && !(graph::is_graph(&account)
+                        && !f.iter().any(|folder| folder.role == FolderRole::Inbox)) =>
+            {
+                f
+            }
             _ => match refresh_folders_inner(&account).await {
                 Ok(f) => f,
                 Err(e) => {
@@ -1100,6 +1227,14 @@ async fn refresh_folders_inner(account: &Account) -> Result<Vec<MailFolder>, Str
         return tauri::async_runtime::spawn_blocking(move || pop3_sync::ensure_folders(&acc))
             .await
             .map_err(|e| format!("刷新文件夹任务失败: {e}"))?;
+    }
+    if graph::is_graph(account) {
+        let acc = account.clone();
+        let folders = tauri::async_runtime::spawn_blocking(move || graph::list_folders(&acc))
+            .await
+            .map_err(|e| format!("刷新文件夹任务失败: {e}"))??;
+        store::replace_folders(&account.id, &folders)?;
+        return store::list_folders(&account.id);
     }
     let password = account_password(account)?;
     let acc = account.clone();
@@ -1206,7 +1341,11 @@ pub async fn mail_get_message(
         detail.attachments = serde_json::from_str(&cached_attachments).unwrap_or_default();
     } else {
         let account = load_account(&account_id)?;
-        let password = account_password(&account)?;
+        let password = if graph::is_graph(&account) {
+            String::new()
+        } else {
+            account_password(&account)?
+        };
         let settings = store::load_settings();
         let raw = fetch_raw_bytes(&account, &password, &folder, uid).await?;
         // 端到端加密 / 签名：在解析 MIME 之前先解开。
@@ -1339,6 +1478,17 @@ async fn mark_seen_inner(
         }
         return Ok(());
     }
+    if graph::is_graph(&account) {
+        let acc = account.clone();
+        let (f, u) = (folder.to_string(), uids.to_vec());
+        let server = tauri::async_runtime::spawn_blocking(move || {
+            graph::set_flags(&acc, &f, &u, Some(seen), None)
+        })
+        .await
+        .map_err(|e| format!("标记任务失败: {e}"))?;
+        store::set_local_flags(account_id, folder, uids, Some(seen), None, None)?;
+        return server;
+    }
     let (f, u) = (folder.to_string(), uids.to_vec());
     let op = offline::OfflineOp {
         id: Uuid::new_v4().to_string(),
@@ -1379,6 +1529,17 @@ pub async fn mail_set_flagged(
     if pop3_sync::is_pop3(&account) {
         store::set_local_flags(&account_id, &folder, &uids, None, Some(flagged), None)?;
         return Ok(());
+    }
+    if graph::is_graph(&account) {
+        let acc = account.clone();
+        let (f, u) = (folder.clone(), uids.clone());
+        let server = tauri::async_runtime::spawn_blocking(move || {
+            graph::set_flags(&acc, &f, &u, None, Some(flagged))
+        })
+        .await
+        .map_err(|e| format!("标记任务失败: {e}"))?;
+        store::set_local_flags(&account_id, &folder, &uids, None, Some(flagged), None)?;
+        return server;
     }
     let (f, u) = (folder.clone(), uids.clone());
     let op = offline::OfflineOp {
@@ -1445,6 +1606,17 @@ pub async fn mail_move_messages(
     if pop3_sync::is_pop3(&account) {
         // POP3 的文件夹都在本机：移动就是「删掉旧行、在新文件夹写一份」。
         return move_locally(&account_id, &folder, &uids, &target);
+    }
+    if graph::is_graph(&account) {
+        let acc = account.clone();
+        let (f, u, t) = (folder.clone(), uids.clone(), target.clone());
+        tauri::async_runtime::spawn_blocking(move || graph::move_messages(&acc, &f, &u, &t))
+            .await
+            .map_err(|e| format!("移动任务失败: {e}"))??;
+        for uid in &uids {
+            let _ = store::delete_message(&account_id, &folder, *uid);
+        }
+        return Ok(());
     }
     let acc = account.clone();
     let server = tauri::async_runtime::spawn_blocking(move || {
@@ -1544,6 +1716,22 @@ pub async fn mail_delete_messages(
         .iter()
         .find(|f| f.role == FolderRole::Trash)
         .map(|f| f.name.clone());
+
+    if graph::is_graph(&account) {
+        let acc = account.clone();
+        let (f, u) = (folder.clone(), uids.clone());
+        let permanent = matches!(current_role, FolderRole::Trash) || trash.is_none();
+        let trash_target = trash.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            graph::delete_messages(&acc, &f, &u, permanent, trash_target.as_deref())
+        })
+        .await
+        .map_err(|e| format!("删除任务失败: {e}"))??;
+        for uid in &uids {
+            let _ = store::delete_message(&account_id, &folder, *uid);
+        }
+        return Ok(());
+    }
 
     match (current_role, trash) {
         (FolderRole::Trash, _) | (_, None) => {
@@ -1838,6 +2026,17 @@ async fn move_batch(
     if pop3_sync::is_pop3(&account) {
         return move_locally(account_id, folder, uids, target);
     }
+    if graph::is_graph(&account) {
+        let acc = account.clone();
+        let (f, t, batch) = (folder.to_string(), target.to_string(), uids.to_vec());
+        tauri::async_runtime::spawn_blocking(move || graph::move_messages(&acc, &f, &batch, &t))
+            .await
+            .map_err(|e| format!("移动任务失败: {e}"))??;
+        for uid in uids {
+            let _ = store::delete_message(account_id, folder, *uid);
+        }
+        return Ok(());
+    }
     let password = account_password(&account)?;
     let (acc, f, t) = (account.clone(), folder.to_string(), target.to_string());
     let batch = uids.to_vec();
@@ -1871,6 +2070,17 @@ pub async fn mail_batch_flags(
             let _ = pop3_sync::sync_counts(&account);
         }
         return result;
+    }
+    if graph::is_graph(&account) {
+        let acc = account.clone();
+        let (f, u) = (folder.clone(), uids.clone());
+        let server = tauri::async_runtime::spawn_blocking(move || {
+            graph::set_flags(&acc, &f, &u, seen, flagged)
+        })
+        .await
+        .map_err(|e| format!("批量标记失败: {e}"))?;
+        store::set_local_flags(&account_id, &folder, &uids, seen, flagged, None)?;
+        return server;
     }
     let password = account_password(&account)?;
     let (acc, f) = (account.clone(), folder.clone());
@@ -1917,6 +2127,22 @@ pub async fn mail_batch_delete(
         .iter()
         .find(|f| f.role == FolderRole::Trash)
         .map(|f| f.name.clone());
+
+    if graph::is_graph(&account_for_protocol) {
+        let acc = account_for_protocol.clone();
+        let (f, u) = (folder.clone(), uids.clone());
+        let permanent = matches!(current, FolderRole::Trash) || trash.is_none();
+        let trash_target = trash.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            graph::delete_messages(&acc, &f, &u, permanent, trash_target.as_deref())
+        })
+        .await
+        .map_err(|e| format!("删除任务失败: {e}"))??;
+        for uid in &uids {
+            let _ = store::delete_message(&account_id, &folder, *uid);
+        }
+        return Ok(());
+    }
 
     match (current, trash) {
         (FolderRole::Trash, _) | (_, None) => {
@@ -2165,6 +2391,27 @@ async fn send_inner(app: &AppHandle, request: &SendRequest) -> Result<(), String
         .map_err(|e| format!("加密封装失败: {e}"))??;
     }
 
+    // Graph：直接把这封 MIME 交给 Exchange Online。附件、内联图、签名、
+    // S/MIME/PGP 都在上面的 `mime::build` / 加密封装里处理完了。
+    if graph::is_graph(&account) {
+        // Graph 的 MIME 草稿接口约有 4 MB 上限；MIME 里的 base64 还会再膨胀，
+        // 超过时直接说清楚，避免用户等到超时才看到失败。
+        if raw.len() > 4 * 1024 * 1024 {
+            return Err(
+                "Exchange Graph 单封邮件（含附件）不能超过约 4 MB；请改用网盘链接，或拆分附件。"
+                    .to_string(),
+            );
+        }
+        let acc = account.clone();
+        let raw_for_send = raw.clone();
+        tauri::async_runtime::spawn_blocking(move || graph::send_mime(&acc, &raw_for_send))
+            .await
+            .map_err(|e| format!("发信任务失败: {e}"))??;
+        info!(account = %account.email, "mail: Graph 发送成功");
+        record_sent_recipients(&account, &request);
+        return Ok(());
+    }
+
     // 信封收件人去重：同一个人既在「收件人」又在「抄送」，或者两个通讯组都包含他时，
     // 服务器会收到两条 RCPT，部分服务器会因此重复投递。邮件头保持原样（各字段各自的收件人）。
     let mut recipients: Vec<String> = Vec::new();
@@ -2231,10 +2478,12 @@ async fn send_inner(app: &AppHandle, request: &SendRequest) -> Result<(), String
         }
     }
     info!(account = %account.email, "mail: 发送成功");
+    record_sent_recipients(&account, &request);
+    Ok(())
+}
 
-    // 主动把收件人记进通讯录：收到的邮件由同步路径收录，但「只发不收」的邮件组 /
-    // 分发列表地址以前永远进不了通讯录（真实反馈）。自己会被 own 过滤掉。
-    // 写库放到后台：发送结果已经确定，不该让通讯录的几十次查询拖慢「已发送」。
+/// 发送成功后把收件人记进通讯录（SMTP 与 Graph 共用）。
+fn record_sent_recipients(account: &Account, request: &SendRequest) {
     let own = vec![account.email.clone(), account.login_name()];
     let mut to_labeled: Vec<contacts::model::LabeledValue> = Vec::new();
     let mut cc_labeled: Vec<contacts::model::LabeledValue> = Vec::new();
@@ -2256,7 +2505,6 @@ async fn send_inner(app: &AppHandle, request: &SendRequest) -> Result<(), String
             warn!(error = %error, "mail: 收录发件收件人失败");
         }
     });
-    Ok(())
 }
 
 /// 服务器拒绝 RCPT 是不是因为「这一封的收件人太多」。
@@ -2511,6 +2759,13 @@ fn remove_staged_copy(request: &SendRequest) {
 /// 服务器文件夹的计数来自 IMAP STATUS；本地文件夹（发件箱、POP3 的已发送 / 草稿）
 /// 只能自己算，否则侧栏角标会一直是 0。
 fn refresh_folder_totals(account_id: &str, folder: &str) {
+    // Graph 的本地只缓存最近几百封：用本地行数更新会把侧栏角标改小。
+    // 计数由 Graph 同步 / 文件夹刷新负责；这里不要在异步线程里再发一次 HTTP。
+    if let Ok(Some(account)) = store::get_account(account_id) {
+        if graph::is_graph(&account) {
+            return;
+        }
+    }
     // 只查两个数，不再把整个文件夹的行都读出来物化一遍：规则批量搬运时
     // 这个函数会在每封邮件上被调用，全表读取会让「对已有邮件执行」卡上几十分钟。
     let Ok((total, unread)) = store::folder_counts(account_id, folder) else {
@@ -2641,6 +2896,27 @@ pub async fn mail_save_draft(
         .into_iter()
         .find(|f| f.role == FolderRole::Drafts)
         .map(|f| f.name);
+
+    // Graph：MIME 草稿直接创建在 Exchange 草稿箱；续写 / 删除旧草稿走
+    // `mail_discard_draft` 的 Graph 分支。同步标记对 Graph 没有意义。
+    if graph::is_graph(&account) {
+        let Some(drafts) = drafts else {
+            return Err("Exchange 草稿箱还没有同步到本地，请刷新文件夹后重试".to_string());
+        };
+        if raw.len() > 4 * 1024 * 1024 {
+            return Err(
+                "Exchange Graph 草稿（含附件）不能超过约 4 MB；请先移除大附件再保存。".to_string(),
+            );
+        }
+        let acc = account.clone();
+        let folder = drafts.clone();
+        let raw_for_draft = raw.clone();
+        return tauri::async_runtime::spawn_blocking(move || {
+            graph::save_draft(&acc, &folder, &raw_for_draft)
+        })
+        .await
+        .map_err(|e| format!("保存草稿任务失败: {e}"))?;
+    }
 
     // 没有草稿箱、或者连不上服务器（离线 / OAuth 过期）：草稿先落到本机库的 Drafts。
     // 「只要没发出去就必须留下一份草稿」优先于「草稿必须在服务器上」——
@@ -2905,6 +3181,21 @@ fn rule_target_folders(rules: &[MailRule]) -> Vec<String> {
 /// 增量拉一个文件夹，让刚被规则移进去的邮件立刻在本地可见。
 /// 离线 / 认证过期就返回 false：这次没同步成，等常规同步再补，不影响已完成的移动。
 async fn sync_folder_once(account: &Account, folder: &str) -> bool {
+    let snippet_len = store::load_settings().snippet_len as usize;
+    if graph::is_graph(account) {
+        let acc = account.clone();
+        let name = folder.to_string();
+        let synced = tauri::async_runtime::spawn_blocking(move || {
+            graph::sync_folder(&acc, &name, snippet_len).map(|_| ())
+        })
+        .await
+        .map(|result| result.is_ok())
+        .unwrap_or(false);
+        if !synced {
+            warn!(account = %account.email, folder = %folder, "mail: 规则目标文件夹同步失败（Graph）");
+        }
+        return synced;
+    }
     let Ok(password) = account_password(account) else {
         return false;
     };
@@ -2914,7 +3205,6 @@ async fn sync_folder_once(account: &Account, folder: &str) -> bool {
     let Ok(last_uid) = store::last_uid(&account.id, folder) else {
         return false;
     };
-    let snippet_len = store::load_settings().snippet_len as usize;
     let acc = account.clone();
     let name = folder.to_string();
     let synced = tauri::async_runtime::spawn_blocking(move || {
@@ -3221,6 +3511,17 @@ pub async fn mail_discard_draft(
 ) -> Result<(), String> {
     ensure_init(&app)?;
     let account = load_account(&account_id)?;
+    if graph::is_graph(&account) {
+        let acc = account.clone();
+        let folder_for_delete = folder.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            graph::discard_draft(&acc, &folder_for_delete, uid)
+        })
+        .await
+        .map_err(|e| format!("删除草稿任务失败: {e}"))??;
+        let _ = store::delete_message(&account_id, &folder, uid);
+        return Ok(());
+    }
     // POP3 的草稿只在本机：删掉本地行就是全部。
     if pop3_sync::is_pop3(&account) {
         let _ = store::delete_message(&account_id, &folder, uid);
@@ -3481,7 +3782,7 @@ pub async fn mail_offline_replay(
     for account in accounts {
         // POP3 的写操作全是本地的，进不了队列；万一有（老队列 / 手工导入），
         // 在这里直接丢弃，避免无限重放一个永远会失败的服务器操作。
-        if pop3_sync::is_pop3(&account) {
+        if pop3_sync::is_pop3(&account) || graph::is_graph(&account) {
             for op in offline::list(Some(&account.id))? {
                 let _ = offline::remove(&op.id);
             }
@@ -3569,7 +3870,8 @@ pub async fn mail_start_idle(
     ensure_init(&app)?;
     let account = load_account(&account_id)?;
     // POP3 没有 IDLE（RFC 2177 是 IMAP 扩展）：保持轮询。
-    if pop3_sync::is_pop3(&account) {
+    // Graph 第一版也走轮询（后续可接 webhook/subscription）。
+    if pop3_sync::is_pop3(&account) || graph::is_graph(&account) {
         return Ok(false);
     }
     let settings = store::load_settings();
@@ -3627,6 +3929,9 @@ pub async fn mail_list_delegate_folders(
 ) -> Result<Vec<MailFolder>, String> {
     ensure_init(&app)?;
     let account = load_account(&account_id)?;
+    if graph::is_graph(&account) {
+        return Err("Exchange Graph 第一版暂不支持共享邮箱 / 委托访问".to_string());
+    }
     if !account.delegate.iter().any(|d| d.email.eq_ignore_ascii_case(&mailbox)) {
         return Err(format!("{mailbox} 不在该账户的共享邮箱列表里"));
     }

@@ -17,6 +17,7 @@ const root = path.join(here, '..')
 const read = (rel) => fs.readFileSync(path.join(root, rel), 'utf8')
 
 const rules = read('src/components/ApplicationViewComponent/apps/mail/MailRulesDialog.vue')
+const ruleGroup = read('src/components/ApplicationViewComponent/apps/mail/MailRuleGroup.vue')
 const picker = read('src/components/ApplicationViewComponent/apps/mail/MailFolderPicker.vue')
 const settings = read('src/components/ApplicationViewComponent/apps/mail/MailSettingsDrawer.vue')
 const sidebar = read('src/components/ApplicationViewComponent/apps/mail/MailSidebar.vue')
@@ -38,16 +39,19 @@ test('收信规则弹层：两个模块分成两个 tab，不再挤在同一列'
   assert.ok(!/mail-section-divider/.test(rules), '不应再用分隔线把两块塞在一列里')
 })
 
-test('规则条件：从通讯录加人后输入框向下长，而不是把地址截断', () => {
-  assert.ok(/textarea[\s\S]{0,200}mail-rule-grow/.test(rules), '发件人 / 收件人应改用可长高的 textarea')
+test('规则条件：从通讯录加人后地址不会被截断', () => {
+  // 新版条件构建器每条地址单独一行，不再把所有地址塞进一个会被横向截断的输入框。
+  assert.ok(/v-model="clause\.value"/.test(ruleGroup), '每条条件有自己的值输入框')
+  assert.ok(/<AddressPicker/.test(ruleGroup), '发件人 / 收件人仍可从通讯录选人')
+  assert.ok(
+    /onPickGroup[\s\S]{0,700}mode:\s*'any'/.test(ruleGroup),
+    '通讯组展开成「任一地址」子组，而不是拼成一个逗号串',
+  )
+  // 标记 / 转发这类多值输入仍会自动长高，不把内容藏在单行框里。
   assert.ok(/function autoGrow/.test(rules) && /function resizeGrowables/.test(rules), '应实现自动长高')
   assert.ok(
     /\.mail-rule-grow\s*\{[\s\S]{0,200}max-height:\s*96px/.test(rules),
     '长高要有上限，不能把整个弹层撑开',
-  )
-  assert.ok(
-    /appendAddresses[\s\S]{0,400}nextTick\(resizeGrowables\)/.test(rules),
-    '追加地址后要立刻重算高度，用户才看得到加了谁',
   )
 })
 
@@ -101,7 +105,15 @@ test('拖拽：邮件行可以直接放到左侧文件夹上（含删除 / 垃�
   assert.ok(/data-drop-folder/.test(sidebar), '标准文件夹与自建文件夹都要带可命中标记')
   assert.ok(/mailDrag\.hoverFolder === (entry\.folder|folder)\.name/.test(sidebar), '悬停中的落点要有高亮')
   assert.ok(/\.mail-folder\.is-drop-target/.test(css), '高亮样式要存在')
-  assert.ok(/folder\?\.role === 'trash'/.test(mailApp) && /runBatch\('delete'/.test(mailApp), '放到「已删除」按删除处理')
+  assert.ok(
+    /folder\?\.role === 'trash'/.test(mailApp) &&
+      /deleteRowsWithUndo\(targets/.test(mailApp),
+    '放到「已删除」按删除处理（带 5 秒撤销窗口）',
+  )
+  assert.ok(
+    /async deleteRowsDeferred[\s\S]{0,2000}threadUids/.test(store),
+    '删除聚合行时仍要展开 threadUids',
+  )
   assert.ok(/folder\?\.role === 'junk'/.test(mailApp), '放到「垃圾邮件」按垃圾处理')
 })
 

@@ -364,7 +364,12 @@ const customFolders = computed(() => {
  * 选它也没有邮件可看），其余交给用户自己建、自己删。
  */
 const primaryCustomFolders = computed(() =>
-  customFolders.value.filter((folder) => !folder.name.includes('/')),
+  customFolders.value.filter((folder) => {
+    // Graph 的 name 是 opaque 文件夹 ID，层级在 displayName 里，不能按 ID 里的
+    // 分隔符判断；IMAP 仍按原来的 `/` 规则隐藏不可选的父目录。
+    if (folder.delimiter === '\u001f') return true
+    return !folder.name.includes('/')
+  }),
 )
 
 /**

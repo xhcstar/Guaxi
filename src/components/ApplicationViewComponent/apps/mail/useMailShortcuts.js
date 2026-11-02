@@ -14,6 +14,7 @@
 //   r            回复        a        全部回复        f      转发
 //   Ctrl+R       回复        Ctrl+Shift+R  全部回复   Ctrl+N 新邮件
 //   Delete / Backspace  删除       e        归档
+//   Shift+↑ / ↓  扩展选择    Ctrl+A   全选当前列表   Ctrl+Z  撤销删除
 //   s            星标        u        标为未读
 //   Ctrl+Enter   发送（在写信框里）
 //   Esc          关闭阅读 / 关闭弹层
@@ -43,8 +44,10 @@ export function useMailShortcuts(handlers, options = {}) {
   function run(name, event) {
     const fn = handlers[name]
     if (typeof fn !== 'function') return false
+    // 处理函数可以返回 false 表示「这次不吃这个键」——例如 Ctrl+A 在阅读区
+    // 应该交给浏览器选中正文，而不是全选邮件列表。
+    if (fn(event) === false) return false
     event.preventDefault()
-    fn()
     return true
   }
 
@@ -67,6 +70,15 @@ export function useMailShortcuts(handlers, options = {}) {
           return
         case 'n':
           run('compose', event)
+          return
+        case 'a':
+          // 阅读区里的 Ctrl+A 是「选中这段正文」，不是「全选邮件」。
+          if (event.target?.closest?.('.mail-reader')) return
+          if (window.getSelection?.() && !window.getSelection().isCollapsed) return
+          run('selectAll', event)
+          return
+        case 'z':
+          run('undo', event)
           return
         case 'enter':
           run('send', event)
@@ -144,7 +156,11 @@ export const SHORTCUT_LIST = [
   { keys: 'S', label: '加 / 取消星标' },
   { keys: 'U', label: '标为未读' },
   { keys: 'E', label: '归档' },
-  { keys: 'Delete', label: '删除' },
+  { keys: 'Delete', label: '删除（选中多封时删整批）' },
+  { keys: 'Shift + ↑ / ↓', label: '扩展选择' },
+  { keys: 'Shift + 点击', label: '连续选择一段邮件' },
+  { keys: 'Ctrl+A', label: '全选当前列表' },
+  { keys: 'Ctrl+Z', label: '撤销上一步（删除 5 秒内）' },
   { keys: '/', label: '聚焦搜索框' },
   { keys: 'Alt + 划词', label: '划词翻译（正文与写信正文都可用）' },
   { keys: 'Esc', label: '关闭阅读 / 弹层' },

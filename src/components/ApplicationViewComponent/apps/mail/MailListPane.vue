@@ -137,7 +137,7 @@
             :row="item.row"
             :checked="isChecked(item.row)"
             :highlight="highlightTokens"
-            @toggle="(v) => $emit('toggle-select', item.row, v)"
+            @toggle="(v) => onToggleSelect(item.row, v)"
             @star="(v) => $emit('toggle-star', item.row, v)"
             @delete="$emit('delete', item.row)"
           />
@@ -166,7 +166,7 @@
             :row="row"
             :checked="isChecked(row)"
             :highlight="highlightTokens"
-            @toggle="(v) => $emit('toggle-select', row, v)"
+            @toggle="(v) => onToggleSelect(row, v)"
             @star="(v) => $emit('toggle-star', row, v)"
             @delete="$emit('delete', row)"
           />
@@ -208,6 +208,7 @@ const emit = defineEmits([
   'toggle-filter',
   'toggle-select',
   'select-all',
+  'select-range',
   'clear-selection',
   'batch',
   'drop-on-folder',
@@ -431,6 +432,20 @@ const someChecked = computed(() => props.selectedKeys.length > 0)
 
 const isChecked = (row) => props.selectedKeys.includes(keyOf(row))
 
+/**
+ * 选择锚点：Shift+点击时从「上一次点中的那封」连到这一封。
+ *
+ * 锚点只由「真正改变选择的点击」更新，Shift+点击本身不移动锚点——
+ * 这样用户可以连续 Shift 点击调整另一端，和资源管理器 / Outlook 一致。
+ */
+let selectionAnchor = ''
+
+function onToggleSelect(row, checked) {
+  emit('toggle-select', row, checked)
+  if (checked) selectionAnchor = keyOf(row)
+  else if (selectionAnchor === keyOf(row)) selectionAnchor = ''
+}
+
 /** 点行：按住 Ctrl/Cmd 或 Shift 时切换勾选，否则打开。与 Outlook 习惯一致。 */
 function onRowClick(row, event) {
   // 拖拽松手后的那一下 click 不算点击。
@@ -438,8 +453,24 @@ function onRowClick(row, event) {
     justDragged = false
     return
   }
+  const key = keyOf(row)
+
+  // Shift+点击：从锚点连到这一封，整段勾上。
+  if (event.shiftKey) {
+    const keys = visible.value.map(keyOf)
+    const anchor = keys.indexOf(selectionAnchor)
+    const target = keys.indexOf(key)
+    if (anchor >= 0 && target >= 0) {
+      const from = Math.min(anchor, target)
+      const to = Math.max(anchor, target)
+      emit('select-range', keys.slice(from, to + 1))
+      return
+    }
+  }
+
   if (event.ctrlKey || event.metaKey || event.shiftKey || props.selectedKeys.length) {
-    emit('toggle-select', row, !isChecked(row))
+    const checked = !isChecked(row)
+    onToggleSelect(row, checked)
     return
   }
   emit('open', row)

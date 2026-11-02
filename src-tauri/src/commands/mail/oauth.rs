@@ -66,6 +66,20 @@ const MICROSOFT: Provider = Provider {
     extra: &[],
 };
 
+/// Microsoft Graph（Exchange Online / Microsoft 365 的原生通道）。
+///
+/// 与 `outlook` 共用同一个公开客户端 ID，但 scope 换成 Graph 的邮件读写与发送权限。
+/// IMAP/SMTP 的 XOAUTH2 scope 不能用于 Graph 端点，反之亦然，所以必须是独立 provider。
+const GRAPH: Provider = Provider {
+    id: "graph",
+    device_url: "https://login.microsoftonline.com/common/oauth2/v2.0/devicecode",
+    token_url: "https://login.microsoftonline.com/common/oauth2/v2.0/token",
+    imap_scope: "https://graph.microsoft.com/Mail.ReadWrite https://graph.microsoft.com/Mail.Send openid profile email offline_access User.Read",
+    smtp_scope: "https://graph.microsoft.com/Mail.Send openid profile email offline_access",
+    client_id: "9e5f94bc-e8a4-4e73-b8be-63364c29d753",
+    extra: &[],
+};
+
 /// 用户自定义服务商（企业自建 IdP）：端点由账户配置给出。
 const CUSTOM: Provider = Provider {
     id: "custom",
@@ -81,6 +95,7 @@ pub fn provider_for(id: &str) -> Option<Provider> {
     match id.trim().to_ascii_lowercase().as_str() {
         "gmail" | "google" => Some(GOOGLE),
         "outlook" | "microsoft" | "office365" => Some(MICROSOFT),
+        "graph" | "exchange" | "m365" => Some(GRAPH),
         "custom" => Some(CUSTOM),
         _ => None,
     }
@@ -147,7 +162,7 @@ pub fn start_device_flow(
 
     let mut form: Vec<(&str, &str)> = vec![("client_id", client_id), ("scope", scope)];
     // 微软要求带上 openid 才会返回 refresh_token（offline_access 已含在 scope 里）。
-    if provider.id == "outlook" {
+    if provider.id == "outlook" || provider.id == "graph" {
         form.push(("offline_access", "true"));
     }
     // Gmail 的设备码流程要求显式声明它支持设备授权。

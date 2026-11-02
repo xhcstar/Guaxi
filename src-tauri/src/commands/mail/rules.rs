@@ -7,7 +7,9 @@
 //! 其中「移动 / 删除 / 转发」需要服务器操作，由调用方（commands 层）拿动作清单去执行；
 //! 规则引擎本身只负责**判定**，保持纯函数、可单测。
 
-use super::model::{Account, MailRule, MessageSummary, RuleAction, RuleCondition};
+use super::model::{
+    Account, MailRule, MessageSummary, RuleAction, RuleClause, RuleCondition, RuleGroup,
+};
 use regex::Regex;
 
 /// 判定所需的邮件上下文。列表摘要之外还需要正文，因为「正文包含」条件
@@ -31,6 +33,9 @@ pub fn needs_body(rules: &[MailRule]) -> bool {
             return false;
         }
         let cond = &rule.condition;
+        if !cond.groups.is_empty() {
+            return groups_need_body(&cond.groups);
+        }
         !cond.body_contains.is_empty()
             || !cond.body_not_contains.is_empty()
             || cond.any_matches_regex.is_some()
@@ -59,7 +64,18 @@ pub fn body_relevant(rules: &[MailRule], ctx: &RuleContext<'_>) -> bool {
     rules
         .iter()
         .filter(|rule| rule.enabled)
-        .any(|rule| conditions_match_inner(&rule.condition, &rule.match_mode, ctx, false))
+        .any(|rule| {
+            let cond = &rule.condition;
+            if !scope_matches(cond, ctx) {
+                return false;
+            }
+            // 含正文的条件组不能用「正文占位」预筛：`非(正文含…)` 或组内「或」
+            // 都会让占位结果与真实结果相反 / 不同，直接按「需要正文」处理。
+            if !cond.groups.is_empty() && groups_need_body(&cond.groups) {
+                return true;
+            }
+            conditions_match_inner(cond, &rule.match_mode, ctx, false)
+        })
 }
 
 fn conditions_match(cond: &RuleCondition, match_mode: &str, ctx: &RuleContext<'_>) -> bool {
@@ -88,23 +104,181 @@ fn list_term(needles: &[String], haystack_lower: &str, negate: bool) -> Option<b
     Some(if negate { !hit } else { hit })
 }
 
-fn conditions_match_inner(
-    cond: &RuleCondition,
-    match_mode: &str,
+// ---------------------------------------------------------------------------
+// 嵌套条件组（Outlook 风格：组内与/或、组间与/或、整组取反）
+// ---------------------------------------------------------------------------
+
+fn groups_need_body(groups: &[RuleGroup]) -> bool {
+    groups.iter().any(|group| {
+        group
+            .clauses
+            .iter()
+            .any(|clause| matches!(clause.field.trim().to_ascii_lowercase().as_str(), "body" | "any"))
+            || groups_need_body(&group.groups)
+    })
+}
+
+fn group_is_empty(group: &RuleGroup) -> bool {
+    group
+        .clauses
+        .iter()
+        .all(|clause| clause.value.trim().is_empty())
+        && group.groups.iter().all(group_is_empty)
+}
+
+/// 组内各项按 `mode` 组合，最后按 `not` 取反。
+///
+/// 空组（没有填任何值）视为「没有约束」，直接跳过——用户在界面里新建了一个
+/// 条件组还没填内容时，不该因为它是「任一满足」就把整条规则判为不命中。
+fn group_match(
+    group: &RuleGroup,
     ctx: &RuleContext<'_>,
     with_body: bool,
 ) -> bool {
-    let msg = ctx.message;
+    let mut results: Vec<bool> = Vec::new();
+    for clause in &group.clauses {
+        if clause.value.trim().is_empty() {
+            continue;
+        }
+        results.push(clause_match(clause, ctx, with_body));
+    }
+    for child in &group.groups {
+        if group_is_empty(child) {
+            continue;
+        }
+        results.push(group_match(child, ctx, with_body));
+    }
+    let base = if results.is_empty() {
+        true
+    } else if is_any_mode(&group.mode) {
+        results.iter().any(|hit| *hit)
+    } else {
+        results.iter().all(|hit| *hit)
+    };
+    if group.not {
+        !base
+    } else {
+        base
+    }
+}
 
-    // 作用域不是筛选条件：它决定这条规则管哪一批邮件，所以永远按「与」处理，
-    // 不能被「任一满足」拿去凑命中。
+fn clause_match(clause: &RuleClause, ctx: &RuleContext<'_>, with_body: bool) -> bool {
+    let RuleClause { field, op, value } = clause;
+    let value = value.trim();
+    if value.is_empty() {
+        return true;
+    }
+    let field = field.trim().to_ascii_lowercase();
+    let op = op.trim().to_ascii_lowercase().replace(['_', '-'], "");
+
+    if field == "size" {
+        let Ok(kb) = value.parse::<f64>() else {
+            return false;
+        };
+        let size_kb = ctx.message.size as f64 / 1024.0;
+        return match op.as_str() {
+            "greaterthan" | "gt" => size_kb > kb,
+            "lessthan" | "lt" => size_kb < kb,
+            "equals" => (size_kb - kb).abs() < 0.5,
+            "notequals" => (size_kb - kb).abs() >= 0.5,
+            _ => false,
+        };
+    }
+
+    let body_dependent = matches!(field.as_str(), "body" | "any");
+    if body_dependent && !with_body {
+        // 预筛阶段：正文条件按「可能命中」处理，宁可多解一次正文也不能漏。
+        return true;
+    }
+
+    let msg = ctx.message;
+    let from_raw = format!("{} {}", msg.from_addr, msg.from_name);
+    let hay_raw = match field.as_str() {
+        "from" => from_raw.clone(),
+        "to" => format!("{} {}", msg.to_json, msg.cc_json),
+        "subject" => msg.subject.clone(),
+        "body" => ctx.body_preview.to_string(),
+        // `any` 与旧的「高级正则」一致：主题 + 正文 + 发件人。
+        _ => format!("{} {} {}", msg.subject, ctx.body_preview, from_raw),
+    };
+    let hay = hay_raw.to_lowercase();
+    let needle = value.to_lowercase();
+    let values = clause_values(&field, ctx);
+
+    match op.as_str() {
+        "contains" => hay.contains(&needle),
+        "notcontains" => !hay.contains(&needle),
+        "equals" => values.iter().any(|item| item.eq_ignore_ascii_case(value))
+            || hay.trim().eq_ignore_ascii_case(value),
+        "notequals" => {
+            !(values.iter().any(|item| item.eq_ignore_ascii_case(value))
+                || hay.trim().eq_ignore_ascii_case(value))
+        }
+        "startswith" => values
+            .iter()
+            .any(|item| item.to_lowercase().starts_with(&needle))
+            || hay.starts_with(&needle),
+        "endswith" => values
+            .iter()
+            .any(|item| item.to_lowercase().ends_with(&needle))
+            || hay.ends_with(&needle),
+        // 正则按用户写的大小写原样匹配；把正文预先小写会让 `[A-Z]` 这类表达式失效。
+        "regex" => match Regex::new(value) {
+            Ok(re) => re.is_match(&hay_raw),
+            // 用户写的正则可能不合法；不合法时这一项判为不命中，而不是让同步线程崩掉。
+            Err(_) => false,
+        },
+        _ => false,
+    }
+}
+
+/// 叶子条件比较「等于 / 开头 / 结尾」时用的值：地址、显示名、主题、正文。
+///
+/// 直接拿 `to_json` 这种序列化文本做 `equals` 永远匹配不上，所以收件人要从
+/// JSON 里拆出姓名与地址；发件人同时比较地址与显示名。
+fn clause_values(field: &str, ctx: &RuleContext<'_>) -> Vec<String> {
+    let msg = ctx.message;
+    match field {
+        "from" => vec![msg.from_addr.clone(), msg.from_name.clone()],
+        "to" => {
+            let mut out = Vec::new();
+            for raw in [&msg.to_json, &msg.cc_json] {
+                if let Ok(items) = serde_json::from_str::<Vec<serde_json::Value>>(raw) {
+                    for item in items {
+                        for key in ["address", "name"] {
+                            if let Some(value) = item.get(key).and_then(|v| v.as_str()) {
+                                if !value.trim().is_empty() {
+                                    out.push(value.to_string());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            out
+        }
+        "subject" => vec![msg.subject.clone()],
+        "body" => vec![ctx.body_preview.to_string()],
+        _ => vec![
+            msg.subject.clone(),
+            ctx.body_preview.to_string(),
+            msg.from_addr.clone(),
+            msg.from_name.clone(),
+        ],
+    }
+}
+
+/// 账户 / 文件夹 / 附件 / 大小这类「范围」判定。
+///
+/// 作用域不是筛选条件：它们决定这条规则管哪一批邮件，永远按「与」处理，
+/// 不参与条件组的与或非。
+fn scope_matches(cond: &RuleCondition, ctx: &RuleContext<'_>) -> bool {
+    let msg = ctx.message;
     if !cond.account_ids.is_empty() && !cond.account_ids.iter().any(|id| id == &msg.account_id) {
         return false;
     }
     // 文件夹范围：空表示「收件箱」（Outlook 默认）；`*` 表示所有文件夹。
     if cond.folder_roles.is_empty() {
-        // 只有明确指定了文件夹角色的规则才处理非收件箱邮件；
-        // 否则「把所有来自 X 的邮件归档」会把已发送的回复也挪走。
         if ctx.folder_role != "inbox" {
             return false;
         }
@@ -115,7 +289,6 @@ fn conditions_match_inner(
     {
         return false;
     }
-    // 「只处理带附件的邮件」和大小下限同样只是范围限定。
     if let Some(want) = cond.has_attachment {
         if msg.has_attachments != want {
             return false;
@@ -125,6 +298,39 @@ fn conditions_match_inner(
         if msg.size < min {
             return false;
         }
+    }
+    true
+}
+
+fn conditions_match_inner(
+    cond: &RuleCondition,
+    match_mode: &str,
+    ctx: &RuleContext<'_>,
+    with_body: bool,
+) -> bool {
+    if !scope_matches(cond, ctx) {
+        return false;
+    }
+    let msg = ctx.message;
+
+    // 新版规则：条件组是可嵌套的树，组内 / 组间都能选与或非。
+    if !cond.groups.is_empty() {
+        let effective: Vec<&RuleGroup> = cond
+            .groups
+            .iter()
+            .filter(|group| !group_is_empty(group))
+            .collect();
+        if effective.is_empty() {
+            return true;
+        }
+        let hits = effective
+            .iter()
+            .map(|group| group_match(group, ctx, with_body));
+        return if is_any_mode(match_mode) {
+            hits.into_iter().any(|hit| hit)
+        } else {
+            hits.into_iter().all(|hit| hit)
+        };
     }
 
     let subject_lower = msg.subject.to_lowercase();
@@ -706,5 +912,139 @@ mod logic_tests {
             ..Default::default()
         };
         assert_eq!(evaluate(&[rule("all", cond)], &ctx(&msg, &acc)).len(), 1);
+    }
+
+    fn clause(field: &str, op: &str, value: &str) -> RuleClause {
+        RuleClause {
+            field: field.into(),
+            op: op.into(),
+            value: value.into(),
+        }
+    }
+
+    fn group(mode: &str, not: bool, clauses: Vec<RuleClause>) -> RuleGroup {
+        RuleGroup {
+            mode: mode.into(),
+            not,
+            clauses,
+            groups: Vec::new(),
+        }
+    }
+
+    fn grouped(cond_groups: Vec<RuleGroup>, mode: &str) -> MailRule {
+        rule(
+            mode,
+            RuleCondition {
+                groups: cond_groups,
+                ..Default::default()
+            },
+        )
+    }
+
+    #[test]
+    fn nested_groups_express_mixed_and_or() {
+        let acc = account();
+        let msg = message("季度报告", "boss@corp.com");
+        let ctx = ctx(&msg, &acc);
+        // (发件人含 boss 或 发件人含 cfo) 且 主题含 报告
+        let cond = vec![RuleGroup {
+            mode: "all".into(),
+            not: false,
+            clauses: vec![clause("subject", "contains", "报告")],
+            groups: vec![group(
+                "any",
+                false,
+                vec![
+                    clause("from", "contains", "boss"),
+                    clause("from", "contains", "cfo"),
+                ],
+            )],
+        }];
+        assert_eq!(evaluate(&[grouped(cond, "all")], &ctx).len(), 1);
+
+        let cond2 = vec![RuleGroup {
+            mode: "all".into(),
+            not: false,
+            clauses: vec![clause("subject", "contains", "发票")],
+            groups: vec![group("any", false, vec![clause("from", "contains", "boss")])],
+        }];
+        assert!(evaluate(&[grouped(cond2, "all")], &ctx).is_empty());
+    }
+
+    #[test]
+    fn group_not_inverts_the_whole_group() {
+        let acc = account();
+        let spam = message("广告：限时优惠", "noreply@spam.example");
+        let spam_ctx = ctx(&spam, &acc);
+        // 非(发件人含 spam 且 主题含 优惠)
+        let cond = vec![RuleGroup {
+            mode: "all".into(),
+            not: true,
+            clauses: vec![
+                clause("from", "contains", "spam.example"),
+                clause("subject", "contains", "优惠"),
+            ],
+            groups: Vec::new(),
+        }];
+        assert!(evaluate(&[grouped(cond, "all")], &spam_ctx).is_empty());
+
+        let friend = message("会议纪要", "boss@corp.com");
+        let friend_ctx = ctx(&friend, &acc);
+        let cond2 = vec![RuleGroup {
+            mode: "all".into(),
+            not: true,
+            clauses: vec![
+                clause("from", "contains", "spam.example"),
+                clause("subject", "contains", "优惠"),
+            ],
+            groups: Vec::new(),
+        }];
+        assert_eq!(evaluate(&[grouped(cond2, "all")], &friend_ctx).len(), 1);
+    }
+
+    #[test]
+    fn equals_matches_recipient_address_not_json_text() {
+        let acc = account();
+        let mut msg = message("hi", "a@b.c");
+        msg.to_json = r#"[{"name":"张三","address":"zhangsan@corp.com"}]"#.into();
+        let cond = RuleCondition {
+            groups: vec![group("all", false, vec![clause("to", "equals", "zhangsan@corp.com")])],
+            ..Default::default()
+        };
+        assert_eq!(evaluate(&[rule("all", cond)], &ctx(&msg, &acc)).len(), 1);
+    }
+
+    #[test]
+    fn body_group_prefilter_is_conservative_under_negation() {
+        let acc = account();
+        let msg = message("hi", "a@b.c");
+        let cond = RuleCondition {
+            groups: vec![group("all", true, vec![clause("body", "contains", "secret")])],
+            ..Default::default()
+        };
+        assert!(
+            body_relevant(&[rule("all", cond)], &ctx(&msg, &acc)),
+            "非(正文含…) 不能靠正文占位预筛，必须解正文"
+        );
+    }
+
+    #[test]
+    fn empty_groups_are_ignored() {
+        let acc = account();
+        let msg = message("hi", "a@b.c");
+        let cond = RuleCondition {
+            groups: vec![RuleGroup {
+                mode: "any".into(),
+                not: false,
+                clauses: vec![clause("subject", "contains", "")],
+                groups: Vec::new(),
+            }],
+            ..Default::default()
+        };
+        assert_eq!(
+            evaluate(&[rule("all", cond)], &ctx(&msg, &acc)).len(),
+            1,
+            "没有填值的空条件组不应把规则判为不命中"
+        );
     }
 }

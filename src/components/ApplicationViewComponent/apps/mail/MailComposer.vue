@@ -1107,6 +1107,7 @@ import { useContactsStore, expandGroupMembers, groupRecipientToken, parseGroupTo
 import AddressInput from './AddressInput.vue'
 import AddressPicker from './AddressPicker.vue'
 import MailIcon from './MailIcon.vue'
+import { askMailConfirm } from './mailConfirm'
 import {
   FILL_COLOR_LIST,
   HIGHLIGHT_COLORS,
@@ -3776,7 +3777,7 @@ function removeAttachment(path) {
 
 async function send(useOutbox) {
   if (sending.value) return
-  if (!confirmBulkRecipients()) return
+  if (!(await confirmBulkRecipients())) return
   syncEditorToDraft()
   sending.value = true
   try {
@@ -3788,13 +3789,14 @@ async function send(useOutbox) {
 }
 
 /** 大通讯组：地址栏只有一个组名，用户看不出真实人数；发送前报一次总数。 */
-function confirmBulkRecipients() {
+async function confirmBulkRecipients() {
   const summary = recipientSummary()
   if (summary.total <= 50) return true
   const groupHint = summary.groups ? `（其中 ${summary.groups} 个通讯组）` : ''
-  return window.confirm(
+  return askMailConfirm(
     `这封邮件将发给 ${summary.total} 位收件人${groupHint}。\n` +
       '部分邮件服务器对单封收件人数有上限（如 Gmail 100 人），超出时整封会被拒收。仍要发送吗？',
+    { title: '收件人很多', confirmText: '仍然发送', danger: false },
   )
 }
 
@@ -3838,7 +3840,11 @@ function scheduleTomorrowMorning() {
 function scheduleCustom() {
   const ms = new Date(scheduleInput.value).getTime()
   if (!Number.isFinite(ms)) {
-    window.alert('请选择有效的发送时间')
+    askMailConfirm('请选择有效的发送时间。', {
+      title: '定时发送',
+      confirmText: '知道了',
+      danger: false,
+    })
     return
   }
   scheduleAt(ms)
@@ -3849,10 +3855,14 @@ async function scheduleAt(ms) {
   if (sending.value) return
   if (!canSend.value) return
   if (ms <= Date.now() + 30 * 1000) {
-    window.alert('定时发送时间需要晚于当前时间至少 1 分钟')
+    await askMailConfirm('定时发送时间需要晚于当前时间至少 1 分钟。', {
+      title: '时间太近',
+      confirmText: '知道了',
+      danger: false,
+    })
     return
   }
-  if (!confirmBulkRecipients()) return
+  if (!(await confirmBulkRecipients())) return
   syncEditorToDraft()
   sending.value = true
   try {

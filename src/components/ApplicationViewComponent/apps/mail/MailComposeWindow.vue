@@ -33,6 +33,10 @@
     <div v-if="notice" class="mail-compose-notice" :class="{ 'is-error': notice.error }">
       {{ notice.text }}
     </div>
+
+    <!-- 独立窗口没有主窗口那套 MailConfirmHost：写信时的大组确认 / 定时时间提示
+         如果继续用 window.confirm/alert，在这个 webview 里会被静默吞掉。 -->
+    <MailConfirmHost />
   </div>
 </template>
 
@@ -40,6 +44,7 @@
 import { onBeforeUnmount, onMounted, ref } from 'vue'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import MailComposer from './MailComposer.vue'
+import MailConfirmHost from './MailConfirmHost.vue'
 import {
   accounts as windowAccounts,
   checkAttachments,

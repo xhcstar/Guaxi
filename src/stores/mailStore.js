@@ -26,6 +26,50 @@ const foldersRequestSeq = new Map()
 /** 操作后的计数校正：合并短时间内的多次操作，避免每次都打一轮完整 STATUS。 */
 const folderRefreshTimers = new Map()
 
+/** 删除的撤销窗口：这段时间内只从界面移除，还没真正提交服务器。 */
+const DEFERRED_DELETE_MS = 5000
+const DEFERRED_DELETE_KEY = 'guaxi.mail.pending-deletes'
+/**
+ * 已进入撤销窗口、但还没提交服务器的邮件 key。
+ *
+ * 这段时间里服务器上还在，任何一次同步 / 刷新都可能把它们捞回来；列表查询
+ * 用这个集合过滤掉，用户看到的才是「已经删掉」的稳定状态。
+ */
+const pendingDeleteKeys = new Set()
+const deferredDeleteTimers = new Map()
+
+function deleteKeyOf(row) {
+  return `${row.accountId}:${row.folder}:${row.uid}`
+}
+
+function readPersistedDeletes() {
+  try {
+    const raw = window.localStorage.getItem(DEFERRED_DELETE_KEY)
+    const items = raw ? JSON.parse(raw) : []
+    return Array.isArray(items) ? items : []
+  } catch {
+    return []
+  }
+}
+
+function persistDeferredDeletes(store) {
+  try {
+    const items = store.deferredDeletes.map((batch) => ({
+      id: batch.id,
+      groups: batch.groups,
+      keys: batch.keys,
+    }))
+    if (items.length) {
+      window.localStorage.setItem(DEFERRED_DELETE_KEY, JSON.stringify(items))
+    } else {
+      window.localStorage.removeItem(DEFERRED_DELETE_KEY)
+    }
+  } catch {
+    /* localStorage 不可用（隐私模式 / 配额）时只影响关窗后的补删，不影响主流程 */
+  }
+}
+
+
 /**
  * 每个账户最近一次「重新发现文件夹」的时间。
  *
@@ -130,6 +174,12 @@ export const useMailStore = defineStore('mail', {
     searching: false,
     /** 批量选择：{ accountId, folder, uid } 的唯一键集合。 */
     selectedKeys: [],
+    /** 撤销窗口内的删除批次（真正提交服务器前可撤回）。 */
+    deferredDeletes: [],
+    /** 最近一次可逆的标记操作（Ctrl+Z 用）。 */
+    lastFlagUndo: null,
+    /** 延迟删除失败时给界面的一条说明（MailApp 监听后弹 toast）。 */
+    deferredDeleteNotice: null,
     searchError: '',
     lastSyncAt: 0,
     lastError: '',
@@ -235,10 +285,14 @@ export const useMailStore = defineStore('mail', {
         if (this.accounts.length && !this.activeAccountId) {
           this.activeAccountId = this.accounts[0].id
         }
+        // 上一次关窗时还没到期的删除：启动时先把它们真正提交，再加载列表，
+        // 否则用户在撤销窗口内退出应用，那几封邮件会「没删掉」。
+        await this.resumeDeferredDeletes()
         await Promise.all(this.accounts.map((a) => this.loadFolders(a.id)))
         this.ready = true
         this.lastSyncAt = Date.now()
         await this.loadMessages({ silent: true })
+        await this.reloadUnread().catch(() => {})
         this.startPolling()
         await this.bindEvents()
         this.refreshLabels().catch(() => {})
@@ -300,6 +354,11 @@ export const useMailStore = defineStore('mail', {
       if (this.outboxTimer) {
         clearTimeout(this.outboxTimer)
         this.outboxTimer = null
+      }
+      // 离开邮件页时撤销窗口没有意义（提示条已经不在了）：立刻补交剩下的删除。
+      // 应用直接关闭时定时器可能来不及跑，启动时的 resumeDeferredDeletes 会兜底。
+      for (const batch of [...this.deferredDeletes]) {
+        this.executeDeferredDelete(batch.id).catch(() => {})
       }
       for (const off of this.unlisten) {
         try {
@@ -717,7 +776,9 @@ export const useMailStore = defineStore('mail', {
         // 旧文件夹的结果不能落到新文件夹上——切文件夹时「列表没跟着刷新，还是上一个
         // 文件夹的信」就是这么来的（真实反馈）。切账户 / 改搜索词 / 自动续页同样适用。
         if (token !== this.listToken) return
-        const list = rows || []
+        const list = (rows || []).filter(
+          (row) => !pendingDeleteKeys.has(`${row.accountId}:${row.folder}:${row.uid}`),
+        )
         const hasMore = list.length > pageSize
         const page = hasMore ? list.slice(0, pageSize) : list
         const grouped = await this.groupThreadsIfNeeded(append ? [...this.messages, ...page] : page)
@@ -1159,7 +1220,7 @@ export const useMailStore = defineStore('mail', {
 
     // ---------------- 阅读 ----------------
 
-    async openMessage(row) {
+    async openMessage(row, { reloadCounts = true } = {}) {
       this.selected = row
       this.thread = []
       this.detailLoading = true
@@ -1186,9 +1247,9 @@ export const useMailStore = defineStore('mail', {
         // 打开即已读：侧栏的未读角标先减一，稍后由服务端 STATUS 校正。
         if (wasUnseen) {
           this.adjustFolderCount(row.accountId, row.folder, { unread: -1 })
-          scheduleFolderRefresh(this, row.accountId)
+          if (reloadCounts) scheduleFolderRefresh(this, row.accountId)
         }
-        await this.reloadUnread()
+        if (reloadCounts) await this.reloadUnread()
       } catch (error) {
         logger.error('打开邮件失败', error)
         this.lastError = String(error?.message || error)
@@ -1203,7 +1264,10 @@ export const useMailStore = defineStore('mail', {
      * 以前只打开最新一封、把历史留在正文的引用块里；现在阅读区本身就是会话。
      */
     async openThread(row) {
-      let rows = (row.threadUids || []).filter(Boolean)
+      const keyOf = (item) => `${item.accountId}:${item.folder}:${item.uid}`
+      let rows = (row.threadUids || [])
+        .filter(Boolean)
+        .filter((item) => !pendingDeleteKeys.has(keyOf(item)))
       // 列表里的聚合行只包含当前文件夹的邮件；到库里按 thread_key 再查一次，
       // 才能把「已发送」里的回复也带进会话。只取同一个账户，避免不同账户
       // 恰好同主题的邮件被误并进同一个会话。
@@ -1211,7 +1275,7 @@ export const useMailStore = defineStore('mail', {
         try {
           const threadRows = await invoke('mail_thread', { threadKey: row.threadKey })
           const sameAccount = (threadRows || []).filter(
-            (item) => item.accountId === row.accountId,
+            (item) => item.accountId === row.accountId && !pendingDeleteKeys.has(keyOf(item)),
           )
           if (sameAccount.length > rows.length) rows = sameAccount
         } catch (error) {
@@ -1338,7 +1402,7 @@ export const useMailStore = defineStore('mail', {
           target,
         })
       }
-      this.afterRemoval(rows)
+      await this.afterRemoval(rows)
     },
 
     async deleteMessages(rows) {
@@ -1349,25 +1413,51 @@ export const useMailStore = defineStore('mail', {
           uids: [row.uid],
         })
       }
-      this.afterRemoval(rows)
+      await this.afterRemoval(rows)
     },
 
-    afterRemoval(rows) {
+    async afterRemoval(rows) {
       const keys = new Set(rows.map((r) => `${r.accountId}:${r.folder}:${r.uid}`))
+      const readerKey = this.detail
+        ? `${this.detail.accountId}:${this.detail.folder}:${this.detail.uid}`
+        : ''
+      const readerWasOpen = Boolean(this.detail && keys.has(readerKey))
+      const readerIndex = this.messages.findIndex(
+        (m) =>
+          this.keyOf(m) === (this.selected ? this.keyOf(this.selected) : readerKey) ||
+          (m.threadUids || []).some((item) => this.keyOf(item) === readerKey),
+      )
       this.messages = this.messages.filter(
         (m) => !keys.has(`${m.accountId}:${m.folder}:${m.uid}`),
       )
       // 阅读区跟着删：以前只在 `selected` 非空时才清，用键盘/通讯录打开的邮件
       // 删掉后正文会留在右边，形成一个已经不存在的「幽灵邮件」。
-      if (
-        this.detail &&
-        keys.has(`${this.detail.accountId}:${this.detail.folder}:${this.detail.uid}`)
-      ) {
+      if (readerWasOpen) {
         this.detail = null
         this.selected = null
+        await this._advanceReader(readerIndex)
       }
       this.loadFolders(this.activeAccountId).catch(() => {})
       this.reloadUnread().catch(() => {})
+    },
+
+    /**
+     * 删除 / 移动正在读的那封之后，把「光标」和阅读区一起挪到相邻的一封。
+     *
+     * 以前只把 detail 清空：列表里高亮已经换到下一行，右边却是一块
+     * 「选中一封邮件开始阅读」的空白（真实反馈）。这里按删除前的位置取
+     * 下一封；删的是最后一封时退回上一封。
+     */
+    async _advanceReader(index, { quiet = false } = {}) {
+      // 删除的那封不在当前列表里（例如从通讯录历史打开、又切到了别的文件夹）：
+      // 没有「下一封」可言，收起阅读区即可，不要跳到列表第一封。
+      if (index < 0 || !this.messages.length) {
+        this.detail = null
+        this.selected = null
+        return
+      }
+      const next = this.messages[Math.min(Math.max(index, 0), this.messages.length - 1)]
+      if (next) await this.openMessage(next, { reloadCounts: !quiet })
     },
 
     async saveAttachment(detail, attachment, targetDir) {
@@ -1430,6 +1520,24 @@ export const useMailStore = defineStore('mail', {
       this.selectedKeys = checked ? this.messages.map((m) => this.keyOf(m)) : []
     },
 
+    /** Shift 连选 / Shift+方向键：把一段 key 设为选中（不取消区间外的已选项）。 */
+    selectRange(keys, checked = true) {
+      if (!keys?.length) return
+      const next = new Set(this.selectedKeys)
+      for (const key of keys) {
+        if (checked) next.add(key)
+        else next.delete(key)
+      }
+      // 按列表顺序保存，批量条上的数字与操作顺序才稳定。
+      this.selectedKeys = this.messages.map((m) => this.keyOf(m)).filter((key) => next.has(key))
+    },
+
+    /** 用一组 key 替换当前选择（Shift+方向键的区间会随移动收缩 / 扩展）。 */
+    setSelection(keys) {
+      const next = new Set(keys || [])
+      this.selectedKeys = this.messages.map((m) => this.keyOf(m)).filter((key) => next.has(key))
+    },
+
     clearSelection() {
       this.selectedKeys = []
     },
@@ -1439,7 +1547,218 @@ export const useMailStore = defineStore('mail', {
       return this.selectedKeys.map((k) => this.rowByKey(k)).filter(Boolean)
     },
 
-    async runBatch(action, target, explicitRows = null) {
+    /**
+     * 删除：先从界面移除，5 秒后才真正提交服务器。
+     *
+     * 这一段窗口就是「撤销 / Ctrl+Z」；Outlook 与 Gmail 的删除撤回都是这个模型。
+     * 直接从服务器删掉再想恢复，需要按 Message-ID 去垃圾箱里找回，POP3 根本做不到；
+     * 延迟提交才是可靠的做法。
+     */
+    async deleteRowsDeferred(inputRows = null) {
+      const input = inputRows?.length ? inputRows : this.selectedRows()
+      if (!input.length) return null
+      const rows = []
+      const seen = new Set()
+      for (const row of input) {
+        const members =
+          Array.isArray(row.threadUids) && row.threadUids.length ? row.threadUids : [row]
+        for (const member of members) {
+          const key = deleteKeyOf(member)
+          if (seen.has(key)) continue
+          seen.add(key)
+          rows.push(member)
+        }
+      }
+      if (!rows.length) return null
+
+      const groupsMap = new Map()
+      for (const row of rows) {
+        const key = `${row.accountId}\u0000${row.folder}`
+        if (!groupsMap.has(key)) groupsMap.set(key, [])
+        groupsMap.get(key).push(row)
+      }
+
+      const keys = rows.map(deleteKeyOf)
+      const keySet = new Set(keys)
+      const readerKey = this.detail
+        ? `${this.detail.accountId}:${this.detail.folder}:${this.detail.uid}`
+        : ''
+      const readerWasOpen = Boolean(this.detail && keySet.has(readerKey))
+      const readerIndex = this.messages.findIndex(
+        (row) =>
+          this.keyOf(row) === (this.selected ? this.keyOf(this.selected) : readerKey) ||
+          (row.threadUids || []).some((item) => this.keyOf(item) === readerKey),
+      )
+
+      const folderByRole = (accountId, role) =>
+        (this.foldersByAccount[accountId] || []).find((f) => f.role === role)
+      for (const list of groupsMap.values()) {
+        const { accountId, folder } = list[0]
+        const total = list.length
+        const unseen = list.filter((m) => !m.seen).length
+        // 界面立刻按「已删除」显示；撤销或真正提交后都会用服务器计数校正。
+        this.adjustFolderCount(accountId, folder, { total: -total, unread: -unseen })
+        const isTrash =
+          (this.foldersByAccount[accountId] || []).find((f) => f.name === folder)?.role ===
+          'trash'
+        const trash = folderByRole(accountId, 'trash')
+        if (!isTrash && trash) {
+          this.adjustFolderCount(accountId, trash.name, { total, unread: unseen })
+        }
+      }
+
+      keys.forEach((key) => pendingDeleteKeys.add(key))
+      this.clearSelection()
+      this.lastFlagUndo = null
+      if (readerWasOpen) {
+        this.detail = null
+        this.selected = null
+      }
+
+      await this.loadMessages({ silent: true })
+
+      const batch = {
+        id: `del-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        createdAt: Date.now(),
+        groups: [...groupsMap.values()].map((list) => ({
+          accountId: list[0].accountId,
+          folder: list[0].folder,
+          uids: list.map((m) => m.uid),
+        })),
+        keys,
+        rows,
+      }
+      this.deferredDeletes.push(batch)
+      persistDeferredDeletes(this)
+      const timer = setTimeout(() => {
+        this.executeDeferredDelete(batch.id).catch(() => {})
+      }, DEFERRED_DELETE_MS)
+      deferredDeleteTimers.set(batch.id, timer)
+
+      // 先让列表和撤销入口就位，再去加载相邻邮件；读取下一封可能要走网络。
+      // 这里等它结束再返回，避免「撤销」和「自动打开下一封」同时改阅读区。
+      if (readerWasOpen) await this._advanceReader(readerIndex, { quiet: true })
+      return batch
+    },
+
+    /** Ctrl+Z：优先撤销还在窗口内的删除，其次回退最近一次已读 / 星标操作。 */
+    async undoLastAction() {
+      if (this.deferredDeletes.length) {
+        const batch = await this.undoDeleteDeferred()
+        return batch ? { type: 'delete', batch } : null
+      }
+      const entry = this.lastFlagUndo
+      if (!entry) return null
+      this.lastFlagUndo = null
+      await this.runBatch(entry.action, null, entry.rows, { recordUndo: false })
+      return { type: 'flags', action: entry.action, count: entry.rows.length }
+    },
+
+    /** 撤销最近一次还在窗口内的删除。返回批次；已经没有可撤销的删除时返回 null。 */
+    async undoDeleteDeferred(id = null) {
+      // 明确给了批次 id（提示条上的「撤销」）时只能撤那一批；它已经提交了
+      // 就返回 null，不能退回去撤销「最近一批」——那会撤错邮件。
+      const batch = id
+        ? this.deferredDeletes.find((item) => item.id === id)
+        : this.deferredDeletes[this.deferredDeletes.length - 1]
+      if (!batch) return null
+      // 已经开始提交服务器：撤销窗口到此为止，不能再把本地状态「恢复」成
+      // 一封服务器上正在被删除的邮件。
+      if (batch.executing) return null
+      const timer = deferredDeleteTimers.get(batch.id)
+      if (timer) clearTimeout(timer)
+      deferredDeleteTimers.delete(batch.id)
+      this.deferredDeletes = this.deferredDeletes.filter((item) => item.id !== batch.id)
+      for (const key of batch.keys) pendingDeleteKeys.delete(key)
+      persistDeferredDeletes(this)
+
+      // 服务器上还没删，重新查询就能恢复；文件夹计数也重新取服务器的值。
+      await Promise.all([
+        this.loadMessages({ silent: true }),
+        this.reloadUnread().catch(() => {}),
+      ])
+      const accounts = [...new Set(batch.groups.map((group) => group.accountId))]
+      for (const accountId of accounts) {
+        this.loadFolders(accountId, { refresh: true }).catch(() => {})
+      }
+      const restored = this.messages.find((row) =>
+        (row.threadUids || [row]).some((member) => batch.keys.includes(this.keyOf(member))),
+      )
+      if (restored) await this.openMessage(restored)
+      return batch
+    },
+
+    /** 撤销窗口结束：真正提交服务器。失败时把邮件放回列表并说明。 */
+    async executeDeferredDelete(id) {
+      const batch = this.deferredDeletes.find((item) => item.id === id)
+      if (!batch) return
+      batch.executing = true
+      const timer = deferredDeleteTimers.get(id)
+      if (timer) clearTimeout(timer)
+      deferredDeleteTimers.delete(id)
+
+      let error = ''
+      for (const group of batch.groups) {
+        try {
+          await invoke('mail_batch_delete', {
+            accountId: group.accountId,
+            folder: group.folder,
+            uids: group.uids,
+          })
+        } catch (err) {
+          if (!error) error = String(err?.message || err)
+        }
+      }
+      for (const key of batch.keys) pendingDeleteKeys.delete(key)
+      this.deferredDeletes = this.deferredDeletes.filter((item) => item.id !== id)
+      persistDeferredDeletes(this)
+
+      const accounts = [...new Set(batch.groups.map((group) => group.accountId))]
+      if (error) {
+        this.lastError = `删除失败：${error}`
+        this.deferredDeleteNotice = {
+          text: `删除没有完成：${error}`,
+          error: true,
+          at: Date.now(),
+        }
+        await this.loadMessages({ silent: true })
+        await this.reloadUnread().catch(() => {})
+        for (const accountId of accounts) {
+          this.loadFolders(accountId, { refresh: true }).catch(() => {})
+        }
+        return
+      }
+      await this.reloadUnread().catch(() => {})
+      for (const accountId of accounts) scheduleFolderRefresh(this, accountId)
+    },
+
+    /** 启动时把上次关窗前未到期的删除补交给服务器。 */
+    async resumeDeferredDeletes() {
+      const items = readPersistedDeletes()
+      if (!items.length) return
+      try {
+        window.localStorage.removeItem(DEFERRED_DELETE_KEY)
+      } catch {
+        /* 忽略 */
+      }
+      for (const item of items) {
+        for (const key of item.keys || []) pendingDeleteKeys.add(key)
+        for (const group of item.groups || []) {
+          try {
+            await invoke('mail_batch_delete', {
+              accountId: group.accountId,
+              folder: group.folder,
+              uids: group.uids || [],
+            })
+          } catch (error) {
+            this.lastError = `补交删除失败：${String(error?.message || error)}`
+          }
+        }
+        for (const key of item.keys || []) pendingDeleteKeys.delete(key)
+      }
+    },
+
+    async runBatch(action, target, explicitRows = null, { recordUndo = true } = {}) {
       // 显式传入的行优先：右键菜单可能只针对一封未勾选的邮件，
       // 那时选择集是空的，不能退回 selectedRows()。
       const input = explicitRows?.length ? explicitRows : this.selectedRows()
@@ -1458,6 +1777,11 @@ export const useMailStore = defineStore('mail', {
         }
       }
       if (!rows.length) return
+      // Ctrl+Z 只回退「能可靠逆转」的标记操作；移动 / 删除由它们的批次自己处理。
+      if (recordUndo) {
+        const inverse = { read: 'unread', unread: 'read', flag: 'unflag', unflag: 'flag' }[action]
+        this.lastFlagUndo = inverse ? { action: inverse, rows } : null
+      }
       const groups = new Map()
       for (const row of rows) {
         const key = `${row.accountId}::${row.folder}`
@@ -1471,6 +1795,17 @@ export const useMailStore = defineStore('mail', {
       )
       const folderByRole = (accountId, role) =>
         (this.foldersByAccount[accountId] || []).find((f) => f.role === role)
+      const readerKey = this.detail
+        ? `${this.detail.accountId}:${this.detail.folder}:${this.detail.uid}`
+        : ''
+      const readerWasOpen = Boolean(
+        affectsList && this.detail && affectedKeys.has(readerKey),
+      )
+      const readerIndex = this.messages.findIndex(
+        (row) =>
+          this.keyOf(row) === (this.selected ? this.keyOf(this.selected) : readerKey) ||
+          (row.threadUids || []).some((item) => this.keyOf(item) === readerKey),
+      )
       for (const list of groups.values()) {
         const { accountId, folder } = list[0]
         const uids = list.map((m) => m.uid)
@@ -1532,17 +1867,14 @@ export const useMailStore = defineStore('mail', {
         accountsTouched.add(accountId)
       }
       this.clearSelection()
-      // 删除 / 移走的是当前正在读的邮件：列表里已经没有了，阅读区也要一并收起，
-      // 否则会留下「正文还在、列表里却找不到这封邮件」的断链状态。
-      if (
-        affectsList &&
-        this.detail &&
-        affectedKeys.has(`${this.detail.accountId}:${this.detail.folder}:${this.detail.uid}`)
-      ) {
+      // 删除 / 移走的是当前正在读的邮件：列表里已经没有了，阅读区要跟着换到
+      // 相邻的一封，而不是留着一封已经不存在的「幽灵邮件」或一块空白。
+      if (readerWasOpen) {
         this.detail = null
         this.selected = null
       }
       await Promise.all([this.loadMessages({ silent: true }), this.reloadUnread()])
+      if (readerWasOpen) await this._advanceReader(readerIndex)
       // 本地增量只是先让角标动起来；服务端计数（尤其目标文件夹）稍后用一次
       // 完整的 STATUS 校正，并合并连续操作，避免每封邮件都触发一轮刷新。
       for (const accountId of accountsTouched) scheduleFolderRefresh(this, accountId)

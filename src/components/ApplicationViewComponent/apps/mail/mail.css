@@ -647,7 +647,11 @@
 .mail-list-scroll {
   flex: 1 1 auto;
   min-height: 0;
-  overflow-y: auto;
+  /* 选择模式会在列表头上方插入一条批量操作条，列表高度随之变化。
+     显式保留滚动条槽位（gutter）并强制显示轨道：否则 WebView2 的覆盖式
+     滚动条会在这时整条消失，用户没法拖动，只能滚轮。 */
+  overflow-y: scroll;
+  scrollbar-gutter: stable;
 }
 
 .mail-row {

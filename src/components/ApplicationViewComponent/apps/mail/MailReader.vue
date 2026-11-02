@@ -55,6 +55,17 @@
           <button class="mail-btn is-icon" title="归档" aria-label="归档" @click="$emit('archive', detail)">
             <MailIcon name="archive" />
           </button>
+          <!-- 只有「已发送」里的邮件才需要撤回入口；已投递的邮件在服务端
+               无法真正收回，点了会明确说明边界，不做假撤回。 -->
+          <button
+            v-if="canRecall"
+            class="mail-btn is-icon"
+            title="撤回这封邮件（仅延迟发送的邮件可真正撤回）"
+            aria-label="撤回这封邮件"
+            @click="$emit('recall', detail)"
+          >
+            <MailIcon name="undo" />
+          </button>
           <button
             class="mail-btn is-icon is-danger"
             title="删除"
@@ -362,6 +373,8 @@ const props = defineProps({
   closeLabel: { type: String, default: '返回列表' },
   /** 列表里的搜索词：正文命中的文字就地高亮（Outlook 同一套做法）。 */
   searchQuery: { type: String, default: '' },
+  /** 当前邮件在「已发送」里：显示撤回入口（已投递的邮件只做说明，不假撤回）。 */
+  canRecall: { type: Boolean, default: false },
 })
 defineEmits([
   'reply',
@@ -369,6 +382,7 @@ defineEmits([
   'forward',
   'delete',
   'archive',
+  'recall',
   'toggle-flag',
   'toggle-unread',
   'save-attachment',

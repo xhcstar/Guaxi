@@ -56,6 +56,11 @@ test('图片可拖动：禁掉浏览器的原生图片拖拽', () => {
 
 test('快捷键删除：与行内删除按钮一致（整条会话）', () => {
   const fn = mailApp.slice(mailApp.indexOf('async function onDeleteCurrent'), mailApp.indexOf('async function onArchiveCurrent'))
-  assert.ok(/store\.runBatch\('delete', null, \[row\]\)/.test(fn), '走 runBatch 才会按 threadUids 展开')
+  assert.ok(/deleteRowsWithUndo\(\[row\]\)/.test(fn), '走统一的删除入口（带撤销窗口）')
   assert.ok(!/store\.deleteMessages\(/.test(fn), '不再走单封删除')
+  // 展开整条会话的逻辑下沉到 store：删除构建器会把 threadUids 里的每一封都算进去。
+  assert.ok(
+    /async deleteRowsDeferred[\s\S]{0,900}threadUids/.test(store),
+    '删除聚合行时按 threadUids 展开',
+  )
 })

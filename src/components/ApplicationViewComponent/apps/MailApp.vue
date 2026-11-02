@@ -142,6 +142,7 @@
           :move-targets="moveTargets"
           @toggle-select="store.toggleSelect"
           @select-all="store.selectAll"
+          @select-range="(keys) => store.selectRange(keys, true)"
           @clear-selection="store.clearSelection"
           @batch="onBatch"
           @drop-on-folder="onDropOnFolder"
@@ -178,11 +179,13 @@
           :theme-mode="store.theme?.mode || 'dark'"
           :mono-font="settings.monoFont"
           :search-query="store.searchQuery"
+          :can-recall="canRecallCurrent"
           @reply="(m, opts) => onReply(m, false, opts || {})"
           @reply-all="(m) => onReply(m, true)"
           @forward="onForward"
           @delete="onDeleteCurrent"
           @archive="onArchiveCurrent"
+          @recall="onRecallMessage"
           @toggle-flag="onToggleFlagCurrent"
           @toggle-unread="onToggleUnreadCurrent"
           @save-attachment="onSaveAttachment"
@@ -428,7 +431,10 @@
 
     <!-- 底部提示 -->
     <div v-if="toast" class="mail-toast" :class="{ 'is-error': toast.error }">
-      {{ toast.text }}
+      <span>{{ toast.text }}</span>
+      <button v-if="toast.action" class="mail-toast-action" @click="runToastAction">
+        {{ toast.action.label }}
+      </button>
     </div>
 
     <!-- 待发倒计时（撤回窗口） -->
@@ -670,10 +676,18 @@ const contextFolders = computed(() => {
     })
 })
 
-function notify(text, error = false) {
-  toast.value = { text, error }
+function notify(text, error = false, action = null) {
+  toast.value = { text, error, action }
   clearTimeout(toastTimer)
-  toastTimer = setTimeout(() => (toast.value = null), error ? 5200 : 2600)
+  toastTimer = setTimeout(() => (toast.value = null), error ? 5200 : action ? 5200 : 2600)
+}
+
+/** 提示条上的动作（目前用于「撤销删除」）。 */
+function runToastAction() {
+  const action = toast.value?.action
+  toast.value = null
+  clearTimeout(toastTimer)
+  action?.run?.()
 }
 
 // ---------------- 虚拟滚动行高 ----------------
@@ -699,17 +713,49 @@ watch(
   },
 )
 
+// 延迟删除真正提交失败：邮件会被放回列表，同时把原因说出来。
+watch(
+  () => store.deferredDeleteNotice,
+  (notice) => {
+    if (notice?.text) notify(notice.text, Boolean(notice.error))
+  },
+)
+
 // ---------------- 键盘快捷键 ----------------
 
-function step(delta) {
+/** Shift+方向键扩展选择的锚点与「扩展前已有的选择」，普通移动时清空。 */
+let keyboardAnchor = ''
+let keyboardBase = []
+
+function step(delta, extend = false) {
   if (!store.messages.length) return
   const index = store.messages.findIndex((m) => store.keyOf(m) === activeKey.value)
-  const next = Math.max(0, Math.min(store.messages.length - 1, index < 0 ? 0 : index + delta))
+  const current = index < 0 ? 0 : index
+  const next = Math.max(0, Math.min(store.messages.length - 1, current + delta))
   const row = store.messages[next]
   if (!row) return
+
+  if (extend) {
+    if (!keyboardAnchor) {
+      keyboardAnchor = activeKey.value || store.keyOf(store.messages[current])
+      keyboardBase = [...store.selectedKeys]
+    }
+    const anchorIndex = store.messages.findIndex(
+      (item) => store.keyOf(item) === keyboardAnchor,
+    )
+    const from = Math.min(anchorIndex < 0 ? current : anchorIndex, next)
+    const to = Math.max(anchorIndex < 0 ? current : anchorIndex, next)
+    const range = store.messages.slice(from, to + 1).map((item) => store.keyOf(item))
+    store.setSelection([...keyboardBase, ...range])
+  } else {
+    keyboardAnchor = ''
+    keyboardBase = []
+  }
+
   activeKey.value = store.keyOf(row)
   listPaneRef.value?.ensureVisible(activeKey.value)
-  store.openMessage(row).catch(() => {})
+  // Shift+方向键只改选择，不打开邮件——否则每按一下都换一次正文。
+  if (!extend) store.openMessage(row).catch(() => {})
 }
 
 /** 当前上下文：优先「当前行」，其次「已打开邮件」，最后「批量选中的第一封」。 */
@@ -726,6 +772,31 @@ function currentDetail() {
   return currentRow()
 }
 
+/** 当前阅读的是「已发送」里的邮件：给它一个明确的撤回入口。 */
+const canRecallCurrent = computed(() => {
+  const detail = store.detail
+  if (!detail) return false
+  const folders = store.foldersByAccount[detail.accountId] || []
+  return folders.some((folder) => folder.name === detail.folder && folder.role === 'sent')
+})
+
+/**
+ * 已投递邮件的「撤回」：IMAP / POP3 / SMTP 没有 Exchange 那种从对方邮箱
+ * 物理删除的能力，所以这里不做一个看起来成功、实际对方仍能看到的假撤回。
+ * 只有还停在待发队列里的延迟邮件可以真正撤回，入口在「待发送邮件」里。
+ */
+async function onRecallMessage() {
+  await askMailConfirm(
+    '这封邮件已经投递，IMAP / POP3 / SMTP 无法从对方邮箱收回。\n' +
+      '只有仍在待发队列里的延迟邮件可以撤回；已延迟的邮件可以在「待发送邮件」里撤回。',
+    {
+      title: '无法撤回已投递的邮件',
+      confirmText: '知道了',
+      danger: false,
+    },
+  )
+}
+
 function replyCurrent(all = false) {
   const detail = currentDetail()
   if (!detail) return
@@ -734,9 +805,11 @@ function replyCurrent(all = false) {
 
 useMailShortcuts(
   {
-    next: () => step(1),
-    prev: () => step(-1),
+    next: (event) => step(1, Boolean(event?.shiftKey)),
+    prev: (event) => step(-1, Boolean(event?.shiftKey)),
     open: () => {
+      keyboardAnchor = ''
+      keyboardBase = []
       const row = currentRow()
       if (row) onOpenMessage(row)
     },
@@ -764,8 +837,26 @@ useMailShortcuts(
       if (detail) onArchiveCurrent(detail)
     },
     delete: () => {
+      // 选择模式下按删除：删整批；没有勾选时删当前打开 / 光标所在的那封。
+      if (store.selectedKeys.length) {
+        deleteRowsWithUndo()
+        return
+      }
       const detail = currentDetail()
       if (detail) onDeleteCurrent(detail)
+    },
+    selectAll: () => {
+      if (store.messages.length) store.selectAll(true)
+    },
+    undo: async () => {
+      try {
+        const result = await store.undoLastAction()
+        if (!result) notify('没有可撤销的操作')
+        else if (result.type === 'delete') notify('已撤销删除')
+        else notify('已撤销上一步')
+      } catch (error) {
+        notify(String(error?.message || error), true)
+      }
     },
     escape: () => {
       if (showShortcuts.value) {
@@ -774,6 +865,10 @@ useMailShortcuts(
       }
       if (contextMenu.value) {
         closeContextMenu()
+        return
+      }
+      if (store.selectedKeys.length) {
+        store.clearSelection()
         return
       }
       if (store.detail) closeReader()
@@ -1049,13 +1144,34 @@ async function saveMessageAs(row, kind) {
   notify(`已保存到 ${path}`)
 }
 
-async function onDeleteRow(row) {
+/**
+ * 删除并给一个「撤销」入口。
+ *
+ * 真正的服务器删除由 store 延后 5 秒提交（见 deleteRowsDeferred）。这里只负责
+ * 把结果说清楚：删了几封、5 秒内可以点撤销；窗口过了再按 Ctrl+Z 会如实回答
+ * 「已经提交，撤不回来了」。
+ */
+async function deleteRowsWithUndo(rows = null, note = '') {
   try {
-    await store.runBatch('delete', null, [row])
-    notify('已删除')
+    const batch = await store.deleteRowsDeferred(rows)
+    if (!batch) return null
+    notify(`已删除 ${batch.keys.length} 封${note ? `，${note}` : ''}`, Boolean(note), {
+      label: '撤销',
+      run: async () => {
+        const undone = await store.undoDeleteDeferred(batch.id)
+        if (undone) notify('已恢复')
+        else notify('这些邮件已经提交删除，无法撤销', true)
+      },
+    })
+    return batch
   } catch (error) {
     notify(String(error?.message || error), true)
+    return null
   }
+}
+
+async function onDeleteRow(row) {
+  await deleteRowsWithUndo([row])
 }
 
 /**
@@ -1270,14 +1386,9 @@ async function onDeleteCurrent(detail) {
     folder: detail.folder,
     uid: detail.uid,
   }
-  try {
-    // 走 runBatch：会话聚合行会按 threadUids 展开，删的是整条会话，
-    // 与行上的删除按钮行为一致（以前这里走 deleteMessages，只删一封）。
-    await store.runBatch('delete', null, [row])
-    notify('已删除')
-  } catch (error) {
-    notify(String(error?.message || error), true)
-  }
+  // 走 deleteRowsWithUndo：会话聚合行会按 threadUids 展开，删的是整条会话，
+  // 与行上的删除按钮行为一致；5 秒内还能在提示条上撤销。
+  await deleteRowsWithUndo([row])
 }
 
 async function onArchiveCurrent(detail) {
@@ -1474,8 +1585,7 @@ async function contextAction(action, target) {
       return
     }
     if (action === 'delete') {
-      await store.runBatch('delete', null, rows)
-      notify(`已删除 ${rows.length} 封`)
+      await deleteRowsWithUndo(rows)
       return
     }
     if (action === 'blockSender' || action === 'allowSender') {
@@ -1548,10 +1658,13 @@ const moveTargets = computed(() => {
 
 /** 列表动作条发出的批量命令。 */
 async function onBatch(action, target) {
+  if (action === 'delete') {
+    await deleteRowsWithUndo()
+    return
+  }
   try {
     await store.runBatch(action, target)
     if (action === 'junk') notify('已移到垃圾邮件')
-    if (action === 'delete') notify('已删除')
     if (action === 'move') notify('已移动')
   } catch (error) {
     notify(String(error?.message || error), true)
@@ -1577,18 +1690,20 @@ async function onDropOnFolder(folderName, dropped = null) {
   if (!targets.length) return
   // 拖到源文件夹本身没有意义。
   if (targets.every((row) => row.folder === folderName)) return
+  const skippedNote = skipped ? `另有 ${skipped} 封属于其它账户，没有移动` : ''
   try {
     if (folder?.role === 'trash') {
-      await store.runBatch('delete', null, targets)
-      notify(`已删除 ${targets.length} 封`)
-    } else if (folder?.role === 'junk') {
+      await deleteRowsWithUndo(targets, skippedNote)
+      return
+    }
+    if (folder?.role === 'junk') {
       await store.runBatch('junk', null, targets)
       notify(`已移到垃圾邮件（${targets.length} 封）`)
     } else {
       await store.runBatch('move', folderName, targets)
       notify(`已移动 ${targets.length} 封到「${folder?.displayName || folderName}」`)
     }
-    if (skipped) notify(`另有 ${skipped} 封属于其它账户，没有移动`, true)
+    if (skippedNote) notify(skippedNote, true)
   } catch (error) {
     notify(String(error?.message || error), true)
   }
@@ -1742,6 +1857,39 @@ function startPendingCountdown(item) {
     }
   }, 1000)
 }
+
+/**
+ * 延迟发送（撤回窗口）可能发生在独立写信窗口里：主窗口从 outbox 看到
+ * 「刚排队、还在窗口内」的那一条，接上倒计时条，撤回按钮才不会只对主窗口
+ * 内联写信生效。普通「发送」仍然立即投递，不走这里。
+ */
+watch(
+  () => store.outbox,
+  (items) => {
+    if (pendingSend.value) {
+      if (!items.some((item) => item.id === pendingSend.value.id)) {
+        clearInterval(pendingTimer)
+        pendingSend.value = null
+      }
+      return
+    }
+    const windowSeconds = Number(settings.value.undoSendSeconds) || 0
+    if (windowSeconds <= 0) return
+    const now = Date.now() / 1000
+    const candidate = items
+      .filter(
+        (item) =>
+          !item.staged &&
+          Number(item.dueAt) > now &&
+          Number(item.dueAt) - now <= windowSeconds + 2,
+      )
+      .sort((a, b) => Number(a.dueAt) - Number(b.dueAt))[0]
+    if (!candidate) return
+    startPendingCountdown(candidate)
+    notify(`邮件已延迟发送，${pendingSend.value?.remaining ?? windowSeconds} 秒内可撤回`)
+  },
+  { deep: true },
+)
 
 async function undoSend() {
   const item = pendingSend.value
@@ -2083,6 +2231,9 @@ defineExpose({ expandThread })
   bottom: 24px;
   transform: translateX(-50%);
   z-index: 70;
+  display: flex;
+  align-items: center;
+  gap: 10px;
   max-width: 70vw;
   padding: 8px 16px;
   border-radius: 999px;
@@ -2090,6 +2241,21 @@ defineExpose({ expandThread })
   color: var(--mail-bg);
   font-size: 12.5px;
   box-shadow: var(--mail-shadow);
+}
+.mail-toast-action {
+  flex: 0 0 auto;
+  padding: 2px 10px;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.mail-toast-action:hover {
+  background: color-mix(in srgb, currentColor 16%, transparent);
 }
 .mail-toast.is-error {
   background: var(--mail-danger);

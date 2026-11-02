@@ -472,11 +472,49 @@ pub struct SearchQuery {
     pub offset: Option<u32>,
 }
 
-/// 规则条件：按 `MailRule.match_mode` 组合（`all` = 全部满足 / `any` = 任一满足），
-/// 每一项可用对应的 `*_not_contains` 取反。与 Outlook 的规则向导同一套心智模型。
+/// 规则里的一条叶子条件。
+///
+/// `field` 取 `from` / `to` / `subject` / `body` / `any` / `size`；
+/// `op` 取 `contains` / `notContains` / `equals` / `notEquals` /
+/// `startsWith` / `endsWith` / `regex` / `greaterThan` / `lessThan`。
+/// `any` 表示「主题 / 正文 / 发件人任一」，用于正则这类跨字段条件。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuleClause {
+    #[serde(default)]
+    pub field: String,
+    #[serde(default)]
+    pub op: String,
+    #[serde(default)]
+    pub value: String,
+}
+
+/// 条件组：组内条件按 `mode`（`all` / `any`）组合，`not` 对整组取反。
+///
+/// 组里还能再放组，所以「(发件人=A 或 发件人=B) 且 主题含 X 且 非(正文含 Y)」
+/// 这类 Outlook 风格的组合可以直接表达。`condition.groups` 为空时仍然走
+/// 下面那些旧字段，老规则不需要迁移。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuleGroup {
+    #[serde(default)]
+    pub mode: String,
+    #[serde(default)]
+    pub not: bool,
+    #[serde(default)]
+    pub clauses: Vec<RuleClause>,
+    #[serde(default)]
+    pub groups: Vec<RuleGroup>,
+}
+
+/// 规则条件：优先使用嵌套的 `groups`；为兼容老规则，`groups` 为空时按
+/// `match_mode` 组合下面那些扁平字段（每项可用对应的 `*_not_contains` 取反）。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RuleCondition {
+    /// 嵌套条件组（新建规则由规则构建器写入）。
+    #[serde(default)]
+    pub groups: Vec<RuleGroup>,
     /// 发件人地址或显示名包含（不区分大小写）。
     #[serde(default)]
     pub from_contains: Vec<String>,

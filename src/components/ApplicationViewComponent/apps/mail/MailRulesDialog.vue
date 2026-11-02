@@ -71,157 +71,19 @@
               </div>
             </div>
 
-            <!-- 与 Outlook 一致：条件之间可以选「与 / 或」；每一项还能填「不包含」当作「非」。 -->
-            <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px">
-              <span class="mail-flabel" style="margin: 0">满足以下条件</span>
-              <select
-                v-model="draft.matchMode"
-                class="mail-select"
-                title="条件之间的组合方式"
-                aria-label="条件组合方式"
-              >
-                <option value="all">全部满足（与）</option>
-                <option value="any">任一满足（或）</option>
-              </select>
-            </div>
-            <!-- 真实反馈：列表里最醒目的通常是「发件人显示名」，很容易被当成主题填进主题条件。
-                 主题只匹配 Subject 头，发件人条件才同时匹配地址与显示名。 -->
+            <!-- 与 Outlook 的规则向导同一套心智模型：一组条件内部可选与 / 或、
+                 整组可勾「非」，组里还能再套组。所以
+                 「(来自 A 或 B) 且 主题含 X 且 非(正文含 Y)」可以直接拼出来。 -->
             <p class="mail-hint" style="margin: 0 0 8px">
               发件人条件同时匹配地址与显示名（例如「PLM系统发送」）；主题只匹配邮件标题，正文只匹配正文。
-              「不包含」就是「非」；要同时满足用「全部满足」，命中其中任意一条即可用「任一满足」。
+              组内可选「全部满足 / 任一满足」，整组可勾「非」；需要混合与或时再加一个条件组。
             </p>
-            <div class="mail-field-row">
-              <div class="mail-field">
-                <label class="mail-flabel">
-                  发件人包含
-                  <span v-if="tokenCount('from')" class="mail-rule-count">{{ tokenCount('from') }} 个</span>
-                </label>
-                <div class="mail-rule-input-row">
-                  <textarea
-                    v-model="cond.from"
-                    class="mail-input mail-rule-grow"
-                    rows="1"
-                    :title="cond.from"
-                    placeholder="用逗号分隔多个"
-                    @input="autoGrow"
-                  ></textarea>
-                  <button
-                    class="mail-btn mail-rule-pick-btn"
-                    :class="{ 'is-on': pickerTarget === 'from' }"
-                    title="从通讯录选择发件人"
-                    @click="togglePicker('from')"
-                  >
-                    通讯录
-                  </button>
-                </div>
-              </div>
-              <div class="mail-field">
-                <label class="mail-flabel">
-                  收件人包含
-                  <span v-if="tokenCount('to')" class="mail-rule-count">{{ tokenCount('to') }} 个</span>
-                </label>
-                <div class="mail-rule-input-row">
-                  <textarea
-                    v-model="cond.to"
-                    class="mail-input mail-rule-grow"
-                    rows="1"
-                    :title="cond.to"
-                    placeholder="用逗号分隔多个"
-                    @input="autoGrow"
-                  ></textarea>
-                  <button
-                    class="mail-btn mail-rule-pick-btn"
-                    :class="{ 'is-on': pickerTarget === 'to' }"
-                    title="从通讯录选择收件人"
-                    @click="togglePicker('to')"
-                  >
-                    通讯录
-                  </button>
-                </div>
-              </div>
-            </div>
-            <!-- 「非」：Outlook 的规则向导本身不允许取反，但「不是 X 的邮件」是常见需求；
-                 单独一列，和「包含」一样参与与 / 或。 -->
-            <div class="mail-field-row">
-              <div class="mail-field">
-                <label class="mail-flabel">
-                  发件人不包含
-                  <span v-if="tokenCount('fromNot')" class="mail-rule-count">{{ tokenCount('fromNot') }} 个</span>
-                </label>
-                <textarea
-                  v-model="cond.fromNot"
-                  class="mail-input mail-rule-grow"
-                  rows="1"
-                  :title="cond.fromNot"
-                  placeholder="用逗号分隔多个"
-                  @input="autoGrow"
-                ></textarea>
-              </div>
-              <div class="mail-field">
-                <label class="mail-flabel">
-                  收件人不包含
-                  <span v-if="tokenCount('toNot')" class="mail-rule-count">{{ tokenCount('toNot') }} 个</span>
-                </label>
-                <textarea
-                  v-model="cond.toNot"
-                  class="mail-input mail-rule-grow"
-                  rows="1"
-                  :title="cond.toNot"
-                  placeholder="用逗号分隔多个"
-                  @input="autoGrow"
-                ></textarea>
-              </div>
-            </div>
-            <!-- 内联展开而不是浮层：弹层正文自带滚动容器，浮层会被裁掉一截。 -->
-            <div v-if="pickerTarget" class="mail-rule-picker">
-              <div class="mail-rule-picker-head">
-                选择{{ pickerTarget === 'from' ? '发件人' : '收件人' }}（可多选，选完继续追加）
-              </div>
-              <AddressPicker
-                :exclude="splitList(pickerTarget === 'from' ? cond.from : cond.to)"
-                keep-open
-                @pick="onPickAddress"
-                @pick-group="onPickGroup"
-                @close="pickerTarget = ''"
-              />
-            </div>
-            <div class="mail-field-row">
-              <div class="mail-field">
-                <label class="mail-flabel">主题包含</label>
-                <textarea
-                  v-model="cond.subject"
-                  class="mail-input mail-rule-grow"
-                  rows="1"
-                  placeholder="用逗号分隔多个"
-                  @input="autoGrow"
-                ></textarea>
-              </div>
-              <div class="mail-field">
-                <label class="mail-flabel">主题不包含</label>
-                <textarea
-                  v-model="cond.subjectNot"
-                  class="mail-input mail-rule-grow"
-                  rows="1"
-                  placeholder="排除这类邮件"
-                  @input="autoGrow"
-                ></textarea>
-              </div>
-            </div>
-            <div class="mail-field-row">
-              <div class="mail-field">
-                <label class="mail-flabel">正文包含</label>
-                <input v-model="cond.body" class="mail-input" placeholder="匹配正文内容" />
-              </div>
-              <div class="mail-field">
-                <label class="mail-flabel">正文不包含</label>
-                <input v-model="cond.bodyNot" class="mail-input" placeholder="命中这一类就排除" />
-              </div>
-            </div>
-            <div class="mail-field-row">
-              <div class="mail-field">
-                <label class="mail-flabel">高级正则（主题 / 正文 / 发件人任一匹配）</label>
-                <input v-model="cond.regex" class="mail-input" placeholder="例如 ^\\[发票\\]" spellcheck="false" />
-              </div>
+            <MailRuleGroup :group="builder" />
+            <label class="mail-check" style="margin-top: 8px">
+              <input v-model="cond.attachmentOnly" type="checkbox" />
+              只处理带附件的邮件
+            </label>
+            <div class="mail-field-row" style="margin-top: 10px">
               <div class="mail-field">
                 <label class="mail-flabel">生效文件夹</label>
                 <select v-model="cond.folder" class="mail-input">
@@ -230,10 +92,6 @@
                 </select>
               </div>
             </div>
-            <label class="mail-check">
-              <input v-model="cond.attachmentOnly" type="checkbox" />
-              只处理带附件的邮件
-            </label>
 
             <div class="mail-flabel" style="margin: 14px 0 6px">执行以下动作</div>
             <div class="mail-field-row">
@@ -368,13 +226,12 @@
 </template>
 
 <script setup>
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
-import AddressPicker from './AddressPicker.vue'
+import { computed, nextTick, onMounted, reactive, ref } from 'vue'
 import MailIcon from './MailIcon.vue'
 import MailFolderPicker from './MailFolderPicker.vue'
+import MailRuleGroup from './MailRuleGroup.vue'
 import { askMailConfirm } from './mailConfirm'
 import { selectableMoveTargets } from './folderTree'
-import { useContactsStore, expandGroupMembers } from '../../../../stores/contactsStore'
 
 const props = defineProps({
   rules: { type: Array, default: () => [] },
@@ -465,15 +322,6 @@ const blankDraft = () => ({
 
 const draft = reactive(blankDraft())
 const cond = reactive({
-  from: '',
-  fromNot: '',
-  to: '',
-  toNot: '',
-  subject: '',
-  subjectNot: '',
-  body: '',
-  bodyNot: '',
-  regex: '',
   folder: 'inbox',
   attachmentOnly: false,
 })
@@ -486,12 +334,94 @@ const act = reactive({
   delete: false,
 })
 
-/** 通讯录选择器当前挂在哪个条件上：'from' | 'to' | ''。 */
-const pickerTarget = ref('')
-const contacts = useContactsStore()
+// ---------------- 条件构建器 ----------------
 
-function togglePicker(target) {
-  pickerTarget.value = pickerTarget.value === target ? '' : target
+let clauseSeq = 0
+function newClause(field = 'from', op = 'contains', value = '') {
+  clauseSeq += 1
+  return { id: `c${clauseSeq}`, field, op, value }
+}
+
+function emptyGroup() {
+  return {
+    id: 'root',
+    mode: 'all',
+    not: false,
+    clauses: [newClause()],
+    groups: [],
+  }
+}
+
+/** 当前编辑中的条件树；保存时拍平成后端的 `condition.groups`。 */
+const builder = ref(emptyGroup())
+
+/** 旧规则（扁平字段）转成条件树，保证编辑时看到的就是它原本的语义。 */
+function builderFromCondition(condition, matchMode) {
+  const c = condition || {}
+  const groups = Array.isArray(c.groups) ? c.groups : []
+  if (groups.length) {
+    const normalized = groups.map(normalizeGroup)
+    if (normalized.length === 1) return normalized[0]
+    return { id: 'root', mode: matchMode === 'any' ? 'any' : 'all', not: false, clauses: [], groups: normalized }
+  }
+
+  const top = { id: 'root', mode: matchMode === 'any' ? 'any' : 'all', not: false, clauses: [], groups: [] }
+  const addList = (values, field, op) => {
+    const items = (values || []).map((value) => String(value || '').trim()).filter(Boolean)
+    if (!items.length) return
+    // 旧模型里同一个框的多个值是「或」，整个框与其它框之间才按 matchMode 组合。
+    // 拍平进同层会把「或」变成「且」，所以多值框保留成一个 any 子组。
+    if (items.length === 1) {
+      top.clauses.push(newClause(field, op, items[0]))
+    } else {
+      top.groups.push({
+        id: `g${++clauseSeq}`,
+        mode: 'any',
+        not: false,
+        clauses: items.map((value) => newClause(field, op, value)),
+        groups: [],
+      })
+    }
+  }
+  addList(c.fromContains, 'from', 'contains')
+  addList(c.fromNotContains, 'from', 'notContains')
+  addList(c.toContains, 'to', 'contains')
+  addList(c.toNotContains, 'to', 'notContains')
+  addList(c.subjectContains, 'subject', 'contains')
+  addList(c.subjectNotContains, 'subject', 'notContains')
+  addList(c.bodyContains, 'body', 'contains')
+  addList(c.bodyNotContains, 'body', 'notContains')
+  if (c.anyMatchesRegex) top.clauses.push(newClause('any', 'regex', c.anyMatchesRegex))
+  if (!top.clauses.length && !top.groups.length) top.clauses.push(newClause())
+  return top
+}
+
+/** 后端返回的组没有前端用的 id；补齐，避免 v-for 的 key 重复。 */
+function normalizeGroup(group) {
+  clauseSeq += 1
+  return {
+    id: group.id || `g${clauseSeq}`,
+    mode: group.mode === 'any' ? 'any' : 'all',
+    not: Boolean(group.not),
+    clauses: (group.clauses || []).map((clause) =>
+      newClause(clause.field || 'from', clause.op || 'contains', clause.value || ''),
+    ),
+    groups: (group.groups || []).map(normalizeGroup),
+  }
+}
+
+/** 保存前裁掉没填值的条件；整组都空就不写进规则。 */
+function pruneGroup(group) {
+  const clauses = (group.clauses || [])
+    .filter((clause) => String(clause.value || '').trim())
+    .map((clause) => ({
+      field: clause.field,
+      op: clause.op,
+      value: String(clause.value).trim(),
+    }))
+  const groups = (group.groups || []).map(pruneGroup).filter(Boolean)
+  if (!clauses.length && !groups.length) return null
+  return { mode: group.mode === 'any' ? 'any' : 'all', not: Boolean(group.not), clauses, groups }
 }
 
 // ---------------- 多值输入框：内容多了向下长，而不是把后面的内容截断 ----------------
@@ -517,55 +447,9 @@ function resizeGrowables() {
   })
 }
 
-/**
- * 输入框里已有几个值。
- *
- * 框最多长到 5 行，从通讯录连着加二十个人时看不到底——标签上先报个数，
- * 悬停输入框还能看到完整清单（textarea 的 title）。
- */
-function tokenCount(field) {
-  return splitList(cond[field]).length
-}
-
-/** 把选中的地址追加进「发件人 / 收件人包含」，去重后仍用逗号分隔。 */
-function appendAddresses(target, addresses) {
-  const field = target === 'from' ? 'from' : 'to'
-  const existing = new Set(splitList(cond[field]).map((item) => item.toLowerCase()))
-  const additions = addresses
-    .map((item) => String(item || '').trim())
-    .filter((item) => item && !existing.has(item.toLowerCase()))
-  if (!additions.length) return
-  const base = String(cond[field] || '').trim().replace(/[,;，；]\s*$/, '')
-  cond[field] = base ? `${base}, ${additions.join(', ')}` : additions.join(', ')
-  // 追加后立刻长高：用户马上能看到新加进去的地址。
-  nextTick(resizeGrowables)
-}
-
-function onPickAddress(address) {
-  const target = pickerTarget.value
-  if (!target) return
-  appendAddresses(target, [address])
-}
-
-/** 通讯组：规则里存具体的成员地址，匹配才生效（组名本身不是邮箱）。 */
-function onPickGroup(groupId) {
-  const target = pickerTarget.value
-  if (!target) return
-  const members = expandGroupMembers(contacts.groups, groupId)
-  appendAddresses(target, members.map((member) => member.email))
-}
-
-function onDocMouseDown(event) {
-  if (!pickerTarget.value) return
-  if (event.target.closest?.('.mail-rule-picker, .mail-rule-pick-btn')) return
-  pickerTarget.value = ''
-}
-
 onMounted(() => {
-  document.addEventListener('mousedown', onDocMouseDown)
   nextTick(resizeGrowables)
 })
-onBeforeUnmount(() => document.removeEventListener('mousedown', onDocMouseDown))
 
 const orderedRules = computed(() =>
   [...props.rules].sort((a, b) => (a.priority ?? 0) - (b.priority ?? 0)),
@@ -609,9 +493,49 @@ function joinList(list) {
   return (list || []).join(', ')
 }
 
-function describeRule(rule) {
+const FIELD_LABELS = {
+  from: '发件人',
+  to: '收件人',
+  subject: '主题',
+  body: '正文',
+  any: '主题/正文/发件人',
+  size: '邮件大小',
+}
+const OP_LABELS = {
+  contains: '包含',
+  notContains: '不包含',
+  equals: '等于',
+  notEquals: '不等于',
+  startsWith: '以…开头',
+  endsWith: '以…结尾',
+  regex: '匹配',
+  greaterThan: '大于',
+  lessThan: '小于',
+}
+
+function describeClause(clause) {
+  const field = FIELD_LABELS[clause.field] || clause.field
+  const op = OP_LABELS[clause.op] || clause.op
+  if (clause.field === 'size') return `${field}${op} ${clause.value} KB`
+  return `${field}${op} ${clause.value}`
+}
+
+function describeGroup(group) {
+  const parts = [
+    ...(group.clauses || []).filter((clause) => String(clause.value || '').trim()).map(describeClause),
+    ...(group.groups || []).map(describeGroup).filter(Boolean),
+  ]
+  if (!parts.length) return ''
+  const joiner = group.mode === 'any' ? ' 或 ' : ' 且 '
+  const body = parts.length > 1 ? `(${parts.join(joiner)})` : parts[0]
+  return group.not ? `非 ${body}` : body
+}
+
+function describeCondition(rule) {
   const c = rule.condition || {}
-  const a = rule.action || {}
+  if (Array.isArray(c.groups) && c.groups.length) {
+    return c.groups.map(describeGroup).filter(Boolean).join(rule.matchMode === 'any' ? ' 或 ' : ' 且 ')
+  }
   const parts = []
   if (c.fromContains?.length) parts.push(`发件人含 ${c.fromContains.join(' / ')}`)
   if (c.fromNotContains?.length) parts.push(`发件人不含 ${c.fromNotContains.join(' / ')}`)
@@ -623,34 +547,39 @@ function describeRule(rule) {
   if (c.bodyNotContains?.length) parts.push(`正文不含 ${c.bodyNotContains.join(' / ')}`)
   if (c.anyMatchesRegex) parts.push(`正则 ${c.anyMatchesRegex}`)
   if (c.hasAttachment) parts.push('带附件')
+  // 「或」写进条件之间，一眼能看出这条规则不是「全部满足」。
+  return parts.join(rule.matchMode === 'any' ? ' 或 ' : '，')
+}
+
+/** 规则摘要里显示文件夹的显示名；Graph 的服务器名是 opaque ID，不能直接给用户看。 */
+function folderLabel(name) {
+  if (!name) return ''
+  for (const list of Object.values(props.foldersByAccount || {})) {
+    const folder = (list || []).find((item) => item.name === name)
+    if (folder) return folder.displayName || folder.display_name || name
+  }
+  return name
+}
+
+function describeRule(rule) {
+  const c = rule.condition || {}
+  const a = rule.action || {}
   const actions = []
-  if (a.moveTo) actions.push(`移到 ${a.moveTo}`)
+  if (a.moveTo) actions.push(`移到 ${folderLabel(a.moveTo)}`)
   if (a.addLabels?.length) actions.push(`标签 ${a.addLabels.join('/')}`)
   if (a.forwardTo?.length) actions.push(`转发 ${a.forwardTo.join('/')}`)
   if (a.markRead) actions.push('标已读')
   if (a.star) actions.push('加星标')
   if (a.delete) actions.push('移入垃圾箱')
-  const where = (rule.condition?.folderRoles || []).length
-    ? `【${rule.condition.folderRoles.join('/')}】`
-    : '【收件箱】'
-  // 「或」写进条件之间，一眼能看出这条规则不是「全部满足」。
-  const joiner = rule.matchMode === 'any' ? ' 或 ' : '，'
-  return `${where}${parts.join(joiner) || '（无条件）'} → ${actions.join('，') || '（无动作）'}`
+  const where = (c.folderRoles || []).length ? `【${c.folderRoles.join('/')}】` : '【收件箱】'
+  const scope = c.hasAttachment ? '仅带附件 · ' : ''
+  return `${where}${scope}${describeCondition(rule) || '（无条件）'} → ${actions.join('，') || '（无动作）'}`
 }
 
 function startNew() {
-  pickerTarget.value = ''
   Object.assign(draft, blankDraft())
+  builder.value = emptyGroup()
   Object.assign(cond, {
-    from: '',
-    fromNot: '',
-    to: '',
-    toNot: '',
-    subject: '',
-    subjectNot: '',
-    body: '',
-    bodyNot: '',
-    regex: '',
     folder: 'inbox',
     attachmentOnly: false,
   })
@@ -670,19 +599,10 @@ function startNew() {
 }
 
 function editRule(rule) {
-  pickerTarget.value = ''
   Object.assign(draft, JSON.parse(JSON.stringify(rule)))
   const c = rule.condition || {}
+  builder.value = builderFromCondition(c, rule.matchMode)
   Object.assign(cond, {
-    from: joinList(c.fromContains),
-    fromNot: joinList(c.fromNotContains),
-    to: joinList(c.toContains),
-    toNot: joinList(c.toNotContains),
-    subject: joinList(c.subjectContains),
-    subjectNot: joinList(c.subjectNotContains),
-    body: joinList(c.bodyContains),
-    bodyNot: joinList(c.bodyNotContains),
-    regex: c.anyMatchesRegex || '',
     folder: (c.folderRoles || []).includes('*') ? '*' : 'inbox',
     attachmentOnly: Boolean(c.hasAttachment),
   })
@@ -703,19 +623,13 @@ function editRule(rule) {
 }
 
 async function saveDraft() {
-  pickerTarget.value = ''
+  const root = pruneGroup(builder.value)
   const payload = {
     ...draft,
+    // 条件树的顶层组就是「满足以下条件」那一块；组本身带 mode / not。
+    matchMode: root?.mode || 'all',
     condition: {
-      fromContains: splitList(cond.from),
-      fromNotContains: splitList(cond.fromNot),
-      toContains: splitList(cond.to),
-      toNotContains: splitList(cond.toNot),
-      subjectContains: splitList(cond.subject),
-      subjectNotContains: splitList(cond.subjectNot),
-      bodyContains: splitList(cond.body),
-      bodyNotContains: splitList(cond.bodyNot),
-      anyMatchesRegex: cond.regex.trim() || null,
+      groups: root ? [root] : [],
       hasAttachment: cond.attachmentOnly ? true : null,
       accountIds: [],
       // 后端语义：空 = 只处理收件箱（Outlook 默认），`*` = 所有文件夹。
@@ -831,20 +745,6 @@ async function removeRule(rule) {
   background: var(--mail-panel);
 }
 
-.mail-rule-input-row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-.mail-rule-input-row .mail-input {
-  flex: 1 1 auto;
-  min-width: 0;
-}
-.mail-rule-pick-btn {
-  flex: 0 0 auto;
-  height: 31px;
-}
-
 /* 多值输入框：内容多了往下长（上限 5 行），之后自身滚动。
    不用单行 input——从通讯录加几个人就被横向截断，用户看不到加了谁。 */
 .mail-rule-grow {
@@ -864,17 +764,6 @@ async function removeRule(rule) {
   font-weight: 400;
 }
 
-/* 条件里已经填了几个值：框最多长到 5 行，靠这个计数知道后面还有没有。 */
-.mail-rule-count {
-  margin-left: 4px;
-  padding: 0 5px;
-  border-radius: 999px;
-  background: var(--mail-bg-sunken);
-  color: var(--mail-text-muted);
-  font-size: 10.5px;
-  font-weight: 500;
-}
-
 /* 就地报错：保存 / 立即执行失败时显示在按钮行下面，不弹系统对话框。 */
 .mail-rule-error {
   margin: 8px 0 0;
@@ -884,25 +773,5 @@ async function removeRule(rule) {
   color: var(--mail-danger);
   font-size: 12px;
   line-height: 1.45;
-}
-
-/* 通讯录面板：内联在条件行下方，标题写清楚这次是往哪一栏里加人。 */
-.mail-rule-picker {
-  margin: 2px 0 14px;
-  border: 1px solid var(--mail-border-strong);
-  border-radius: var(--mail-radius-sm);
-  background: var(--mail-panel);
-  overflow: hidden;
-}
-.mail-rule-picker-head {
-  padding: 7px 12px;
-  border-bottom: 1px solid var(--mail-border);
-  color: var(--mail-text-muted);
-  font-size: 11.5px;
-}
-/* AddressPicker 本身是内联面板配色（凹陷底 + 底边线），嵌进来后跟着弹层底面走。 */
-.mail-rule-picker :deep(.address-picker) {
-  background: var(--mail-panel);
-  border-bottom: 0;
 }
 </style>

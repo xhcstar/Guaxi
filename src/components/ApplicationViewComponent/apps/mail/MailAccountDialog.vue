@@ -14,10 +14,8 @@
             <div class="meta">
               <span class="email">{{ account.email }}</span>
               <span class="servers">
-                {{ account.protocol === 'pop3' ? 'POP3' : 'IMAP' }}
-                {{ account.protocol === 'pop3' ? account.pop3Host : account.imapHost }}:{{
-                  account.protocol === 'pop3' ? account.pop3Port : account.imapPort
-                }}
+                {{ protocolLabel(account) }}
+                {{ serverLabel(account) }}
                 · SMTP {{ account.smtpHost }}:{{ account.smtpPort }}
               </span>
             </div>
@@ -108,12 +106,19 @@
           <div class="mail-field-row">
             <div class="mail-field">
               <label class="mail-flabel">认证方式</label>
-              <select v-model="form.authKind" class="mail-input" :disabled="form.protocol === 'pop3'">
+              <select
+                v-model="form.authKind"
+                class="mail-input"
+                :disabled="form.protocol === 'pop3' || form.protocol === 'graph'"
+              >
                 <option value="password">密码 / 授权码</option>
                 <option value="oauth2">OAuth2（Gmail / Outlook 推荐）</option>
               </select>
               <span v-if="form.protocol === 'pop3'" class="mail-hint">
                 POP3 只能用密码 / 授权码：服务商没有为它提供 OAuth2 端点。
+              </span>
+              <span v-else-if="form.protocol === 'graph'" class="mail-hint">
+                Exchange Online 走 Microsoft Graph，必须使用 OAuth2 授权。
               </span>
             </div>
             <div class="mail-field">
@@ -135,9 +140,14 @@
             <div class="mail-field-row">
               <div class="mail-field">
                 <label class="mail-flabel">服务商</label>
-                <select v-model="form.oauthProvider" class="mail-input">
+                <select
+                  v-model="form.oauthProvider"
+                  class="mail-input"
+                  :disabled="form.protocol === 'graph'"
+                >
                   <option value="gmail">Google / Gmail</option>
-                  <option value="outlook">Microsoft / Outlook</option>
+                  <option value="outlook">Microsoft / Outlook（IMAP）</option>
+                  <option value="graph">Microsoft 365 / Exchange（Graph）</option>
                 </select>
               </div>
               <div class="mail-field">
@@ -226,6 +236,15 @@
             </div>
           </div>
 
+          <div v-if="form.protocol === 'graph'" class="mail-field">
+            <label class="mail-flabel">Exchange Online / Microsoft 365</label>
+            <p class="mail-hint" style="margin: 0">
+              Graph 通道直接同步文件夹、已读/星标、移动与删除，并通过 Exchange 发信；
+              不需要填写 IMAP / SMTP 地址。授权后如果租户管理员没有同意
+              Mail.ReadWrite / Mail.Send 权限，连接会失败并在这里显示原因。
+            </p>
+          </div>
+
           <template v-if="form.protocol === 'pop3'">
             <div class="mail-field-row">
               <div class="mail-field">
@@ -257,7 +276,7 @@
             </div>
           </template>
 
-          <div v-else class="mail-field-row">
+          <div v-else-if="form.protocol !== 'graph'" class="mail-field-row">
             <div class="mail-field">
               <label class="mail-flabel">IMAP 服务器</label>
               <input v-model="form.imapHost" class="mail-input" placeholder="imap.example.com" />
@@ -275,7 +294,7 @@
             </div>
           </div>
 
-          <div class="mail-field-row">
+          <div v-if="form.protocol !== 'graph'" class="mail-field-row">
             <div class="mail-field">
               <label class="mail-flabel">SMTP 服务器</label>
               <input v-model="form.smtpHost" class="mail-input" placeholder="smtp.example.com" />
@@ -298,8 +317,8 @@
             <textarea v-model="form.signature" class="mail-textarea" rows="3" placeholder="署名 / 联系方式，会附在每封邮件末尾"></textarea>
           </div>
 
-          <!-- 共享邮箱 / 委托访问 -->
-          <div class="mail-field">
+          <!-- 共享邮箱 / 委托访问（Graph 第一版不接委托，先隐藏避免误导） -->
+          <div v-if="form.protocol !== 'graph'" class="mail-field">
             <label class="mail-flabel">共享邮箱 / 委托访问（团队收件箱）</label>
             <p class="mail-hint" style="margin: 0 0 6px">
               用你的凭据登录，直接读取被委托的邮箱（Exchange / Office 365 / Dovecot
@@ -316,7 +335,7 @@
           </div>
 
           <!-- 服务器端规则（Sieve） -->
-          <div class="mail-field">
+          <div v-if="form.protocol !== 'graph'" class="mail-field">
             <label class="mail-flabel">服务器端规则（Sieve，可选）</label>
             <div style="display: flex; gap: 6px; align-items: center; flex-wrap: wrap">
               <select v-model="form.sieve.mode" class="mail-input" style="width: 140px">
@@ -383,7 +402,7 @@
           <div v-if="probeResult" class="mail-probe">
             <div v-for="(probe, index) in probeResult" :key="index">
               <span :class="probe.ok ? 'ok' : 'bad'">
-                {{ index === 0 ? 'IMAP' : 'SMTP' }}{{ probe.ok ? ' 正常' : ' 失败' }}
+                {{ probe.stage === 'graph' ? 'Exchange / Graph' : index === 0 ? 'IMAP' : 'SMTP' }}{{ probe.ok ? ' 正常' : ' 失败' }}
               </span>
               — {{ probe.detail }}
             </div>
@@ -443,12 +462,23 @@ const props = defineProps({
 })
 const emit = defineEmits(['close', 'saved', 'deleted', 'select'])
 
-const presets = [
-  { label: 'QQ 邮箱', email: '', imapHost: 'imap.qq.com', imapPort: 993, pop3Host: 'pop.qq.com', smtpHost: 'smtp.qq.com', smtpPort: 465, hint: '需要 QQ 邮箱设置里生成的授权码' },
+function protocolLabel(account) {
+  if (account.protocol === 'graph') return 'Exchange'
+  return account.protocol === 'pop3' ? 'POP3' : 'IMAP'
+}
+
+function serverLabel(account) {
+  if (account.protocol === 'graph') return 'Microsoft Graph'
+  if (account.protocol === 'pop3') return `${account.pop3Host}:${account.pop3Port}`
+  return `${account.imapHost}:${account.imapPort}`
+}
+
+const presets = [  { label: 'QQ 邮箱', email: '', imapHost: 'imap.qq.com', imapPort: 993, pop3Host: 'pop.qq.com', smtpHost: 'smtp.qq.com', smtpPort: 465, hint: '需要 QQ 邮箱设置里生成的授权码' },
   { label: '163 邮箱', email: '', imapHost: 'imap.163.com', imapPort: 993, pop3Host: 'pop.163.com', smtpHost: 'smtp.163.com', smtpPort: 465, hint: '需要客户端授权密码' },
   { label: '126 邮箱', email: '', imapHost: 'imap.126.com', imapPort: 993, pop3Host: 'pop.126.com', smtpHost: 'smtp.126.com', smtpPort: 465, hint: '需要客户端授权密码' },
   { label: 'Gmail', email: '', imapHost: 'imap.gmail.com', imapPort: 993, smtpHost: 'smtp.gmail.com', smtpPort: 465, oauthProvider: 'gmail', hint: '需要开启两步验证并使用应用专用密码' },
   { label: 'Outlook', email: '', imapHost: 'outlook.office365.com', imapPort: 993, smtpHost: 'smtp.office365.com', smtpPort: 587, smtpSecurity: 'starttls', oauthProvider: 'outlook', authKind: 'oauth2', hint: '微软账户需要在安全设置里开启 IMAP' },
+  { label: 'Exchange Online', email: '', protocol: 'graph', oauthProvider: 'graph', authKind: 'oauth2', hint: 'Microsoft 365 / Exchange Online 原生同步（Graph）' },
   { label: '腾讯企业邮', email: '', imapHost: 'imap.exmail.qq.com', imapPort: 993, smtpHost: 'smtp.exmail.qq.com', smtpPort: 465, hint: '登录名可能是完整邮箱' },
   { label: '阿里企业邮', email: '', imapHost: 'imap.qiye.aliyun.com', imapPort: 993, smtpHost: 'smtp.qiye.aliyun.com', smtpPort: 465, hint: '' },
 ]
@@ -473,6 +503,7 @@ const KNOWN_SERVERS = {
 const PROTOCOL_OPTIONS = [
   { value: 'imap', label: 'IMAP（推荐）', hint: '多设备同步，文件夹与已读状态都在服务器上' },
   { value: 'pop3', label: 'POP3', hint: '只收件箱，下载到本机；部分老邮箱只支持这个' },
+  { value: 'graph', label: 'Exchange（Graph）', hint: 'Microsoft 365 / Exchange Online 原生同步，需要 OAuth2 授权' },
 ]
 
 const DOMAIN_SERVERS = {
@@ -576,6 +607,7 @@ function derivePop3Host(imapHost) {
 
 /** 按服务商 / 邮箱域名补服务器：已有服务器或用户手改过就不动。 */
 function fillKnownServers() {
+  if (form.protocol === 'graph') return
   const domain = String(form.email.split('@')[1] || '').trim().toLowerCase()
   const defaults =
     (form.authKind === 'oauth2' ? KNOWN_SERVERS[form.oauthProvider] : null) ||
@@ -597,6 +629,12 @@ function fillKnownServers() {
 function setProtocol(next) {
   if (form.protocol === next) return
   form.protocol = next
+  if (next === 'graph') {
+    form.authKind = 'oauth2'
+    form.oauthProvider = 'graph'
+    return
+  }
+  if (form.oauthProvider === 'graph') form.oauthProvider = 'outlook'
   if (next === 'pop3') {
     // POP3 不能用 OAuth2：服务商不提供它的授权端点。
     form.authKind = 'password'
@@ -614,6 +652,7 @@ function missingFields() {
   // OAuth 可以先不填邮箱：授权结果里的 id_token 会带回来真实地址。
   const canOmitEmail = form.authKind === 'oauth2' && !form.email.trim()
   if (!emailValid.value && !canOmitEmail) missing.push('完整邮箱地址')
+  if (form.protocol === 'graph') return missing
   if (form.protocol === 'pop3') {
     if (!form.pop3Host.trim()) missing.push('POP3 服务器')
   } else if (!form.imapHost.trim()) {
@@ -629,6 +668,8 @@ const GMAIL_DOMAINS = new Set(['gmail.com', 'googlemail.com'])
 /** 邮箱域名已经说明了服务商：OAuth 下自动选中对应项，避免 Outlook 邮箱配到 Gmail 端点。 */
 function syncProviderFromDomain() {
   if (form.authKind !== 'oauth2') return
+  // Graph 账户的 provider 是协议的一部分，不能被域名自动改成 IMAP 的 outlook。
+  if (form.protocol === 'graph') return
   const domain = String(form.email.split('@')[1] || '').trim().toLowerCase()
   if (OUTLOOK_DOMAINS.has(domain) && form.oauthProvider !== 'outlook') {
     form.oauthProvider = 'outlook'
@@ -692,14 +733,20 @@ watch(
 // 只要求「本地部分@域名.后缀」：不追求 RFC 完整性，但一定要挡住
 // `name@` 这种缺域名的半截地址——它会让保存下来的账户永远连不上服务器。
 const emailValid = computed(() => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email.trim()))
-const canSave = computed(
-  () =>
-    // OAuth 允许先空着邮箱，授权完成后再由服务商返回的地址补上。
-    (emailValid.value || (form.authKind === 'oauth2' && !form.email.trim())) &&
-    // 收信服务器按协议二选一：POP3 账户没有 IMAP 服务器，反之亦然。
+const canSave = computed(() => {
+  const emailOk =
+    emailValid.value || (form.authKind === 'oauth2' && !form.email.trim())
+  if (!emailOk) return false
+  if (form.protocol === 'graph') {
+    // Graph 账户只填邮箱 + 完成 OAuth，不需要 IMAP/SMTP 服务器。
+    return form.authKind === 'oauth2' && form.oauthProvider === 'graph'
+  }
+  // 收信服务器按协议二选一：POP3 账户没有 IMAP 服务器，反之亦然。
+  return Boolean(
     (form.protocol === 'pop3' ? form.pop3Host.trim() : form.imapHost.trim()) &&
-    form.smtpHost.trim(),
-)
+      form.smtpHost.trim(),
+  )
+})
 
 function pickAccent() {
   const palette = ['#5b7cfa', '#d97757', '#2f9e6e', '#b46bd6', '#c98a18', '#2f8fbf']
@@ -789,6 +836,7 @@ function cancel() {
 function startCustom() {
   customMode.value = true
   // 自建/公司邮件系统通常用密码或授权码；OAuth2 只对内置的两家服务商有端点。
+  form.protocol = 'imap'
   form.authKind = 'password'
   autoServers.value = null
   form.imapHost = ''
@@ -804,11 +852,22 @@ function startCustom() {
 
 function applyPreset(preset) {
   customMode.value = false
-  form.imapHost = preset.imapHost
-  form.imapPort = preset.imapPort
+  if (preset.protocol === 'graph') {
+    form.protocol = 'graph'
+    form.authKind = 'oauth2'
+    form.oauthProvider = 'graph'
+    form.imapHost = ''
+    form.smtpHost = ''
+    form.pop3Host = ''
+    autoServers.value = null
+    return
+  }
+  if (form.protocol === 'graph') form.protocol = 'imap'
+  form.imapHost = preset.imapHost || ''
+  form.imapPort = preset.imapPort || 993
   form.imapSecurity = 'ssl'
-  form.smtpHost = preset.smtpHost
-  form.smtpPort = preset.smtpPort
+  form.smtpHost = preset.smtpHost || ''
+  form.smtpPort = preset.smtpPort || 465
   form.smtpSecurity = preset.smtpSecurity || 'ssl'
   // 服务商自带 OAuth 端点时顺手选中，避免服务器和认证方式对不上。
   if (preset.oauthProvider) form.oauthProvider = preset.oauthProvider
@@ -991,7 +1050,9 @@ async function save(closeAfter = true) {
       throw new Error(
         form.protocol === 'pop3'
           ? '请先填写邮箱地址、POP3 与 SMTP 服务器'
-          : '请先填写邮箱地址、IMAP 与 SMTP 服务器',
+          : form.protocol === 'graph'
+            ? '请先填写邮箱地址，并完成 Microsoft Graph 授权'
+            : '请先填写邮箱地址、IMAP 与 SMTP 服务器',
       )
     }
     return null
