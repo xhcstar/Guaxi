@@ -1530,6 +1530,35 @@ export const useMailStore = defineStore('mail', {
       return this.messages.find((m) => this.keyOf(m) === key) || null
     },
 
+    /**
+     * 同一角色可能有多个候选（QQ 的「其他文件夹/Deleted Items」模板壳也常被标成
+     * Trash）。删除、归档、垃圾邮件要选真正可用的那个：排除模板壳，优先有邮件、
+     * 名字更短的那个。
+     */
+    folderForRole(accountId, role) {
+      const candidates = (this.foldersByAccount[accountId] || []).filter(
+        (folder) => folder.role === role && folder.selectable !== false,
+      )
+      const rank = (folder) => {
+        const label = `${folder.displayName || folder.display_name || ''} ${folder.name || ''}`
+          .toLowerCase()
+        return [
+          /其他文件夹|other folders/.test(label) ? 1 : 0,
+          Number(folder.total) > 0 ? 0 : 1,
+          String(folder.displayName || folder.display_name || folder.name || '').length,
+        ]
+      }
+      candidates.sort((a, b) => {
+        const ra = rank(a)
+        const rb = rank(b)
+        for (let i = 0; i < ra.length; i += 1) {
+          if (ra[i] !== rb[i]) return ra[i] - rb[i]
+        }
+        return 0
+      })
+      return candidates[0] || null
+    },
+
     toggleSelect(row, checked) {
       // 用户手动改动选择时，作废还在途中的「全选整个文件夹」查询。
       this.selectionSeq += 1
@@ -1679,8 +1708,7 @@ export const useMailStore = defineStore('mail', {
           (row.threadUids || []).some((item) => this.keyOf(item) === readerKey),
       )
 
-      const folderByRole = (accountId, role) =>
-        (this.foldersByAccount[accountId] || []).find((f) => f.role === role)
+      const folderByRole = (accountId, role) => this.folderForRole(accountId, role)
       for (const list of groupsMap.values()) {
         const { accountId, folder } = list[0]
         const total = list.length
@@ -1817,7 +1845,30 @@ export const useMailStore = defineStore('mail', {
         }
         return
       }
+      // 服务器上的「已删除」是另一个文件夹：只删源夹本地行不会自动出现目标夹的行。
+      // 这里顺手同步一次 Trash，用户马上点「已删除」就能看到；POP3 是本地移动，
+      // 不需要网络，但调用也无害。
+      for (const accountId of accounts) {
+        const trash = this.folderForRole(accountId, 'trash')
+        if (!trash) continue
+        const movedToTrash = batch.groups.some(
+          (group) => group.accountId === accountId && group.folder !== trash.name,
+        )
+        if (!movedToTrash) continue
+        try {
+          await invoke('mail_sync_folder', { accountId, folder: trash.name })
+        } catch (error) {
+          logger.warn('同步已删除文件夹失败', error)
+        }
+      }
       await this.reloadUnread().catch(() => {})
+      const viewingTrash =
+        this.scope === 'trash' ||
+        (this.scope === 'folder' &&
+          (this.foldersByAccount[this.activeAccountId] || []).some(
+            (folder) => folder.name === this.activeFolder && folder.role === 'trash',
+          ))
+      if (viewingTrash) await this.loadMessages({ silent: true }).catch(() => {})
       for (const accountId of accounts) scheduleFolderRefresh(this, accountId)
     },
 

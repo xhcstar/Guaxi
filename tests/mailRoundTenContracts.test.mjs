@@ -89,7 +89,11 @@ test('侧栏角标：存完草稿要重算草稿夹的计数', () => {
     'POP3 本地移动后目标夹也要重算',
   )
   assert.ok(
-    (mod.match(/refresh_folder_totals\(&account_id, &folder\)/g) || []).length >= 2,
-    'POP3 的两种删除入口都要重算来源夹',
+    /fn pop3_delete_to_trash[\s\S]{0,900}refresh_folder_totals\(&account\.id, folder\)/.test(mod),
+    'POP3 删除后在本地重算来源夹',
+  )
+  assert.ok(
+    (mod.match(/pop3_delete_to_trash\(/g) || []).length >= 3,
+    '两个删除入口都走同一个本地删除 / 回收站逻辑',
   )
 })

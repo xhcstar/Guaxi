@@ -1410,12 +1410,12 @@ async function onArchiveCurrent(detail) {
   const accountId = detail.accountId
   // 存档是账户的固定入口（后端同步时总会补齐）；万一还没有，先建一个再归档，
   // 而不是让用户为了「归档」按钮去侧栏手动建文件夹。
-  let archive = (store.foldersByAccount[accountId] || []).find((f) => f.role === 'archive')
+  let archive = store.folderForRole(accountId, 'archive')
   if (!archive) {
     try {
       // createFolder 内部已经刷新过文件夹表，这里只取结果。
       await store.createFolder('Archive')
-      archive = (store.foldersByAccount[accountId] || []).find((f) => f.role === 'archive')
+      archive = store.folderForRole(accountId, 'archive')
     } catch (error) {
       notify(String(error?.message || error), true)
       return
@@ -1583,9 +1583,7 @@ async function contextAction(action, target) {
       return
     }
     if (action === 'archive') {
-      const archive = (store.foldersByAccount[row.accountId] || []).find(
-        (f) => f.role === 'archive',
-      )
+      const archive = store.folderForRole(row.accountId, 'archive')
       if (!archive) {
         notify('该账户没有存档文件夹，可以先用侧栏的「＋」新建一个', true)
         return

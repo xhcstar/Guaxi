@@ -145,11 +145,30 @@ fn load_account(account_id: &str) -> Result<Account, String> {
 
 /// 按语义角色取文件夹的服务器名（Graph 是 folder id，EWS 是 FolderId）。
 fn folder_name_by_role(account_id: &str, role: FolderRole) -> Result<String, String> {
-    store::list_folders(account_id)?
-        .into_iter()
-        .find(|folder| folder.role == role)
+    folder_by_role(account_id, role)
         .map(|folder| folder.name)
         .ok_or_else(|| format!("账户缺少「{}」文件夹，请先刷新文件夹", role.as_str()))
+}
+
+/// 同一角色可能有多个候选：QQ 的「其他文件夹/Deleted Items」模板壳也会被标成
+/// Trash，真正的「Deleted Messages」在它旁边。删除 / 垃圾邮件必须选真正可用的
+/// 那个，否则邮件会被搬进一个根本不展示、也不同步的壳里。
+fn folder_by_role(account_id: &str, role: FolderRole) -> Option<MailFolder> {
+    let mut candidates: Vec<MailFolder> = store::list_folders(account_id)
+        .ok()?
+        .into_iter()
+        .filter(|folder| folder.role == role && folder.selectable)
+        .collect();
+    candidates.sort_by_key(|folder| {
+        let label = format!("{} {}", folder.display_name, folder.name).to_ascii_lowercase();
+        let shell = label.contains("其他文件夹") || label.contains("other folders");
+        (
+            shell as u8,
+            (folder.total == 0) as u8,
+            folder.display_name.chars().count(),
+        )
+    });
+    candidates.into_iter().next()
 }
 
 /// 这封邮件的原始报文。POP3 账户没有按 uid 取单封的接口，走 `pop3_sync` 重新下载。
@@ -970,10 +989,7 @@ async fn apply_rules_to_new(
     all_rules: &[MailRule],
 ) {
     let folders = store::list_folders(&account.id).unwrap_or_default();
-    let trash = folders
-        .iter()
-        .find(|f| f.role == FolderRole::Trash)
-        .map(|f| f.name.clone());
+    let trash = folder_by_role(&account.id, FolderRole::Trash).map(|f| f.name);
     // 收/发件人名单比规则优先：命中的发件人直接按名单处理，不再跑规则。
     let sender_rules = store::list_sender_rules().unwrap_or_default();
     // 没有一条规则要看正文时，整个循环都不读正文：正文是密文，读一次就解一次，
@@ -1787,6 +1803,33 @@ pub async fn mail_move_messages(
     }
 }
 
+/// POP3 的删除：有本地「已删除」就移过去，已经在「已删除」里才真正删掉。
+///
+/// 以前 POP3 直接删本地行，侧栏里的「已删除」永远是空的——用户以为删掉的邮件
+/// 去了回收站，实际已经永久消失。POP3 没有服务器端 Trash，这里用本地文件夹模拟。
+fn pop3_delete_to_trash(account: &Account, folder: &str, uids: &[u32]) -> Result<(), String> {
+    let folders = store::list_folders(&account.id)?;
+    let current = folders
+        .iter()
+        .find(|f| f.name == folder)
+        .map(|f| f.role)
+        .unwrap_or(FolderRole::Custom);
+    let trash = folder_by_role(&account.id, FolderRole::Trash).map(|folder| folder.name);
+    if current != FolderRole::Trash {
+        if let Some(trash) = trash {
+            return move_locally(&account.id, folder, uids, &trash);
+        }
+    }
+    for uid in uids {
+        let _ = store::delete_message(&account.id, folder, *uid);
+    }
+    if folder == pop3_sync::INBOX {
+        let _ = pop3_sync::sync_counts(account);
+    }
+    refresh_folder_totals(&account.id, folder);
+    Ok(())
+}
+
 /// POP3 账户的本地移动：把（摘要 + 正文）复制到目标文件夹，再删掉原行。
 ///
 /// uid 尽量原样带走：POP3 的 UIDL→uid 映射记的就是这个号，换号之后同步时查不到
@@ -1850,14 +1893,7 @@ pub async fn mail_delete_messages(
     let account = load_account(&account_id)?;
     // POP3 的删除只碰本地：服务器上的那一份由「收信后是否保留副本」决定。
     if pop3_sync::is_pop3(&account) {
-        for uid in &uids {
-            let _ = store::delete_message(&account_id, &folder, *uid);
-        }
-        if folder == pop3_sync::INBOX {
-            let _ = pop3_sync::sync_counts(&account);
-        }
-        refresh_folder_totals(&account_id, &folder);
-        return Ok(());
+        return pop3_delete_to_trash(&account, &folder, &uids);
     }
     let password = account_password(&account)?;
     let folders = store::list_folders(&account_id)?;
@@ -1866,10 +1902,7 @@ pub async fn mail_delete_messages(
         .find(|f| f.name == folder)
         .map(|f| f.role)
         .unwrap_or(FolderRole::Custom);
-    let trash = folders
-        .iter()
-        .find(|f| f.role == FolderRole::Trash)
-        .map(|f| f.name.clone());
+    let trash = folder_by_role(&account_id, FolderRole::Trash).map(|folder| folder.name);
 
     if graph::is_graph(&account) {
         let acc = account.clone();
@@ -2161,20 +2194,15 @@ pub async fn mail_unmark_junk(
     uids: Vec<u32>,
 ) -> Result<(), String> {
     ensure_init(&app)?;
-    let inbox = store::list_folders(&account_id)?
-        .into_iter()
-        .find(|f| f.role == FolderRole::Inbox)
-        .map(|f| f.name)
+    let inbox = folder_by_role(&account_id, FolderRole::Inbox)
+        .map(|folder| folder.name)
         .ok_or_else(|| "账户没有收件箱".to_string())?;
     move_batch(&app, &account_id, &folder, &uids, &inbox).await
 }
 
 fn junk_folder_name(account_id: &str) -> Result<String, String> {
-    let folders = store::list_folders(account_id)?;
-    folders
-        .iter()
-        .find(|f| f.role == FolderRole::Junk)
-        .map(|f| f.name.clone())
+    folder_by_role(account_id, FolderRole::Junk)
+        .map(|folder| folder.name)
         .ok_or_else(|| "该账户没有垃圾邮件文件夹（可在文件夹列表里新建「垃圾邮件」）".to_string())
 }
 
@@ -2297,15 +2325,7 @@ pub async fn mail_batch_delete(
     }
     let account_for_protocol = load_account(&account_id)?;
     if pop3_sync::is_pop3(&account_for_protocol) {
-        for uid in &uids {
-            let _ = store::delete_message(&account_id, &folder, *uid);
-        }
-        if folder == pop3_sync::INBOX {
-            let _ = pop3_sync::sync_counts(&account_for_protocol);
-        }
-        // 本地删完就地重算：否则侧栏靠着内存里的乐观值显示，重启后又读回旧数字。
-        refresh_folder_totals(&account_id, &folder);
-        return Ok(());
+        return pop3_delete_to_trash(&account_for_protocol, &folder, &uids);
     }
     let folders = store::list_folders(&account_id)?;
     let current = folders
@@ -2313,10 +2333,7 @@ pub async fn mail_batch_delete(
         .find(|f| f.name == folder)
         .map(|f| f.role)
         .unwrap_or(FolderRole::Custom);
-    let trash = folders
-        .iter()
-        .find(|f| f.role == FolderRole::Trash)
-        .map(|f| f.name.clone());
+    let trash = folder_by_role(&account_id, FolderRole::Trash).map(|folder| folder.name);
 
     if graph::is_graph(&account_for_protocol) {
         let acc = account_for_protocol.clone();
