@@ -647,6 +647,18 @@ onUnmounted(() => {
   min-height: 0;
   display: flex;
   flex-direction: column;
+  /* 与主界面文件树 / 编辑器同一套字体（--guaxi-editor-font-family）。
+     naive 的树组件没有设置 font-family，不显式指定会落回 WebView 默认无衬线字体，
+     同一份文件列表在两个页面看起来像两种字体。 */
+  font-family: var(
+    --guaxi-editor-font-family,
+    'Maple Mono NF CN',
+    'JetBrainsMono Nerd Font Mono',
+    Consolas,
+    monospace,
+    'Microsoft YaHei',
+    'Courier New'
+  );
 }
 
 .list-header {
