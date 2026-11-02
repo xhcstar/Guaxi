@@ -14,7 +14,20 @@
 import { ref, h } from 'vue';
 import { NMenu, NIcon } from 'naive-ui';
 import { InformationCircleOutline, BookOutline } from '@vicons/ionicons5';
-import { FolderAdd20Regular, Image28Regular, Server24Regular, Key24Regular, TaskListSquareLtr20Regular, BrainCircuit20Regular } from '@vicons/fluent';
+import {
+  FolderAdd20Regular,
+  Image28Regular,
+  Code24Regular,
+  WindowConsole20Regular,
+  Server24Regular,
+  Key24Regular,
+  TaskListSquareLtr20Regular,
+  BrainCircuit20Regular,
+  Mic24Regular,
+  ArrowSwap24Regular,
+  PuzzlePiece24Regular,
+  Wrench24Regular,
+} from '@vicons/fluent';
 import { useSettingsStore } from '../../stores/settingsStore';
 
 const settingsStore = useSettingsStore();
@@ -47,8 +60,18 @@ const menuOptions = [
     children: [
       {
         label: '外观',
-        key: 'preference',
+        key: 'appearance',
         icon: () => h(NIcon, { component: Image28Regular, size: 24 }),
+      },
+      {
+        label: '编辑器',
+        key: 'editor',
+        icon: () => h(NIcon, { component: Code24Regular, size: 24 }),
+      },
+      {
+        label: '终端',
+        key: 'terminal',
+        icon: () => h(NIcon, { component: WindowConsole20Regular, size: 24 }),
       },
     ],
   },
@@ -61,6 +84,11 @@ const menuOptions = [
         label: '大模型',
         key: 'llm',
         icon: () => h(NIcon, { component: Key24Regular, size: 24 }),
+      },
+      {
+        label: '语音能力',
+        key: 'voice',
+        icon: () => h(NIcon, { component: Mic24Regular, size: 24 }),
       },
       {
         label: '认知层',
@@ -78,6 +106,21 @@ const menuOptions = [
         label: '服务器',
         key: 'server',
         icon: () => h(NIcon, { component: Server24Regular, size: 24 }),
+      },
+      {
+        label: '文件传输',
+        key: 'transfer',
+        icon: () => h(NIcon, { component: ArrowSwap24Regular, size: 24 }),
+      },
+      {
+        label: '插件',
+        key: 'plugins',
+        icon: () => h(NIcon, { component: PuzzlePiece24Regular, size: 24 }),
+      },
+      {
+        label: '系统维护',
+        key: 'maintenance',
+        icon: () => h(NIcon, { component: Wrench24Regular, size: 24 }),
       },
     ],
   },

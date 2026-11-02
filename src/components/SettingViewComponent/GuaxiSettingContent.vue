@@ -12,7 +12,13 @@
 import { computed } from 'vue';
 import { NCard } from 'naive-ui';
 import NoteRepoContent from './NoteRepoContent.vue';
-import PreferenceContent from './PreferenceContent.vue';
+import AppearanceContent from './AppearanceContent.vue';
+import EditorContent from './EditorContent.vue';
+import VoiceContent from './VoiceContent.vue';
+import TerminalContent from './TerminalContent.vue';
+import TransferContent from './TransferContent.vue';
+import PluginContent from './PluginContent.vue';
+import MaintenanceContent from './MaintenanceContent.vue';
 import ServerContent from './ServerContent.vue';
 import AboutContent from './AboutContent.vue';
 import LLMModalSetting from './LLMModalSetting.vue';
@@ -28,8 +34,20 @@ const currentComponent = computed(() => {
   switch (settingsStore.selectedMenu) {
     case 'noterepo':
       return NoteRepoContent;
-    case 'preference':
-      return PreferenceContent;
+    case 'appearance':
+      return AppearanceContent;
+    case 'editor':
+      return EditorContent;
+    case 'voice':
+      return VoiceContent;
+    case 'terminal':
+      return TerminalContent;
+    case 'transfer':
+      return TransferContent;
+    case 'plugins':
+      return PluginContent;
+    case 'maintenance':
+      return MaintenanceContent;
     case 'server':
       return ServerContent;
     case 'about':
@@ -145,3 +163,5 @@ const currentComponent = computed(() => {
   color: var(--guaxi-text-secondary) !important;
 }
 </style>
+
+<style src="./settingsPageShared.css"></style>

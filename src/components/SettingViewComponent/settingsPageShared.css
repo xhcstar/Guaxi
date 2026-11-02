@@ -1,0 +1,39 @@
+/* 设置页拆分后的共用排版。类名统一带 setting-page 前缀，避免影响其他界面。 */
+.setting-page {
+  width: 100%;
+  font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', 'Noto Sans CJK SC', Consolas, 'Courier New', monospace;
+}
+
+.setting-page-card {
+  border: 1px solid var(--guaxi-border);
+  border-radius: 12px;
+  background: var(--guaxi-panel-bg);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+  transition: box-shadow 0.18s ease, border-color 0.18s ease;
+}
+
+.setting-page-card:hover {
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.07);
+}
+
+.setting-page-card .n-card-header__main {
+  font-weight: 600;
+  letter-spacing: 0.3px;
+}
+
+.setting-page h3 {
+  margin: 0 0 2px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--guaxi-text-primary);
+}
+
+.setting-page-desc {
+  margin-top: 4px;
+  color: var(--guaxi-text-secondary);
+  font-size: 13px;
+}
+
+.setting-page-tip {
+  margin-top: 8px;
+}
