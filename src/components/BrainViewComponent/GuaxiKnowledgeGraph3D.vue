@@ -2610,6 +2610,10 @@ defineExpose({ reload: loadGraph });
 .kg3d-canvas {
   position: absolute;
   inset: 0;
+  /* 关键:CSS2DRenderer 会给每个标签写内联 z-index(最高可达标签数量级),
+     若画布不建立独立层叠上下文,这些标签会盖到工具栏/面板之上。
+     z-index:0 把整个 3D 层收敛成一层,所有 UI 覆盖层(>=5)稳定压在图上面。 */
+  z-index: 0;
 }
 .kg3d-top {
   position: absolute;
@@ -2621,8 +2625,9 @@ defineExpose({ reload: loadGraph });
   flex-direction: column;
   gap: 6px;
   padding: 8px 12px;
-  background: linear-gradient(rgba(13, 17, 23, 0.78), rgba(13, 17, 23, 0.35));
-  backdrop-filter: blur(6px);
+  /* 接近不透明的玻璃底:节点/标签从下面发光时不再透上来干扰文字与控件 */
+  background: linear-gradient(rgba(13, 17, 23, 0.94), rgba(13, 17, 23, 0.88));
+  backdrop-filter: blur(8px);
 }
 .kg3d-toolbar {
   display: flex;
@@ -2827,7 +2832,7 @@ defineExpose({ reload: loadGraph });
   color: #1f2328;
 }
 .kg3d-light .kg3d-top {
-  background: linear-gradient(rgba(255, 255, 255, 0.9), rgba(255, 255, 255, 0.5));
+  background: linear-gradient(rgba(255, 255, 255, 0.96), rgba(255, 255, 255, 0.9));
 }
 .kg3d-light .tb-search,
 .kg3d-light .tb-sel,
