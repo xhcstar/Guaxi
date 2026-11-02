@@ -122,7 +122,7 @@
           :style="{ transform: `translateY(${item.top}px)` }"
           :class="{
             'is-unread': !item.row.seen,
-            'is-selected': isSelected(item.row),
+            'is-selected': isSelected(item.row) || isChecked(item.row),
             'is-active': activeKey === rowKey(item.row),
             thread: item.row.threadCount > 1,
           }"
@@ -151,7 +151,7 @@
           class="mail-row"
           :class="{
             'is-unread': !row.seen,
-            'is-selected': isSelected(row),
+            'is-selected': isSelected(row) || isChecked(row),
             'is-active': activeKey === rowKey(row),
             thread: row.threadCount > 1,
           }"
@@ -233,6 +233,8 @@ const props = defineProps({
     default: () => ({ unreadOnly: false, starredOnly: false, hasAttachment: false }),
   },
   selectedKeys: { type: Array, default: () => [] },
+  /** 顶部全选框是否代表「整个文件夹」已全选（而不仅是当前已加载的行）。 */
+  selectionAll: { type: Boolean, default: false },
   searchError: { type: String, default: '' },
   /** 拖拽时可以放下的目标文件夹。 */
   moveTargets: { type: Array, default: () => [] },
@@ -426,7 +428,10 @@ defineExpose({ ensureVisible })
 
 const keyOf = (row) => `${row.accountId}:${row.folder}:${row.uid}`
 const allChecked = computed(
-  () => visible.value.length > 0 && props.selectedKeys.length >= visible.value.length,
+  () =>
+    props.selectionAll ||
+    (visible.value.length > 0 &&
+      visible.value.every((row) => props.selectedKeys.includes(keyOf(row)))),
 )
 const someChecked = computed(() => props.selectedKeys.length > 0)
 
@@ -456,14 +461,21 @@ function onRowClick(row, event) {
   const key = keyOf(row)
 
   // Shift+点击：从锚点连到这一封，整段勾上。
+  // 锚点优先用「最近一次勾选的行」，没有就用当前打开 / 光标所在行——
+  // 用户通常是「先点开一封，再按住 Shift 点另一封」。
   if (event.shiftKey) {
+    // 别让浏览器把 Shift+点击当成「跨行选中文字」，否则行点击会变得很不稳定。
+    event.preventDefault()
     const keys = visible.value.map(keyOf)
-    const anchor = keys.indexOf(selectionAnchor)
+    const anchorKey = selectionAnchor || props.activeKey || key
+    const anchor = keys.indexOf(anchorKey)
     const target = keys.indexOf(key)
     if (anchor >= 0 && target >= 0) {
       const from = Math.min(anchor, target)
       const to = Math.max(anchor, target)
       emit('select-range', keys.slice(from, to + 1))
+      // Shift+点击不移动锚点，方便连续调整另一端。
+      selectionAnchor = anchorKey
       return
     }
   }
@@ -471,8 +483,12 @@ function onRowClick(row, event) {
   if (event.ctrlKey || event.metaKey || event.shiftKey || props.selectedKeys.length) {
     const checked = !isChecked(row)
     onToggleSelect(row, checked)
+    // 在列表里点过的那一行就是下一次 Shift 连选的起点；取消勾选也保留它。
+    selectionAnchor = key
     return
   }
+  // 普通点击打开邮件，同时把它记为下一次 Shift+点击的锚点。
+  selectionAnchor = key
   emit('open', row)
 }
 
@@ -493,6 +509,7 @@ let justDragged = false
 
 function onRowMouseDown(row, event) {
   if (event.button !== 0) return
+  if (event.shiftKey) event.preventDefault()
   // 勾选框 / 星标 / 删除按钮上的按下是操作按钮，不是拖邮件。
   if (event.target?.closest?.('button, input, a, select, textarea')) return
   pendingDrag = { x: event.clientX, y: event.clientY, row }

@@ -248,7 +248,7 @@ test('列表请求带序号：旧文件夹的结果不能落到新文件夹上',
     '每次「换一份列表」都要占一个新号，续页沿用当前号',
   )
   assert.ok(
-    store.indexOf('const token = append') < store.indexOf('await this.searchAlternativesFor'),
+    store.indexOf('const token = append') < store.indexOf('const query = await this.currentSearchQuery'),
     '占号必须发生在任何 await 之前，否则落地顺序可能和发起顺序不一致',
   )
   assert.ok(
@@ -301,4 +301,19 @@ test('Exchange Server (EWS)：账户表单、EWS 后端与 MIME 发信都接上'
   assert.ok(/<m:FindItem[\s\S]{0,400}<m:FindItem/.test(ews) || /FindItem/.test(ews), 'EWS 邮件同步')
   assert.ok(/IncludeMimeContent/.test(ews) && /MimeContent/.test(ews), 'EWS 用 MIME 读正文/附件')
   assert.ok(/CreateItem[\s\S]{0,400}MimeContent/.test(ews), 'EWS 用 MIME 创建草稿/发信')
+})
+
+// 列表选择：全选必须覆盖整个文件夹，勾选框要显示，Ctrl+A / Shift+点击要能用。
+test('邮件列表：全选整个文件夹、勾选框可见、Ctrl+A/Shift+点击可用', () => {
+  const store = read('src/stores/mailStore.js')
+  const pane = read('src/components/ApplicationViewComponent/apps/mail/MailListPane.vue')
+  const shortcuts = read('src/components/ApplicationViewComponent/apps/mail/useMailShortcuts.js')
+  const css = read('src/components/ApplicationViewComponent/apps/mail/mail.css')
+  assert.ok(/async selectAll\(checked = true\)/.test(store), '全选是异步查询整个结果集')
+  assert.ok(/currentSearchQuery\(100_000, 0\)/.test(store), '按当前检索条件取全部邮件')
+  assert.ok(/selectionRows/.test(store), '保留未加载行，批量操作覆盖整个文件夹')
+  assert.ok(/isSelected\(row\) \|\| isChecked\(row\)/.test(pane), '勾选后行进入选择态')
+  assert.ok(/props\.activeKey \|\| key/.test(pane), 'Shift+点击没有勾选锚点时用当前打开行')
+  assert.ok(/checkbox/.test(shortcuts) && /target\.type/.test(shortcuts), '焦点在复选框时 Ctrl+A 仍生效')
+  assert.ok(/\.mail-list-scroll::-webkit-scrollbar/.test(css), '列表滚动条显式绘制')
 })

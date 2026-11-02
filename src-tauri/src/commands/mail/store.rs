@@ -2081,7 +2081,7 @@ fn fts_query_in(text: &str, column: Option<&str>) -> String {
 }
 
 pub fn search(query: &SearchQuery) -> Result<Vec<MessageSummary>, String> {
-    let limit = query.limit.unwrap_or(200).min(2000);
+    let limit = query.limit.unwrap_or(200).min(50_000);
     let offset = query.offset.unwrap_or(0);
     let field = query.field.as_deref().unwrap_or("all");
     let text = query.text.trim();

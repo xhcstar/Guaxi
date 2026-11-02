@@ -26,7 +26,13 @@ function isTyping(event) {
   const target = event.target
   if (!target || target.nodeType !== 1) return false
   const tag = String(target.tagName || '').toUpperCase()
-  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return true
+  if (tag === 'TEXTAREA' || tag === 'SELECT') return true
+  if (tag === 'INPUT') {
+    // 复选框 / 单选 / 按钮不是文本输入：点过「全选」之后焦点停在 checkbox 上，
+    // 这时 Ctrl+A 仍然应该全选邮件，而不是被当成「正在输入」直接放行。
+    const type = String(target.type || 'text').toLowerCase()
+    return !['checkbox', 'radio', 'button', 'submit', 'reset', 'file', 'range', 'color'].includes(type)
+  }
   if (target.isContentEditable) return true
   // 富文本编辑器把焦点放在子节点上时 target 可能不是 contenteditable 本身。
   return Boolean(target.closest?.('[contenteditable="true"]'))
@@ -73,8 +79,8 @@ export function useMailShortcuts(handlers, options = {}) {
           return
         case 'a':
           // 阅读区里的 Ctrl+A 是「选中这段正文」，不是「全选邮件」。
+          // 列表 / 复选框上的焦点则应该全选整个文件夹（包括点过全选之后）。
           if (event.target?.closest?.('.mail-reader')) return
-          if (window.getSelection?.() && !window.getSelection().isCollapsed) return
           run('selectAll', event)
           return
         case 'z':

@@ -141,7 +141,8 @@
           :search-error="store.searchError"
           :move-targets="moveTargets"
           @toggle-select="store.toggleSelect"
-          @select-all="store.selectAll"
+          @select-all="onSelectAll"
+          :selection-all="store.selectionAll"
           @select-range="(keys) => store.selectRange(keys, true)"
           @clear-selection="store.clearSelection"
           @batch="onBatch"
@@ -846,7 +847,7 @@ useMailShortcuts(
       if (detail) onDeleteCurrent(detail)
     },
     selectAll: () => {
-      if (store.messages.length) store.selectAll(true)
+      onSelectAll(true)
     },
     undo: async () => {
       try {
@@ -1142,6 +1143,20 @@ async function saveMessageAs(row, kind) {
     })
   }
   notify(`已保存到 ${path}`)
+}
+
+/** 顶部全选框 / Ctrl+A：全选当前文件夹（不只是已加载的一页）。 */
+async function onSelectAll(checked) {
+  if (!checked) {
+    store.clearSelection()
+    return
+  }
+  try {
+    const count = await store.selectAll(true)
+    if (!count) notify('当前视图没有可选择的邮件')
+  } catch (error) {
+    notify(String(error?.message || error), true)
+  }
 }
 
 /**

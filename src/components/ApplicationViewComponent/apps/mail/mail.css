@@ -649,9 +649,31 @@
   min-height: 0;
   /* 选择模式会在列表头上方插入一条批量操作条，列表高度随之变化。
      显式保留滚动条槽位（gutter）并强制显示轨道：否则 WebView2 的覆盖式
-     滚动条会在这时整条消失，用户没法拖动，只能滚轮。 */
+     滚动条会在这时整条消失，用户没法拖动，只能滚轮。
+     这里再单独把轨道 / 滑块调成高对比、加宽，避免「有滚动条但几乎看不见」。 */
   overflow-y: scroll;
   scrollbar-gutter: stable;
+  scrollbar-width: auto;
+  scrollbar-color: var(--mail-text-muted) var(--mail-bg-sunken);
+}
+.mail-list-scroll::-webkit-scrollbar {
+  width: 12px;
+  background: var(--mail-bg-sunken);
+}
+.mail-list-scroll::-webkit-scrollbar-track {
+  background: var(--mail-bg-sunken);
+  border-radius: 6px;
+}
+.mail-list-scroll::-webkit-scrollbar-thumb {
+  min-height: 44px;
+  border: 2px solid var(--mail-bg-sunken);
+  border-radius: 7px;
+  background: var(--mail-text-muted);
+  background-clip: padding-box;
+}
+.mail-list-scroll::-webkit-scrollbar-thumb:hover {
+  background: var(--mail-text-secondary);
+  background-clip: padding-box;
 }
 
 .mail-row {

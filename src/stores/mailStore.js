@@ -174,6 +174,18 @@ export const useMailStore = defineStore('mail', {
     searching: false,
     /** 批量选择：{ accountId, folder, uid } 的唯一键集合。 */
     selectedKeys: [],
+    /**
+     * 「全选整个文件夹」时的完整行集合。
+     *
+     * 全选不能只选当前已经加载的 100 行：用户要的是整个文件夹（可能几千封）。
+     * 这里保存后端一次性查回来的全部行；`selectedRows()` 优先用它，
+     * 批量操作就不会只作用在屏幕里那几封上。
+     */
+    selectionRows: null,
+    /** 顶部全选框是否表示「整个文件夹已全选」（而不是只勾了当前已加载的行）。 */
+    selectionAll: false,
+    /** 全选请求序号：查询回来前用户取消 / 换文件夹时，旧结果不能覆盖新状态。 */
+    selectionSeq: 0,
     /** 撤销窗口内的删除批次（真正提交服务器前可撤回）。 */
     deferredDeletes: [],
     /** 最近一次可逆的标记操作（Ctrl+Z 用）。 */
@@ -478,6 +490,7 @@ export const useMailStore = defineStore('mail', {
       this.detail = null
       this.thread = []
       this.selected = null
+      this.clearSelection()
       this.loadMessages()
       // 切账户时顺手把收件箱拉到最新：列表和侧栏计数不该停留在上一次同步。
       this.syncFolders([this.activeFolder])
@@ -552,6 +565,7 @@ export const useMailStore = defineStore('mail', {
       this.detail = null
       this.thread = []
       this.selected = null
+      this.clearSelection()
       this.loadMessages()
       // 本地库里可能还没同步过这个文件夹（列表会是空的，计数也不准）。
       this.syncFolders([name])
@@ -563,6 +577,7 @@ export const useMailStore = defineStore('mail', {
       this.detail = null
       this.thread = []
       this.selected = null
+      this.clearSelection()
       this.loadMessages()
       // 按角色聚合的视图同样要先同步：垃圾箱 / 已删除往往从没拉过邮件。
       if (['inbox', 'sent', 'drafts', 'trash', 'junk', 'archive'].includes(scope)) {
@@ -737,6 +752,24 @@ export const useMailStore = defineStore('mail', {
       }
     },
 
+    /** 当前视图的检索条件；列表分页与「全选整个文件夹」共用，避免两套条件走样。 */
+    async currentSearchQuery(limit, offset) {
+      return {
+        accountIds: this.activeAccountId ? [this.activeAccountId] : [],
+        folder: this.scope === 'folder' ? this.activeFolder : null,
+        scope: this.scope,
+        text: this.searchQuery.trim(),
+        field: this.searchField,
+        labels: this.activeLabel ? [this.activeLabel] : [],
+        unreadOnly: this.searchFilters.unreadOnly ? true : null,
+        starredOnly: this.searchFilters.starredOnly ? true : null,
+        hasAttachment: this.searchFilters.hasAttachment ? true : null,
+        limit,
+        offset,
+        textAlternatives: await this.searchAlternativesFor(this.searchQuery.trim()),
+      }
+    },
+
     async loadMessages({ silent = false, seq = null, append = false } = {}) {
       if (!this.ready && !silent) return
       const searching =
@@ -754,20 +787,7 @@ export const useMailStore = defineStore('mail', {
       const token = append ? this.listToken : ++this.listToken
       // 增量请求多要一条：用来判断「还有没有下一页」，
       // 否则用户要一直点「加载更多」直到点出一个空列表才知道到底了。
-      const query = {
-        accountIds: this.activeAccountId ? [this.activeAccountId] : [],
-        folder: this.scope === 'folder' ? this.activeFolder : null,
-        scope: this.scope,
-        text: this.searchQuery.trim(),
-        field: this.searchField,
-        labels: this.activeLabel ? [this.activeLabel] : [],
-        unreadOnly: this.searchFilters.unreadOnly ? true : null,
-        starredOnly: this.searchFilters.starredOnly ? true : null,
-        hasAttachment: this.searchFilters.hasAttachment ? true : null,
-        limit: pageSize + 1,
-        offset,
-        textAlternatives: await this.searchAlternativesFor(this.searchQuery.trim()),
-      }
+      const query = await this.currentSearchQuery(pageSize + 1, offset)
 
       try {
         const rows = await invoke('mail_search', { query })
@@ -1478,6 +1498,8 @@ export const useMailStore = defineStore('mail', {
     },
 
     async runSearch() {
+      // 换了一份结果集：旧的勾选（尤其「全选整个文件夹」）不能带到新结果上。
+      this.clearSelection()
       // 递增序号：快速输入会连发多个请求，慢的后到会把新结果覆盖掉，
       // 表现就是「搜索框里是新词，列表还是旧词的结果」。
       const seq = (this.searchSeq || 0) + 1
@@ -1491,6 +1513,7 @@ export const useMailStore = defineStore('mail', {
     },
 
     clearSearch() {
+      this.clearSelection()
       this.searchQuery = ''
       this.searchFilters = { unreadOnly: false, starredOnly: false, hasAttachment: false }
       this.activeLabel = ''
@@ -1508,7 +1531,21 @@ export const useMailStore = defineStore('mail', {
     },
 
     toggleSelect(row, checked) {
+      // 用户手动改动选择时，作废还在途中的「全选整个文件夹」查询。
+      this.selectionSeq += 1
       const key = this.keyOf(row)
+      if (this.selectionRows) {
+        if (checked) {
+          if (!this.selectionRows.some((item) => this.keyOf(item) === key)) {
+            this.selectionRows.push(row)
+          }
+        } else {
+          this.selectionRows = this.selectionRows.filter(
+            (item) => this.keyOf(item) !== key,
+          )
+        }
+        this.selectionAll = false
+      }
       if (checked) {
         if (!this.selectedKeys.includes(key)) this.selectedKeys.push(key)
       } else {
@@ -1516,34 +1553,86 @@ export const useMailStore = defineStore('mail', {
       }
     },
 
-    selectAll(checked) {
-      this.selectedKeys = checked ? this.messages.map((m) => this.keyOf(m)) : []
+    /**
+     * 全选当前文件夹 / 当前搜索结果，而不只是已经加载到列表里的那一页。
+     *
+     * 列表是分页 + 会话聚合的；如果只把 `this.messages` 全勾上，用户看到
+     * 「已选 100 封」但文件夹里有 1599 封。这里直接按当前检索条件向本地库
+     * 要全部行，选中集合与批量操作都作用在整份结果上。
+     */
+    async selectAll(checked = true) {
+      if (!checked) {
+        this.clearSelection()
+        return 0
+      }
+      const seq = ++this.selectionSeq
+      const query = await this.currentSearchQuery(100_000, 0)
+      const rows = (await invoke('mail_search', { query })) || []
+      if (seq !== this.selectionSeq) return 0
+      const visible = rows.filter((row) => !pendingDeleteKeys.has(this.keyOf(row)))
+      this.selectionRows = visible
+      this.selectedKeys = visible.map((row) => this.keyOf(row))
+      this.selectionAll = visible.length > 0
+      return visible.length
     },
 
     /** Shift 连选 / Shift+方向键：把一段 key 设为选中（不取消区间外的已选项）。 */
     selectRange(keys, checked = true) {
       if (!keys?.length) return
+      this.selectionSeq += 1
+      const keySet = new Set(keys)
+      if (this.selectionRows) {
+        if (checked) {
+          for (const key of keys) {
+            if (!this.selectionRows.some((item) => this.keyOf(item) === key)) {
+              const row = this.rowByKey(key)
+              if (row) this.selectionRows.push(row)
+            }
+          }
+        } else {
+          this.selectionRows = this.selectionRows.filter(
+            (item) => !keySet.has(this.keyOf(item)),
+          )
+        }
+        this.selectionAll = false
+      }
       const next = new Set(this.selectedKeys)
       for (const key of keys) {
         if (checked) next.add(key)
         else next.delete(key)
       }
-      // 按列表顺序保存，批量条上的数字与操作顺序才稳定。
-      this.selectedKeys = this.messages.map((m) => this.keyOf(m)).filter((key) => next.has(key))
+      // 保留未加载行对应的 key（全选整个文件夹时它们不在 this.messages 里）。
+      this.selectedKeys = [...next]
     },
 
     /** 用一组 key 替换当前选择（Shift+方向键的区间会随移动收缩 / 扩展）。 */
     setSelection(keys) {
+      this.selectionSeq += 1
       const next = new Set(keys || [])
-      this.selectedKeys = this.messages.map((m) => this.keyOf(m)).filter((key) => next.has(key))
+      if (this.selectionRows) {
+        this.selectionRows = this.selectionRows.filter((row) =>
+          next.has(this.keyOf(row)),
+        )
+        for (const key of next) {
+          if (!this.selectionRows.some((row) => this.keyOf(row) === key)) {
+            const row = this.rowByKey(key)
+            if (row) this.selectionRows.push(row)
+          }
+        }
+      }
+      this.selectedKeys = [...next]
     },
 
     clearSelection() {
+      this.selectionSeq += 1
       this.selectedKeys = []
+      this.selectionRows = null
+      this.selectionAll = false
     },
 
     /** 选中的行，按账户分组（IMAP 命令是 per-account 的）。 */
     selectedRows() {
+      if (this.selectionRows) return this.selectionRows
       return this.selectedKeys.map((k) => this.rowByKey(k)).filter(Boolean)
     },
 
