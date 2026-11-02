@@ -103,6 +103,10 @@ pub struct Account {
     pub smtp_port: u16,
     #[serde(default)]
     pub smtp_security: Security,
+    /// 本地 Exchange 的 EWS 端点（`https://host/EWS/Exchange.asmx`）。
+    /// 留空时服务会尝试 Autodiscover。
+    #[serde(default)]
+    pub ews_url: String,
     /// 登录名。留空则回退到邮箱地址（Gmail/QQ/163 都是地址本身，企业邮常需要短用户名）。
     #[serde(default)]
     pub username: String,

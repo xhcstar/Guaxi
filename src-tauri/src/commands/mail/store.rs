@@ -104,7 +104,7 @@ fn open() -> Result<Connection, String> {
 /// 为什么必须做版本化迁移：老用户的 `mail.db` 已经存在，`CREATE TABLE IF NOT EXISTS`
 /// 只会补新表、不会补新列；一旦某天查询里用到新列，整个邮件页会直接报
 /// 「no such column」而不是「少一个功能」。
-pub const SCHEMA_VERSION: i32 = 7;
+pub const SCHEMA_VERSION: i32 = 8;
 
 pub fn init(app: &AppHandle) -> Result<(), String> {
     let path = db_path(app)?;
@@ -402,6 +402,10 @@ fn migrate(conn: &mut Connection) -> Result<(), String> {
         )
         .map_err(|e| format!("迁移到 v7 失败: {e}"))?;
     }
+    if version < 8 {
+        // v8：本地 Exchange 的 EWS 端点。留空表示通过 Autodiscover 找。
+        add_column(&tx, "accounts", "ews_url", "TEXT NOT NULL DEFAULT ''")?;
+    }
     tx.pragma_update(None, "user_version", SCHEMA_VERSION)
         .map_err(|e| format!("写入 schema 版本失败: {e}"))?;
     tx.commit().map_err(|e| e.to_string())?;
@@ -555,7 +559,7 @@ fn reindex_message(
 const ACCOUNT_COLS: &str = "id, email, display_name, imap_host, imap_port, imap_security, \
     smtp_host, smtp_port, smtp_security, username, auth_kind, proxy_json, accent, signature, \
     folder_map_json, created_at, last_sync_at, oauth_provider, oauth_expires, delegate_json, \
-    sieve_json, protocol, pop3_host, pop3_port, pop3_security, pop3_leave_on_server";
+    sieve_json, protocol, pop3_host, pop3_port, pop3_security, pop3_leave_on_server, ews_url";
 
 fn row_to_account(row: &Row<'_>) -> rusqlite::Result<Account> {
     let proxy_json: Option<String> = row.get(11)?;
@@ -591,6 +595,7 @@ fn row_to_account(row: &Row<'_>) -> rusqlite::Result<Account> {
         pop3_port: row.get(23)?,
         pop3_security: super::model::Security::parse(&row.get::<_, String>(24)?),
         pop3_leave_on_server: row.get::<_, i32>(25)? != 0,
+        ews_url: row.get(26)?,
     })
 }
 
@@ -627,9 +632,9 @@ pub fn upsert_account(account: &Account) -> Result<(), String> {
                 smtp_host, smtp_port, smtp_security, username, auth_kind, proxy_json, accent,
                 signature, folder_map_json, created_at, last_sync_at,
                 oauth_provider, oauth_expires, delegate_json, sieve_json,
-                protocol, pop3_host, pop3_port, pop3_security, pop3_leave_on_server)
+                protocol, pop3_host, pop3_port, pop3_security, pop3_leave_on_server, ews_url)
            VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,
-                   ?22,?23,?24,?25,?26)
+                   ?22,?23,?24,?25,?26,?27)
            ON CONFLICT(id) DO UPDATE SET
                 email=excluded.email, display_name=excluded.display_name,
                 imap_host=excluded.imap_host, imap_port=excluded.imap_port,
@@ -642,7 +647,8 @@ pub fn upsert_account(account: &Account) -> Result<(), String> {
                 delegate_json=excluded.delegate_json, sieve_json=excluded.sieve_json,
                 protocol=excluded.protocol, pop3_host=excluded.pop3_host,
                 pop3_port=excluded.pop3_port, pop3_security=excluded.pop3_security,
-                pop3_leave_on_server=excluded.pop3_leave_on_server"#,
+                pop3_leave_on_server=excluded.pop3_leave_on_server,
+                ews_url=excluded.ews_url"#,
         params![
             account.id,
             account.email,
@@ -681,6 +687,7 @@ pub fn upsert_account(account: &Account) -> Result<(), String> {
             account.pop3_port,
             account.pop3_security.as_str(),
             account.pop3_leave_on_server as i32,
+            account.ews_url,
         ],
     )
     .map_err(|e| format!("保存账户失败: {e}"))?;

@@ -30,7 +30,7 @@ test('同步不再「猜」哪些是用户的文件夹', () => {
 })
 
 test('v6 迁移把被误标的自定义文件夹清回「不是用户的」', () => {
-  assert.ok(/pub const SCHEMA_VERSION: i32 = 7;/.test(storeRs), 'schema 版本要 +1')
+  assert.ok(/pub const SCHEMA_VERSION: i32 = 8;/.test(storeRs), 'schema 版本要 +1')
   assert.ok(
     /if version < 6 \{[\s\S]{0,700}UPDATE folders SET user_created = 0 WHERE role = 'custom'/.test(storeRs),
     '一次性清掉自定义角色的误标',
@@ -40,6 +40,7 @@ test('v6 迁移把被误标的自定义文件夹清回「不是用户的」', ()
   // v7：原生 Exchange 的远端字符串 ID → 本地 uid 映射。
   assert.ok(/CREATE TABLE IF NOT EXISTS remote_ids/.test(storeRs), '远端 ID 映射表')
   assert.ok(/if version < 7 \{[\s\S]{0,500}remote_ids/.test(storeRs), 'v7 迁移建立映射表')
+  assert.ok(/if version < 8 \{[\s\S]{0,220}ews_url/.test(storeRs), 'v8 迁移建立 EWS 端点')
 })
 
 test('用户建的文件夹仍会显示（新建时把已存在的行标成用户的）', () => {

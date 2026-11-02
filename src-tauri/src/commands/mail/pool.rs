@@ -365,6 +365,7 @@ mod tests {
             smtp_host: String::new(),
             smtp_port: 465,
             smtp_security: crate::commands::mail::model::Security::Ssl,
+            ews_url: String::new(),
             username: String::new(),
             auth_kind: "password".into(),
             oauth_provider: String::new(),

@@ -364,6 +364,7 @@ mod tests {
             smtp_host: String::new(),
             smtp_port: 0,
             smtp_security: Security::None,
+            ews_url: String::new(),
             username: String::new(),
             auth_kind: "password".into(),
             oauth_provider: String::new(),

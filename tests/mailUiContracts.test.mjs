@@ -285,3 +285,20 @@ test('Exchange Online (Graph)：账户表单、OAuth scope 与 Graph 后端都�
   assert.ok(/pub mod graph;/.test(modRs), '注册 Graph 后端模块')
   assert.ok(/graph::is_graph\(&account\)/.test(modRs), '同步 / 发信入口按 Graph 分支')
 })
+
+// 本地 Exchange：EWS 账户、Autodiscover/URL、SOAP 同步与 MIME 发信都接上。
+test('Exchange Server (EWS)：账户表单、EWS 后端与 MIME 发信都接上', () => {
+  const dialog = read('src/components/ApplicationViewComponent/apps/mail/MailAccountDialog.vue')
+  const oauth = read('src-tauri/src/commands/mail/oauth.rs')
+  const ews = read('src-tauri/src/commands/mail/ews.rs')
+  const modRs = read('src-tauri/src/commands/mail/mod.rs')
+  assert.ok(/value: 'ews'[\s\S]{0,80}Exchange（EWS）/.test(dialog), '收信协议有 Exchange（EWS）')
+  assert.ok(/label: 'Exchange Server'/.test(dialog), '有 Exchange Server 预设')
+  assert.ok(/v-model="form\.ewsUrl"/.test(dialog), 'EWS 地址字段')
+  assert.ok(/留空会自动发现|留空自动发现/.test(dialog), '支持 Autodiscover')
+  assert.ok(/const EWS: Provider/.test(oauth) && /EWS\.AccessAsUser\.All/.test(oauth), 'EWS OAuth scope')
+  assert.ok(/pub mod ews;/.test(modRs) && /ews::is_ews/.test(modRs), '注册并分流 EWS 后端')
+  assert.ok(/<m:FindItem[\s\S]{0,400}<m:FindItem/.test(ews) || /FindItem/.test(ews), 'EWS 邮件同步')
+  assert.ok(/IncludeMimeContent/.test(ews) && /MimeContent/.test(ews), 'EWS 用 MIME 读正文/附件')
+  assert.ok(/CreateItem[\s\S]{0,400}MimeContent/.test(ews), 'EWS 用 MIME 创建草稿/发信')
+})
