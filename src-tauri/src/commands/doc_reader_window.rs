@@ -117,10 +117,20 @@ pub async fn create_doc_reader_window(
 
     // 窗口以隐藏状态创建，真正显示的时刻交给前端：DocReaderWindow 等到阅读器渲染出
     // 首帧后才调用 show()，用户看到的第一眼就是内容，而不是一块白底。
-    //
-    // 这里不再用固定 sleep 猜时间 —— 慢机器上 100ms 远远不够（那正是「窗口先白一下」
-    // 的来源），快机器上又白等。但这个兜底是必需的：前端脚本报错、资源缺失时
-    // show() 永远不会被调用，窗口就会无声地一直隐藏，用户只会以为程序没反应。
+    spawn_first_paint_fallback(window);
+
+    Ok(OpenReaderWindow {
+        label,
+        existed: false,
+    })
+}
+
+/// 等前端「首帧就绪」信号的兜底。
+///
+/// 这里不再用固定 sleep 猜时间 —— 慢机器上 100ms 远远不够（那正是「窗口先白一下」
+/// 的来源），快机器上又白等。但这个兜底是必需的：前端脚本报错、资源缺失时
+/// show() 永远不会被调用，窗口就会无声地一直隐藏，用户只会以为程序没反应。
+fn spawn_first_paint_fallback(window: tauri::WebviewWindow) {
     let fallback = window.clone();
     tokio::spawn(async move {
         tokio::time::sleep(std::time::Duration::from_millis(FIRST_PAINT_FALLBACK_MS)).await;
@@ -131,6 +141,67 @@ pub async fn create_doc_reader_window(
         fallback.show().ok();
         fallback.set_focus().ok();
     });
+}
+
+/// 打开（或聚焦）一篇外部资料的「全文阅读器」窗口。
+///
+/// 这根命令服务的不是磁盘上的文件，而是认知层收件箱里的一条感知（正文在 sqlite 里）。
+/// 所以窗口里不放文件路径，只放感知 id —— 正文可能有几十 KB，塞进 query string
+/// 会被长度与转义拖死（与 mail-compose 同一个理由）；窗口自己在挂载后取一次正文。
+///
+/// 窗口 label 沿用 `doc-reader-` 前缀：capabilities 里 `doc-reader-*` 已经放行，
+/// 不为一扇新窗口再放宽一份权限范围。
+#[tauri::command]
+pub async fn create_article_reader_window(
+    app: tauri::AppHandle,
+    id: String,
+    title: String,
+    theme: Option<String>,
+) -> Result<OpenReaderWindow, String> {
+    let id = id.trim().to_string();
+    if id.is_empty() {
+        return Err("资料 id 为空".to_string());
+    }
+    let title = title.trim().to_string();
+    let label = reader_window_label(&format!("article:{id}"));
+
+    if let Some(existing) = app.get_webview_window(&label) {
+        existing.show().ok();
+        existing.set_focus().ok();
+        info!("[ArticleReader] focus existing window label={}", label);
+        return Ok(OpenReaderWindow {
+            label,
+            existed: true,
+        });
+    }
+
+    let theme = theme.unwrap_or_default().trim().to_lowercase();
+    let mut query = format!("id={}&title={}", encode(&id), encode(&title));
+    if theme == "dark" || theme == "light" {
+        query.push_str(&format!("&theme={}", encode(&theme)));
+    }
+
+    let url = WebviewUrl::App(format!("/article-reader.html?{}", query).into());
+
+    info!(
+        "[ArticleReader] create window label={} title={} id={}",
+        label, title, id
+    );
+
+    let window = WebviewWindowBuilder::new(&app, &label, url)
+        .title(if title.is_empty() {
+            "全文阅读"
+        } else {
+            title.as_str()
+        })
+        .inner_size(1040.0, 860.0)
+        .min_inner_size(560.0, 480.0)
+        .resizable(true)
+        .visible(false)
+        .build()
+        .map_err(|e| format!("创建阅读器窗口失败: {}", e))?;
+
+    spawn_first_paint_fallback(window);
 
     Ok(OpenReaderWindow {
         label,

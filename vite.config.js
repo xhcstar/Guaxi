@@ -34,6 +34,10 @@ const READER_SUBTREE_PATHS = [
   "/src/composables/useSelectionTranslate.js",
   "/src/composables/usePageTranslate.js",
   "/src/composables/useReadAloud.js",
+  // 整篇对照翻译（按段注入译文）。编辑器预览、资讯详情与全文阅读窗口共用，
+  // 不钉进 reader-core 就会被 Rollup 归到主应用入口 chunk，阅读窗口随之把
+  // 整个主应用拉起来（见下方 manualChunks 的说明）。
+  "/src/composables/useBilingualPreview.js",
   "/src/utils/readaloudEvents.js",
   "/src/utils/textOffsets.js",
   "/src/utils/logger.js",
@@ -171,6 +175,9 @@ export default defineConfig(async () => ({
       input: {
         main: path.resolve(projectRoot, "index.html"),
         "doc-reader": path.resolve(projectRoot, "doc-reader.html"),
+        // 外部资料全文阅读器：Markdown 阅读窗口（大纲 / 朗读 / 译文），
+        // 同样只挂自己的子树，不走主应用入口。
+        "article-reader": path.resolve(projectRoot, "article-reader.html"),
         // 独立写信窗口：与阅读器同一个理由——只需要 MailComposer 这一棵子树，
         // 走主入口会把 Monaco / LSP / 全部路由重新解析一遍。
         "mail-compose": path.resolve(projectRoot, "mail-compose.html"),

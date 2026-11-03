@@ -97,54 +97,63 @@ const check = (name, fn) => {
   }
 }
 
-const readerEntryChunks = entryChunkOf('doc-reader.html')
+// 独立窗口入口：doc-reader.html（文档阅读器）与 article-reader.html（外部资料全文阅读器）。
+// 两者都走自己的入口、共用 reader-core，任何一方把主应用入口拉进来，都会在那个窗口里
+// 执行 main.js 的 bootstrap() 并清空 #app —— 表现都是「新窗口是空的」。
+const READER_ENTRIES = ['doc-reader.html', 'article-reader.html']
+
 console.log('readerChunks:')
-console.log(`  阅读器入口 chunk: ${readerEntryChunks.join(', ') || '(未找到)'}`)
 
-check('doc-reader.html 能找到入口 chunk', () => {
-  assert.ok(readerEntryChunks.length > 0, 'dist/doc-reader.html 里没有 <script type="module" src="/assets/...">')
-})
+for (const entryHtml of READER_ENTRIES) {
+  const entryChunks = entryChunkOf(entryHtml)
+  console.log(`  ${entryHtml} 入口 chunk: ${entryChunks.join(', ') || '(未找到)'}`)
 
-const readerStatic = staticClosure(readerEntryChunks)
+  check(`${entryHtml} 能找到入口 chunk`, () => {
+    assert.ok(entryChunks.length > 0, `dist/${entryHtml} 里没有 <script type="module" src="/assets/...">`)
+  })
+  if (!entryChunks.length) continue
 
-check('阅读器入口的静态依赖闭包里没有主应用入口 chunk', () => {
-  const leaked = [...readerStatic].filter(mountsAppEntry)
-  assert.deepEqual(
-    leaked,
-    [],
-    `阅读器入口静态依赖了主应用入口：${leaked.join(', ')}\n` +
-      '主应用入口 chunk 顶层会执行 main.js 的 bootstrap() 并 mount("#app")，\n' +
-      '把阅读器已渲染的 DOM 清空。检查 vite.config.js 的 manualChunks 是否漏钉了共享模块。'
-  )
-})
+  const entryStatic = staticClosure(entryChunks)
 
-check('阅读器会用到的分块（含动态 import）也不依赖主应用入口', () => {
-  // 只沿「阅读器子树真实会加载的分块」追踪。
-  //
-  // 不能把入口闭包的所有动态 import 都算进来：reader-core 静态依赖了 docs chunk，
-  // 而 docs 内部对 mermaid 的几十种语言数据是函数体里的动态 import（只有对应语言
-  // 被渲染时才触发）。这些数据分块又反向引用 docs 的导出，把整个 dist 连成一张网，
-  // 于是任何与主应用共享的模块都会被误报。真正要拦的是：阅读器自己（reader-core
-  // 及其异步子阅读器）导入的模块，不能落到主应用入口上。
-  const owned = new Set()
-  const stack = [...readerStatic]
-  while (stack.length) {
-    const cur = stack.pop()
-    if (owned.has(cur) || !edges.has(cur)) continue
-    owned.add(cur)
-    for (const next of edges.get(cur).stat) {
-      if (!owned.has(next) && edges.has(next)) stack.push(next)
+  check(`${entryHtml} 入口的静态依赖闭包里没有主应用入口 chunk`, () => {
+    const leaked = [...entryStatic].filter(mountsAppEntry)
+    assert.deepEqual(
+      leaked,
+      [],
+      `${entryHtml} 静态依赖了主应用入口：${leaked.join(', ')}\n` +
+        '主应用入口 chunk 顶层会执行 main.js 的 bootstrap() 并 mount("#app")，\n' +
+        '把阅读器已渲染的 DOM 清空。检查 vite.config.js 的 manualChunks 是否漏钉了共享模块。'
+    )
+  })
+
+  check(`${entryHtml} 会用到的分块（含动态 import）也不依赖主应用入口`, () => {
+    // 只沿「阅读器子树真实会加载的分块」追踪。
+    //
+    // 不能把入口闭包的所有动态 import 都算进来：reader-core 静态依赖了 docs chunk，
+    // 而 docs 内部对 mermaid 的几十种语言数据是函数体里的动态 import（只有对应语言
+    // 被渲染时才触发）。这些数据分块又反向引用 docs 的导出，把整个 dist 连成一张网，
+    // 于是任何与主应用共享的模块都会被误报。真正要拦的是：阅读器自己（reader-core
+    // 及其异步子阅读器）导入的模块，不能落到主应用入口上。
+    const owned = new Set()
+    const stack = [...entryStatic]
+    while (stack.length) {
+      const cur = stack.pop()
+      if (owned.has(cur) || !edges.has(cur)) continue
+      owned.add(cur)
+      for (const next of edges.get(cur).stat) {
+        if (!owned.has(next) && edges.has(next)) stack.push(next)
+      }
     }
-  }
-  const leaked = [...owned].filter(mountsAppEntry)
-  assert.deepEqual(
-    leaked,
-    [],
-    `这些阅读器会用到的分块依赖了主应用入口：${leaked.join(', ')}\n` +
-      '打开对应类型的文档时，主应用会被整个启动并清空阅读器窗口。\n' +
-      '把该分块用到的共享模块补进 vite.config.js 的 READER_SUBTREE_PATHS。'
-  )
-})
+    const leaked = [...owned].filter(mountsAppEntry)
+    assert.deepEqual(
+      leaked,
+      [],
+      `这些阅读器会用到的分块依赖了主应用入口：${leaked.join(', ')}\n` +
+        '打开对应类型的文档时，主应用会被整个启动并清空阅读器窗口。\n' +
+        '把该分块用到的共享模块补进 vite.config.js 的 READER_SUBTREE_PATHS。'
+    )
+  })
+}
 
 if (failed) {
   console.log(`\nreaderChunks: ${failed} 项失败`)

@@ -590,6 +590,8 @@ async fn app_main() {
             commands::doc_reader::convert_document_to_markdown,
             commands::doc_reader_window::create_doc_reader_window,
             commands::doc_reader_window::close_doc_reader_window,
+            // 外部资料（认知层收件箱）的全文阅读器：Markdown 阅读窗口，带大纲/朗读/翻译
+            commands::doc_reader_window::create_article_reader_window,
             commands::craft_app::open_in_craft_app,
             commands::craft_app::probe_craft_apps,
             commands::craft_cli::craft_cli_info,

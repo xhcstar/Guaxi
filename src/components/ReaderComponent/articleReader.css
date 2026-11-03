@@ -1,0 +1,280 @@
+/*
+ * 外部资料全文阅读器（article-reader.html）的正文样式。
+ *
+ * 为什么单独一份而不是复用 App.vue 的全局 markdown 规则：这扇窗口走独立入口，
+ * 不加载 App.vue，拿不到那份 `.markdown-content` / `.markdown-body` 排版。这里按
+ * 阅读场景重写一份轻量排版，颜色全部走 --guaxi-* 变量（guaxiBase.css 提供两套主题），
+ * 代码块的 .hljs-* 配色仍由 renderMarkdown 注入的代码主题负责，不在这里重复定义。
+ */
+
+.car-md-body {
+  font-family: 'Noto Sans CJK SC', 'Microsoft YaHei UI', 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  font-size: 16px;
+  line-height: 1.85;
+  color: var(--guaxi-text-primary);
+  word-wrap: break-word;
+  overflow-wrap: anywhere;
+  box-sizing: border-box;
+}
+
+.car-md-body :where(p, li, blockquote, h1, h2, h3, h4, h5, h6, a, span, div) {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.car-md-body h1,
+.car-md-body h2,
+.car-md-body h3,
+.car-md-body h4,
+.car-md-body h5,
+.car-md-body h6 {
+  margin: 1.5em 0 0.6em;
+  line-height: 1.35;
+  font-weight: 650;
+  color: var(--guaxi-text-primary);
+}
+
+.car-md-body h1 {
+  font-size: 1.65em;
+  margin-top: 0.4em;
+  padding-bottom: 0.3em;
+  border-bottom: 1px solid var(--guaxi-border-weak);
+}
+
+.car-md-body h2 {
+  font-size: 1.34em;
+  padding-bottom: 0.24em;
+  border-bottom: 1px solid var(--guaxi-border-weak);
+}
+
+.car-md-body h3 { font-size: 1.16em; }
+.car-md-body h4 { font-size: 1.04em; }
+.car-md-body h5,
+.car-md-body h6 { font-size: 1em; }
+
+.car-md-body p {
+  margin: 0.75em 0;
+}
+
+.car-md-body a,
+.car-md-body a:visited {
+  color: var(--guaxi-text-link, #0969da);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+:root[data-guaxi-theme='dark'] .car-md-body a,
+:root[data-guaxi-theme='dark'] .car-md-body a:visited {
+  color: var(--guaxi-text-link-dark, #4acadb);
+}
+
+.car-md-body a:hover {
+  opacity: 0.92;
+}
+
+.car-md-body ul,
+.car-md-body ol {
+  margin: 0.6em 0;
+  padding-inline-start: 1.6em;
+  box-sizing: border-box;
+}
+
+.car-md-body li {
+  margin: 0.28em 0;
+}
+
+.car-md-body li > p {
+  margin: 0.2em 0;
+}
+
+.car-md-body blockquote {
+  margin: 1em 0;
+  padding: 0.4em 1em;
+  border-left: 3px solid var(--guaxi-border);
+  color: var(--guaxi-text-secondary);
+  background: var(--guaxi-hover-bg);
+  border-radius: 0 8px 8px 0;
+}
+
+.car-md-body blockquote > p:first-child { margin-top: 0.2em; }
+.car-md-body blockquote > p:last-child { margin-bottom: 0.2em; }
+
+.car-md-body hr {
+  margin: 2em 0;
+  border: 0;
+  border-top: 1px solid var(--guaxi-border-weak);
+}
+
+.car-md-body img,
+.car-md-body svg,
+.car-md-body canvas,
+.car-md-body video {
+  max-width: 100%;
+  height: auto;
+  box-sizing: border-box;
+}
+
+.car-md-body code {
+  font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace;
+  font-size: 0.92em;
+  padding: 0.15em 0.38em;
+  border-radius: 5px;
+  background: var(--guaxi-hover-bg);
+}
+
+.car-md-body pre,
+.car-md-body pre.hljs,
+.car-md-body .hljs {
+  margin: 1em 0;
+  padding: 12px 14px;
+  border-radius: 10px;
+  overflow-x: auto;
+  box-sizing: border-box;
+  font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace;
+  font-size: 14px;
+  line-height: 1.6;
+  background: var(--guaxi-panel-bg);
+  border: 1px solid var(--guaxi-border-weak);
+}
+
+.car-md-body pre code,
+.car-md-body .hljs code {
+  padding: 0;
+  background: transparent;
+  border: 0;
+  font-size: inherit;
+}
+
+/* 表格：与主窗口预览同一套卡片式外框（无 thead 的排版表保持朴素，避免把 Word/PDF
+   转换出来的嵌套表画成卡片）。颜色走 --guaxi-table-*，由 guaxiBase.css 提供。 */
+.car-md-body table {
+  width: 100%;
+  max-width: 100%;
+  margin: 1em 0;
+  border: 1px solid var(--guaxi-table-border);
+  border-radius: 10px;
+  border-collapse: separate;
+  border-spacing: 0;
+  background: var(--guaxi-table-bg);
+  color: var(--guaxi-table-text);
+  line-height: 1.55;
+}
+
+.car-md-body table:not(:has(> thead)) {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.car-md-body th,
+.car-md-body td {
+  padding: 8px 14px;
+  border-right: 1px solid var(--guaxi-table-border);
+  border-bottom: 1px solid var(--guaxi-table-border);
+  text-align: left;
+  vertical-align: top;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.car-md-body tr > :last-child { border-right: 0; }
+.car-md-body tbody tr:last-child > :is(th, td) { border-bottom: 0; }
+
+.car-md-body thead th {
+  background: var(--guaxi-table-head-bg);
+  color: var(--guaxi-table-head-text);
+  font-weight: 600;
+  border-bottom-color: var(--guaxi-table-border-strong);
+}
+
+.car-md-body tbody tr:nth-child(even) > td {
+  background: var(--guaxi-table-row-alt-bg);
+}
+
+.car-md-body tbody tr:hover > td {
+  background: var(--guaxi-table-row-hover-bg);
+}
+
+.car-md-body table:not(:has(> thead)) :is(th, td) {
+  border-right: 0;
+  border-bottom: 0;
+  padding: 4px 8px;
+}
+
+.car-md-body mjx-container,
+.car-md-body .math-block,
+.car-md-body .math-inline,
+.car-md-body .mermaid {
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+/* ── 全文翻译注入的译文块（useBilingualPreview 的产物）──
+   与编辑器预览的视觉保持一致：浅色底 + 左侧竖线，明确是「附加的译文」而不是原文。 */
+.guaxi-bilingual-line {
+  margin: 4px 0 12px;
+  padding: 6px 10px;
+  border-left: 3px solid color-mix(in srgb, var(--primary-color, #4acadb) 65%, transparent);
+  border-radius: 0 8px 8px 0;
+  background: color-mix(in srgb, var(--primary-color, #4acadb) 8%, transparent);
+  color: color-mix(in srgb, var(--primary-color, #4acadb) 32%, var(--guaxi-text-primary, #333));
+  font-size: 0.95em;
+  line-height: 1.75;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+li > .guaxi-bilingual-line,
+td > .guaxi-bilingual-line,
+th > .guaxi-bilingual-line,
+dd > .guaxi-bilingual-line,
+dt > .guaxi-bilingual-line,
+summary > .guaxi-bilingual-line {
+  margin: 2px 0 0;
+  border-radius: 6px;
+}
+
+/* ── 选区与朗读高亮 ──
+   ::highlight() 必须写在全局样式里（scoped 会给它加上 data-v 而彻底失效）。
+   与主界面共用同一组变量，换主题时两处一起变。 */
+.car-md-body ::selection {
+  background: var(--guaxi-selection-bg);
+  color: inherit;
+}
+
+.car-md-body pre ::selection,
+.car-md-body pre::selection,
+.car-md-body code ::selection,
+.car-md-body code::selection {
+  background: var(--guaxi-selection-strong-bg);
+  color: inherit;
+}
+
+::highlight(guaxi-readaloud) {
+  background-color: var(--guaxi-search-hit-active-bg, rgba(234, 92, 0, 0.5));
+  color: inherit;
+}
+
+/* ── 滚动条：与阅读窗口其它面板同一档细条 ── */
+.car-scroll::-webkit-scrollbar,
+.car-outline-list::-webkit-scrollbar,
+.car-md-body pre::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.car-scroll::-webkit-scrollbar-thumb,
+.car-outline-list::-webkit-scrollbar-thumb,
+.car-md-body pre::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.45);
+}
+
+.car-scroll::-webkit-scrollbar-thumb:hover,
+.car-outline-list::-webkit-scrollbar-thumb:hover,
+.car-md-body pre::-webkit-scrollbar-thumb:hover {
+  background: rgba(148, 163, 184, 0.65);
+}

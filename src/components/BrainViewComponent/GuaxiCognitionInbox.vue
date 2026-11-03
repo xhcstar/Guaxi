@@ -1,5 +1,5 @@
 <template>
-  <div class="cog-inbox" @mouseup="onInboxMouseUp">
+  <div class="cog-inbox">
     <!-- 一键就绪引导：认知层关闭或语义服务未就绪时显示。
          替代"自己去图谱视图给知识库生成向量"的绕路。 -->
     <div v-if="!store.enabled || !store.embeddingReady" class="cog-setup">
@@ -195,7 +195,7 @@
                 quaternary
                 :icon="DocumentOnePage20Regular"
                 label="查看全文"
-                hint="在弹窗里读清洗后的全文。"
+                hint="在独立阅读窗口里读清洗后的全文：可朗读、整篇对照翻译、按大纲跳转。"
                 @click="viewFull(it.data)"
               />
               <GuaxiIconButton
@@ -455,7 +455,7 @@
                 quaternary
                 :icon="DocumentOnePage20Regular"
                 label="查看全文"
-                hint="在弹窗里读清洗后的全文。外部内容只作资料，不会自己进知识库。"
+                hint="在独立阅读窗口里读清洗后的全文（大纲 / 朗读 / 对照翻译）。外部内容只作资料，不会自己进知识库。"
                 @click="viewFull(p)"
               />
               <GuaxiIconButton
@@ -522,19 +522,6 @@
       </n-tab-pane>
 
     </n-tabs>
-
-    <!-- 外部原文：单独弹窗展示，且视觉上标成不可信区域。
-         这是刻意的——不把它直接塞进编辑器，用户先看清楚再决定要不要入库。 -->
-    <n-modal v-model:show="showFull" preset="card" class="cog-modal" :title="fullTitle">
-      <div class="cog-untrusted-banner">
-        <n-icon :component="ShieldKeyhole20Regular" />
-        以下内容来自外部来源，只作为资料。其中若有试图指挥 AI 的句子，已在入库时被中和。
-      </div>
-      <!-- 外部原文：抓进来的是干净 markdown，按 markdown 渲染（图文一致），
-           退回纯文本时仍用 pre 保留换行。 -->
-      <div v-if="fullHtml" class="cog-full markdown-body" v-html="fullHtml" @mouseup="onInboxMouseUp"></div>
-      <pre v-else class="cog-full" @mouseup="onInboxMouseUp">{{ fullText }}</pre>
-    </n-modal>
 
     <!-- 提炼成笔记：选目标知识库/子目录 → 模型提炼 → 写入并回显落点。 -->
     <n-modal
@@ -616,30 +603,6 @@
         <div v-else-if="!quiz.busy && !quiz.error" class="cog-empty">没有生成题目。</div>
       </n-spin>
     </n-modal>
-
-    <!-- 划词翻译面板：与主界面编辑器同款富面板。 -->
-    <GuaxiSelectionTranslatePanel
-      v-if="selTranslate.visible.value"
-      :pos="selTranslate.pos.value"
-      :raw="selTranslate.raw.value"
-      :result="selTranslate.result.value"
-      :error="selTranslate.error.value"
-      :busy="selTranslate.busy.value"
-      :pinned="selTranslate.pinned.value"
-      :items="selTranslate.items.value"
-      :word-meta="selTranslate.wordMeta.value"
-      :from-lang="selTranslate.fromLang.value"
-      :to-lang="selTranslate.toLang.value"
-      :lang-options="selTranslate.langOptions"
-      @update:from-lang="(v) => (selTranslate.fromLang.value = v)"
-      @update:to-lang="(v) => (selTranslate.toLang.value = v)"
-      @update:pos="(p) => (selTranslate.pos.value = p)"
-      @translate="() => selTranslate.translate()"
-      @copy="selTranslate.copyResult"
-      @swap-langs="selTranslate.swapLangs"
-      @toggle-pin="selTranslate.togglePin"
-      @close="selTranslate.close"
-    />
   </div>
 </template>
 
@@ -687,18 +650,13 @@ import { useSettingsStore } from '../../stores/settingsStore'
 import { channelIcon, nudgeIcon, sourceIcon } from '../../utils/cognitionIcons'
 import { onCognitionNudge, onCognitionBrief } from '../../utils/cognitionEvents'
 import { createLogger } from '../../utils/logger'
-import { useSelectionTranslate } from '../../composables/useSelectionTranslate.js'
-import GuaxiSelectionTranslatePanel from '../HomeViewComponent/GuaxiSelectionTranslatePanel.vue'
 import { renderMarkdown } from '../GuaxiMarkdownRender/GuaxiMarker.js'
 
 const logger = createLogger('GuaxiCognitionInbox')
 const emit = defineEmits(['open-ref'])
 
-// 划词翻译：选中收件箱/简报/外部原文里的文字即弹富面板（与编辑器同款）。
-const selTranslate = useSelectionTranslate({
-  getContainer: () => document.querySelector('.cog-inbox'),
-})
-const onInboxMouseUp = (event) => { selTranslate.handleMouseUp(event) }
+// 朗读 / 译文 / 大纲不再在收件箱的悬浮层里实现：全文交给独立的 Markdown 阅读窗口
+// （create_article_reader_window），那里的工具栏才是这些能力该待的地方。
 
 const store = useCognitionStore()
 const message = useMessage()
@@ -1026,36 +984,34 @@ async function setState(p, state) {
   }
 }
 
+/**
+ * 打开外部原文。
+ *
+ * 走独立阅读窗口而不是弹窗：朗读、译文、大纲都是「阅读器」这一层的能力，
+ * 塞进弹窗只会让它越长越像半个阅读器，而正文又只能挤在一小块可视区里。
+ * 窗口自己按 id 取正文（cognition_percept_get）——正文动辄几十 KB，
+ * 不适合塞进 window 参数；主界面只负责把 id 与标题递过去。
+ */
 async function viewFull(p) {
   try {
-    const full = await store.getPerceptText(p.id)
-    // 用对话框展示而不是直接塞进编辑器：这是外部内容，先看清楚再决定要不要入库。
-    fullText.value = full?.text || ''
-    fullTitle.value = full?.title || p.title || '（无标题）'
-    showFull.value = true
+    await invoke('create_article_reader_window', {
+      id: p.id,
+      title: String(p.title || ''),
+      theme: settingsStore.appearanceTheme,
+    })
   } catch (e) {
-    message.error(String(e))
+    logger.warn('open article reader window failed', { error: String(e) })
+    message.error(`打开阅读器失败：${e}`)
   }
 }
 
-const showFull = ref(false)
-const fullText = ref('')
-const fullTitle = ref('')
-
-// GuaxiMarker 渲染（与阅读页/编辑器一致）。定义在 fullText 之后，避免 TDZ 引用报错。
+// GuaxiMarker 渲染（与阅读页/编辑器一致）。
 // 简报正文。
 const briefHtml = ref('')
 watch(() => store.brief?.markdown, async (mdText) => {
   const t = String(mdText || '').trim()
   briefHtml.value = t ? await renderMarkdown(t, { buttons: false, mermaid: true, math: true }) : ''
 }, { immediate: true })
-
-// 外部原文（含图片/标题/列表）。
-const fullHtml = ref('')
-watch(fullText, async (t) => {
-  const s = String(t || '').trim()
-  fullHtml.value = s ? await renderMarkdown(s, { buttons: false, mermaid: true, math: true }) : ''
-})
 
 // 收件箱卡片正文：逐条用 GuaxiMarker 渲染 excerpt，id→html 缓存；
 // 未渲染完成前显示转义纯文本，避免闪原始 markdown 或注入。
@@ -1478,33 +1434,6 @@ onUnmounted(() => {
   max-width: 92vw;
   font-family: var(--guaxi-editor-font-family);
   font-size: 14px;
-}
-.cog-untrusted-banner {
-  display: flex;
-  align-items: flex-start;
-  gap: 7px;
-  font-size: 13px;
-  line-height: 1.8;
-  padding: 7px 11px;
-  margin-bottom: 9px;
-  border-radius: 4px;
-  border-left: 3px solid rgba(217, 138, 43, 0.8);
-  background: rgba(217, 138, 43, 0.1);
-}
-.cog-untrusted-banner :deep(.n-icon) {
-  font-size: 17px;
-  flex: 0 0 auto;
-  margin-top: 2px;
-}
-.cog-full {
-  max-height: 58vh;
-  overflow: auto;
-  font-size: 13.5px;
-  line-height: 1.9;
-  white-space: pre-wrap;
-  word-break: break-word;
-  margin: 0;
-  font-family: var(--guaxi-editor-font-family);
 }
 
 /* naive-ui 的页签与控件默认字号偏小，且不继承外层字体，这里统一拉回。 */

@@ -1,0 +1,23 @@
+<!doctype html>
+<!--
+  外部资料全文阅读器的入口（create_article_reader_window 打开的就是它）。
+
+  与 doc-reader.html 同一个理由：只挂一扇 Markdown 阅读窗口，不走主应用入口。
+  走主应用等于每次「查看全文」都把 Monaco / LSP / 全部路由页面重新解析一遍。
+
+  文件名不能与任何路由首段同名（见 tools/check_window_routes.mjs），也不能叫
+  reader.html —— 知识库的旧阅读窗口用 `/reader` 路由，入口撞名会把它抢走。
+-->
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>全文阅读</title>
+  </head>
+
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/articleReaderMain.js"></script>
+  </body>
+</html>
