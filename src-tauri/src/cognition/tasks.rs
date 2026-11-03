@@ -142,40 +142,44 @@ fn title_of(task: &TaskBlock) -> String {
     task.internal_id.clone()
 }
 
-/// 学习/工作/生活里已允许的分类，未来 `days` 天内到期或已过期的未完成任务。
+/// 大脑「任务」页签：白名单分类里的未完成任务。
 ///
-/// 只返回带截止日期的条目：大脑关心的是"该做了"，无截止日期的收集箱条目留给
-/// 任务管理本身。返回按截止日升序，最多 60 条。
+/// 不按截止日期截断：没有截止日期与截止在很久以后的任务同样属于"我的任务"，
+/// 一律返回，由界面分到「已过期 / 今天 / 接下来 7 天 / 以后 / 无截止」。
+/// 排序按截止日升序，没有截止日期的排在最后。
 pub fn overview(days: Option<i64>) -> Result<TaskOverview, String> {
     let allowed = allowed_categories();
     let window_days = days.unwrap_or(7).clamp(1, 60);
     let today_str = today();
-    let end = (chrono::Local::now() + chrono::Duration::days(window_days))
+    let soon_end = (chrono::Local::now() + chrono::Duration::days(window_days))
         .format("%Y-%m-%d")
         .to_string();
 
     let mut items: Vec<TaskItem> = Vec::new();
+    let mut first_error: Option<String> = None;
     if !allowed.is_empty() {
         for category in &allowed {
-            let tasks = taskmanager::query_blocks(&TaskQuery {
+            let tasks = match taskmanager::query_blocks(&TaskQuery {
                 category: Some(category.clone()),
                 status: None,
                 done: Some(false),
                 date_from: None,
                 date_to: None,
                 keyword: None,
-            })
-            .unwrap_or_default();
-            for task in tasks {
-                let deadline = task.deadline.trim().to_string();
-                if deadline.is_empty() || deadline.as_str() > end.as_str() {
+            }) {
+                Ok(tasks) => tasks,
+                Err(error) => {
+                    first_error.get_or_insert(error);
                     continue;
                 }
+            };
+            for task in tasks {
+                let deadline = task.deadline.trim().to_string();
                 items.push(TaskItem {
                     internal_id: task.internal_id.clone(),
                     id: task.id.clone(),
                     title: title_of(&task),
-                    overdue: deadline.as_str() < today_str.as_str(),
+                    overdue: !deadline.is_empty() && deadline.as_str() < today_str.as_str(),
                     deadline,
                     category: category.clone(),
                     category_label: label_of(category),
@@ -185,18 +189,37 @@ pub fn overview(days: Option<i64>) -> Result<TaskOverview, String> {
             }
         }
     }
+    // 有截止日的按日期排前面，没截止日的按优先级/标题排在最后。
     items.sort_by(|a, b| {
-        a.deadline
-            .cmp(&b.deadline)
+        let a_empty = a.deadline.is_empty();
+        let b_empty = b.deadline.is_empty();
+        a_empty
+            .cmp(&b_empty)
+            .then_with(|| a.deadline.cmp(&b.deadline))
             .then_with(|| a.priority.cmp(&b.priority))
+            .then_with(|| a.title.cmp(&b.title))
     });
     let overdue = items.iter().filter(|t| t.overdue).count() as i64;
     let due_today = items
         .iter()
         .filter(|t| t.deadline == today_str)
         .count() as i64;
-    let due_soon = items.len() as i64 - overdue - due_today;
-    items.truncate(60);
+    let due_soon = items
+        .iter()
+        .filter(|t| {
+            !t.deadline.is_empty()
+                && !t.overdue
+                && t.deadline.as_str() > today_str.as_str()
+                && t.deadline.as_str() <= soon_end.as_str()
+        })
+        .count() as i64;
+    items.truncate(200);
+
+    if items.is_empty() {
+        if let Some(error) = first_error {
+            return Err(format!("读取任务失败: {error}"));
+        }
+    }
 
     Ok(TaskOverview {
         categories: categories_with(&allowed),

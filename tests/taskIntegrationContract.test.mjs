@@ -52,6 +52,9 @@ assert.match(inbox, /taskGroups/)
 // 「打开任务管理」必须走独立窗口命令，而不是切主窗口路由（路由方式会让任务页
 // 与大脑页抢同一个工作区，且页面是按独立窗口设计的）。
 assert.match(inbox, /create_task_manager_window/)
+// 任务概览不按截止日期截断：无截止与远期任务也要出现在大脑里。
+assert.match(read('src-tauri/src/cognition/tasks.rs'), /let a_empty = a\.deadline\.is_empty\(\)/)
+assert.match(inbox, /无截止/)
 assert.match(setting, /任务接入/)
 assert.match(setting, /setTaskCategory/)
 

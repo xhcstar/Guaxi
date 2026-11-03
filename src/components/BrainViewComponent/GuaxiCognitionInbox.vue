@@ -613,9 +613,11 @@
             />
           </div>
           <div class="task-summary">
-            <span><b>{{ taskOverview?.overdue ?? 0 }}</b>已过期</span>
-            <span><b>{{ taskOverview?.dueToday ?? 0 }}</b>今天</span>
-            <span><b>{{ taskOverview?.dueSoon ?? 0 }}</b>接下来 {{ taskOverview?.windowDays ?? 7 }} 天</span>
+            <span><b>{{ taskCounts.overdue }}</b>已过期</span>
+            <span><b>{{ taskCounts.today }}</b>今天</span>
+            <span><b>{{ taskCounts.soon }}</b>接下来 7 天</span>
+            <span v-if="taskCounts.later"><b>{{ taskCounts.later }}</b>以后</span>
+            <span v-if="taskCounts.undated"><b>{{ taskCounts.undated }}</b>无截止</span>
           </div>
           <n-spin :show="store.taskLoading">
             <template v-if="taskGroups.length">
@@ -624,7 +626,7 @@
                   {{ g.label }}<i>{{ g.items.length }}</i>
                 </div>
                 <div v-for="t in g.items" :key="t.internalId" class="task-row">
-                  <span class="task-date">{{ shortDate(t.deadline) }}</span>
+                  <span class="task-date">{{ t.deadline ? shortDate(t.deadline) : '无截止' }}</span>
                   <span class="task-title" :class="{ overdue: t.overdue }" :title="t.title">{{ t.title }}</span>
                   <span class="task-meta">
                     {{ t.categoryLabel }}<template v-if="t.priority"> · P{{ t.priority }}</template> · {{ t.status }}
@@ -632,11 +634,14 @@
                 </div>
               </section>
             </template>
+            <div v-else-if="store.taskError" class="cog-empty">
+              读取任务失败：{{ store.taskError }}
+            </div>
             <div v-else-if="!taskAllowed.length" class="cog-empty">
               任务接入已全部关闭。打开上面的分类开关，或到设置 → 认知层 → 任务接入里调整。
             </div>
             <div v-else class="cog-empty">
-              接入的分类里，未来 {{ taskOverview?.windowDays ?? 7 }} 天没有到期任务；无截止日期的条目留在任务管理里。
+              接入的分类里没有未完成任务。无截止日期的条目也会显示在这里的「无截止」分组。
             </div>
           </n-spin>
         </div>
@@ -1101,24 +1106,67 @@ const refreshLearning = async () => {
 // ── 任务接入
 const taskRootEl = ref(null)
 const taskCategories = computed(() => store.taskCategories)
-const taskOverview = computed(() => store.taskOverview)
 const taskAllowed = computed(() => store.taskCategories?.allowed || [])
-const todayKey = () => {
+const dateKeyAfter = (days) => {
   const d = new Date()
+  d.setDate(d.getDate() + days)
   const pad = (n) => String(n).padStart(2, '0')
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
 }
+const todayKey = () => dateKeyAfter(0)
 const shortDate = (iso) => String(iso || '').slice(5)
-const taskGroups = computed(() => {
-  const items = store.taskOverview?.items || []
+const taskItems = computed(() => store.taskOverview?.items || [])
+const taskCounts = computed(() => {
+  const items = taskItems.value
   const today = todayKey()
-  const overdue = items.filter((t) => t.overdue)
-  const dueToday = items.filter((t) => !t.overdue && t.deadline === today)
-  const soon = items.filter((t) => !t.overdue && t.deadline !== today)
+  const soonEnd = dateKeyAfter(7)
+  return {
+    overdue: items.filter((t) => t.overdue).length,
+    today: items.filter((t) => !t.overdue && t.deadline === today).length,
+    soon: items.filter(
+      (t) => !t.overdue && t.deadline && t.deadline > today && t.deadline <= soonEnd,
+    ).length,
+    later: items.filter((t) => !t.overdue && t.deadline > soonEnd).length,
+    undated: items.filter((t) => !t.deadline).length,
+  }
+})
+const taskGroups = computed(() => {
+  const items = taskItems.value
+  const today = todayKey()
+  const soonEnd = dateKeyAfter(7)
   return [
-    { key: 'overdue', label: '已过期', tone: 'is-overdue', items: overdue },
-    { key: 'today', label: '今天', tone: '', items: dueToday },
-    { key: 'soon', label: '接下来', tone: '', items: soon },
+    {
+      key: 'overdue',
+      label: '已过期',
+      tone: 'is-overdue',
+      items: items.filter((t) => t.overdue),
+    },
+    {
+      key: 'today',
+      label: '今天',
+      tone: '',
+      items: items.filter((t) => !t.overdue && t.deadline === today),
+    },
+    {
+      key: 'soon',
+      label: '接下来 7 天',
+      tone: '',
+      items: items.filter(
+        (t) => !t.overdue && t.deadline && t.deadline > today && t.deadline <= soonEnd,
+      ),
+    },
+    {
+      key: 'later',
+      label: '以后',
+      tone: '',
+      items: items.filter((t) => !t.overdue && t.deadline > soonEnd),
+    },
+    {
+      key: 'undated',
+      label: '无截止',
+      tone: '',
+      items: items.filter((t) => !t.deadline),
+    },
   ].filter((g) => g.items.length)
 })
 const toggleTaskCategory = async (key) => {
@@ -1166,35 +1214,103 @@ const plainSpeechText = (raw) =>
 
 const buildBroadcastText = () => {
   const parts = []
-  const nudges = (store.nudges || []).slice(0, 3)
+  const day = String(todayLabel.value || '').replace(/·/g, '，')
+  const inboxCount = st.value?.percept?.newCount ?? 0
+  const pendingScore = store.pendingScoreCount
+  parts.push(`今天是${day}。`)
+  parts.push(
+    `待处理提醒 ${store.openNudgeCount} 条，收件箱还有 ${inboxCount} 条未处理内容` +
+      (pendingScore ? `，其中 ${pendingScore} 条待打分。` : '。'),
+  )
+
+  // 提醒：标题 + 正文摘要 + 第一条"为什么"
+  const nudges = (store.nudges || []).slice(0, 4)
   if (nudges.length) {
-    parts.push(`有 ${store.openNudgeCount} 条待处理提醒。`)
-    for (const n of nudges) {
+    parts.push('先看提醒。')
+    nudges.forEach((n, i) => {
       const title = plainSpeechText(n.title)
-      const body = plainSpeechText(n.body).slice(0, 120)
-      if (title || body) parts.push(`${title}${body ? `。${body}` : ''}`)
+      const body = plainSpeechText(n.body).slice(0, 180)
+      const why = plainSpeechText((n.why || [])[0]).slice(0, 80)
+      parts.push(
+        `第 ${i + 1} 条，${kindLabel(n.kind)}：${title}。${body ? `${body}。` : ''}${why ? `原因是：${why}。` : ''}`,
+      )
+    })
+    if (store.openNudgeCount > nudges.length) {
+      parts.push(`还有 ${store.openNudgeCount - nudges.length} 条提醒没有展开。`)
     }
   } else {
     parts.push('目前没有待处理的提醒。')
   }
-  const tasks = store.taskOverview?.items || []
-  if (tasks.length) {
-    const overdue = tasks.filter((t) => t.overdue).length
-    const today = tasks.filter((t) => !t.overdue && t.deadline === todayKey()).length
-    if (overdue || today) {
+
+  // 任务：分布 + 过期与今天的条目名
+  const counts = taskCounts.value
+  const items = taskItems.value
+  if (items.length) {
+    parts.push('任务方面。')
+    parts.push(
+      `已过期 ${counts.overdue} 条，今天到期 ${counts.today} 条，接下来七天 ${counts.soon} 条` +
+        (counts.later ? `，以后 ${counts.later} 条` : '') +
+        (counts.undated ? `，无截止 ${counts.undated} 条` : '') +
+        '。',
+    )
+    const overdue = items.filter((t) => t.overdue).slice(0, 3)
+    if (overdue.length) {
       parts.push(
-        `任务方面，${overdue ? `${overdue} 条已经过期，` : ''}${today ? `${today} 条今天到期。` : ''}`,
+        `已经过期的是：${overdue
+          .map((t) => `${plainSpeechText(t.title)}，截止 ${t.deadline}`)
+          .join('；')}。`,
       )
     }
+    const dueToday = items
+      .filter((t) => !t.overdue && t.deadline === todayKey())
+      .slice(0, 3)
+    if (dueToday.length) {
+      parts.push(`今天到期的是：${dueToday.map((t) => plainSpeechText(t.title)).join('；')}。`)
+    }
+  } else if (taskAllowed.value.length && !store.taskError) {
+    parts.push('任务方面，接入的分类里没有未完成任务。')
   }
-  if (briefTeaser.value) {
-    parts.push(`今日简报：${plainSpeechText(briefTeaser.value)}`)
+
+  // 学习：最该补的主题、今天该复习什么、近期读完
+  const learnData = store.learningOverview
+  if (learnData) {
+    const sections = []
+    const weak = weakTopics.value.slice(0, 2)
+    if (weak.length) {
+      sections.push(
+        `最该补的是${weak
+          .map((t) => `${t.topic}，掌握度 ${Math.round(t.mastery * 100)}%`)
+          .join('；')}`,
+      )
+    }
+    if (learnData.dueReviews) {
+      const dueNames = (learnData.due || [])
+        .slice(0, 2)
+        .map((d) => plainSpeechText(d.label))
+        .filter(Boolean)
+      sections.push(
+        `今天有 ${learnData.dueReviews} 条复习到期${dueNames.length ? `，包括${dueNames.join('、')}` : ''}`,
+      )
+    }
+    if (learnData.finishedBooks) {
+      sections.push(`近 ${learnData.days} 天读完了 ${learnData.finishedBooks} 本`)
+    }
+    if (sections.length) parts.push(`学习方面，${sections.join('。')}。`)
   }
-  const weak = weakTopics.value[0]
-  if (weak) {
-    parts.push(`学习上最该补的是 ${weak.topic}，当前掌握度 ${Math.round(weak.mastery * 100)}%。`)
+
+  // 简报：优先用完整正文的开头，比一句 teaser 更完整
+  const briefText = plainSpeechText(store.brief?.markdown || '').slice(0, 420)
+  if (briefText) parts.push(`今日简报：${briefText}。`)
+
+  // 记忆：最近两条
+  const memories = (store.memories || []).slice(0, 2)
+  if (memories.length) {
+    parts.push(`最近记住：${memories.map((m) => plainSpeechText(m.text)).join('；')}。`)
   }
-  return parts.filter(Boolean).join('\n')
+
+  parts.push('以上是今天需要你知道的内容。')
+  const text = parts.filter(Boolean).join('\n')
+  return text.length > 2200 ? `${text.slice(0, 2200)}…` : text
 }
 
 const broadcastToday = async () => {
@@ -1205,8 +1321,10 @@ const broadcastToday = async () => {
   try {
     if (!store.taskCategories) await store.loadTaskCategories()
     await store.loadTasks()
+    if (!store.learningOverview) await store.loadLearning(30)
+    if (!store.memories?.length) await store.loadMemories()
   } catch {
-    /* 任务读取失败不影响播报其余内容 */
+    /* 单项读取失败不影响播报其余内容 */
   }
   const text = buildBroadcastText()
   if (!text.trim()) {
@@ -1411,11 +1529,17 @@ onMounted(async () => {
     // 语音播报是可选的（设置页默认关闭）：开着的时候，把这条提醒念一遍。
     if (store.voiceBroadcast) {
       const n = (store.nudges || []).find((x) => x.id === evt.id)
-      const text = n
-        ? [plainSpeechText(n.title), plainSpeechText(n.body).slice(0, 200)]
-            .filter(Boolean)
-            .join('。')
-        : `新提醒：${meta?.label || evt.kind}`
+      const pieces = []
+      if (n) {
+        pieces.push(`${meta?.label || evt.kind}提醒：${plainSpeechText(n.title)}`)
+        const body = plainSpeechText(n.body).slice(0, 200)
+        if (body) pieces.push(body)
+        const why = plainSpeechText((n.why || [])[0]).slice(0, 100)
+        if (why) pieces.push(`原因是：${why}`)
+      } else {
+        pieces.push(`新提醒：${meta?.label || evt.kind}`)
+      }
+      const text = pieces.filter(Boolean).join('。')
       if (text) void speech.speak(text)
     }
   })

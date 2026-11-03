@@ -100,6 +100,8 @@ export const useCognitionStore = defineStore('cognitionStore', {
     taskCategories: null,
     taskOverview: null,
     taskLoading: false,
+    /** 最近一次读取任务概览的失败原因（空 = 正常）。 */
+    taskError: '',
 
     /** 当前会话的接地引证：episodeId -> citations[]。 */
     groundedByEpisode: {},
@@ -765,11 +767,13 @@ export const useCognitionStore = defineStore('cognitionStore', {
 
     async loadTasks(days = 7) {
       this.taskLoading = true
+      this.taskError = ''
       try {
         this.taskOverview = await invoke('cognition_task_overview', { days })
       } catch (e) {
         logger.warn('cognition_task_overview failed', e)
         this.taskOverview = null
+        this.taskError = String(e?.message || e || '读取任务失败')
       } finally {
         this.taskLoading = false
       }

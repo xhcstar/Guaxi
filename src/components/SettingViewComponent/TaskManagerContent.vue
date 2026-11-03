@@ -117,7 +117,7 @@
 
 <script setup>
 import { createLogger } from '../../utils/logger'
-import { ref, onMounted } from 'vue';
+import { ref, onMounted, markRaw } from 'vue';
 import {
   NCard, NSpace, NText, NButton, NIcon, NInput, NAlert, NTooltip,
   NDivider, NForm, NFormItem, NList, NListItem, NTag, useMessage,
@@ -143,9 +143,11 @@ const gitUsername = ref('')
 const gitEmail = ref('')
 
 const categoryRows = ref([
-  { key: 'work', zh: '工作', icon: Briefcase20Regular, color: '#7c3aed', path: '' },
-  { key: 'life', zh: '生活', icon: Home20Regular, color: '#059669', path: '' },
-  { key: 'study', zh: '学习', icon: Book20Regular, color: '#2563eb', path: '' },
+  // 图标组件是纯数据对象，不能进 Vue 的响应式代理——否则每次渲染都要把组件对象
+  // 递归代理一遍，并在开发期打出 "Component that was made a reactive object" 警告。
+  { key: 'work', zh: '工作', icon: markRaw(Briefcase20Regular), color: '#7c3aed', path: '' },
+  { key: 'life', zh: '生活', icon: markRaw(Home20Regular), color: '#059669', path: '' },
+  { key: 'study', zh: '学习', icon: markRaw(Book20Regular), color: '#2563eb', path: '' },
 ])
 
 const syncCategoryRows = () => {

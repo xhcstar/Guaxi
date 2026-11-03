@@ -233,7 +233,7 @@ fn remote_proxy_url(url: &str) -> String {
 /// 只改写 http(s) 的 src，其余保持原样；返回改写后的内容与映射。
 fn proxy_html_images(content: &str, mappings: &mut Vec<ImageMapping>) -> String {
     let tag_re = Regex::new(r"(?is)<img\b[^>]*>").unwrap();
-    let src_re = Regex::new(r#"(?i)\bsrc\s*=\s*(["'])(https?://[^"']+)\1"#).unwrap();
+    let src_re = Regex::new(r#"(?i)\bsrc\s*=\s*(["'])(https?://[^"']+)["']"#).unwrap();
     tag_re
         .replace_all(content, |caps: &regex::Captures| {
             let tag = caps.get(0).map(|m| m.as_str().to_string()).unwrap_or_default();
