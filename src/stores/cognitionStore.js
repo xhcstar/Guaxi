@@ -113,6 +113,8 @@ export const useCognitionStore = defineStore('cognitionStore', {
   getters: {
     enabled: (s) => Boolean(s.status?.enabled),
     embeddingReady: (s) => Boolean(s.status?.embeddingReady),
+    /** 新提醒是否语音播报（设置页开关）。 */
+    voiceBroadcast: (s) => Boolean(s.status?.voiceBroadcast),
     openNudgeCount: (s) => s.nudges.length,
     contradictionCount: (s) => s.nudges.filter((n) => n.kind === 'contradiction').length,
     pendingScoreCount: (s) => Number(s.status?.percept?.pendingScore || 0),

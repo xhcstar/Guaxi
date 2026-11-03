@@ -64,6 +64,15 @@
       <div class="cog-bar-right">
         <GuaxiIconButton
           icon-only
+          :icon="speechBusy ? Stop20Regular : Speaker220Regular"
+          :label="speechBusy ? '停止播报' : '语音播报'"
+          :hint="speechBusy
+            ? '停止当前的语音播报。'
+            : '用语音读出今天需要你知道的内容：待处理提醒、到期任务、今日简报与最该补的主题。'"
+          @click="broadcastToday"
+        />
+        <GuaxiIconButton
+          icon-only
           :icon="Lightbulb20Regular"
           label="立即审议"
           hint="现在就扫一遍新感知与图谱变化，产出提醒并按额度投递。不必等下一轮自动审议。"
@@ -782,6 +791,8 @@ import {
   Open20Regular,
   Settings20Regular,
   ShieldKeyhole20Regular,
+  Speaker220Regular,
+  Stop20Regular,
   ThumbDislike20Regular,
   Warning20Regular,
   WeatherSunny20Regular,
@@ -799,6 +810,7 @@ import { useSettingsStore } from '../../stores/settingsStore'
 import { channelIcon, nudgeIcon, sourceIcon } from '../../utils/cognitionIcons'
 import { onCognitionNudge, onCognitionBrief } from '../../utils/cognitionEvents'
 import { createLogger } from '../../utils/logger'
+import { useSelectionReadAloud } from '../../composables/useSelectionReadAloud'
 import { renderMarkdown } from '../GuaxiMarkdownRender/GuaxiMarker.js'
 
 const logger = createLogger('GuaxiCognitionInbox')
@@ -809,6 +821,10 @@ const emit = defineEmits(['open-ref'])
 
 const store = useCognitionStore()
 const message = useMessage()
+// 语音播报复用划词朗读的一次性合成通道：短文本不值得开逐句会话，
+// 而且它用的是独立引擎实例，不会和阅读器里的逐句朗读互相阻塞。
+const speech = useSelectionReadAloud({ message })
+const speechBusy = speech.busy
 const KINDS = NUDGE_KINDS
 
 const tab = ref('today')
@@ -1119,6 +1135,70 @@ const openTaskManager = () => {
   window.location.hash = '/task-manager'
 }
 
+// ── 语音播报：把"今天需要你知道的"拼成一段口语稿
+const plainSpeechText = (raw) =>
+  String(raw || '')
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/`([^`]*)`/g, '$1')
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, ' ')
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/[#>*_~]/g, ' ')
+    .replace(/\[|\]|\(|\)/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+
+const buildBroadcastText = () => {
+  const parts = []
+  const nudges = (store.nudges || []).slice(0, 3)
+  if (nudges.length) {
+    parts.push(`有 ${store.openNudgeCount} 条待处理提醒。`)
+    for (const n of nudges) {
+      const title = plainSpeechText(n.title)
+      const body = plainSpeechText(n.body).slice(0, 120)
+      if (title || body) parts.push(`${title}${body ? `。${body}` : ''}`)
+    }
+  } else {
+    parts.push('目前没有待处理的提醒。')
+  }
+  const tasks = store.taskOverview?.items || []
+  if (tasks.length) {
+    const overdue = tasks.filter((t) => t.overdue).length
+    const today = tasks.filter((t) => !t.overdue && t.deadline === todayKey()).length
+    if (overdue || today) {
+      parts.push(
+        `任务方面，${overdue ? `${overdue} 条已经过期，` : ''}${today ? `${today} 条今天到期。` : ''}`,
+      )
+    }
+  }
+  if (briefTeaser.value) {
+    parts.push(`今日简报：${plainSpeechText(briefTeaser.value)}`)
+  }
+  const weak = weakTopics.value[0]
+  if (weak) {
+    parts.push(`学习上最该补的是 ${weak.topic}，当前掌握度 ${Math.round(weak.mastery * 100)}%。`)
+  }
+  return parts.filter(Boolean).join('\n')
+}
+
+const broadcastToday = async () => {
+  if (speech.busy.value) {
+    speech.stop()
+    return
+  }
+  try {
+    if (!store.taskCategories) await store.loadTaskCategories()
+    await store.loadTasks()
+  } catch {
+    /* 任务读取失败不影响播报其余内容 */
+  }
+  const text = buildBroadcastText()
+  if (!text.trim()) {
+    message.info('今天没有需要播报的内容')
+    return
+  }
+  await speech.toggle(text)
+}
+
 watch(tab, async (value) => {
   await nextTick()
   // 页签共用滚动容器：切换后回到顶部，避免上一条长列表的 scrollTop 带过来。
@@ -1305,12 +1385,21 @@ let offWindowFocus = null
 onMounted(async () => {
   await reload()
   briefWatchReady = true
-  offNudge = await onCognitionNudge((evt) => {
-    store.refreshNudges()
+  offNudge = await onCognitionNudge(async (evt) => {
+    await store.refreshNudges()
     store.refreshStatus()
-    if (evt.push) {
-      const meta = KINDS[evt.kind]
-      message.info(`新提醒：${meta?.label || evt.kind}`, { duration: 6000 })
+    if (!evt.push) return
+    const meta = KINDS[evt.kind]
+    message.info(`新提醒：${meta?.label || evt.kind}`, { duration: 6000 })
+    // 语音播报是可选的（设置页默认关闭）：开着的时候，把这条提醒念一遍。
+    if (store.voiceBroadcast) {
+      const n = (store.nudges || []).find((x) => x.id === evt.id)
+      const text = n
+        ? [plainSpeechText(n.title), plainSpeechText(n.body).slice(0, 200)]
+            .filter(Boolean)
+            .join('。')
+        : `新提醒：${meta?.label || evt.kind}`
+      if (text) void speech.speak(text)
     }
   })
   offBrief = await onCognitionBrief(async () => {

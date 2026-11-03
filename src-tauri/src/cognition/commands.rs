@@ -34,6 +34,8 @@ pub struct CognitionStatus {
     pub embedding_ready: bool,
     /// 最近一次后台打分失败的原因(空=正常)。顶栏据此解释"为什么一直是 0.00"。
     pub scoring_last_error: String,
+    /// 新提醒到达时是否用语音播报（设置页开关，默认关闭）。
+    pub voice_broadcast: bool,
 }
 
 #[tauri::command]
@@ -80,6 +82,7 @@ pub async fn cognition_status(probe: Option<bool>) -> Result<CognitionStatus, St
         quiet_hours: prof.quiet_hours,
         embedding_ready,
         scoring_last_error: store::get_setting("scoring_last_error").unwrap_or_default(),
+        voice_broadcast: store::get_bool("voice_broadcast", false),
     })
 }
 

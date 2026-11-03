@@ -278,6 +278,20 @@
           </div>
           <div class="cog-row">
             <div class="cog-row-main">
+              <div class="cog-row-label">新提醒语音播报</div>
+              <div class="cog-row-hint">
+                新提醒投递时用语音念一遍标题与要点（默认关闭）。只播报提醒，不朗读文章正文；
+                大脑顶部的喇叭按钮可以随时手动播报今日内容。
+              </div>
+            </div>
+            <n-switch
+              size="small"
+              :value="Boolean(st?.voiceBroadcast)"
+              @update:value="setVoiceBroadcast"
+            />
+          </div>
+          <div class="cog-row">
+            <div class="cog-row-main">
               <div class="cog-row-label">每日 token 预算</div>
               <div class="cog-row-hint">
                 用尽后自动跳过需要模型的环节（矛盾判决、简报开场），纯结构类提醒不受影响。
@@ -946,6 +960,14 @@ async function setNum(key, value) {
   if (value == null) return
   try {
     await store.setSetting(key, value)
+  } catch (e) {
+    message.error(String(e))
+  }
+}
+
+async function setVoiceBroadcast(value) {
+  try {
+    await store.setSetting('voice_broadcast', value ? '1' : '0')
   } catch (e) {
     message.error(String(e))
   }
