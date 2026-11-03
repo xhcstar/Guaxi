@@ -49,7 +49,7 @@
           @click="selectStandard(entry)"
           @contextmenu.prevent="entry.folder && openFolderMenu(entry.folder, $event)"
         >
-          <span class="mail-folder-icon">{{ entry.icon }}</span>
+          <MailIcon class="mail-folder-icon" :name="entry.icon" :size="15" />
           <span class="mail-folder-name">{{ entry.label }}</span>
           <span v-if="entry.unread" class="mail-badge">{{ entry.unread }}</span>
         </button>
@@ -60,7 +60,7 @@
           :class="{ 'is-active': scope === 'unread' }"
           @click="$emit('select-scope', 'unread')"
         >
-          <span class="mail-folder-icon">●</span>
+          <MailIcon class="mail-folder-icon" name="unread" :size="15" />
           <span class="mail-folder-name">未读</span>
           <span v-if="quickCounts.unread" class="mail-badge">{{ quickCounts.unread }}</span>
         </button>
@@ -69,7 +69,7 @@
           :class="{ 'is-active': scope === 'flagged' }"
           @click="$emit('select-scope', 'flagged')"
         >
-          <span class="mail-folder-icon">★</span>
+          <MailIcon class="mail-folder-icon" name="star" :size="15" />
           <span class="mail-folder-name">已加星标</span>
         </button>
         <button
@@ -77,7 +77,7 @@
           :class="{ 'is-active': scope === 'attachments' }"
           @click="$emit('select-scope', 'attachments')"
         >
-          <span class="mail-folder-icon">📎</span>
+          <MailIcon class="mail-folder-icon" name="paperclip" :size="15" />
           <span class="mail-folder-name">带附件</span>
         </button>
         <button
@@ -85,7 +85,7 @@
           :class="{ 'is-active': scope === 'all' }"
           @click="$emit('select-scope', 'all')"
         >
-          <span class="mail-folder-icon">▤</span>
+          <MailIcon class="mail-folder-icon" name="layers" :size="15" />
           <span class="mail-folder-name">全部邮件</span>
         </button>
 
@@ -116,7 +116,7 @@
           @click="$emit('select-folder', folder.name)"
           @contextmenu.prevent="openFolderMenu(folder, $event)"
         >
-          <span class="mail-folder-icon">📁</span>
+          <MailIcon class="mail-folder-icon" name="folder" :size="15" />
           <span class="mail-folder-name" :title="folder.displayName">{{ folder.displayName }}</span>
           <span v-if="folder.unread" class="mail-badge">{{ folder.unread }}</span>
         </button>
@@ -155,7 +155,7 @@
               :title="folder.name"
               @click="$emit('select-folder', folder.name)"
             >
-              <span class="mail-folder-icon">⌸</span>
+              <MailIcon class="mail-folder-icon" name="folder" :size="15" />
               <span class="mail-folder-name">{{ folder.displayName }}</span>
               <span v-if="folder.unread" class="mail-badge">{{ folder.unread }}</span>
             </button>
@@ -170,7 +170,7 @@
           :class="{ 'is-active': activeLabel === label }"
           @click="$emit('select-scope', 'all', label)"
         >
-          <span class="mail-folder-icon">◇</span>
+          <MailIcon class="mail-folder-icon" name="tag" :size="15" />
           <span class="mail-folder-name" :title="label">{{ label }}</span>
           <span class="mail-badge">{{ count }}</span>
         </button>
@@ -181,7 +181,7 @@
          顶栏留给高频动作，设置属于低频全局配置。 -->
     <div class="mail-sidebar-footer">
       <button class="mail-footer-btn" title="外观与设置" @click="$emit('settings')">
-        <span class="mail-footer-icon" aria-hidden="true">⚙</span>
+        <MailIcon class="mail-footer-icon" name="gear" :size="15" />
         <span class="mail-footer-label">设置</span>
       </button>
     </div>
@@ -218,6 +218,7 @@
 
 <script setup>
 import { computed, nextTick, onBeforeUnmount, ref } from 'vue'
+import MailIcon from './MailIcon.vue'
 import { mailDrag } from './mailDragState'
 import { visibleCustomFolders } from './folderTree'
 
@@ -296,15 +297,15 @@ const folders = computed(() => {
 
 /** 标准文件夹的固定顺序与显示名。服务器没建时后端会补占位项，这里再兜一次。 */
 const STANDARD_ROLES = [
-  { role: 'inbox', label: '收件箱', icon: '▣' },
-  { role: 'drafts', label: '草稿', icon: '✎' },
+  { role: 'inbox', label: '收件箱', icon: 'inbox' },
+  { role: 'drafts', label: '草稿', icon: 'edit' },
   // 发件箱：定时待发与多次投递失败的邮件都在这里。它是固定入口、始终可见——
   // 用户需要确认「有没有信还没发出去」，藏起来反而让人以为发丢了。
-  { role: 'outbox', label: '发件箱', icon: '◷' },
-  { role: 'sent', label: '已发送', icon: '↗' },
-  { role: 'archive', label: '存档', icon: '▤' },
-  { role: 'junk', label: '垃圾邮件', icon: '⚠' },
-  { role: 'trash', label: '已删除', icon: '🗑' },
+  { role: 'outbox', label: '发件箱', icon: 'clock' },
+  { role: 'sent', label: '已发送', icon: 'send' },
+  { role: 'archive', label: '存档', icon: 'archive' },
+  { role: 'junk', label: '垃圾邮件', icon: 'warning' },
+  { role: 'trash', label: '已删除', icon: 'trash' },
 ]
 
 /**
