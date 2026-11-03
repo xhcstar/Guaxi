@@ -4,10 +4,13 @@ use actix_web::{get, post, web, HttpResponse};
 use mime_guess;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::fs;
+use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
+use std::time::Duration;
 use tracing::{info, warn};
 use urlencoding::{decode, encode};
 
@@ -219,6 +222,43 @@ pub struct ResourceRegisterRequest {
     extra: Option<serde_json::Value>,
 }
 
+fn remote_proxy_url(url: &str) -> String {
+    format!(
+        "http://localhost:8888/markdown/api/remote_image?url={}",
+        encode(url)
+    )
+}
+
+/// Markdown 里的原始 HTML 图片（作者头像、封面在转换产物里常是 `<img>`）。
+/// 只改写 http(s) 的 src，其余保持原样；返回改写后的内容与映射。
+fn proxy_html_images(content: &str, mappings: &mut Vec<ImageMapping>) -> String {
+    let tag_re = Regex::new(r"(?is)<img\b[^>]*>").unwrap();
+    let src_re = Regex::new(r#"(?i)\bsrc\s*=\s*(["'])(https?://[^"']+)\1"#).unwrap();
+    tag_re
+        .replace_all(content, |caps: &regex::Captures| {
+            let tag = caps.get(0).map(|m| m.as_str().to_string()).unwrap_or_default();
+            src_re
+                .replace_all(&tag, |src_caps: &regex::Captures| {
+                    let quote = src_caps.get(1).map(|m| m.as_str()).unwrap_or("\"");
+                    let url = src_caps.get(2).map(|m| m.as_str()).unwrap_or("");
+                    if url.is_empty() || url.starts_with("http://localhost:8888/") {
+                        return src_caps
+                            .get(0)
+                            .map(|m| m.as_str().to_string())
+                            .unwrap_or_default();
+                    }
+                    let served = remote_proxy_url(url);
+                    mappings.push(ImageMapping {
+                        original_path: url.to_string(),
+                        served_path: served.clone(),
+                    });
+                    format!("src={quote}{served}{quote}")
+                })
+                .to_string()
+        })
+        .to_string()
+}
+
 fn process_image_paths(content: &str, base_path: &Path) -> (String, Vec<ImageMapping>) {
     let mut mappings = Vec::new();
     let mut processed = content.to_string();
@@ -228,7 +268,20 @@ fn process_image_paths(content: &str, base_path: &Path) -> (String, Vec<ImageMap
         let img_path = cap.get(2).unwrap().as_str();
         info!("Found image path: {}", img_path);
 
-        if img_path.starts_with("http") {
+        if img_path.starts_with("http://") || img_path.starts_with("https://") {
+            // 外链图片交给本地后端代理，不再让 WebView 直连第三方：
+            // 1) 避免 WebView2 跟踪防护对第三方图片存储访问刷 Tracking Prevention 警告；
+            // 2) 绕开部分站点的防盗链（后端不像浏览器那样带来源页）；
+            // 3) 代理侧落盘缓存，同一张图只取一次。
+            if img_path.starts_with("http://localhost:8888/") {
+                continue;
+            }
+            let served_path = remote_proxy_url(img_path);
+            mappings.push(ImageMapping {
+                original_path: img_path.to_string(),
+                served_path: served_path.clone(),
+            });
+            processed = processed.replace(&format!("]({})", img_path), &format!("]({})", served_path));
             continue;
         }
 
@@ -269,6 +322,14 @@ fn process_image_paths(content: &str, base_path: &Path) -> (String, Vec<ImageMap
     (processed, mappings)
 }
 
+/// 先处理 Markdown 语法里的图片，再处理原始 HTML 的 `<img>`。
+/// 两步都只改写外链；本地路径仍走 serve_image 的授权登记。
+fn process_all_images(content: &str, base_path: &Path) -> (String, Vec<ImageMapping>) {
+    let (markdown_processed, mut mappings) = process_image_paths(content, base_path);
+    let processed = proxy_html_images(&markdown_processed, &mut mappings);
+    (processed, mappings)
+}
+
 fn resolve_base_path(req: &MarkdownRequest) -> PathBuf {
     req.base_path
         .as_ref()
@@ -279,7 +340,7 @@ fn resolve_base_path(req: &MarkdownRequest) -> PathBuf {
 #[post("/api/markdown/image_process")]
 async fn process_markdown(req: web::Json<MarkdownRequest>) -> HttpResponse {
     let base_path = resolve_base_path(&req);
-    let (processed, mappings) = process_image_paths(&req.content, &base_path);
+    let (processed, mappings) = process_all_images(&req.content, &base_path);
 
     HttpResponse::Ok().json(serde_json::json!({
         "processed_content": processed,
@@ -290,7 +351,7 @@ async fn process_markdown(req: web::Json<MarkdownRequest>) -> HttpResponse {
 #[post("/api/markdown/chat_process")]
 async fn process_chat_markdown(req: web::Json<MarkdownRequest>) -> HttpResponse {
     let base_path = resolve_base_path(&req);
-    let (processed, mappings) = process_image_paths(&req.content, &base_path);
+    let (processed, mappings) = process_all_images(&req.content, &base_path);
     let processed = normalize_list_display_math(&processed);
 
     HttpResponse::Ok().json(serde_json::json!({
@@ -490,10 +551,256 @@ async fn register_resource(req: web::Json<ResourceRegisterRequest>) -> HttpRespo
     }
 }
 
+// ───────────────────────── 远程图片代理 ─────────────────────────
+//
+// 只代理图片，且目标不能是回环 / 内网地址：Markdown 来自不可信内容，
+// `![](http://127.0.0.1:8080/...)` 不能借代理变成一次 SSRF。
+// 缓存落在 exe 同级 cache/remote-images/，按 URL 哈希命名。
+
+const REMOTE_IMAGE_MAX_BYTES: usize = 20 * 1024 * 1024;
+
+#[derive(Debug, Deserialize)]
+struct RemoteImageQuery {
+    url: String,
+}
+
+fn remote_image_cache_dir() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let dir = exe.parent()?.join("cache").join("remote-images");
+    fs::create_dir_all(&dir).ok()?;
+    Some(dir)
+}
+
+fn remote_image_ext(content_type: &str) -> Option<&'static str> {
+    match content_type
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "image/jpeg" | "image/jpg" => Some("jpg"),
+        "image/png" => Some("png"),
+        "image/gif" => Some("gif"),
+        "image/webp" => Some("webp"),
+        "image/svg+xml" => Some("svg"),
+        "image/avif" => Some("avif"),
+        "image/bmp" => Some("bmp"),
+        _ => None,
+    }
+}
+
+fn remote_image_content_type(ext: &str) -> &'static str {
+    match ext {
+        "jpg" => "image/jpeg",
+        "png" => "image/png",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "svg" => "image/svg+xml",
+        "avif" => "image/avif",
+        "bmp" => "image/bmp",
+        _ => "application/octet-stream",
+    }
+}
+
+fn ip_is_forbidden(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => {
+            v4.is_loopback()
+                || v4.is_private()
+                || v4.is_link_local()
+                || v4.is_unspecified()
+                || v4.is_multicast()
+                || v4.is_broadcast()
+        }
+        IpAddr::V6(v6) => {
+            v6.is_loopback()
+                || v6.is_unspecified()
+                || v6.is_multicast()
+                || v6.is_unique_local()
+                || v6.is_unicast_link_local()
+        }
+    }
+}
+
+fn url_host_is_forbidden(url: &reqwest::Url) -> bool {
+    let Some(host) = url.host_str() else {
+        return true;
+    };
+    let host = host.trim_matches(['[', ']']);
+    if let Ok(ip) = host.parse::<IpAddr>() {
+        return ip_is_forbidden(ip);
+    }
+    let lower = host.to_ascii_lowercase();
+    lower == "localhost" || lower.ends_with(".localhost") || lower.ends_with(".local")
+}
+
+async fn ensure_public_host(url: &reqwest::Url) -> Result<(), String> {
+    let host = url.host_str().ok_or_else(|| "缺少主机名".to_string())?;
+    let port = url
+        .port_or_known_default()
+        .ok_or_else(|| "缺少端口".to_string())?;
+    let addrs = tokio::net::lookup_host((host, port))
+        .await
+        .map_err(|e| format!("解析域名失败: {e}"))?;
+    let mut any = false;
+    for addr in addrs {
+        any = true;
+        if ip_is_forbidden(addr.ip()) {
+            return Err("拒绝代理内网或本机地址".to_string());
+        }
+    }
+    if !any {
+        return Err("域名没有解析到地址".to_string());
+    }
+    Ok(())
+}
+
+fn remote_image_cache_key(url: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(url.as_bytes());
+    format!("{:x}", hasher.finalize())
+}
+
+fn read_cached_remote(url: &str) -> Option<(String, Vec<u8>)> {
+    let dir = remote_image_cache_dir()?;
+    let key = remote_image_cache_key(url);
+    for ext in ["jpg", "png", "gif", "webp", "svg", "avif", "bmp"] {
+        let path = dir.join(format!("{key}.{ext}"));
+        if let Ok(bytes) = fs::read(&path) {
+            return Some((remote_image_content_type(ext).to_string(), bytes));
+        }
+    }
+    None
+}
+
+async fn fetch_remote_image(url_str: &str) -> Result<(String, Vec<u8>), String> {
+    if let Some(cached) = read_cached_remote(url_str) {
+        return Ok(cached);
+    }
+    let url = reqwest::Url::parse(url_str).map_err(|e| format!("无效的图片地址: {e}"))?;
+    if !matches!(url.scheme(), "http" | "https") {
+        return Err("只代理 http/https 图片".to_string());
+    }
+    if url_host_is_forbidden(&url) {
+        return Err("拒绝代理内网或本机地址".to_string());
+    }
+    ensure_public_host(&url).await?;
+
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(20))
+        .redirect(reqwest::redirect::Policy::custom(|attempt| {
+            if attempt.previous().len() >= 3 || url_host_is_forbidden(attempt.url()) {
+                attempt.stop()
+            } else {
+                attempt.follow()
+            }
+        }))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let resp = client
+        .get(url)
+        .header(reqwest::header::USER_AGENT, "Guaxi/1.0 image proxy")
+        .send()
+        .await
+        .map_err(|e| format!("下载失败: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("上游返回 {}", resp.status()));
+    }
+    let content_type = resp
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    let ext = remote_image_ext(&content_type)
+        .ok_or_else(|| format!("不是图片类型: {content_type}"))?;
+    if let Some(len) = resp.content_length() {
+        if len as usize > REMOTE_IMAGE_MAX_BYTES {
+            return Err("图片过大".to_string());
+        }
+    }
+    let bytes = resp.bytes().await.map_err(|e| format!("读取图片失败: {e}"))?;
+    if bytes.len() > REMOTE_IMAGE_MAX_BYTES {
+        return Err("图片过大".to_string());
+    }
+
+    if let Some(dir) = remote_image_cache_dir() {
+        let key = remote_image_cache_key(url_str);
+        let path = dir.join(format!("{key}.{ext}"));
+        let tmp = dir.join(format!("{key}.{ext}.tmp"));
+        if fs::write(&tmp, &bytes).is_ok() {
+            let _ = fs::rename(&tmp, &path);
+        }
+    }
+    Ok((remote_image_content_type(ext).to_string(), bytes.to_vec()))
+}
+
+#[get("/api/markdown/remote_image")]
+async fn remote_image(query: web::Query<RemoteImageQuery>) -> HttpResponse {
+    match fetch_remote_image(query.url.trim()).await {
+        Ok((content_type, bytes)) => HttpResponse::Ok()
+            .insert_header(("Content-Type", content_type))
+            .insert_header(("Cache-Control", "public, max-age=604800"))
+            .body(bytes),
+        Err(error) => {
+            warn!(url = %query.url, error = %error, "remote image proxy failed");
+            HttpResponse::BadGateway()
+                .content_type("text/plain; charset=utf-8")
+                .body(format!("远程图片代理失败: {error}"))
+        }
+    }
+}
+
 pub fn config(cfg: &mut web::ServiceConfig) {
     cfg.service(process_markdown)
         .service(process_chat_markdown)
         .service(serve_image)
         .service(serve_bed_image)
-        .service(register_resource);
+        .service(register_resource)
+        .service(remote_image);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn proxies_markdown_remote_images() {
+        let (out, mappings) =
+            process_image_paths("![](https://example.com/a.png)", Path::new(""));
+        assert!(out.contains("/markdown/api/remote_image?url="), "out={out}");
+        assert!(out.contains("https%3A%2F%2Fexample.com%2Fa.png"), "out={out}");
+        assert_eq!(mappings.len(), 1);
+    }
+
+    #[test]
+    fn proxies_html_img_src() {
+        let mut mappings = Vec::new();
+        let out = proxy_html_images(
+            r#"<p><img src="https://example.com/a.png" alt="x"></p>"#,
+            &mut mappings,
+        );
+        assert!(out.contains("/markdown/api/remote_image?url="), "out={out}");
+        assert!(!out.contains(r#"src="https://example.com"#), "out={out}");
+        assert_eq!(mappings.len(), 1);
+    }
+
+    #[test]
+    fn forbids_private_hosts() {
+        for entry in [
+            "http://127.0.0.1/x",
+            "http://localhost/x",
+            "http://192.168.1.2/x",
+            "http://10.0.0.1/x",
+            "http://[::1]/x",
+        ] {
+            let url = reqwest::Url::parse(entry).unwrap();
+            assert!(url_host_is_forbidden(&url), "{entry} 应被拒绝");
+        }
+        let public = reqwest::Url::parse("https://example.com/x").unwrap();
+        assert!(!url_host_is_forbidden(&public));
+    }
 }
