@@ -2,12 +2,8 @@
   <aside class="mail-pane mail-sidebar">
     <div class="mail-brand">
       <span class="mail-brand-mark">✉</span>
-      <span class="mail-brand-name">邮局</span>
+      <span class="mail-brand-name">Guaxi邮箱</span>
     </div>
-
-    <button class="mail-compose-btn" @click="$emit('compose')">
-      <span aria-hidden="true">✎</span> 写邮件
-    </button>
 
     <div class="mail-sidebar-scroll">
       <div class="mail-section-label">账户</div>
@@ -120,7 +116,7 @@
           @click="$emit('select-folder', folder.name)"
           @contextmenu.prevent="openFolderMenu(folder, $event)"
         >
-          <span class="mail-folder-icon">▢</span>
+          <span class="mail-folder-icon">📁</span>
           <span class="mail-folder-name" :title="folder.displayName">{{ folder.displayName }}</span>
           <span v-if="folder.unread" class="mail-badge">{{ folder.unread }}</span>
         </button>
@@ -239,7 +235,6 @@ const emit = defineEmits([
   'select-account',
   'select-folder',
   'select-scope',
-  'compose',
   'add-account',
   'create-folder',
   'delete-folder',
@@ -445,19 +440,6 @@ const totalUnread = computed(() => {
   return total
 })
 
-function folderIcon(role) {
-  return (
-    {
-      inbox: '▣',
-      sent: '↗',
-      drafts: '✎',
-      outbox: '◷',
-      trash: '🗑',
-      junk: '⚠',
-      archive: '▤',
-    }[role] || '▢'
-  )
-}
 </script>
 
 <style scoped>

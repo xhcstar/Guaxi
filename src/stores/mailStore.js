@@ -26,6 +26,9 @@ const foldersRequestSeq = new Map()
 /** 操作后的计数校正：合并短时间内的多次操作，避免每次都打一轮完整 STATUS。 */
 const folderRefreshTimers = new Map()
 
+/** 同步过程中「已落库一批」的刷新节流：后端每 40 封发一次进度事件。 */
+let syncProgressTimer = null
+
 /** 删除的撤销窗口：这段时间内只从界面移除，还没真正提交服务器。 */
 const DEFERRED_DELETE_MS = 5000
 const DEFERRED_DELETE_KEY = 'guaxi.mail.pending-deletes'
@@ -40,6 +43,25 @@ const deferredDeleteTimers = new Map()
 
 function deleteKeyOf(row) {
   return `${row.accountId}:${row.folder}:${row.uid}`
+}
+
+/**
+ * 追加分页时按「账户 + 文件夹 + uid」去重。
+ *
+ * 翻页用 SQL offset，而同步可能在这期间往列表顶部插入了新邮件，offset 会整体
+ * 后移，上一页的末尾就会在下一页里再出现一次。不去重的话，用户会看到同一封
+ * 邮件出现两行（会话聚合也救不了——同一 UID 被算进了两个 bucket）。
+ */
+function dedupeByIdentity(rows) {
+  const seen = new Set()
+  const out = []
+  for (const row of rows) {
+    const key = deleteKeyOf(row)
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push(row)
+  }
+  return out
 }
 
 function readPersistedDeletes() {
@@ -210,6 +232,13 @@ export const useMailStore = defineStore('mail', {
     rawLoaded: 0,
     hasMore: false,
     loadingMore: false,
+    /**
+     * 已经回溯到服务器最早的邮件（`accountId:folder`）。
+     *
+     * 本地列表加载完之后，IMAP 账户还能往更早的历史继续拉；拉不到东西时
+     * 记在这里，避免每次滚到底都再发一次注定为空的请求。
+     */
+    backfillDone: {},
     /** 搜索序号：快速输入时丢弃过期结果。 */
     searchSeq: 0,
     /**
@@ -227,6 +256,8 @@ export const useMailStore = defineStore('mail', {
     /** 模板与收发件人名单（设置页 / 写信页共用）。 */
     templates: [],
     senderRules: [],
+    /** 上次保存规则时退回收件箱的封数（供保存后的提示条使用）。 */
+    lastRuleRestore: 0,
     /** 当前账户的 MFA / OAuth 状态。 */
     oauthStatus: null,
   }),
@@ -268,6 +299,24 @@ export const useMailStore = defineStore('mail', {
     hasAccounts(state) {
       return state.accounts.length > 0
     },
+    /**
+     * 本地列表已经全部加载完了，但服务器上可能还有更早的邮件时，允许继续往前拉。
+     *
+     * 只对「单个文件夹 + IMAP」开放：聚合视图（全部 / 未读…）跨多个文件夹，
+     * 回溯顺序无法用单一 UID 表达；POP3 本来就把整箱邮件都下载下来。
+     */
+    canBackfill(state) {
+      if (state.scope !== 'folder' || !state.activeAccountId) return false
+      const account = state.accounts.find((item) => item.id === state.activeAccountId)
+      if (!account || String(account.protocol || '').toLowerCase() !== 'imap') return false
+      // 纯本地文件夹（发件箱 / 本地草稿）在服务器上不存在，回溯只会 SELECT 失败。
+      const folder = (state.foldersByAccount[state.activeAccountId] || []).find(
+        (item) => item.name === state.activeFolder,
+      )
+      if (!folder || folder.localOnly) return false
+      if (state.backfillDone[`${state.activeAccountId}:${state.activeFolder}`]) return false
+      return state.messages.length > 0
+    },
   },
 
   actions: {
@@ -301,6 +350,16 @@ export const useMailStore = defineStore('mail', {
         // 否则用户在撤销窗口内退出应用，那几封邮件会「没删掉」。
         await this.resumeDeferredDeletes()
         await Promise.all(this.accounts.map((a) => this.loadFolders(a.id)))
+        // 启动后落到收件箱，而不是跨账户的「全部邮件」：与手动切账户的行为保持一致，
+        // 也让「滚到底继续往回拉」有明确的单一文件夹可用。
+        if (this.activeAccountId) {
+          const folders = this.foldersByAccount[this.activeAccountId] || []
+          const inbox = folders.find((folder) => folder.role === 'inbox') || folders[0]
+          if (inbox) {
+            this.activeFolder = inbox.name
+            this.scope = 'folder'
+          }
+        }
         this.ready = true
         this.lastSyncAt = Date.now()
         await this.loadMessages({ silent: true })
@@ -328,8 +387,26 @@ export const useMailStore = defineStore('mail', {
     async bindEvents() {
       if (this.unlisten.length) return
       try {
-        const offSync = await listen('mail-sync-progress', () => {
+        const offSync = await listen('mail-sync-progress', (event) => {
           this.lastSyncAt = Date.now()
+          const payload = event?.payload || {}
+          // 规则目标文件夹在后台补建完成：侧栏读本地表，刷新一次就能看到。
+          if (payload.foldersChanged && payload.accountId) {
+            this.loadFolders(payload.accountId).catch(() => {})
+            this.reloadUnread().catch(() => {})
+            return
+          }
+          if (!payload.partial) return
+          if (payload.accountId !== this.activeAccountId) return
+          if (payload.folder !== this.activeFolder) return
+          if (this.searchQuery.trim()) return
+          // 只在首屏刷新：用户可能已经往下翻了几页，整表替换会把视口拽回去。
+          const pageSize = Math.max(20, Number(this.settings.pageSize) || 100)
+          if (this.rawLoaded > pageSize) return
+          clearTimeout(syncProgressTimer)
+          syncProgressTimer = setTimeout(() => {
+            this.loadMessages({ silent: true }).catch(() => {})
+          }, 350)
         })
         const offNew = await listen('mail-new-messages', async () => {
           await this.reloadUnread()
@@ -363,6 +440,7 @@ export const useMailStore = defineStore('mail', {
 
     dispose() {
       this.stopPolling()
+      clearTimeout(syncProgressTimer)
       if (this.outboxTimer) {
         clearTimeout(this.outboxTimer)
         this.outboxTimer = null
@@ -801,7 +879,8 @@ export const useMailStore = defineStore('mail', {
         )
         const hasMore = list.length > pageSize
         const page = hasMore ? list.slice(0, pageSize) : list
-        const grouped = await this.groupThreadsIfNeeded(append ? [...this.messages, ...page] : page)
+        const combined = append ? dedupeByIdentity([...this.messages, ...page]) : page
+        const grouped = await this.groupThreadsIfNeeded(combined)
         this.messages = grouped
         this.hasMore = hasMore
         // 游标按原始条数走，跟聚合后的行数无关。
@@ -821,12 +900,54 @@ export const useMailStore = defineStore('mail', {
       }
     },
 
-    /** 上一页之后继续加载。 */
+    /**
+     * 上一页之后继续加载。
+     *
+     * 先翻本地库；本地已经翻完（首次同步只拉了最新的几百封）时，再向服务器
+     * 回溯一页更早的邮件。没有这一步，列表滚到底就真的到底了——用户永远
+     * 看不到那批更早的邮件。
+     */
     async loadMore() {
-      if (this.loadingMore || !this.hasMore) return
+      if (this.loadingMore) return
+      if (this.hasMore) {
+        this.loadingMore = true
+        try {
+          await this.loadMessages({ silent: true, append: true })
+        } finally {
+          this.loadingMore = false
+        }
+        return
+      }
+      if (!this.canBackfill) return
+
+      const accountId = this.activeAccountId
+      const folder = this.activeFolder
+      const key = `${accountId}:${folder}`
       this.loadingMore = true
       try {
+        const result = await invoke('mail_backfill_folder', {
+          accountId,
+          folder,
+          // 回溯要下载完整报文，页大一点会让每次滚动等太久；80 封左右
+          // 既能填满一屏，又能在几秒内返回。
+          pageSize: Math.min(80, Math.max(20, Number(this.settings.pageSize) || 100)),
+        })
+        if (!result?.added) {
+          if (!result?.hasMore) {
+            this.backfillDone = { ...this.backfillDone, [key]: true }
+          }
+          return
+        }
+        // 更早的邮件已经入库：按 offset 追加一页即可（同目录下日期更晚的行
+        // 已经在前面的页里，回溯回来的这批必然排在后面）。
         await this.loadMessages({ silent: true, append: true })
+        if (!result.hasMore) {
+          this.backfillDone = { ...this.backfillDone, [key]: true }
+        }
+      } catch (error) {
+        // 网络 / 服务器错误：不标记 exhausted，下次滚动还会再试。
+        logger.warn('回溯同步失败', error)
+        this.lastError = String(error?.message || error)
       } finally {
         this.loadingMore = false
       }
@@ -2339,7 +2460,10 @@ export const useMailStore = defineStore('mail', {
     },
 
     async saveRule(rule) {
-      const saved = await invoke('mail_save_rule', { rule })
+      const result = await invoke('mail_save_rule', { rule })
+      // 后端返回 { rule, restored }：restored 是条件改完后退回收件箱的封数。
+      const saved = result?.rule || result
+      this.lastRuleRestore = Number(result?.restored) || 0
       const index = this.rules.findIndex((r) => r.id === saved.id)
       if (index >= 0) this.rules.splice(index, 1, saved)
       else this.rules.push(saved)

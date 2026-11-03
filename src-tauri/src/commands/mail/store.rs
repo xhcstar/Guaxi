@@ -1396,6 +1396,19 @@ pub fn last_uid(account_id: &str, folder: &str) -> Result<u32, String> {
     Ok(value.unwrap_or(0).max(0) as u32)
 }
 
+/// 文件夹里本地已知的最小 UID（向前回溯的边界；0 表示还没有本地邮件）。
+pub fn min_uid(account_id: &str, folder: &str) -> Result<u32, String> {
+    let conn = open()?;
+    let value: Option<i64> = conn
+        .query_row(
+            "SELECT MIN(uid) FROM messages WHERE account_id=?1 AND folder=?2",
+            params![account_id, folder],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    Ok(value.unwrap_or(0).max(0) as u32)
+}
+
 pub fn folder_uid_state(account_id: &str, folder: &str) -> Result<(u32, u32), String> {
     let conn = open()?;
     conn.query_row(

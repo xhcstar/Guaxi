@@ -67,7 +67,6 @@
           @select-account="store.selectAccount"
           @select-folder="store.selectFolder"
           @select-scope="store.selectScope"
-          @compose="onCompose"
           @add-account="openAccounts"
           @create-folder="onCreateFolder"
           @delete-folder="onDeleteFolder"
@@ -122,6 +121,7 @@
           :virtual="settings.virtualList !== false"
           :row-height="rowHeightPx"
           :has-more="store.hasMore"
+          :can-backfill="store.canBackfill"
           :loading-more="store.loadingMore"
           :scheduled-items="folderScheduledItems"
           :staged-items="stageOutboxItems"
@@ -991,8 +991,18 @@ function onRefreshFoldersFromRules() {
  */
 async function onSaveRuleFromDialog(rule, applyExisting = false) {
   const saved = await store.saveRule(rule)
+  // 条件改完后，旧目标文件夹里不再匹配的邮件已经在后端退回收件箱。
+  const restored = Number(store.lastRuleRestore) || 0
+  if (restored) {
+    await Promise.all([
+      store.loadFolders(store.activeAccountId).catch(() => {}),
+      store.loadMessages({ silent: true }).catch(() => {}),
+      store.reloadUnread().catch(() => {}),
+    ])
+  }
+  const restoredNote = restored ? `，并把 ${restored} 封不再匹配的邮件退回收件箱` : ''
   if (!applyExisting) {
-    notify(`规则「${saved.name}」已保存，将作用于之后收到的新邮件`)
+    notify(`规则「${saved.name}」已保存${restoredNote}，将作用于之后收到的新邮件`)
     return saved
   }
   const accountId = store.activeAccountId || store.accounts[0]?.id
@@ -1007,12 +1017,13 @@ async function onSaveRuleFromDialog(rule, applyExisting = false) {
   // 只报命中数就会变成「提示成功、文件夹里还是空的」。
   const moved = Number(result?.moved) || 0
   const partial = matched > 0 && moved < matched
+  const restoredHint = restored ? `；另有 ${restored} 封不再匹配的邮件已退回收件箱` : ''
   notify(
-    !matched
+    (!matched
       ? `已检查 ${scanned} 封已有邮件，没有命中这条规则的`
       : partial
         ? `命中 ${matched} 封，实际处理 ${moved} 封——其余没能连上服务器，等下次同步再补`
-        : `已对已有邮件执行：${matched} 封已按规则处理（共检查 ${scanned} 封）`,
+        : `已对已有邮件执行：${matched} 封已按规则处理（共检查 ${scanned} 封）`) + restoredHint,
     partial,
   )
   await Promise.all([

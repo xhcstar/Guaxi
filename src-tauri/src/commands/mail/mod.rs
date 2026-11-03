@@ -370,6 +370,14 @@ pub async fn mail_save_account(
     // 新账户一接进来就有「存档 / 发件箱」两个固定入口：否则用户第一次点归档时
     // 侧栏里还找不到存档，要等下次同步才补出来。
     ensure_standard_folders(&account);
+    // 重建账户时把既有规则引用的文件夹补回来（删账户会连本地文件夹一起清掉）。
+    // 放到后台：建文件夹要连服务器，不能让「保存账户」卡在这上面；
+    // 建完会发事件，侧栏收到后自己刷新。
+    let rules_app = app.clone();
+    let rules_account = account.clone();
+    tauri::async_runtime::spawn(async move {
+        ensure_rule_folders(&rules_app, &rules_account).await;
+    });
     Ok(account)
 }
 
@@ -642,44 +650,136 @@ pub async fn mail_create_folder(
         return Err("文件夹名不能为空".to_string());
     }
 
+    create_folder_for_account(&account, &name).await
+}
+
+/// 真正创建一个文件夹：POP3 建在本地，其余在服务器上建完再回写本地表。
+///
+/// 用户手动「新建文件夹」和「规则目标文件夹自动补齐」共用这一条路径，
+/// 免得两处对「服务器上已存在」的判断不一致。
+async fn create_folder_for_account(account: &Account, name: &str) -> Result<(), String> {
     // POP3 只有一个服务器邮箱，但用户仍然需要在自己这边分门别类：
     // 建一个纯本地的文件夹即可，不碰服务器。
-    if pop3_sync::is_pop3(&account) {
-        note_local_folder(&account.id, &name)?;
+    if pop3_sync::is_pop3(account) {
+        note_local_folder(&account.id, name)?;
         return Ok(());
     }
-    if graph::is_graph(&account) {
+    if graph::is_graph(account) {
         let acc = account.clone();
-        let folder_name = name.clone();
+        let folder_name = name.to_string();
         tauri::async_runtime::spawn_blocking(move || graph::create_folder(&acc, &folder_name))
             .await
             .map_err(|e| format!("创建文件夹任务失败: {e}"))??;
         // 重新发现一次，拿到 Graph 分配的 folder id；前端随后会刷新侧栏。
-        let _ = refresh_folders_inner(&account).await;
+        let _ = refresh_folders_inner(account).await;
         return Ok(());
     }
-    if ews::is_ews(&account) {
+    if ews::is_ews(account) {
         let acc = account.clone();
-        let folder_name = name.clone();
+        let folder_name = name.to_string();
         tauri::async_runtime::spawn_blocking(move || ews::create_folder(&acc, &folder_name))
             .await
             .map_err(|e| format!("创建文件夹任务失败: {e}"))??;
-        let _ = refresh_folders_inner(&account).await;
+        let _ = refresh_folders_inner(account).await;
         return Ok(());
     }
-    let password = account_password(&account)?;
-    {
-        let (acc, folder_name) = (account.clone(), name.clone());
-        tauri::async_runtime::spawn_blocking(move || {
-            imap::create_folder(&acc, &password, &folder_name)
-        })
-        .await
-        .map_err(|e| format!("创建文件夹任务失败: {e}"))??;
+    let password = account_password(account)?;
+    let (acc, folder_name) = (account.clone(), name.to_string());
+    let created = tauri::async_runtime::spawn_blocking(move || {
+        imap::create_folder(&acc, &password, &folder_name)
+    })
+    .await
+    .map_err(|e| format!("创建文件夹任务失败: {e}"))?;
+    if let Err(error) = created {
+        // 服务器上已经有了、只是本地表还没刷新：重新发现一次，有就当成功，
+        // 而不是在「文件夹已存在」上把规则的移动一起卡死。
+        let list = refresh_folders_inner(account).await?;
+        if list.iter().any(|folder| folder.name == name) {
+            note_local_folder(&account.id, name)?;
+            return Ok(());
+        }
+        return Err(error);
     }
     // 服务器上建好了，本地表也要立刻能看到；并标记成「用户自己建的」，
     // 否则下一次文件夹刷新时它会被当成服务商遗留目录从侧栏里藏起来。
-    note_local_folder(&account.id, &name)?;
+    note_local_folder(&account.id, name)?;
     Ok(())
+}
+
+/// 规则目标文件夹可能在账户被删 / 重建后不存在了（POP3 的文件夹是纯本地的，
+/// 删账户时一并清空；IMAP 上也可能被别处删掉）。执行规则前先把它补出来，
+/// 否则用户只会看到「规则命中了，但邮件没进那个文件夹」。
+async fn ensure_rule_folder(account: &Account, name: &str) -> Result<(), String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Ok(());
+    }
+    if store::list_folders(&account.id)?
+        .iter()
+        .any(|folder| folder.name == name)
+    {
+        // 规则明确要用它：即使这是服务商带下来的目录，也要在侧栏里保留，
+        // 否则「规则把它当目标」和「侧栏看不到它」会同时成立。
+        store::set_folder_user_created(&account.id, name, true)?;
+        return Ok(());
+    }
+    create_folder_for_account(account, name).await
+}
+
+/// 保存账户时，把它名下规则引用的目标文件夹补齐。
+///
+/// 删除账户再重新添加时，邮件和文件夹都会被清掉，但规则还在；没有这一步，
+/// 用户要等下一封新邮件命中规则才发现「文件夹没回来」。
+async fn ensure_rule_folders(app: &AppHandle, account: &Account) {
+    // 设备码授权还没完成（保存账户的那一刻）：没有令牌，连服务器只会得到
+    // 一串「未授权」，还会把保存动作拖慢好几十秒。等授权成功后由同步补建。
+    if account.auth_kind.eq_ignore_ascii_case("oauth2") && !oauth::has_tokens(&account.id) {
+        return;
+    }
+    let Ok(rules) = store::list_rules() else {
+        return;
+    };
+    let mut targets: Vec<String> = rules
+        .iter()
+        .filter(|rule| rule.enabled)
+        .filter(|rule| {
+            rule.condition.account_ids.is_empty()
+                || rule
+                    .condition
+                    .account_ids
+                    .iter()
+                    .any(|id| id == &account.id)
+        })
+        .flat_map(|rule| [rule.action.move_to.clone(), rule.action.copy_to.clone()])
+        .flatten()
+        .map(|name| name.trim().to_string())
+        .filter(|name| !name.is_empty())
+        .collect();
+    targets.sort();
+    targets.dedup();
+    let existing = store::list_folders(&account.id).unwrap_or_default();
+    let mut created = false;
+    for target in &targets {
+        let already = existing.iter().any(|folder| folder.name == *target);
+        if let Err(error) = ensure_rule_folder(account, target).await {
+            warn!(
+                account = %account.email,
+                folder = %target,
+                error = %error,
+                "mail: 规则目标文件夹补建失败"
+            );
+        } else if !already {
+            created = true;
+        }
+    }
+    if created {
+        // 侧栏是按本地文件夹表渲染的：建完要让它刷新，否则用户得等下一次同步
+        // 才看见文件夹「回来了」。
+        let _ = app.emit(
+            MAIL_SYNC_EVENT,
+            serde_json::json!({ "accountId": account.id, "foldersChanged": true }),
+        );
+    }
 }
 
 /// 本地新建文件夹（POP3 直接建在本地；IMAP 在服务器创建成功后补一条本地记录）。
@@ -795,7 +895,7 @@ pub async fn mail_sync_folder(
 ) -> Result<Vec<MessageSummary>, String> {
     ensure_init(&app)?;
     let account = load_account(&account_id)?;
-    let items = sync_folder_guarded(&account, &folder).await?;
+    let items = sync_folder_guarded(&app, &account, &folder).await?;
     let _ = app.emit(
         MAIL_SYNC_EVENT,
         serde_json::json!({
@@ -808,8 +908,71 @@ pub async fn mail_sync_folder(
     Ok(items)
 }
 
+/// 列表滚到底部时，向更早的历史补一页。
+///
+/// 增量同步只向前走（`UID > 本地最大`），第一次同步也只取最新的一批；
+/// 没有这个入口，比那批更早的邮件永远到不了本机。前端在「本地已全部显示」
+/// 之后调用它，并用 `hasMore` 决定是否还能继续往前翻。
+#[command]
+pub async fn mail_backfill_folder(
+    app: AppHandle,
+    account_id: String,
+    folder: String,
+    page_size: Option<u32>,
+) -> Result<serde_json::Value, String> {
+    ensure_init(&app)?;
+    let account = load_account(&account_id)?;
+    // Graph / EWS / POP3 的拉取范围由各自协议决定：POP3 本来整箱下载，
+    // Graph/EWS 另有分页；这里只处理 IMAP 的 UID 回溯。
+    if !account.protocol.eq_ignore_ascii_case("imap") {
+        return Ok(serde_json::json!({
+            "added": 0,
+            "hasMore": false,
+            "supported": false,
+        }));
+    }
+    let page = page_size.unwrap_or(120).clamp(20, 300);
+    let snippet_len = store::load_settings().snippet_len as usize;
+    let acc = account.clone();
+    let account_key = account_id.clone();
+    let folder_name = folder.clone();
+
+    let result = tauri::async_runtime::spawn_blocking(move || -> Result<imap::BackfillResult, String> {
+        let _guard = sync::lock_account(&account_key);
+        let before_uid = store::min_uid(&account_key, &folder_name)?;
+        if before_uid <= 1 {
+            return Ok(imap::BackfillResult::default());
+        }
+        imap::backfill_folder_pooled(
+            &acc,
+            &folder_name,
+            before_uid,
+            page,
+            snippet_len,
+        )
+    })
+    .await
+    .map_err(|e| format!("回溯同步任务失败: {e}"))??;
+
+    let _ = app.emit(
+        MAIL_SYNC_EVENT,
+        serde_json::json!({
+            "accountId": account_id,
+            "folder": folder,
+            "added": result.added,
+            "backfill": true,
+        }),
+    );
+    Ok(serde_json::json!({
+        "added": result.added,
+        "hasMore": result.has_more,
+        "supported": true,
+    }))
+}
+
 /// 同步单个文件夹的完整流程（加锁、增量、标记比对、规则、通知）。
 async fn sync_folder_guarded(
+    app: &AppHandle,
     account: &Account,
     folder: &str,
 ) -> Result<Vec<MessageSummary>, String> {
@@ -817,6 +980,22 @@ async fn sync_folder_guarded(
     let account_id = account.id.clone();
     let folder_name = folder.to_string();
     let acc = account.clone();
+    // 分块落库时通知前端刷新列表：首次同步几百封邮件时，用户不用盯着空白列表
+    // 等整批下载完。`partial` 让前端只刷新首屏，别把已经翻到很下面的列表拽回顶部。
+    let progress_app = app.clone();
+    let progress_account = account_id.clone();
+    let progress_folder = folder_name.clone();
+    let on_progress = move |count: usize| {
+        let _ = progress_app.emit(
+            MAIL_SYNC_EVENT,
+            serde_json::json!({
+                "accountId": progress_account,
+                "folder": progress_folder,
+                "added": count,
+                "partial": true,
+            }),
+        );
+    };
 
     let items = tauri::async_runtime::spawn_blocking(move || -> Result<Vec<MessageSummary>, String> {
         let _guard = sync::lock_account(&account_id);
@@ -834,7 +1013,11 @@ async fn sync_folder_guarded(
             if folder_name != pop3_sync::INBOX {
                 return Ok(Vec::new());
             }
-            return pop3_sync::sync_inbox(&acc, settings.snippet_len as usize);
+            return pop3_sync::sync_inbox(
+                &acc,
+                settings.snippet_len as usize,
+                Some(&on_progress),
+            );
         }
         // 纯本地文件夹（发件箱）在服务器上不存在：去 SELECT 只会每轮报错。
         if store::list_folders(&account_id)
@@ -853,6 +1036,7 @@ async fn sync_folder_guarded(
             uid_validity,
             last_uid,
             settings.snippet_len as usize,
+            Some(&on_progress),
         )?;
         // 增量之后按间隔做一次标记全量比对：增量只管「新信」，
         // 而「已读 / 星标 / 被别处删掉」是就地变化，UID 不变。
@@ -1161,6 +1345,16 @@ async fn apply_rule_move_batch(account: &Account, folder: &str, uids: &[u32], ta
     if uids.is_empty() || folder == target {
         return;
     }
+    // 目标文件夹可能已经被删掉（或账户重建后从没建回来）：先补建，再搬。
+    if let Err(error) = ensure_rule_folder(account, target).await {
+        error!(
+            error = %error,
+            folder = %target,
+            count = uids.len(),
+            "mail: 规则目标文件夹不存在且无法创建，跳过本批移动"
+        );
+        return;
+    }
     // POP3 的文件夹全在本机：走本地搬行，别去连 IMAP（会直接失败，
     // 表现是「规则命中但邮件没动」）。
     if pop3_sync::is_pop3(account) {
@@ -1330,7 +1524,7 @@ pub async fn mail_sync_all(app: AppHandle) -> Result<serde_json::Value, String> 
             .iter()
             .filter(|f| f.role == FolderRole::Inbox && f.selectable)
         {
-            match sync_one(&account, &folder.name).await {
+            match sync_one(&app, &account, &folder.name).await {
                 Ok(n) => total += n,
                 Err(e) => {
                     // 网络类错误在轮询里很常见（笔记本合盖、切 Wi-Fi），
@@ -1384,8 +1578,8 @@ async fn refresh_folders_inner(account: &Account) -> Result<Vec<MailFolder>, Str
     store::list_folders(&account.id)
 }
 
-async fn sync_one(account: &Account, folder: &str) -> Result<usize, String> {
-    let items = sync_folder_guarded(account, folder).await?;
+async fn sync_one(app: &AppHandle, account: &Account, folder: &str) -> Result<usize, String> {
+    let items = sync_folder_guarded(app, account, folder).await?;
     Ok(items.len())
 }
 
@@ -3273,7 +3467,10 @@ pub async fn mail_list_rules(app: AppHandle) -> Result<Vec<MailRule>, String> {
 }
 
 #[command]
-pub async fn mail_save_rule(app: AppHandle, rule: MailRule) -> Result<MailRule, String> {
+pub async fn mail_save_rule(
+    app: AppHandle,
+    rule: MailRule,
+) -> Result<serde_json::Value, String> {
     ensure_init(&app)?;
     let mut rule = rule;
     if rule.id.trim().is_empty() {
@@ -3282,8 +3479,130 @@ pub async fn mail_save_rule(app: AppHandle, rule: MailRule) -> Result<MailRule, 
     if rule.created_at == 0 {
         rule.created_at = chrono::Utc::now().timestamp();
     }
+    // 更新已有规则时先记住旧版本：条件改了之后，旧目标文件夹里不再匹配的邮件
+    // 要退回收件箱（用户要求的语义：文件夹内容跟随规则条件）。
+    let previous = store::list_rules()?
+        .into_iter()
+        .find(|existing| existing.id == rule.id);
     store::upsert_rule(&rule)?;
-    Ok(rule)
+    let restored = match previous {
+        Some(old) => restore_unmatched_from_rule(&rule, &old).await,
+        None => 0,
+    };
+    Ok(serde_json::json!({ "rule": rule, "restored": restored }))
+}
+
+/// 规则条件变化后，把旧目标文件夹里已经不匹配的邮件退回收件箱。
+///
+/// 返回实际搬回多少封。只在「规则仍然启用、且条件确实变了」时执行：
+/// 改名、调整优先级、停用/启用都不会动邮件。
+///
+/// 没有记录「哪条规则把哪封邮件移进来的」，所以按目标文件夹的语义处理：
+/// 这个文件夹是这条规则的归档区，条件改完后不满足的邮件就不该留在里面。
+/// 只处理原本作用于收件箱的规则——作用在其它角色上的规则不会把邮件从收件箱
+/// 搬走，把目标夹里的邮件塞回收件箱反而错位。
+async fn restore_unmatched_from_rule(new_rule: &MailRule, old_rule: &MailRule) -> usize {
+    if !new_rule.enabled {
+        return 0;
+    }
+    let conditions_changed =
+        serde_json::to_string(&new_rule.condition).ok() != serde_json::to_string(&old_rule.condition).ok();
+    // 只有条件真的变了才回迁：改名、调优先级、停用/启用都不动邮件。
+    if !conditions_changed {
+        return 0;
+    }
+    let Some(target) = old_rule
+        .action
+        .move_to
+        .as_deref()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+    else {
+        return 0;
+    };
+    let roles = &new_rule.condition.folder_roles;
+    let inbox_scoped = roles.is_empty() || roles.iter().any(|role| role == "inbox" || role == "*");
+    if !inbox_scoped {
+        return 0;
+    }
+
+    let body_needed = rules::needs_body(std::slice::from_ref(new_rule));
+    let mut restored = 0usize;
+    for account in store::list_accounts().unwrap_or_default() {
+        if !new_rule.condition.account_ids.is_empty()
+            && !new_rule
+                .condition
+                .account_ids
+                .iter()
+                .any(|id| id == &account.id)
+        {
+            continue;
+        }
+        let folders = store::list_folders(&account.id).unwrap_or_default();
+        let Some(target_folder) = folders.iter().find(|folder| folder.name == target) else {
+            continue;
+        };
+        let Some(inbox) = folders.iter().find(|folder| folder.role == FolderRole::Inbox) else {
+            continue;
+        };
+        if target_folder.role == FolderRole::Inbox {
+            continue;
+        }
+
+        let rows = store::list_recent(&account.id, target, u32::MAX, 0).unwrap_or_default();
+        let mut uids: Vec<u32> = Vec::new();
+        for msg in rows.iter().filter(|msg| !msg.outgoing) {
+            // 这些邮件当初是从收件箱被规则搬过来的，所以按 inbox 角色判断条件，
+            // 不能用它现在所在的目标文件夹角色（否则文件夹范围条件会把所有邮件判成不匹配）。
+            let cheap_ctx = rules::RuleContext {
+                message: msg,
+                body_preview: "",
+                account: &account,
+                folder_role: "inbox",
+            };
+            let body = if body_needed
+                && rules::body_relevant(std::slice::from_ref(new_rule), &cheap_ctx)
+            {
+                store::get_body_text(&msg.account_id, &msg.folder, msg.uid).unwrap_or_default()
+            } else {
+                String::new()
+            };
+            let ctx = rules::RuleContext {
+                message: msg,
+                body_preview: &body,
+                account: &account,
+                folder_role: "inbox",
+            };
+            if rules::evaluate(std::slice::from_ref(new_rule), &ctx).is_empty() {
+                uids.push(msg.uid);
+            }
+        }
+        if uids.is_empty() {
+            continue;
+        }
+        apply_rule_move_batch(&account, target, &uids, &inbox.name).await;
+
+        // 移动失败时本地目标夹里的行还在，按「还剩哪些」数实际搬走的封数，
+        // 与「对已有邮件执行规则」保持同一种如实口径。
+        let alive: std::collections::HashSet<u32> =
+            store::list_recent(&account.id, target, u32::MAX, 0)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|msg| msg.uid)
+                .collect();
+        let moved = uids.iter().filter(|uid| !alive.contains(uid)).count();
+        if moved == 0 {
+            continue;
+        }
+        restored += moved;
+        // 收件箱那份在服务器上，本地要再同步一次才看得到（POP3 是本地搬行，不需要）。
+        if !pop3_sync::is_pop3(&account) {
+            let _ = sync_folder_once(&account, &inbox.name).await;
+        }
+        refresh_folder_totals(&account.id, target);
+        refresh_folder_totals(&account.id, &inbox.name);
+    }
+    restored
 }
 
 /// 把规则**立即**应用到库里已有的邮件上。

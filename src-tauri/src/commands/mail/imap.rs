@@ -704,6 +704,16 @@ pub fn delete_folder(account: &Account, password: &str, name: &str) -> Result<()
 // 同步
 // ---------------------------------------------------------------------------
 
+/// 同步进度回调：每落库一批就通知一次，列表可以先显示已取回的部分。
+pub type SyncProgress<'a> = &'a (dyn Fn(usize) + Send + Sync);
+
+/// 单次 FETCH 的邮件数。
+///
+/// 以前 200 封的完整报文放在一个 FETCH 里，必须等全部下载、解析、入库完
+/// 界面才有东西可看；首次同步一个几百封的文件夹要空等几十秒。切成小块后
+/// 每块落库就通知一次，用户在同步过程中就能看到列表在长出来。
+const FETCH_CHUNK: usize = 40;
+
 /// 同步一个文件夹里的新邮件。
 ///
 /// 策略：`UID SEARCH UID <last+1>:*` 找出比本地更大的 UID，取最近 `MAX_FETCH_PER_SYNC`
@@ -718,7 +728,15 @@ pub fn sync_folder(
     snippet_len: usize,
 ) -> Result<Vec<MessageSummary>, String> {
     let mut session = login(account, password)?;
-    let summaries = sync_folder_with(account, &mut session, folder_name, uid_validity_hint, last_uid, snippet_len)?;
+    let summaries = sync_folder_with(
+        account,
+        &mut session,
+        folder_name,
+        uid_validity_hint,
+        last_uid,
+        snippet_len,
+        None,
+    )?;
     let _ = session.logout();
     Ok(summaries)
 }
@@ -734,6 +752,7 @@ pub fn sync_folder_with(
     uid_validity_hint: u32,
     last_uid: u32,
     snippet_len: usize,
+    on_progress: Option<SyncProgress<'_>>,
 ) -> Result<Vec<MessageSummary>, String> {
     let mailbox = session
         .select(folder_name)
@@ -773,7 +792,43 @@ pub fn sync_folder_with(
         return Ok(Vec::new());
     }
 
-    let set = compact_uid_set(&uids);
+    let mut summaries: Vec<MessageSummary> = Vec::new();
+    for chunk in uids.chunks(FETCH_CHUNK) {
+        let mut part = fetch_and_store(account, session, folder_name, chunk, snippet_len)?;
+        summaries.append(&mut part);
+        // 每块都已落库：通知前端先刷新列表，而不是等整批结束。
+        if let Some(progress) = on_progress {
+            progress(summaries.len());
+        }
+    }
+
+    store::update_folder_counts(
+        &account.id,
+        folder_name,
+        mailbox.unseen.unwrap_or(0),
+        mailbox.exists,
+        uid_validity,
+        mailbox.uid_next.unwrap_or(0),
+    )?;
+
+    info!(
+        account = %account.email,
+        folder = folder_name,
+        fetched = summaries.len(),
+        "mail: 同步完成"
+    );
+    Ok(summaries)
+}
+
+/// 拉取一批 UID 的完整报文，解析后把摘要与正文一起落库。
+fn fetch_and_store(
+    account: &Account,
+    session: &mut ImapSession,
+    folder_name: &str,
+    uids: &[u32],
+    snippet_len: usize,
+) -> Result<Vec<MessageSummary>, String> {
+    let set = compact_uid_set(uids);
     let fetches = session
         .uid_fetch(&set, "(UID FLAGS INTERNALDATE RFC822.SIZE BODY.PEEK[])")
         .map_err(|e| format!("拉取邮件失败: {e}"))?;
@@ -854,27 +909,93 @@ pub fn sync_folder_with(
 
     store::upsert_summaries(&summaries)?;
     // 本批邮件的正文已经为列表摘要解析过了，全部入库。这样全文索引从一开始就是完整的，
-    // 「搜正文搜不到刚同步的邮件」这类问题不会出现；一次最多 MAX_FETCH_PER_SYNC 封，
+    // 「搜正文搜不到刚同步的邮件」这类问题不会出现；一次最多 FETCH_CHUNK 封，
     // 写入开销与摘要本身同量级。
     for (uid, html, text, attachments) in &bodies {
         store::upsert_body(&account.id, folder_name, *uid, html.as_deref(), text, attachments)?;
     }
-    store::update_folder_counts(
-        &account.id,
-        folder_name,
-        mailbox.unseen.unwrap_or(0),
-        mailbox.exists,
-        uid_validity,
-        mailbox.uid_next.unwrap_or(0),
-    )?;
+    Ok(summaries)
+}
 
+/// 回溯同步结果。
+#[derive(Debug, Default, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackfillResult {
+    /// 本次补回多少封。
+    pub added: usize,
+    /// 服务器上是否还有更早的邮件。
+    pub has_more: bool,
+}
+
+/// 向更早的历史回溯一页（列表滚到底部时调用）。
+///
+/// 增量同步只走 `UID > last_uid`，第一次同步又只取最新的一批，于是「更早的邮件」
+/// 永远没有入口。这里以本地最小 UID 为界，往 `1..min` 里取最新的一页，
+/// 反复调用就能一直翻到最早的邮件。
+pub fn backfill_folder_pooled(
+    account: &Account,
+    folder_name: &str,
+    before_uid: u32,
+    page_size: u32,
+    snippet_len: usize,
+) -> Result<BackfillResult, String> {
+    if before_uid <= 1 || page_size == 0 {
+        return Ok(BackfillResult::default());
+    }
+    let mut lease = try_lease(account)?;
+    let session = lease.session();
+    let mailbox = session
+        .select(folder_name)
+        .map_err(|e| format!("选择文件夹失败（{folder_name}）: {e}"))?;
+
+    // UIDVALIDITY 变了：本地那批 UID 已经失效，交给常规同步重建，
+    // 在旧空间上回溯只会把错乱的邮件写进来。
+    let (uid_validity_hint, _) = store::folder_uid_state(&account.id, folder_name)?;
+    let uid_validity = mailbox.uid_validity.unwrap_or(0);
+    if uid_validity != 0 && uid_validity_hint != 0 && uid_validity != uid_validity_hint {
+        warn!(
+            folder = folder_name,
+            old = uid_validity_hint,
+            new = uid_validity,
+            "mail: UIDVALIDITY 变化，放弃本次回溯并清空缓存"
+        );
+        store::clear_folder_messages(&account.id, folder_name)?;
+        return Ok(BackfillResult::default());
+    }
+
+    let found = session
+        .uid_search(format!("UID 1:{}", before_uid - 1))
+        .map_err(|e| format!("检索历史邮件失败: {e}"))?;
+    let mut older: Vec<u32> = found
+        .into_iter()
+        .filter(|uid| *uid > 0 && *uid < before_uid)
+        .collect();
+    older.sort_unstable();
+    older.dedup();
+    let has_more = older.len() > page_size as usize;
+    if has_more {
+        // 取最靠近 before_uid 的一页：列表按时间倒序，用户最先要看的是「接着刚才那批」。
+        older = older.split_off(older.len() - page_size as usize);
+    }
+    if older.is_empty() {
+        return Ok(BackfillResult {
+            added: 0,
+            has_more: false,
+        });
+    }
+
+    let summaries = fetch_and_store(account, session, folder_name, &older, snippet_len)?;
     info!(
         account = %account.email,
         folder = folder_name,
         fetched = summaries.len(),
-        "mail: 同步完成"
+        has_more,
+        "mail: 回溯同步完成"
     );
-    Ok(summaries)
+    Ok(BackfillResult {
+        added: summaries.len(),
+        has_more,
+    })
 }
 
 /// 多设备一致性：把服务器上的 FLAGS 与存在性全量比对回本地。
@@ -959,6 +1080,7 @@ pub fn sync_folder_pooled(
     uid_validity_hint: u32,
     last_uid: u32,
     snippet_len: usize,
+    on_progress: Option<SyncProgress<'_>>,
 ) -> Result<Vec<MessageSummary>, String> {
     let mut lease = try_lease(account)?;
     sync_folder_with(
@@ -968,6 +1090,7 @@ pub fn sync_folder_pooled(
         uid_validity_hint,
         last_uid,
         snippet_len,
+        on_progress,
     )
 }
 

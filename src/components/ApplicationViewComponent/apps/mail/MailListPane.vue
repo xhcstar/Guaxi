@@ -173,9 +173,9 @@
         </article>
       </template>
 
-      <div v-if="hasMore" class="mail-load-more">
+      <div v-if="hasMore || canBackfill" class="mail-load-more">
         <button class="mail-btn" :disabled="loadingMore" @click="onLoadMoreClick">
-          {{ loadingMore ? '加载中…' : '加载更多' }}
+          {{ loadingMore ? '加载中…' : hasMore ? '加载更多' : '加载更早的邮件' }}
         </button>
       </div>
     </div>
@@ -240,6 +240,8 @@ const props = defineProps({
   moveTargets: { type: Array, default: () => [] },
   /** 是否还有下一页。 */
   hasMore: { type: Boolean, default: false },
+  /** 本地列表已翻完，但服务器上还有更早的邮件可以回溯。 */
+  canBackfill: { type: Boolean, default: false },
   loadingMore: { type: Boolean, default: false },
   /** 虚拟滚动开关（设置里可关掉，老机器或调试时有用）。 */
   virtual: { type: Boolean, default: true },
@@ -287,9 +289,10 @@ function onScroll(event) {
   if (nearBottom(event.target)) requestMore()
 }
 
-/** 还有下一页、且没有在途请求时才续页；「加载更多」按钮留着当兜底。 */
+/** 还有下一页（本地或服务器）、且没有在途请求时才续页；按钮留着当兜底。 */
 function requestMore() {
-  if (!props.hasMore || props.loadingMore) return
+  if (!props.hasMore && !props.canBackfill) return
+  if (props.loadingMore) return
   emit('load-more')
 }
 

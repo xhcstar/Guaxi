@@ -791,6 +791,7 @@ async fn app_main() {
             commands::mail::mail_get_encryption_enabled,
             commands::mail::mail_set_encryption_enabled,
             commands::mail::mail_sync_folder,
+            commands::mail::mail_backfill_folder,
             commands::mail::mail_sync_all,
             commands::mail::mail_list_messages,
             commands::mail::mail_search,

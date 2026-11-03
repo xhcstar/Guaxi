@@ -73,10 +73,48 @@ pub fn ensure_folders(account: &Account) -> Result<Vec<MailFolder>, String> {
     store::list_folders(&account.id)
 }
 
+/// 每下载多少封就落库一次。
+///
+/// 以前整箱收完才一次性入库：重新添加账户 / 换机器时，大邮箱要等几分钟才看到
+/// 第一封邮件。分批入库后，每几十封就能显示一批，进度是看得见的。
+const POP3_STORE_BATCH: usize = 40;
+
+/// 把已下载、还没入库的邮件写进库（一个事务）。
+fn store_pending(
+    account_id: &str,
+    pending: &mut Vec<(String, Vec<u8>, mime::ParsedMessage, MessageSummary)>,
+) -> Result<Vec<MessageSummary>, String> {
+    if pending.is_empty() {
+        return Ok(Vec::new());
+    }
+    super::batch::with_batch(|batch| {
+        let mut out = Vec::with_capacity(pending.len());
+        for (uidl, raw, parsed, mut summary) in pending.drain(..) {
+            let uid = batch.assign_uid(account_id, &uidl)?;
+            summary.uid = uid;
+            let attachments_json =
+                serde_json::to_string(&parsed.attachments).unwrap_or_else(|_| "[]".into());
+            batch.store_message(
+                &summary,
+                parsed.html.as_deref(),
+                &parsed.text,
+                &attachments_json,
+                Some(&raw),
+            )?;
+            out.push(summary);
+        }
+        Ok(out)
+    })
+}
+
 /// 同步收件箱：拉回新邮件，返回新增的列表行。
 ///
 /// `snippet_len` 与 IMAP 同步一致，由调用方从设置里取。
-pub fn sync_inbox(account: &Account, snippet_len: usize) -> Result<Vec<MessageSummary>, String> {
+pub fn sync_inbox(
+    account: &Account,
+    snippet_len: usize,
+    on_progress: Option<super::imap::SyncProgress<'_>>,
+) -> Result<Vec<MessageSummary>, String> {
     let secret = imap::auth_secret(account)?;
     let proxy = super::effective_proxy(account);
     let mut session = pop3::Pop3Session::connect(account, &secret, proxy)?;
@@ -116,9 +154,12 @@ pub fn sync_inbox(account: &Account, snippet_len: usize) -> Result<Vec<MessageSu
         let known = store::pop3_known_uids(&account.id)?;
         let settings = store::load_settings();
         let mut pending: Vec<(String, Vec<u8>, mime::ParsedMessage, MessageSummary)> = Vec::new();
+        let mut refreshed: Vec<MessageSummary> = Vec::new();
         let mut downloaded = 0usize;
 
-        for entry in &entries {
+        // 从最新的邮件开始下：重新添加账户时，用户最先关心的是最近收到的信，
+        // 而不是按服务器序号从最老的一封慢慢等到最新。
+        for entry in entries.iter().rev() {
             if known.contains(&entry.uidl) {
                 continue;
             }
@@ -148,32 +189,18 @@ pub fn sync_inbox(account: &Account, snippet_len: usize) -> Result<Vec<MessageSu
                     );
                 }
             }
+            if pending.len() >= POP3_STORE_BATCH {
+                let mut stored = store_pending(&account.id, &mut pending)?;
+                refreshed.append(&mut stored);
+                if let Some(progress) = on_progress {
+                    progress(refreshed.len());
+                }
+            }
         }
 
-        // 一次性写库：分配 uid、写摘要、写正文、缓存原文，全在一个事务里。
-        let mut refreshed: Vec<MessageSummary> = Vec::with_capacity(pending.len());
-        if !pending.is_empty() {
-            let account_id = account.id.clone();
-            let stored = super::batch::with_batch(|batch| {
-                let mut out = Vec::with_capacity(pending.len());
-                for (uidl, raw, parsed, mut summary) in pending {
-                    let uid = batch.assign_uid(&account_id, &uidl)?;
-                    summary.uid = uid;
-                    let attachments_json = serde_json::to_string(&parsed.attachments)
-                        .unwrap_or_else(|_| "[]".into());
-                    batch.store_message(
-                        &summary,
-                        parsed.html.as_deref(),
-                        &parsed.text,
-                        &attachments_json,
-                        Some(&raw),
-                    )?;
-                    out.push(summary);
-                }
-                Ok(out)
-            })?;
-            refreshed = stored;
-        }
+        // 剩下的（不足一批）收尾落库。
+        let mut stored = store_pending(&account.id, &mut pending)?;
+        refreshed.append(&mut stored);
 
         // 删信语义：只有明确关闭「保留在服务器」时才 DELE。
         // 无论哪种模式，都要顺手丢掉「服务器上已不存在」的 UIDL 映射，
