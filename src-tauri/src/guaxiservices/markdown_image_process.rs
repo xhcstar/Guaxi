@@ -738,7 +738,7 @@ async fn fetch_remote_image(url_str: &str) -> Result<(String, Vec<u8>), String> 
     Ok((remote_image_content_type(ext).to_string(), bytes.to_vec()))
 }
 
-#[get("/api/markdown/remote_image")]
+#[get("/markdown/api/remote_image")]
 async fn remote_image(query: web::Query<RemoteImageQuery>) -> HttpResponse {
     match fetch_remote_image(query.url.trim()).await {
         Ok((content_type, bytes)) => HttpResponse::Ok()
