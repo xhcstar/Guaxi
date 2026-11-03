@@ -502,7 +502,7 @@ async fn produce_due(report: &mut DeliberateReport) {
 
 /// 产出④遗忘曲线复习：把语言学习里已经验证过的 SRS 泛化到知识库章节。
 ///
-/// 排期用 SM-2 的简化版（ease 2.5 起，记住则乘 ease，忘了回到 1 天）。
+/// 排期交给 FSRS（见 `cognition::fsrs`）：新卡第一次反馈时接管，之后按稳定度/难度排期。
 /// 种子来自"写下超过 7 天、且从未复习过"的章节——自己写的东西才值得复习。
 fn produce_review(snaps: &GraphSnapshots, report: &mut DeliberateReport) {
     let Ok(conn) = ensure_db() else { return };
@@ -595,37 +595,72 @@ fn produce_review(snaps: &GraphSnapshots, report: &mut DeliberateReport) {
     record_draft(draft, report);
 }
 
-/// 复习反馈：记住 → 间隔 × ease；忘了 → 回到 1 天并降 ease。
+/// 复习反馈：用 FSRS 重排下一间隔。
+///
+/// 「记得」= Good(3)，「忘了」= Again(1)。旧 SM-2 队列没有 FSRS 状态（stability/difficulty
+/// 为空），第一次反馈按新卡接管；之后稳定度与难度都由 FSRS 维护。反馈后顺手更新
+/// 该节点的掌握度，看板不必等到每日刷新。
 pub fn review_feedback(node_id: &str, remembered: bool) -> Result<(), String> {
     let conn = ensure_db()?;
-    let row: Option<(f64, i64, i64, i64)> = conn
+    let row: Option<(i64, i64, Option<String>, Option<f64>, Option<f64>)> = conn
         .query_row(
-            "SELECT ease,interval_days,reps,lapses FROM review_state WHERE node_id=?1",
+            "SELECT reps,lapses,last_review,stability,difficulty FROM review_state WHERE node_id=?1",
             params![node_id],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
         )
         .optional()
         .map_err(|e| e.to_string())?;
-    let (ease, interval, reps, lapses) = row.ok_or_else(|| "该节点未在复习队列中".to_string())?;
-    let (next_ease, next_interval, next_reps, next_lapses) = if remembered {
-        (
-            (ease + 0.1).min(3.0),
-            ((interval as f64 * ease).round() as i64).clamp(1, 365),
-            reps + 1,
-            lapses,
-        )
-    } else {
-        ((ease - 0.25).max(1.3), 1, reps, lapses + 1)
-    };
-    let due = (chrono::Local::now() + chrono::Duration::days(next_interval))
+    let (reps, lapses, last_review, stability, difficulty) =
+        row.ok_or_else(|| "该节点未在复习队列中".to_string())?;
+
+    let elapsed_days = last_review
+        .as_deref()
+        .and_then(|iso| chrono::DateTime::parse_from_rfc3339(iso).ok())
+        .map(|time| {
+            let local = time.with_timezone(&chrono::Local);
+            (chrono::Local::now()
+                .signed_duration_since(local)
+                .num_seconds() as f64
+                / 86400.0)
+                .max(0.0)
+        })
+        .unwrap_or(0.0);
+
+    let rating = if remembered { 3 } else { 1 };
+    let sched = crate::cognition::fsrs::schedule(stability, difficulty, rating, elapsed_days);
+    let interval = sched.interval_days;
+    let due = (chrono::Local::now() + chrono::Duration::days(interval))
         .format("%Y-%m-%d")
         .to_string();
+    let next_reps = if remembered { reps + 1 } else { reps };
+    let next_lapses = if remembered { lapses } else { lapses + 1 };
+    let fsrs_state = if remembered { "review" } else { "relearning" };
+
     conn.execute(
-        "UPDATE review_state SET ease=?2,interval_days=?3,due_date=?4,reps=?5,lapses=?6,last_review=?7 \
-         WHERE node_id=?1",
-        params![node_id, next_ease, next_interval, due, next_reps, next_lapses, now_iso()],
+        "UPDATE review_state SET stability=?2,difficulty=?3,interval_days=?4,due_date=?5,\
+         reps=?6,lapses=?7,last_review=?8,fsrs_state=?9,elapsed_days=?10,scheduled_days=?4,\
+         ease=?11 WHERE node_id=?1",
+        params![
+            node_id,
+            sched.stability,
+            sched.difficulty,
+            interval,
+            due,
+            next_reps,
+            next_lapses,
+            now_iso(),
+            fsrs_state,
+            elapsed_days.round() as i64,
+            (11.0 - sched.difficulty).clamp(1.3, 3.0)
+        ],
     )
     .map_err(|e| e.to_string())?;
+    // 掌握度就地更新：反馈完立刻能在看板上看到变化。
+    let _ = crate::cognition::learning::touch_node(node_id);
+    debug!(
+        "[cognition] 复习反馈 node={} remembered={} S={:.2} D={:.2} 下次 {} 天后 R={:.2}",
+        node_id, remembered, sched.stability, sched.difficulty, interval, sched.retrievability
+    );
     Ok(())
 }
 

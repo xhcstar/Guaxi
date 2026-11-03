@@ -588,6 +588,7 @@ import { openUrl } from '@tauri-apps/plugin-opener'
 import { createLogger } from '../../../utils/logger'
 import { useReadingHistory } from '../../../composables/useReadingHistory'
 import { useReaderReadAloud } from '../../../composables/useReaderReadAloud'
+import { trackReaderProgress } from '../../../composables/useActivityBeacon'
 import { useSelectionTranslate } from '../../../composables/useSelectionTranslate'
 import { useSelectionReadAloud } from '../../../composables/useSelectionReadAloud'
 import './readerPane.css'
@@ -1367,17 +1368,29 @@ const applyPendingRestore = () => {
 
 const persistState = async () => {
   if (!bookKey.value || loading.value) return
+  let ratio = 0
   try {
+    ratio = currentScrollRatio()
     await invoke('reader_save_state', {
       bookKey: bookKey.value,
       sectionIndex: activeIndex.value,
-      scrollRatio: currentScrollRatio(),
+      scrollRatio: ratio,
     })
   } catch (error) {
     logger.debug('[DocEbookReader] save state failed', {
       error: String(error?.message || error),
     })
   }
+  // 活动总线：电子书读到第几章、整本到哪了。节流在采集器里。
+  const total = sections.value.length
+  trackReaderProgress({
+    filePath: props.path,
+    fileName: props.name || bookKey.value,
+    progress: total ? (activeIndex.value + ratio) / total : undefined,
+    page: total ? activeIndex.value + 1 : undefined,
+    total: total || undefined,
+    extra: { format: props.kind },
+  })
 }
 
 const progressLabel = ref('')

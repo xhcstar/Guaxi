@@ -3,7 +3,7 @@
 //! 命名统一 `cognition_*`，避免与既有 500 多个命令冲突。所有命令都很薄——
 //! 逻辑在各子模块里，这里只做参数适配与错误透传。
 
-use crate::cognition::{belief, brief, episode, evolve, nudge, percept, profile, recall, runtime, store, tools};
+use crate::cognition::{activity, belief, brief, episode, evolve, learning, memory, nudge, percept, profile, ranker, recall, runtime, store, tools};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -138,6 +138,116 @@ pub fn cognition_percept_set_state(
 pub fn cognition_percept_get(id: String) -> Result<Value, String> {
     let (title, text, uri) = percept::percept_text(&id).ok_or_else(|| "感知不存在".to_string())?;
     Ok(serde_json::json!({ "id": id, "title": title, "uri": uri, "text": text }))
+}
+
+// ───────────────────────── 活动总线 ─────────────────────────
+
+/// 批量上报行为事件。前端按约 1 秒一批提交；空批直接返回 0。
+#[tauri::command]
+pub fn cognition_activity_log(events: Vec<activity::ActivityEvent>) -> Result<usize, String> {
+    // 阅读情节是活动之上的派生物：先把事实写进去，再拿同一批事件归并。
+    // 归并失败不能让上报本身失败——记录行为不能反而被下游拖垮。
+    let reading_events = events.clone();
+    let written = activity::log_events(events)?;
+    let finished = crate::cognition::reading::note_events(&reading_events);
+    if !finished.is_empty() {
+        tauri::async_runtime::spawn(async move {
+            crate::cognition::reading::reinforce_finished(finished).await;
+        });
+    }
+    Ok(written)
+}
+
+/// 最近的活动（设置页的调试视图）。
+#[tauri::command]
+pub fn cognition_activity_recent(
+    limit: Option<usize>,
+    app: Option<String>,
+    kind: Option<String>,
+) -> Result<Vec<activity::ActivityRow>, String> {
+    activity::recent(limit, app.as_deref(), kind.as_deref())
+}
+
+/// 活动概览：总量 / 今日 / 近 N 天的 app、kind 分布。
+#[tauri::command]
+pub fn cognition_activity_stats(days: Option<i64>) -> Result<activity::ActivityStats, String> {
+    activity::stats(days)
+}
+
+// ───────────────────────── 长期记忆 ─────────────────────────
+
+/// 列出记忆。`status` 传 "all" 可看全部（含已忘记的墓碑）。
+#[tauri::command]
+pub fn cognition_memory_list(
+    kind: Option<String>,
+    status: Option<String>,
+    limit: Option<usize>,
+) -> Result<Vec<memory::Memory>, String> {
+    memory::list(kind.as_deref(), status.as_deref(), limit)
+}
+
+/// 手动记一条（同时写进 memory.md 手动块）。
+#[tauri::command]
+pub fn cognition_memory_add(
+    kind: String,
+    text: String,
+    confidence: Option<f64>,
+) -> Result<memory::Memory, String> {
+    memory::add_manual(&kind, &text, confidence)
+}
+
+/// 忘记一条。派生记忆留墓碑（同一句不再被自动加回来）；手动记忆同时从 markdown 删行。
+#[tauri::command]
+pub fn cognition_memory_forget(id: String) -> Result<(), String> {
+    memory::forget(&id)
+}
+
+/// 立即巩固一次：手动块同步 → 规则/模型抽取 → 合并 → 重建 memory.md。
+#[tauri::command]
+pub async fn cognition_memory_consolidate() -> Result<memory::ConsolidateReport, String> {
+    memory::consolidate_now().await
+}
+
+/// memory.md 的绝对路径（设置页展示用）。
+#[tauri::command]
+pub fn cognition_memory_file_path() -> Result<String, String> {
+    memory::memory_file_path().map(|p| p.to_string_lossy().to_string())
+}
+
+// ───────────────────────── 学习状态 ─────────────────────────
+
+/// 学习看板：主题掌握度、复习队列、最近读完与连续阅读天数。
+#[tauri::command]
+pub fn cognition_learning_overview(days: Option<i64>) -> Result<learning::LearningOverview, String> {
+    learning::overview(days)
+}
+
+/// 立即重算掌握度（看板的刷新按钮）。
+#[tauri::command]
+pub fn cognition_learning_refresh() -> Result<usize, String> {
+    learning::refresh_mastery()
+}
+
+// ───────────────────────── 引证排序器 ─────────────────────────
+
+/// 排序器状态：是否已训练、版本、AUC、可用标签数。
+#[tauri::command]
+pub fn cognition_ranker_status() -> Result<ranker::RankerStatus, String> {
+    ranker::status()
+}
+
+/// 用现有 used/clicked 标签训练一次。必须过冻结留出集门禁才会落库。
+#[tauri::command]
+pub async fn cognition_ranker_train() -> Result<ranker::TrainReport, String> {
+    tokio::task::spawn_blocking(ranker::train)
+        .await
+        .map_err(|e| format!("训练任务失败: {e}"))?
+}
+
+/// 回滚排序器：召回回到纯 RRF，标签保留可重训。
+#[tauri::command]
+pub fn cognition_ranker_reset() -> Result<(), String> {
+    ranker::reset()
 }
 
 /// 手动触发一批打分（设置页的"立即处理"按钮）。

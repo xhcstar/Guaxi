@@ -441,6 +441,7 @@
 
 <script setup>
 import { createLogger } from '../../utils/logger'
+import { trackActivity } from '../../composables/useActivityBeacon'
 import { parseSearchQuery, matchesPathFilters } from '../../utils/searchQuerySyntax'
 import { computed, ref, h, onMounted, onUnmounted, nextTick, watch } from "vue";
 import { NDropdown, NTooltip } from 'naive-ui'
@@ -2175,6 +2176,23 @@ const openResultInEditor = async (item) => {
 const handleSearchEnter = () => {
   const q = searchQuery.value.trim()
   if (!q && !hasActiveFilters.value) return
+
+  // 活动总线：一次"真的提交了搜索"。逐字预览不记——那是输入过程，不是意图。
+  try {
+    trackActivity({
+      app: 'search',
+      kind: 'search',
+      targetKind: 'query',
+      targetId: q || '(仅筛选)',
+      meta: {
+        type: searchType.value,
+        hasQuery: !!q,
+        filters: hasActiveFilters.value,
+      },
+    })
+  } catch {
+    /* 记录失败不影响搜索 */
+  }
 
   // 仅有筛选条件(无关键字)时，按文件列举筛选结果(内容/摘录搜索需要关键字)。
   if (!q && hasActiveFilters.value) {

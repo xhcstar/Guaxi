@@ -299,10 +299,10 @@ pub async fn tune_recall_weights(limit: usize) -> Result<EvalRun, String> {
     let (_, _, base_mrr) = score(&cases, &base);
 
     const CANDIDATES: [f64; 7] = [0.2, 0.4, 0.6, 0.8, 1.0, 1.3, 1.6];
-    const CHANNELS: [&str; 4] = ["semantic", "graph", "percept", "episodic"];
+    const CHANNELS: [&str; 5] = ["semantic", "graph", "percept", "episodic", "memory"];
     let mut best = base.clone();
     let mut best_mrr = base_mrr;
-    // 两轮坐标上升足够收敛：只有 4 个维度，且目标函数平滑。
+    // 两轮坐标上升足够收敛：只有 5 个维度，且目标函数平滑。
     for _round in 0..2 {
         for ch in CHANNELS {
             let mut local_best = best.get(ch).copied().unwrap_or(0.5);

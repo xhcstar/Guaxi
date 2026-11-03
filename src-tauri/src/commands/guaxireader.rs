@@ -346,6 +346,21 @@ pub async fn load_notes_file(file_path: String) -> Result<NotesData, String> {
     Ok(notes)
 }
 
+/// 从 `.../Libraries/<kb>/<book>/...` 路径里取库名；取不到就留空（新颖度走全局基准）。
+fn kb_name_from_libraries_path(path: &str) -> String {
+    let normalized = path.replace('\\', "/");
+    let parts: Vec<&str> = normalized
+        .split('/')
+        .filter(|p| !p.is_empty())
+        .collect();
+    if let Some(idx) = parts.iter().rposition(|p| *p == "Libraries") {
+        if let Some(name) = parts.get(idx + 1) {
+            return (*name).to_string();
+        }
+    }
+    String::new()
+}
+
 #[tauri::command]
 pub async fn update_notes_file(
     action: String,
@@ -362,6 +377,26 @@ pub async fn update_notes_file(
     // 解析传入的数据
     let card: NoteCard =
         serde_json::from_value(data).map_err(|e| format!("解析笔记数据失败: {}", e))?;
+    // 摘录这件事本身要进活动总线（"人做过什么"）。趁 card 还没被移动先取出来。
+    let card_type = card.card_type.clone();
+    let card_title = card.title.clone();
+    let card_items = card.items.len();
+    let card_id = card.id.clone();
+    // 入库用正文：优先 content，退到 original_markdown（图片/公式卡只有后者）。
+    let note_text = card
+        .items
+        .iter()
+        .map(|item| {
+            let content = item.content.trim();
+            if !content.is_empty() {
+                content.to_string()
+            } else {
+                item.original_markdown.trim().to_string()
+            }
+        })
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n");
 
     // 处理操作
     match action.as_str() {
@@ -384,6 +419,60 @@ pub async fn update_notes_file(
     // 异步写入文件
     let json = serde_json::to_string_pretty(&notes).map_err(|e| e.to_string())?;
     tokio::fs::write(&file_path, json).await.map_err(|e| e.to_string())?;
+
+    // 活动总线：只在「新增」这一下记一条。更新/删除是同一张卡的后续动作，
+    // 记下来只会让"读到什么、摘了什么"的轨迹变成噪声。失败不影响写盘结果。
+    if action == "add" {
+        let _ = crate::cognition::activity::log_events(vec![
+            crate::cognition::activity::ActivityEvent {
+                app: "reader".to_string(),
+                kind: "note".to_string(),
+                target_kind: Some("file".to_string()),
+                target_id: Some(file_path.clone()),
+                path: Some(file_path.clone()),
+                meta: Some(serde_json::json!({
+                    "importFileId": import_file_id,
+                    "importFileName": import_file_name,
+                    "cardType": card_type.clone(),
+                    "cardTitle": card_title.clone(),
+                    "items": card_items,
+                })),
+                ..Default::default()
+            },
+        ]);
+
+        // 记忆侧：摘录以「自有材料」感知入库（state=linked，不占收件箱）。
+        // 它会被打分锚定到知识库节点，之后召回与矛盾检测都能看见这条摘录；
+        // 文本走 `ingest_owned` 的纯文本路径，代码里的 <...> 不会被当成标签吃掉。
+        if !note_text.trim().is_empty() {
+            let kb = kb_name_from_libraries_path(&file_path);
+            let title = if card_title.trim().is_empty() {
+                format!("摘录笔记 · {}", import_file_name)
+            } else {
+                format!("摘录笔记 · {} · {}", import_file_name, card_title.trim())
+            };
+            let input = crate::cognition::percept::PerceptInput {
+                source_kind: "note".to_string(),
+                source_id: card_id.clone(),
+                uri: file_path.clone(),
+                title,
+                text: note_text.clone(),
+                kb_name: kb,
+                trust: Some(1.0),
+                meta: Some(serde_json::json!({
+                    "importFileId": import_file_id,
+                    "importFileName": import_file_name,
+                    "cardType": card_type,
+                    "cardTitle": card_title,
+                    "items": card_items,
+                    "notesPath": file_path,
+                })),
+            };
+            if let Err(e) = crate::cognition::percept::ingest_owned(input, "linked") {
+                tracing::debug!("[cognition] 摘录入库跳过: {}", e);
+            }
+        }
+    }
 
     let conn = init_db().map_err(|e| e.to_string())?;
     let imported_id_val: i32 = if import_file_id != 0 {

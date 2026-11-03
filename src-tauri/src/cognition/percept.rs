@@ -509,19 +509,9 @@ pub fn ingest(input: PerceptInput) -> Result<IngestResult, String> {
     let text = normalize_text(&clean);
     quality_gate(&title, &text)?;
 
-    let hash = dedup_hash(&title, &text);
-    let conn = ensure_db()?;
-
-    // 命中去重：只刷新一次 captured_at 之外的东西都不动，避免把用户已归档的条目拉回收件箱。
-    if let Some(existing) = conn
-        .query_row(
-            "SELECT id FROM percepts WHERE text_hash=?1",
-            params![hash],
-            |r| r.get::<_, String>(0),
-        )
-        .optional()
-        .map_err(|e| e.to_string())?
-    {
+    // 去重先于额度：额度用完时，同一篇内容的重复抓取仍应老实返回 duplicate，
+    // 而不是把采集器刷成一片「额度已用完」的假错误。
+    if let Some(existing) = find_duplicate(&title, &text)? {
         return Ok(IngestResult {
             id: existing,
             duplicate: true,
@@ -533,6 +523,7 @@ pub fn ingest(input: PerceptInput) -> Result<IngestResult, String> {
     // 每日额度：只卡自动抓取来源（crawl / rss）。用户主动送进来的内容不受限——
     // 额度是为了防信息过载，不是为了限制用户。
     if matches!(kind, "crawl" | "rss") {
+        let conn = ensure_db()?;
         let cap = crate::cognition::store::get_i64("percept_daily_cap", DEFAULT_DAILY_CAP);
         if cap > 0 {
             let used: i64 = conn
@@ -549,48 +540,161 @@ pub fn ingest(input: PerceptInput) -> Result<IngestResult, String> {
         }
     }
 
+    insert_percept(PerceptRecord {
+        kind,
+        source_id: input.source_id.trim(),
+        uri: input.uri.trim(),
+        title: &title,
+        text: &text,
+        kb_name: input.kb_name.trim(),
+        trust: input.trust,
+        meta: input.meta,
+        neutralized,
+        state: "new",
+    })
+}
+
+/// 用户自有材料（摘录、笔记、资料库文档）的入库口。
+///
+/// 与 `ingest` 的差别只在信任链，不在安全策略：
+/// - 不做 `html_to_text`：笔记里常有代码，`Vec<String>` 会被当成标签吃掉；
+/// - 不套抓取质量闸门：短摘录是用户亲手选中的，信息量由人保证；
+/// - 落到调用方指定的状态（通常 `linked`）：它们不该占收件箱，但要参与打分与召回。
+/// 指令中和仍然保留——用户笔记里可能粘贴了外部段落。
+pub fn ingest_owned(input: PerceptInput, state: &str) -> Result<IngestResult, String> {
+    let kind = input.source_kind.trim();
+    if kind.is_empty() {
+        return Err("source_kind 不能为空".to_string());
+    }
+    let title = normalize_text(&input.title);
+    let (clean, neutralized) = neutralize_untrusted(&input.text);
+    let text = normalize_text(&clean);
+    if text.chars().count() < 2 {
+        return Err("正文为空".to_string());
+    }
+    let state = match state {
+        "new" | "triaged" | "linked" | "archived" => state,
+        _ => "linked",
+    };
+    insert_percept(PerceptRecord {
+        kind,
+        source_id: input.source_id.trim(),
+        uri: input.uri.trim(),
+        title: &title,
+        text: &text,
+        kb_name: input.kb_name.trim(),
+        trust: input.trust,
+        meta: input.meta,
+        neutralized,
+        state,
+    })
+}
+
+/// 按内容哈希找已有条目。采集入口在额度判断前先查一次，保证重复内容不报额度错。
+fn find_duplicate(title: &str, text: &str) -> Result<Option<String>, String> {
+    let hash = dedup_hash(title, text);
+    let conn = ensure_db()?;
+    conn.query_row(
+        "SELECT id FROM percepts WHERE text_hash=?1",
+        params![hash],
+        |r| r.get::<_, String>(0),
+    )
+    .optional()
+    .map_err(|e| e.to_string())
+}
+
+/// 一条准备落库的感知。抽出来是为了让 `ingest` 与 `ingest_owned` 共用同一条写入路径
+/// （去重、主题、信任度、meta 补齐、neutralized 计数），只在「清洗/闸门/状态」上分叉。
+struct PerceptRecord<'a> {
+    kind: &'a str,
+    source_id: &'a str,
+    uri: &'a str,
+    title: &'a str,
+    text: &'a str,
+    kb_name: &'a str,
+    trust: Option<f32>,
+    meta: Option<serde_json::Value>,
+    neutralized: usize,
+    state: &'a str,
+}
+
+fn insert_percept(rec: PerceptRecord<'_>) -> Result<IngestResult, String> {
+    let hash = dedup_hash(rec.title, rec.text);
+    let conn = ensure_db()?;
+
+    // 命中去重：只刷新一次 captured_at 之外的东西都不动，避免把用户已归档的条目拉回收件箱。
+    if let Some(existing) = conn
+        .query_row(
+            "SELECT id FROM percepts WHERE text_hash=?1",
+            params![hash],
+            |r| r.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?
+    {
+        return Ok(IngestResult {
+            id: existing,
+            duplicate: true,
+            neutralized: rec.neutralized,
+            chars: rec.text.chars().count(),
+        });
+    }
+
     let id = uuid::Uuid::new_v4().to_string();
-    let topics = extract_topics(&title, &text);
-    let trust = input.trust.unwrap_or_else(|| default_trust(kind)).clamp(0.0, 1.0);
-    let mut meta = input.meta.unwrap_or_else(|| serde_json::json!({}));
+    let topics = extract_topics(rec.title, rec.text);
+    let trust = rec
+        .trust
+        .unwrap_or_else(|| default_trust(rec.kind))
+        .clamp(0.0, 1.0);
+    let mut meta = rec.meta.unwrap_or_else(|| serde_json::json!({}));
     if let Some(obj) = meta.as_object_mut() {
-        obj.insert("neutralized".into(), serde_json::json!(neutralized));
+        obj.insert(
+            "neutralized".into(),
+            serde_json::json!(rec.neutralized),
+        );
     }
 
     conn.execute(
         "INSERT INTO percepts(id,source_kind,source_id,uri,title,text,text_hash,captured_at,\
          novelty,salience,trust,kb_name,state,topics,meta) \
-         VALUES(?1,?2,?3,?4,?5,?6,?7,?8,-1,0,?9,?10,'new',?11,?12)",
+         VALUES(?1,?2,?3,?4,?5,?6,?7,?8,-1,0,?9,?10,?11,?12,?13)",
         params![
             id,
-            kind,
-            input.source_id.trim(),
-            input.uri.trim(),
-            title,
-            text,
+            rec.kind,
+            rec.source_id,
+            rec.uri,
+            rec.title,
+            rec.text,
             hash,
             now_iso(),
             trust as f64,
-            input.kb_name.trim(),
+            rec.kb_name,
+            rec.state,
             serde_json::to_string(&topics).unwrap_or_else(|_| "[]".into()),
             meta.to_string()
         ],
     )
     .map_err(|e| format!("写入 percept 失败: {e}"))?;
     debug!(
-        "[cognition] percept 入库 kind={} chars={} neutralized={}",
-        kind,
-        text.chars().count(),
-        neutralized
+        "[cognition] percept 入库 kind={} state={} chars={} neutralized={}",
+        rec.kind,
+        rec.state,
+        rec.text.chars().count(),
+        rec.neutralized
     );
-    Ok(IngestResult { id, duplicate: false, neutralized, chars: text.chars().count() })
+    Ok(IngestResult {
+        id,
+        duplicate: false,
+        neutralized: rec.neutralized,
+        chars: rec.text.chars().count(),
+    })
 }
 
 /// 各来源的默认可信度。用户自己产生的内容最高，公开网页最低。
 fn default_trust(kind: &str) -> f32 {
     match kind {
-        "manual" | "chat" => 1.0,
-        "file" => 0.9,
+        "manual" | "chat" | "note" | "excerpt" => 1.0,
+        "file" | "library" => 0.9,
         "capture" => 0.75,
         "clipboard" => 0.6,
         "rss" => 0.55,
@@ -804,6 +908,20 @@ pub fn list_percepts(q: &PerceptQuery) -> Result<Vec<Percept>, String> {
 }
 
 /// 取一条 percept 的完整正文（已净化）。
+/// 单条感知的排序特征元数据：显著性、可信度、抓取时间。
+/// 只服务于引证排序器的特征快照，不改变任何召回/打分行为。
+pub fn meta_of(id: &str) -> Option<(f64, f64, String)> {
+    let conn = ensure_db().ok()?;
+    conn.query_row(
+        "SELECT salience,trust,captured_at FROM percepts WHERE id=?1",
+        params![id],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+    )
+    .optional()
+    .ok()
+    .flatten()
+}
+
 pub fn percept_text(id: &str) -> Option<(String, String, String)> {
     let conn = ensure_db().ok()?;
     conn.query_row(

@@ -5,6 +5,7 @@ import { platform } from "@tauri-apps/plugin-os";
 import { useSettingsStore } from "../../../stores/settingsStore";
 import { createLogger } from '../../../utils/logger'
 import { useConfirm } from './useConfirm.js'
+import { trackActivity } from '../../../composables/useActivityBeacon.js'
 import {
   Open20Regular,
   FolderOpen20Regular,
@@ -216,6 +217,20 @@ export function useContextMenu({ store, message, reconvert = null, onShare = nul
           import_file_id: importFileId,
         },
         theme,
+      });
+
+      // 活动总线：Repo 里"打开了一本书"。阅读进度由阅读器自己按节流上报。
+      trackActivity({
+        app: "repo",
+        kind: "open",
+        targetKind: "book",
+        targetId: readFilePath,
+        kbName: row.library ? String(row.library) : undefined,
+        meta: {
+          fileType,
+          fileName: rowFileName,
+          importFileId: importFileId ?? undefined,
+        },
       });
 
       logger.info("窗口创建成功:", {

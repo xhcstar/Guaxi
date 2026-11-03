@@ -15,7 +15,7 @@ use std::path::PathBuf;
 use tracing::{info, warn};
 
 /// schema 版本。新增表/列时 +1 并在 `migrate` 里补一段。
-pub const COG_SCHEMA_VERSION: i64 = 3;
+pub const COG_SCHEMA_VERSION: i64 = 7;
 
 /// 建库串行化：多个后台循环同时首次开库时避免并发建表冲突。
 static INIT_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
@@ -486,6 +486,96 @@ fn migrate(conn: &Connection) -> Result<(), String> {
     if current < 3 {
         add_column(conn, "nudges", "policy_score", "REAL NOT NULL DEFAULT 0");
         add_column(conn, "nudges", "policy_version", "INTEGER NOT NULL DEFAULT 0");
+    }
+    // v3 → v4：活动总线。只新增表与索引，幂等；旧库首次启动时自动补上。
+    if current < 4 {
+        conn.execute_batch(
+            r#"
+CREATE TABLE IF NOT EXISTS activity (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    at          TEXT NOT NULL,
+    app         TEXT NOT NULL,
+    kind        TEXT NOT NULL,
+    target_kind TEXT,
+    target_id   TEXT,
+    kb_name     TEXT,
+    path        TEXT,
+    line        INTEGER,
+    duration_ms INTEGER,
+    progress    REAL,
+    session_id  TEXT,
+    meta        TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_activity_at ON activity(at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS idx_activity_app ON activity(app, kind, at DESC);
+CREATE INDEX IF NOT EXISTS idx_activity_target ON activity(target_id, at DESC);
+"#,
+        )
+        .map_err(|e| format!("建 activity 表失败: {e}"))?;
+    }
+    // v4 → v5：长期记忆。手动块（memory.md）是用户可以改的那一半，本表是派生索引与墓碑。
+    if current < 5 {
+        conn.execute_batch(
+            r#"
+CREATE TABLE IF NOT EXISTS memories (
+    id            TEXT PRIMARY KEY,
+    kind          TEXT NOT NULL,
+    text          TEXT NOT NULL,
+    text_hash     TEXT NOT NULL,
+    confidence    REAL NOT NULL DEFAULT 0.6,
+    status        TEXT NOT NULL DEFAULT 'active',
+    source        TEXT NOT NULL DEFAULT 'derived',
+    topics        TEXT NOT NULL DEFAULT '[]',
+    refs          TEXT NOT NULL DEFAULT '[]',
+    hits          INTEGER NOT NULL DEFAULT 0,
+    created_at    TEXT NOT NULL,
+    updated_at    TEXT NOT NULL,
+    last_seen_at  TEXT,
+    vec           BLOB
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_memories_hash ON memories(text_hash);
+CREATE INDEX IF NOT EXISTS idx_memories_status ON memories(status, kind, updated_at DESC);
+"#,
+        )
+        .map_err(|e| format!("建 memories 表失败: {e}"))?;
+    }
+    // v5 → v6：FSRS 排期字段 + 主题掌握度。旧 SM-2 队列保留，首次反馈时按新卡接管。
+    if current < 6 {
+        add_column(conn, "review_state", "stability", "REAL");
+        add_column(conn, "review_state", "difficulty", "REAL");
+        add_column(conn, "review_state", "fsrs_state", "TEXT");
+        add_column(conn, "review_state", "elapsed_days", "INTEGER NOT NULL DEFAULT 0");
+        add_column(conn, "review_state", "scheduled_days", "INTEGER NOT NULL DEFAULT 1");
+        conn.execute_batch(
+            r#"
+CREATE TABLE IF NOT EXISTS topic_mastery (
+    topic_key      TEXT PRIMARY KEY,
+    topic          TEXT NOT NULL,
+    source         TEXT NOT NULL,
+    kb_name        TEXT,
+    ref_id         TEXT,
+    coverage       REAL NOT NULL DEFAULT 0,
+    retention      REAL NOT NULL DEFAULT 0,
+    engagement     REAL NOT NULL DEFAULT 0,
+    mastery        REAL NOT NULL DEFAULT 0,
+    confidence     REAL NOT NULL DEFAULT 0,
+    sessions       INTEGER NOT NULL DEFAULT 0,
+    finished       INTEGER NOT NULL DEFAULT 0,
+    reps           INTEGER NOT NULL DEFAULT 0,
+    lapses         INTEGER NOT NULL DEFAULT 0,
+    last_touched_at TEXT,
+    updated_at     TEXT NOT NULL,
+    extra          TEXT NOT NULL DEFAULT '{}'
+);
+CREATE INDEX IF NOT EXISTS idx_mastery_rank ON topic_mastery(mastery ASC, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_mastery_source ON topic_mastery(source, kb_name);
+"#,
+        )
+        .map_err(|e| format!("建 topic_mastery 表失败: {e}"))?;
+    }
+    // v6 → v7：引证排序特征。召回时把特征快照写进引证，训练器才有样本可用。
+    if current < 7 {
+        add_column(conn, "citations", "features", "TEXT");
     }
 
     conn.execute(

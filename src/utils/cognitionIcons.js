@@ -17,7 +17,9 @@ import {
   Flash20Regular,
   Globe20Regular,
   Keyboard20Regular,
+  Library20Regular,
   News20Regular,
+  Notepad20Regular,
   PuzzlePiece20Regular,
   Rss24Regular,
   Sparkle20Regular,
@@ -46,6 +48,9 @@ export const PERCEPT_SOURCE_ICONS = {
   screen: Desktop20Regular,
   manual: Keyboard20Regular,
   chat: Chat20Regular,
+  // M2：用户自有材料。摘录与资料库文档都算"你选的资料"，与外部抓取分开。
+  note: Notepad20Regular,
+  library: Library20Regular,
 }
 
 /** 投递渠道：这条提醒当初是怎么找到你的。 */

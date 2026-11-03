@@ -19,11 +19,13 @@ use tracing::debug;
 /// RRF 的平滑常数。60 是文献常用值：让前几名之间差距明显，尾部快速趋平。
 const RRF_K: f64 = 60.0;
 
-/// 各通路默认权重。语义为主，图补结构邻近，感知给新鲜度，情节给连续性。
+/// 各通路默认权重。语义为主，图补结构邻近，感知给新鲜度，情节给连续性，记忆给稳定性。
 const W_SEMANTIC: f64 = 1.0;
 const W_GRAPH: f64 = 0.6;
 const W_PERCEPT: f64 = 0.5;
 const W_EPISODIC: f64 = 0.4;
+/// 记忆通道：用户自己的事实/偏好/疑问。文本短，但往往是最直接的回答依据。
+const W_MEMORY: f64 = 0.55;
 
 /// 召回参数。
 #[derive(Debug, Clone, Deserialize)]
@@ -85,6 +87,15 @@ struct Candidate {
     ranks: Vec<(String, usize, f64)>,
     fused: f64,
     text: String,
+    /// 排序器特征（见 `cognition::ranker`）。
+    pagerank: f64,
+    trust: f64,
+    salience: f64,
+    recency_days: f64,
+    /// 融合分经过排序器微调后的最终排序键。
+    adjusted: f64,
+    /// 特征快照（JSON），写进引证供后续训练。
+    features: Option<String>,
 }
 
 /// 读取当前生效的通路权重。缺省值 × 学习到的调整系数。
@@ -97,6 +108,7 @@ pub fn channel_weights() -> HashMap<String, f64> {
         ("graph".to_string(), W_GRAPH),
         ("percept".to_string(), W_PERCEPT),
         ("episodic".to_string(), W_EPISODIC),
+        ("memory".to_string(), W_MEMORY),
     ]);
     let Ok(conn) = ensure_db() else { return w };
     let stored: Option<String> = conn
@@ -126,6 +138,28 @@ const RECALL_NODE_TYPES: [&str; 4] = ["section", "paragraph", "file", "concept"]
 
 fn key_of(kind: &str, id: &str) -> String {
     format!("{kind}::{id}")
+}
+
+/// 距今天数（排序特征里的「新旧」项）。解析失败按 0 处理。
+fn days_since_iso(iso: &str) -> f64 {
+    chrono::DateTime::parse_from_rfc3339(iso)
+        .map(|time| {
+            let local = time.with_timezone(&chrono::Local);
+            (chrono::Local::now()
+                .signed_duration_since(local)
+                .num_seconds() as f64
+                / 86400.0)
+                .max(0.0)
+        })
+        .unwrap_or(0.0)
+}
+
+fn channel_rank(c: &Candidate, channel: &str) -> usize {
+    c.ranks
+        .iter()
+        .find(|(ch, _, _)| ch == channel)
+        .map(|(_, rank, _)| *rank)
+        .unwrap_or(0)
 }
 
 /// 倒数排名融合。**唯一**的融合实现——召回与评测共用它，
@@ -212,6 +246,12 @@ pub async fn recall(query: &str, opts: RecallOptions) -> RecallResult {
                 ranks: Vec::new(),
                 fused: 0.0,
                 text,
+                pagerank: node.pagerank,
+                trust: 0.0,
+                salience: 0.0,
+                recency_days: 0.0,
+                adjusted: 0.0,
+                features: None,
             });
             entry.ranks.push(("semantic".into(), rank + 1, score as f64));
             *channels.entry("semantic".into()).or_insert(0) += 1;
@@ -257,6 +297,12 @@ pub async fn recall(query: &str, opts: RecallOptions) -> RecallResult {
                     ranks: Vec::new(),
                     fused: 0.0,
                     text,
+                    pagerank: node.pagerank,
+                    trust: 0.0,
+                    salience: 0.0,
+                    recency_days: 0.0,
+                    adjusted: 0.0,
+                    features: None,
                 });
                 entry.ranks.push(("graph".into(), rank + 1, node.pagerank));
                 *channels.entry("graph".into()).or_insert(0) += 1;
@@ -275,6 +321,9 @@ pub async fn recall(query: &str, opts: RecallOptions) -> RecallResult {
                         title.clone()
                     };
                     let key = key_of("percept", &id);
+                    let (salience, trust, captured_at) =
+                        percept::meta_of(&id).unwrap_or((0.0, 0.0, String::new()));
+                    let recency_days = days_since_iso(&captured_at);
                     let entry = pool.entry(key).or_insert_with(|| Candidate {
                         ref_kind: "percept".into(),
                         ref_id: id.clone(),
@@ -285,6 +334,12 @@ pub async fn recall(query: &str, opts: RecallOptions) -> RecallResult {
                         ranks: Vec::new(),
                         fused: 0.0,
                         text: text.chars().take(1200).collect(),
+                        pagerank: 0.0,
+                        trust: trust as f64,
+                        salience: salience as f64,
+                        recency_days,
+                        adjusted: 0.0,
+                        features: None,
                     });
                     entry.ranks.push(("percept".into(), rank + 1, score as f64));
                     *channels.entry("percept".into()).or_insert(0) += 1;
@@ -299,6 +354,9 @@ pub async fn recall(query: &str, opts: RecallOptions) -> RecallResult {
         if let Ok(hits) = episode::episode_topk(&qv, 3) {
             for (rank, (id, question, answer, score)) in hits.into_iter().enumerate() {
                 let key = key_of("episode", &id);
+                let recency_days = episode::started_at(&id)
+                    .map(|at| days_since_iso(&at))
+                    .unwrap_or(0.0);
                 let entry = pool.entry(key).or_insert_with(|| Candidate {
                     ref_kind: "episode".into(),
                     ref_id: id.clone(),
@@ -309,12 +367,48 @@ pub async fn recall(query: &str, opts: RecallOptions) -> RecallResult {
                     ranks: Vec::new(),
                     fused: 0.0,
                     text: format!("问：{}\n答：{}", question, answer.chars().take(800).collect::<String>()),
+                    pagerank: 0.0,
+                    trust: 0.0,
+                    salience: 0.0,
+                    recency_days,
+                    adjusted: 0.0,
+                    features: None,
                 });
                 entry.ranks.push(("episodic".into(), rank + 1, score as f64));
                 *channels.entry("episodic".into()).or_insert(0) += 1;
             }
         }
     }
+    // ── 第 5 路：长期记忆。用户自己的事实/偏好/疑问——不来自知识库，也不在收件箱，
+    // 但往往就是回答"我上次说过什么"最直接的依据。记忆是用户自己的内容，直出、不包不可信块。
+    for (rank, (mem, score)) in crate::cognition::memory::topk(&qv, 3)
+        .into_iter()
+        .enumerate()
+    {
+        let label_text: String = mem.text.chars().take(40).collect();
+        let key = key_of("memory", &mem.id);
+        let recency_days = days_since_iso(&mem.updated_at);
+        let entry = pool.entry(key).or_insert_with(|| Candidate {
+            ref_kind: "memory".into(),
+            ref_id: mem.id.clone(),
+            kb_name: None,
+            label: format!("记忆：{}", label_text),
+            path: None,
+            line: None,
+            ranks: Vec::new(),
+            fused: 0.0,
+            text: mem.text.clone(),
+            pagerank: 0.0,
+            trust: mem.confidence,
+            salience: 0.0,
+            recency_days,
+            adjusted: 0.0,
+            features: None,
+        });
+        entry.ranks.push(("memory".into(), rank + 1, score as f64));
+        *channels.entry("memory".into()).or_insert(0) += 1;
+    }
+
     finalize(q, pool, k, max_chars, channels, weights, started)
 }
 
@@ -329,13 +423,41 @@ fn finalize(
     started: Instant,
 ) -> RecallResult {
     let mut items: Vec<Candidate> = pool.into_values().collect();
+    // 排序器最多每周训一次；没训练过时 adjusted = fused，行为与纯 RRF 完全一致。
+    let ranker_model = crate::cognition::ranker::current_model();
     for c in items.iter_mut() {
         // 倒数排名融合：同一条被多路命中会自然叠加，这正是我们想要的"多方印证"。
         let ranks: Vec<(String, usize)> =
             c.ranks.iter().map(|(ch, r, _)| (ch.clone(), *r)).collect();
         c.fused = rrf_fuse(&ranks, &weights);
+        let input = crate::cognition::ranker::FeatureInput {
+            fused: c.fused,
+            best_rank: c.ranks.iter().map(|(_, r, _)| *r).min().unwrap_or(0),
+            channel_count: c.ranks.len(),
+            channel_ranks: [
+                channel_rank(c, "semantic"),
+                channel_rank(c, "graph"),
+                channel_rank(c, "percept"),
+                channel_rank(c, "episodic"),
+                channel_rank(c, "memory"),
+            ],
+            ref_kind: c.ref_kind.clone(),
+            text_len: c.text.chars().count(),
+            has_kb: c.kb_name.is_some(),
+            pagerank: c.pagerank,
+            trust: c.trust,
+            salience: c.salience,
+            recency_days: c.recency_days,
+        };
+        let fv = crate::cognition::ranker::features(&input);
+        c.adjusted = crate::cognition::ranker::adjust_fused(c.fused, &fv, ranker_model.as_ref());
+        c.features = Some(crate::cognition::ranker::features_json(&fv));
     }
-    items.sort_by(|a, b| b.fused.partial_cmp(&a.fused).unwrap_or(std::cmp::Ordering::Equal));
+    items.sort_by(|a, b| {
+        b.adjusted
+            .partial_cmp(&a.adjusted)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     items.truncate(k);
 
     // 预算按名次递减切分：靠前的引证拿更多字符，尾部只留摘要级片段。
@@ -389,6 +511,7 @@ fn finalize(
             path: c.path.clone(),
             line: c.line,
             snippet,
+            features: c.features.clone(),
         });
     }
 
@@ -396,7 +519,7 @@ fn finalize(
         String::new()
     } else {
         format!(
-            "以下是从用户自己的知识库与感知收件箱里召回的资料，按相关度排序。\n\
+            "以下是从用户自己的知识库、长期记忆与感知收件箱里召回的资料，按相关度排序。\n\
              引用其中内容时**必须**写出对应编号（如 [1]）；资料不足以回答时如实说明，不要编造。\n\n{}",
             blocks.join("\n\n")
         )
@@ -521,6 +644,12 @@ pub async fn eval_channels(query: &str, kb_name: Option<&str>) -> Vec<(String, V
         .map(|v| v.into_iter().map(|(id, _, _, _)| id).collect())
         .unwrap_or_default();
     out.push(("episodic".into(), eps));
+
+    let mems: Vec<String> = crate::cognition::memory::topk(&qv, 3)
+        .into_iter()
+        .map(|(m, _)| m.id)
+        .collect();
+    out.push(("memory".into(), mems));
     out
 }
 

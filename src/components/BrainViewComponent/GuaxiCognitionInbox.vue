@@ -484,6 +484,87 @@
         </n-spin>
       </n-tab-pane>
 
+      <!--
+        学习看板：主题掌握度 + 复习队列 + 最近读完。
+        数据来自后端 learning::overview（阅读活动、读完情节、FSRS 复习队列三处），
+        这里只负责展示；「刷新」会重算掌握度。
+      -->
+      <n-tab-pane name="learning">
+        <template #tab>
+          <span class="cog-tab"><n-icon :component="Gauge20Regular" />学习</span>
+        </template>
+        <div class="learn-stats">
+          <div class="learn-stat">
+            <b>{{ learn?.finishedBooks ?? 0 }}</b>
+            <span>近 {{ learn?.days ?? 30 }} 天读完</span>
+          </div>
+          <div class="learn-stat">
+            <b>{{ learn?.dueReviews ?? 0 }}</b>
+            <span>待复习</span>
+          </div>
+          <div class="learn-stat">
+            <b>{{ learn?.streakDays ?? 0 }}</b>
+            <span>连续阅读天数</span>
+          </div>
+          <div class="learn-stat">
+            <b>{{ learn?.mastered ?? 0 }}/{{ learn?.topicsTotal ?? 0 }}</b>
+            <span>已掌握主题</span>
+          </div>
+        </div>
+        <div class="learn-bands">
+          <span class="learn-band is-weak">待加强 {{ learn?.weak ?? 0 }}</span>
+          <span class="learn-band is-learning">进行中 {{ learn?.learning ?? 0 }}</span>
+          <span class="learn-band is-mastered">已掌握 {{ learn?.mastered ?? 0 }}</span>
+          <span class="learn-updated">更新于 {{ shortTime(learn?.updatedAt) || '—' }}</span>
+        </div>
+
+        <n-spin :show="store.learningLoading">
+          <div class="learn-section-title">该补的</div>
+          <div v-if="weakTopics.length" class="learn-topic-list">
+            <div v-for="t in weakTopics" :key="t.key" class="learn-topic">
+              <span class="learn-topic-name" :title="t.topic">{{ t.topic }}</span>
+              <span class="learn-topic-bar"><b :style="{ width: pct(t.mastery) }"></b></span>
+              <span class="learn-topic-pct">{{ Math.round(t.mastery * 100) }}%</span>
+              <span class="learn-topic-meta">
+                {{ t.source === 'node' ? '复习' : '阅读' }} · {{ t.sessions }} 次
+              </span>
+            </div>
+          </div>
+          <div v-else class="cog-empty">还没有可统计的主题。读一本书或复习一处笔记后就会出现在这里。</div>
+
+          <div class="learn-section-title">今天该复习</div>
+          <div v-if="learn?.due?.length" class="learn-due">
+            <div v-for="d in learn.due" :key="d.nodeId" class="learn-due-row">
+              <span class="learn-due-name" :title="d.label">{{ d.label }}</span>
+              <span class="learn-due-meta">{{ d.kbName }} · 已复习 {{ d.reps }} 次 · {{ d.dueDate }}</span>
+            </div>
+          </div>
+          <div v-else class="cog-empty">今天没有到期的复习。</div>
+
+          <div class="learn-section-title">最近读完</div>
+          <div v-if="learn?.recentFinished?.length" class="learn-finished">
+            <div v-for="(f, i) in learn.recentFinished" :key="i" class="learn-finished-row">
+              <span class="learn-finished-title" :title="f.title">{{ f.title }}</span>
+              <span class="learn-finished-meta">
+                {{ shortTime(f.endedAt) }}<template v-if="f.minutes"> · {{ f.minutes }} 分钟</template>
+              </span>
+            </div>
+          </div>
+          <div v-else class="cog-empty">还没有读完的书。</div>
+        </n-spin>
+
+        <div class="cog-actions">
+          <GuaxiIconButton
+            :icon="ArrowSync20Regular"
+            label="刷新学习状态"
+            hint="重算主题掌握度并读取看板。阅读活动与复习反馈会自动带进来。"
+            :loading="store.learningRefreshing"
+            @click="refreshLearning"
+          />
+          <n-button size="tiny" quaternary @click="tab = 'brief'">去看简报</n-button>
+        </div>
+      </n-tab-pane>
+
       <n-tab-pane name="brief">
         <template #tab>
           <span class="cog-tab"><n-icon :component="News20Regular" />简报</span>
@@ -914,6 +995,27 @@ const sourceLabel = (k) => PERCEPT_SOURCE_LABELS[k] || k
 const countOf = (kind) => store.nudges.filter((n) => n.kind === kind).length
 const pct = (v) => `${Math.round(Math.max(0, Math.min(1, Number(v) || 0)) * 100)}%`
 
+// ── 学习看板
+const learn = computed(() => store.learningOverview)
+const weakTopics = computed(() =>
+  (store.learningOverview?.topics || []).filter((t) => t.mastery < 0.7).slice(0, 8),
+)
+const shortTime = (iso) => {
+  if (!iso) return ''
+  const s = String(iso)
+  return s.length > 19 ? s.slice(5, 19).replace('T', ' ') : s
+}
+const refreshLearning = async () => {
+  try {
+    await store.refreshLearning(30)
+  } catch (e) {
+    message.error(String(e))
+  }
+}
+watch(tab, (value) => {
+  if (value === 'learning' && !store.learningOverview) void store.loadLearning(30)
+})
+
 const CHANNELS = {
   board: ['看板', '只在这里显示，不打扰你'],
   brief: ['简报', '进入下一份简报'],
@@ -1119,6 +1221,9 @@ onActivated(() => {
   if (tab.value === 'percepts' || tab.value === 'today') {
     store.refreshPercepts()
   }
+  if (tab.value === 'learning') {
+    void store.loadLearning(30)
+  }
 })
 
 onUnmounted(() => {
@@ -1285,6 +1390,137 @@ onUnmounted(() => {
   font-size: 13.5px;
   line-height: 1.9;
   color: var(--guaxi-text-secondary);
+}
+
+/* ── 学习看板 ── */
+.learn-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 12px 0 8px;
+}
+
+.learn-stat {
+  flex: 1 1 120px;
+  min-width: 110px;
+  padding: 10px 12px;
+  border: 1px solid var(--guaxi-border);
+  border-radius: 10px;
+  background: var(--guaxi-panel-bg);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.learn-stat b {
+  font-size: 22px;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+}
+
+.learn-stat span {
+  font-size: 12px;
+  color: var(--guaxi-text-secondary);
+}
+
+.learn-bands {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 6px 0 12px;
+  font-size: 12px;
+}
+
+.learn-band {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--guaxi-hover-bg);
+  color: var(--guaxi-text-secondary);
+}
+
+.learn-band.is-weak { color: #d98a2b; }
+.learn-band.is-learning { color: #3b82c4; }
+.learn-band.is-mastered { color: #5b9e6a; }
+
+.learn-updated {
+  margin-left: auto;
+  color: var(--guaxi-text-secondary);
+  font-size: 12px;
+}
+
+.learn-section-title {
+  margin: 14px 0 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--guaxi-text-primary);
+}
+
+.learn-topic-list,
+.learn-due,
+.learn-finished {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.learn-topic {
+  display: grid;
+  grid-template-columns: minmax(120px, 1.2fr) minmax(80px, 1fr) 44px auto;
+  gap: 10px;
+  align-items: center;
+  font-size: 12.5px;
+}
+
+.learn-topic-name,
+.learn-due-name,
+.learn-finished-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.learn-topic-bar {
+  height: 6px;
+  border-radius: 999px;
+  background: var(--guaxi-hover-bg);
+  overflow: hidden;
+}
+
+.learn-topic-bar b {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #e0a13b, #4acadb);
+}
+
+.learn-topic-pct {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--guaxi-text-secondary);
+}
+
+.learn-topic-meta {
+  color: var(--guaxi-text-secondary);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+
+.learn-due-row,
+.learn-finished-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 5px 0;
+  border-bottom: 1px solid var(--guaxi-border);
+  font-size: 12.5px;
+}
+
+.learn-due-meta,
+.learn-finished-meta {
+  color: var(--guaxi-text-secondary);
+  white-space: nowrap;
+  font-size: 11.5px;
 }
 
 .cog-card {

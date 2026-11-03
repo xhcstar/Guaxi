@@ -176,6 +176,7 @@ fn spawn_scoring_loop() {
             let _ = crate::cognition::episode::embed_pending(16).await;
             let _ = crate::cognition::belief::embed_pending(16).await;
             let _ = crate::cognition::profile::ensure_interest_vectors(16).await;
+            let _ = crate::cognition::memory::embed_pending(16).await;
             sleep(Duration::from_secs(20)).await;
         }
     });
@@ -251,6 +252,31 @@ fn spawn_maintenance_loop() {
                         Ok(_) => {}
                         Err(e) => warn!("[cognition] 轨迹裁剪失败: {}", e),
                     }
+                    let activity_keep =
+                        store::get_i64("activity_keep_days", crate::cognition::activity::DEFAULT_KEEP_DAYS);
+                    match crate::cognition::activity::prune(activity_keep) {
+                        Ok(n) if n > 0 => info!("[cognition] 裁剪过期活动 {} 条", n),
+                        Ok(_) => {}
+                        Err(e) => warn!("[cognition] 活动裁剪失败: {}", e),
+                    }
+                    // 阅读情节收尾：没人读到一半关掉的书不该永远挂在 running。
+                    if let Err(e) = crate::cognition::reading::close_stale(24) {
+                        warn!("[cognition] 阅读情节收尾失败: {}", e);
+                    }
+                    // 资料库增量：新入库/新转换的文档以 linked 感知进入召回，不占收件箱。
+                    if let Err(e) = crate::cognition::library_digest::run() {
+                        warn!("[cognition] 资料库增量扫描失败: {}", e);
+                    }
+                    // 记忆巩固：同步 memory.md 手动块 → 规则/模型抽取 → 合并 → 重建镜像。
+                    if let Err(e) = crate::cognition::memory::consolidate_now().await {
+                        warn!("[cognition] 记忆巩固失败: {}", e);
+                    }
+                    // 学习状态：阅读活动 + 复习队列 → 主题掌握度。
+                    if let Err(e) = crate::cognition::learning::refresh_mastery() {
+                        warn!("[cognition] 学习状态刷新失败: {}", e);
+                    }
+                    // 引证排序器：每周最多试训一次，样本不足会静默跳过。
+                    crate::cognition::ranker::maybe_auto_train();
                     match crate::cognition::nudge::train_policy() {
                         Ok(r) => debug!("[cognition] 策略训练：{}", r.reason),
                         Err(e) => warn!("[cognition] 策略训练失败: {}", e),

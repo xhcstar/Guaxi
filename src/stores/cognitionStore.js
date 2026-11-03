@@ -23,6 +23,9 @@ export const PERCEPT_SOURCE_LABELS = {
   screen: '屏幕',
   manual: '手动录入',
   chat: '对话',
+  // 用户自有材料（M2）：不占收件箱，但参与打分、锚定与召回。
+  note: '摘录笔记',
+  library: '资料库文档',
 }
 
 export const useCognitionStore = defineStore('cognitionStore', {
@@ -69,6 +72,27 @@ export const useCognitionStore = defineStore('cognitionStore', {
     /** 进化闩。 */
     evalRuns: [],
     evalBusy: false,
+
+    /** 活动总线：最近事件与概览（设置页调试视图）。 */
+    activity: [],
+    activityStats: null,
+    activityLoading: false,
+
+    /** 长期记忆：活跃条目、memory.md 路径与最近一次巩固结果。 */
+    memories: [],
+    memoriesLoading: false,
+    memoryBusy: false,
+    memoryFilePath: '',
+    memoryReport: null,
+
+    /** 学习看板：主题掌握度、复习队列与阅读统计。 */
+    learningOverview: null,
+    learningLoading: false,
+    learningRefreshing: false,
+
+    /** 引证排序器状态（训练/回滚用）。 */
+    rankerStatus: null,
+    rankerBusy: false,
 
     /** 当前会话的接地引证：episodeId -> citations[]。 */
     groundedByEpisode: {},
@@ -574,6 +598,134 @@ export const useCognitionStore = defineStore('cognitionStore', {
       return r
     },
 
+    // ── 活动总线
+
+    async loadActivity({ limit = 60, app = '', kind = '' } = {}) {
+      this.activityLoading = true
+      try {
+        this.activity = await invoke('cognition_activity_recent', {
+          limit,
+          app: app || null,
+          kind: kind || null,
+        })
+      } catch (e) {
+        logger.warn('cognition_activity_recent failed', e)
+        this.activity = []
+      } finally {
+        this.activityLoading = false
+      }
+    },
+
+    async refreshActivityStats(days = 7) {
+      try {
+        this.activityStats = await invoke('cognition_activity_stats', { days })
+      } catch (e) {
+        logger.warn('cognition_activity_stats failed', e)
+        this.activityStats = null
+      }
+    },
+
+    // ── 长期记忆
+
+    async loadMemories({ kind = '', status = 'active', limit = 200 } = {}) {
+      this.memoriesLoading = true
+      try {
+        this.memories = await invoke('cognition_memory_list', {
+          kind: kind || null,
+          status: status || 'active',
+          limit,
+        })
+      } catch (e) {
+        logger.warn('cognition_memory_list failed', e)
+        this.memories = []
+      } finally {
+        this.memoriesLoading = false
+      }
+    },
+
+    async loadMemoryFilePath() {
+      try {
+        this.memoryFilePath = await invoke('cognition_memory_file_path')
+      } catch (e) {
+        logger.warn('cognition_memory_file_path failed', e)
+        this.memoryFilePath = ''
+      }
+    },
+
+    async addMemory(kind, text) {
+      const memory = await invoke('cognition_memory_add', { kind, text })
+      await this.loadMemories()
+      return memory
+    },
+
+    async forgetMemory(id) {
+      await invoke('cognition_memory_forget', { id })
+      await this.loadMemories()
+    },
+
+    async consolidateMemory() {
+      this.memoryBusy = true
+      try {
+        this.memoryReport = await invoke('cognition_memory_consolidate')
+        await this.loadMemories()
+        return this.memoryReport
+      } finally {
+        this.memoryBusy = false
+      }
+    },
+
+    // ── 学习看板
+
+    async loadLearning(days = 30) {
+      this.learningLoading = true
+      try {
+        this.learningOverview = await invoke('cognition_learning_overview', { days })
+      } catch (e) {
+        logger.warn('cognition_learning_overview failed', e)
+        this.learningOverview = null
+      } finally {
+        this.learningLoading = false
+      }
+    },
+
+    async refreshLearning(days = 30) {
+      this.learningRefreshing = true
+      try {
+        const n = await invoke('cognition_learning_refresh')
+        await this.loadLearning(days)
+        return n
+      } finally {
+        this.learningRefreshing = false
+      }
+    },
+
+    // ── 引证排序器
+
+    async loadRankerStatus() {
+      try {
+        this.rankerStatus = await invoke('cognition_ranker_status')
+      } catch (e) {
+        logger.warn('cognition_ranker_status failed', e)
+        this.rankerStatus = null
+      }
+    },
+
+    async trainRanker() {
+      this.rankerBusy = true
+      try {
+        const report = await invoke('cognition_ranker_train')
+        await this.loadRankerStatus()
+        return report
+      } finally {
+        this.rankerBusy = false
+      }
+    },
+
+    async resetRanker() {
+      await invoke('cognition_ranker_reset')
+      await this.loadRankerStatus()
+    },
+
     /** 首屏一次性拉齐看板需要的东西。 */
     async bootstrap() {
       await this.refreshStatus()
@@ -582,6 +734,7 @@ export const useCognitionStore = defineStore('cognitionStore', {
         this.refreshNudges(),
         this.refreshPercepts(),
         this.loadBrief(),
+        this.loadLearning(),
       ])
     },
   },

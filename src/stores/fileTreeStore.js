@@ -2,6 +2,7 @@ import { defineStore } from "pinia";
 import { invoke } from "@tauri-apps/api/core";
 import { createLogger } from "../utils/logger";
 import { useEditorBridgeStore } from "./editorBridgeStore";
+import { trackActivityOnce } from "../composables/useActivityBeacon";
 
 const logger = createLogger("fileTreeStore");
 const console = {
@@ -511,6 +512,20 @@ export const useFileTreeStore = defineStore("fileTreeStore", {
 
           const normalizedContent = normalizeEditorContent(content);
           await invoke("write_file_content", { path, content: normalizedContent });
+
+          // 活动总线：一次真实落盘。自动保存很密，按文件 60 秒节流，只记"动过哪个文件"。
+          trackActivityOnce(
+            `edit:${writeKey}`,
+            {
+              app: "editor",
+              kind: "edit",
+              targetKind: "file",
+              targetId: path,
+              path,
+              meta: { bytes: normalizedContent.length },
+            },
+            60_000
+          );
 
           const tabIndex = this.openTabs.findIndex((tab) => normalizeTabPath(tab.path) === writeKey);
           if (tabIndex !== -1) {

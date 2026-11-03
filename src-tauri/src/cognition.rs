@@ -29,17 +29,24 @@
 //!    每天真正触达用户的那少数几件事，且受每日 token 预算硬约束。
 //! 3. **可解释可回滚**：所有自调产物都是带版本的行，附带评测分数与一键回滚。
 
+pub mod activity;
 pub mod belief;
 pub mod brief;
 pub mod commands;
 pub mod episode;
 pub mod evolve;
+pub mod fsrs;
 pub mod hooks;
+pub mod learning;
+pub mod library_digest;
 pub mod mcp;
 pub mod mcp_bridge;
+pub mod memory;
 pub mod nudge;
 pub mod percept;
 pub mod profile;
+pub mod ranker;
+pub mod reading;
 pub mod recall;
 pub mod runtime;
 pub mod store;

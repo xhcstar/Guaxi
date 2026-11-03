@@ -650,6 +650,7 @@ import {
   VolumeHighOutline
 } from '@vicons/ionicons5'
 import { useReaderReadAloud } from '../../composables/useReaderReadAloud'
+import { trackReaderProgress } from '../../composables/useActivityBeacon'
 import { useSelectionReadAloud } from '../../composables/useSelectionReadAloud'
 
 const logger = createLogger('GuaxiConvertPDFReader')
@@ -1638,6 +1639,16 @@ const persistReaderState = () => {
     );
   } catch {
   }
+  // 活动总线：读到哪了。节流在采集器里（同一本书 45 秒一条），这里随手调用即可。
+  trackReaderProgress({
+    filePath: props.filePath,
+    library: props.library,
+    fileName: props.fileName,
+    progress: totalPages.value ? currentPage.value / totalPages.value : undefined,
+    page: currentPage.value,
+    total: totalPages.value,
+    extra: { format: 'pdf' },
+  });
 };
 
 const startReadingSession = () => {

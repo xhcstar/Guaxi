@@ -111,6 +111,106 @@
           />
         </div>
       </n-collapse-item>
+      <n-collapse-item name="activities">
+        <template #header>
+          <span class="cog-sec"><n-icon :component="History20Regular" />活动总线</span>
+        </template>
+        <div class="cog-note">
+          记录「你做过什么」：打开哪本书、读到哪一页、摘了什么、搜了什么、保存了哪个文件。
+          只写本地 cognition.db，不参与打分、不打断你；默认保留 180 天。
+          后续的记忆沉淀与学习状态都从这张表来。
+        </div>
+        <div class="cog-stat-line">
+          共 <b>{{ activityStats?.total ?? 0 }}</b> 条，今天 <b>{{ activityStats?.today ?? 0 }}</b> 条；
+          近 {{ activityStats?.windowDays ?? 7 }} 天：
+          <template v-if="activityStats?.byApp?.length">
+            <span v-for="(row, i) in activityStats.byApp" :key="row[0]">
+              {{ APP_LABELS[row[0]] || row[0] }} {{ row[1] }}<i v-if="i < activityStats.byApp.length - 1"> · </i>
+            </span>
+          </template>
+          <span v-else>还没有活动</span>
+        </div>
+        <div class="cog-actions">
+          <GuaxiIconButton
+            :icon="History20Regular"
+            label="刷新最近活动"
+            hint="读取最近 80 条行为轨迹与近 7 天的分布。只读，不会触发任何后台任务。"
+            :loading="busy.activity"
+            @click="loadActivity"
+          />
+        </div>
+        <div v-if="store.activity.length" class="cog-activity">
+          <div v-for="row in store.activity" :key="row.id" class="cog-activity-row">
+            <span class="cog-activity-at">{{ shortTime(row.at) }}</span>
+            <span class="cog-activity-app">{{ APP_LABELS[row.app] || row.app }}</span>
+            <span class="cog-activity-kind">{{ KIND_LABELS[row.kind] || row.kind }}</span>
+            <span class="cog-activity-target" :title="row.targetId || row.path || ''">{{ activityTarget(row) }}</span>
+            <span v-if="row.progress != null" class="cog-activity-progress">{{ Math.round(row.progress * 100) }}%</span>
+          </div>
+        </div>
+        <div v-else-if="!store.activityLoading" class="cog-row-hint">
+          还没有记录。打开一本书、摘一段、搜一次，就会出现在这里。
+        </div>
+      </n-collapse-item>
+      <n-collapse-item name="memory">
+        <template #header>
+          <span class="cog-sec"><n-icon :component="BrainCircuit20Regular" />长期记忆</span>
+        </template>
+        <div class="cog-note">
+          巩固任务把活动、读完的书与摘录沉淀成记忆：事实、偏好、疑问、技能、目标。
+          派生记忆可以在下面「忘记」，也可以直接编辑 <code>memory.md</code> 的手动块——
+          手动块里的增删会在下次巩固时同步进来。<b>忘记会留墓碑</b>：同一句话不会被自动加回来。
+        </div>
+        <div class="cog-stat-line">
+          活跃 <b>{{ store.memories.length }}</b> 条，其中手动 <b>{{ manualMemoryCount }}</b> 条；
+          <span v-if="store.memoryReport">
+            上次巩固新增 {{ store.memoryReport.created }}，合并 {{ store.memoryReport.merged }}，退休 {{ store.memoryReport.retired }}<span v-if="store.memoryReport.usedLlm">（含模型抽取）</span>。
+          </span>
+          <span v-else>还没有跑过巩固。</span>
+        </div>
+        <div class="memory-add">
+          <n-select v-model:value="memoryKind" size="small" :options="MEMORY_KIND_OPTIONS" style="width: 104px" />
+          <n-input
+            v-model:value="memoryText"
+            size="small"
+            placeholder="记一条：偏好、事实、悬而未决的问题……"
+            @keydown.enter.prevent="addMemory"
+          />
+          <n-button size="small" type="primary" :disabled="!memoryText.trim()" @click="addMemory">记住</n-button>
+          <GuaxiIconButton
+            quaternary
+            :icon="ArrowSync20Regular"
+            label="立即巩固"
+            hint="同步 memory.md 手动块，抽取最近一天的活动、读完的书与摘录，合并进记忆并重建镜像。"
+            :loading="store.memoryBusy"
+            @click="consolidateMemory"
+          />
+          <GuaxiIconButton
+            quaternary
+            :icon="ArrowClockwise20Regular"
+            label="刷新"
+            hint="重新读取记忆列表与 memory.md 路径。"
+            :loading="store.memoriesLoading"
+            @click="loadMemories"
+          />
+        </div>
+        <div v-if="store.memoryFilePath" class="cog-row-hint">
+          镜像文件 <code>{{ store.memoryFilePath }}</code>
+        </div>
+        <div v-if="store.memories.length" class="memory-list">
+          <div v-for="m in store.memories" :key="m.id" class="memory-row">
+            <n-tag size="tiny" :bordered="false" :type="memoryTagType(m.kind)">{{ memoryKindLabel(m.kind) }}</n-tag>
+            <span class="memory-text" :title="m.text">{{ m.text }}</span>
+            <span class="memory-meta">
+              {{ m.source === 'manual' ? '手动' : '自动' }}<template v-if="m.hits"> · {{ m.hits + 1 }} 次</template>
+            </span>
+            <n-button size="tiny" text type="error" @click="forgetMemory(m)">忘记</n-button>
+          </div>
+        </div>
+        <div v-else-if="!store.memoriesLoading" class="cog-row-hint">
+          还没有记忆。跑一次巩固，或者在输入框里手动记一条。
+        </div>
+      </n-collapse-item>
       <n-collapse-item name="budget">
         <template #header>
           <span class="cog-sec"><n-icon :component="Alert20Regular" />打扰与预算</span>
@@ -559,6 +659,47 @@
             @click="store.refreshEvalRuns()"
           />
         </div>
+
+        <div class="cog-sub">引证排序器</div>
+        <div class="cog-note">
+          用「引证是否被答案用上 / 被点开」训练一个轻量逻辑回归，在 RRF 融合之后做小幅重排。
+          同样要过留出集：AUC 必须 ≥ 0.55 且比按融合分排序高 0.02 才会生效；否则保持原顺序。
+          排序器只影响引证顺序，不改变召回哪一些候选。
+        </div>
+        <div class="cog-row-hint">
+          <template v-if="store.rankerStatus?.trained">
+            已训练 v{{ store.rankerStatus.version }}，AUC {{ store.rankerStatus.metric.toFixed(3) }}，
+            样本 {{ store.rankerStatus.samples }}，可用标签 {{ store.rankerStatus.labeled }}
+            （正例 {{ store.rankerStatus.positives }}）｜{{ shortTime(store.rankerStatus.trainedAt) }}
+          </template>
+          <template v-else>
+            未训练（召回按纯 RRF）｜可用标签 {{ store.rankerStatus?.labeled ?? 0 }}
+            （正例 {{ store.rankerStatus?.positives ?? 0 }}）
+          </template>
+        </div>
+        <div class="cog-actions">
+          <GuaxiIconButton
+            :icon="ArrowTrendingLines20Regular"
+            label="训练排序器"
+            hint="用现有 used/clicked 标签训练一次。样本不足或 AUC 没赢过基线时只会给报告，不会落库。"
+            :loading="store.rankerBusy"
+            @click="trainRanker"
+          />
+          <GuaxiIconButton
+            quaternary
+            :icon="ArrowUndo20Regular"
+            label="回滚排序器"
+            hint="删除已生效的排序器，召回回到纯 RRF。标签与引证记录保留，可以再训。"
+            @click="resetRanker"
+          />
+          <GuaxiIconButton
+            quaternary
+            :icon="History20Regular"
+            label="刷新状态"
+            hint="读取排序器版本、AUC 与可用标签数。"
+            @click="store.loadRankerStatus()"
+          />
+        </div>
       </n-collapse-item>
       <n-collapse-item name="maint">
         <template #header>
@@ -670,6 +811,7 @@ const busy = ref({
   score: false,
   belief: false,
   contradict: false,
+  activity: false,
 })
 const audit = ref([])
 const mcp = ref(null)
@@ -686,7 +828,7 @@ const acceptPct = computed(() => {
 
 const weightsText = computed(() => {
   const w = st.value?.recallWeights || {}
-  const order = ['semantic', 'graph', 'percept', 'episodic']
+  const order = ['semantic', 'graph', 'percept', 'episodic', 'memory']
   return order.map((k) => `${k} ${(w[k] ?? 0).toFixed(2)}`).join('  ')
 })
 
@@ -747,6 +889,8 @@ const SOURCE_HINTS = {
   clipboard: '你复制的内容。信噪比最高，但也最敏感——默认关闭。',
   screen: '定时对屏幕做 OCR。最具侵入性，默认关闭，建议配合应用白名单使用。',
   manual: '你手动粘贴或通过工具录入的内容。',
+  note: '阅读器里加进笔记的摘录。以你自己的资料身份参与打分与召回，不占收件箱。',
+  library: '资料库里新导入 / 新转换的文档。日常维护增量扫描，不占收件箱。',
 }
 const sourceLabel = (k) => PERCEPT_SOURCE_LABELS[k] || k
 const sourceHint = (k) => SOURCE_HINTS[k] || ''
@@ -847,6 +991,138 @@ async function loadAudit() {
     message.error(String(e))
   } finally {
     busy.value.audit = false
+  }
+}
+
+// ── 活动总线（只读调试视图）
+const activityStats = computed(() => store.activityStats)
+const APP_LABELS = {
+  repo: '资料库',
+  reader: '阅读',
+  editor: '编辑',
+  search: '搜索',
+  mail: '邮件',
+  task: '任务',
+  git: 'Git',
+}
+const KIND_LABELS = {
+  open: '打开',
+  read: '阅读',
+  edit: '保存',
+  note: '摘录',
+  highlight: '高亮',
+  search: '搜索',
+  convert: '转换',
+  quiz: '自测',
+}
+
+/** 列表里显示「书名 / 文件名 / 查询串」，原始路径放 title。 */
+const activityTarget = (row) => {
+  let meta = null
+  try {
+    meta = row?.meta ? JSON.parse(row.meta) : null
+  } catch {
+    meta = null
+  }
+  const name = meta?.fileName || meta?.importFileName || ''
+  if (name) return String(name)
+  if (row?.kind === 'search') return String(row.targetId || '')
+  const raw = String(row?.targetId || row?.path || '')
+  if (!raw) return ''
+  const parts = raw.replace(/\\/g, '/').split('/').filter(Boolean)
+  return parts.length ? parts[parts.length - 1] : raw
+}
+
+async function loadActivity() {
+  busy.value.activity = true
+  try {
+    await Promise.all([store.loadActivity({ limit: 80 }), store.refreshActivityStats(7)])
+  } catch (e) {
+    message.error(String(e))
+  } finally {
+    busy.value.activity = false
+  }
+}
+
+// ── 长期记忆
+const MEMORY_KIND_OPTIONS = [
+  { label: '事实', value: 'fact' },
+  { label: '偏好', value: 'preference' },
+  { label: '疑问', value: 'question' },
+  { label: '技能', value: 'skill' },
+  { label: '目标', value: 'goal' },
+]
+const memoryKind = ref('fact')
+const memoryText = ref('')
+const manualMemoryCount = computed(
+  () => store.memories.filter((m) => m.source === 'manual').length,
+)
+const memoryKindLabel = (kind) =>
+  MEMORY_KIND_OPTIONS.find((o) => o.value === kind)?.label || kind
+const memoryTagType = (kind) =>
+  ({
+    preference: 'info',
+    question: 'warning',
+    skill: 'success',
+    goal: 'error',
+  })[kind] || 'default'
+
+async function loadMemories() {
+  await Promise.all([store.loadMemories(), store.loadMemoryFilePath()])
+}
+
+async function addMemory() {
+  const text = memoryText.value.trim()
+  if (!text) return
+  try {
+    await store.addMemory(memoryKind.value, text)
+    memoryText.value = ''
+    message.success('已记住')
+  } catch (e) {
+    message.error(String(e))
+  }
+}
+
+async function forgetMemory(memory) {
+  try {
+    await store.forgetMemory(memory.id)
+    message.success('已忘记')
+  } catch (e) {
+    message.error(String(e))
+  }
+}
+
+async function consolidateMemory() {
+  try {
+    const r = await store.consolidateMemory()
+    message.success(`巩固完成：新增 ${r.created}，合并 ${r.merged}，退休 ${r.retired}`)
+  } catch (e) {
+    message.error(String(e))
+  }
+}
+
+// ── 引证排序器
+async function trainRanker() {
+  try {
+    const r = await store.trainRanker()
+    if (r.accepted) {
+      message.success(
+        `排序器 v${r.version} 已生效：AUC ${r.auc.toFixed(3)}（基线 ${r.aucBase.toFixed(3)}）`,
+      )
+    } else {
+      message.info(`未过门禁：${r.note}`)
+    }
+  } catch (e) {
+    message.error(String(e))
+  }
+}
+
+async function resetRanker() {
+  try {
+    await store.resetRanker()
+    message.success('已回滚：召回按纯 RRF')
+  } catch (e) {
+    message.error(String(e))
   }
 }
 
@@ -1066,7 +1342,7 @@ async function removeBelief(id) {
 
 onMounted(async () => {
   await store.refreshStatus()
-  await Promise.all([store.refreshSources(), store.refreshTools()])
+  await Promise.all([store.refreshSources(), store.refreshTools(), loadMemories(), store.loadRankerStatus()])
   try {
     const summaries = await invoke('kg_kb_summaries')
     kbOptions.value = (summaries || [])
@@ -1369,8 +1645,103 @@ onMounted(async () => {
   flex: 0 0 auto;
   width: 56px;
 }
+
 .cog-eval.ok .cog-eval-tag {
   color: #5b9e6a;
+}
+
+/* 活动总线调试视图：与工具审计同一套行样式。 */
+.cog-activity {
+  margin-top: 8px;
+  max-height: 300px;
+  overflow: auto;
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.cog-activity-row {
+  display: flex;
+  gap: 10px;
+  padding: 3px 0;
+  border-bottom: 1px solid var(--guaxi-border);
+}
+
+.cog-activity-at {
+  flex: 0 0 auto;
+  width: 118px;
+  color: var(--guaxi-text-secondary);
+}
+
+.cog-activity-app {
+  flex: 0 0 auto;
+  width: 52px;
+  color: var(--guaxi-text-secondary);
+}
+
+.cog-activity-kind {
+  flex: 0 0 auto;
+  width: 42px;
+  color: var(--guaxi-text-secondary);
+}
+
+.cog-activity-target {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cog-activity-progress {
+  flex: 0 0 auto;
+  width: 46px;
+  text-align: right;
+  color: var(--guaxi-text-secondary);
+}
+
+/* 长期记忆 */
+.memory-add {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin: 10px 0 6px;
+}
+
+.memory-add :deep(.n-input) {
+  flex: 1 1 260px;
+  min-width: 200px;
+}
+
+.memory-list {
+  margin-top: 8px;
+  max-height: 320px;
+  overflow: auto;
+  font-size: 12.5px;
+}
+
+.memory-row {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--guaxi-border);
+}
+
+.memory-text {
+  flex: 1 1 auto;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  white-space: normal;
+  line-height: 1.5;
+}
+
+.memory-meta {
+  flex: 0 0 auto;
+  width: 86px;
+  text-align: right;
+  color: var(--guaxi-text-secondary);
 }
 .cog-eval-m {
   flex: 0 0 auto;

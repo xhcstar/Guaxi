@@ -9,7 +9,7 @@
 //! 写入必须廉价且绝不失败上抛——记轨迹不能拖垮主流程，所有写入错误只记日志。
 
 use crate::cognition::store::{blob_to_vec, ensure_db, now_iso, vec_to_blob};
-use rusqlite::params;
+use rusqlite::{params, OptionalExtension};
 use serde::Serialize;
 use tracing::warn;
 
@@ -32,6 +32,9 @@ pub struct Citation {
     pub line: Option<i64>,
     /// 片段正文（已截断）。
     pub snippet: String,
+    /// 召回时算好的排序特征（JSON 数组）。只给训练用，不对外序列化。
+    #[serde(skip)]
+    pub features: Option<String>,
 }
 
 /// 情节列表项（审计视图）。
@@ -129,8 +132,8 @@ pub fn record_citations(episode_id: &str, cites: &[Citation]) {
     let Ok(conn) = ensure_db() else { return };
     for c in cites {
         if let Err(e) = conn.execute(
-            "INSERT INTO citations(episode_id,ref_kind,ref_id,kb_name,label,channel,rank,score,at) \
-             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+            "INSERT INTO citations(episode_id,ref_kind,ref_id,kb_name,label,channel,rank,score,at,features) \
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
             params![
                 episode_id,
                 c.ref_kind,
@@ -140,7 +143,8 @@ pub fn record_citations(episode_id: &str, cites: &[Citation]) {
                 c.channel,
                 c.rank as i64,
                 c.score,
-                now_iso()
+                now_iso(),
+                c.features
             ],
         ) {
             warn!("[cognition] 引证写入失败: {}", e);
@@ -150,6 +154,19 @@ pub fn record_citations(episode_id: &str, cites: &[Citation]) {
         "UPDATE episodes SET recall_used=?2 WHERE id=?1",
         params![episode_id, cites.len() as i64],
     );
+}
+
+/// 某段情节的开始时间（引证排序特征用：新旧是很强的先验）。
+pub fn started_at(id: &str) -> Option<String> {
+    let conn = ensure_db().ok()?;
+    conn.query_row(
+        "SELECT started_at FROM episodes WHERE id=?1",
+        params![id],
+        |r| r.get::<_, String>(0),
+    )
+    .optional()
+    .ok()
+    .flatten()
 }
 
 /// 答案里是否引用了某条引证。

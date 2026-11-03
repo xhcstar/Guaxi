@@ -1282,6 +1282,23 @@ async fn app_main() {
             cognition::commands::cognition_percept_ingest,
             cognition::commands::cognition_percept_set_state,
             cognition::commands::cognition_percept_get,
+            // 活动总线：行为轨迹的批量上报与调试视图（M1：Repo 打开/阅读/摘录/搜索/保存）
+            cognition::commands::cognition_activity_log,
+            cognition::commands::cognition_activity_recent,
+            cognition::commands::cognition_activity_stats,
+            // 长期记忆：CRUD、手动巩固与 memory.md 路径
+            cognition::commands::cognition_memory_list,
+            cognition::commands::cognition_memory_add,
+            cognition::commands::cognition_memory_forget,
+            cognition::commands::cognition_memory_consolidate,
+            cognition::commands::cognition_memory_file_path,
+            // 学习状态：主题掌握度看板与手动重算
+            cognition::commands::cognition_learning_overview,
+            cognition::commands::cognition_learning_refresh,
+            // 引证排序器：状态、训练（过门禁才落库）、回滚
+            cognition::commands::cognition_ranker_status,
+            cognition::commands::cognition_ranker_train,
+            cognition::commands::cognition_ranker_reset,
             cognition::commands::cognition_score_percepts,
             cognition::commands::cognition_recall,
             cognition::commands::cognition_nudge_list,

@@ -486,6 +486,7 @@ import wandIcon from '@iconify-icons/lucide/wand-2'
 import { openPath, openUrl } from '@tauri-apps/plugin-opener'
 import { createLogger } from '../../utils/logger'
 import { usePageTranslate, splitIntoParagraphs } from '../../composables/usePageTranslate'
+import { trackReaderProgress } from '../../composables/useActivityBeacon'
 import { useSelectionReadAloud } from '../../composables/useSelectionReadAloud'
 import { useRightSiderStore } from '../../stores/rightSiderStore'
 import { useSiderStore } from '../../stores/useSiderStore'
@@ -665,6 +666,14 @@ const savePdfPositionNow = () => {
   } catch (error) {
     logger.debug('[ReaderPane] save pdf position failed', { error: String(error?.message || error) })
   }
+  // 活动总线：PDF 读到整本的哪个比例。节流在采集器里（同一本书 45 秒一条）。
+  trackReaderProgress({
+    filePath: props.path,
+    fileName: props.fileName,
+    progress: ratio,
+    page: pdfCurrentPage.value,
+    extra: { format: 'pdf' },
+  })
 }
 
 const scheduleSavePdfPosition = () => {

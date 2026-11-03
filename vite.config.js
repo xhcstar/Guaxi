@@ -38,6 +38,8 @@ const READER_SUBTREE_PATHS = [
   // 不钉进 reader-core 就会被 Rollup 归到主应用入口 chunk，阅读窗口随之把
   // 整个主应用拉起来（见下方 manualChunks 的说明）。
   "/src/composables/useBilingualPreview.js",
+  // 活动总线采集器：阅读器里也要上报「读到哪了」，同样属于阅读器子树的静态依赖。
+  "/src/composables/useActivityBeacon.js",
   "/src/utils/readaloudEvents.js",
   "/src/utils/textOffsets.js",
   "/src/utils/logger.js",
