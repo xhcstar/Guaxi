@@ -419,6 +419,11 @@ async fn produce_due(report: &mut DeliberateReport) {
     let soon = (chrono::Local::now() + chrono::Duration::days(2))
         .format("%Y-%m-%d")
         .to_string();
+    // 任务接入的分类白名单：用户可以让工作待办不进大脑。空数组 = 全部关闭。
+    let allowed = crate::cognition::tasks::allowed_categories();
+    if allowed.is_empty() {
+        return;
+    }
     let tasks = match crate::commands::taskmanager::query_blocks(
         &crate::commands::taskmanager::TaskQuery {
             category: None,
@@ -437,7 +442,11 @@ async fn produce_due(report: &mut DeliberateReport) {
     };
     let mut due: Vec<_> = tasks
         .into_iter()
-        .filter(|t| !t.done && !t.deadline.trim().is_empty())
+        .filter(|t| {
+            !t.done
+                && !t.deadline.trim().is_empty()
+                && allowed.iter().any(|c| c == &t.manage_type)
+        })
         .collect();
     due.sort_by(|a, b| a.deadline.cmp(&b.deadline));
     if due.is_empty() {

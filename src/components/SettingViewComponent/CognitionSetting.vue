@@ -211,6 +211,34 @@
           还没有记忆。跑一次巩固，或者在输入框里手动记一条。
         </div>
       </n-collapse-item>
+      <n-collapse-item name="tasks">
+        <template #header>
+          <span class="cog-sec"><n-icon :component="CalendarClock20Regular" />任务接入</span>
+        </template>
+        <div class="cog-note">
+          大脑的「任务」页签与到期提醒只读这里打开的分类。<b>关掉一类，它就不会出现在大脑里，
+          也不会再生成到期提醒</b>；任务管理本身不受影响。例如只留「生活 / 学习」，工作待办就留在
+          大脑之外。
+        </div>
+        <div class="cog-rows">
+          <div v-for="c in taskCategories?.categories || []" :key="c.key" class="cog-row">
+            <div class="cog-row-main">
+              <div class="cog-row-label">{{ c.label }}</div>
+              <div class="cog-row-hint">{{ taskCategoryHint(c.key) }}</div>
+            </div>
+            <n-switch
+              size="small"
+              :value="c.enabled"
+              @update:value="(v) => setTaskCategory(c.key, v)"
+            />
+          </div>
+        </div>
+        <div class="cog-row-hint">
+          当前接入：{{ taskCategories?.allowed?.length
+            ? taskCategories.allowed.map(taskCategoryLabel).join(' / ')
+            : '无（全部关闭）' }}
+        </div>
+      </n-collapse-item>
       <n-collapse-item name="budget">
         <template #header>
           <span class="cog-sec"><n-icon :component="Alert20Regular" />打扰与预算</span>
@@ -770,6 +798,7 @@ import {
   Beaker20Regular,
   BrainCircuit20Regular,
   Broom20Regular,
+  CalendarClock20Regular,
   Copy20Regular,
   Cursor20Regular,
   Database20Regular,
@@ -1126,6 +1155,28 @@ async function resetRanker() {
   }
 }
 
+// ── 任务接入
+const taskCategories = computed(() => store.taskCategories)
+const TASK_CATEGORY_HINTS = {
+  work: '工作待办。默认接入；不想让工作进入大脑就关掉它。',
+  life: '生活待办。',
+  study: '学习待办。',
+}
+const taskCategoryHint = (key) => TASK_CATEGORY_HINTS[key] || ''
+const taskCategoryLabel = (key) =>
+  store.taskCategories?.categories?.find((c) => c.key === key)?.label || key
+
+async function setTaskCategory(key, enabled) {
+  const allowed = new Set(store.taskCategories?.allowed || [])
+  if (enabled) allowed.add(key)
+  else allowed.delete(key)
+  try {
+    await store.setTaskCategories([...allowed])
+  } catch (e) {
+    message.error(String(e))
+  }
+}
+
 async function loadMcp() {
   busy.value.mcp = true
   try {
@@ -1342,7 +1393,13 @@ async function removeBelief(id) {
 
 onMounted(async () => {
   await store.refreshStatus()
-  await Promise.all([store.refreshSources(), store.refreshTools(), loadMemories(), store.loadRankerStatus()])
+  await Promise.all([
+    store.refreshSources(),
+    store.refreshTools(),
+    loadMemories(),
+    store.loadRankerStatus(),
+    store.loadTaskCategories(),
+  ])
   try {
     const summaries = await invoke('kg_kb_summaries')
     kbOptions.value = (summaries || [])

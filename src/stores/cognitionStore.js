@@ -96,6 +96,11 @@ export const useCognitionStore = defineStore('cognitionStore', {
     rankerStatus: null,
     rankerBusy: false,
 
+    /** 任务接入：分类白名单与大脑任务概览。 */
+    taskCategories: null,
+    taskOverview: null,
+    taskLoading: false,
+
     /** 当前会话的接地引证：episodeId -> citations[]。 */
     groundedByEpisode: {},
     /** 最近一次接地（供聊天视图直接渲染）。 */
@@ -743,6 +748,35 @@ export const useCognitionStore = defineStore('cognitionStore', {
     async resetRanker() {
       await invoke('cognition_ranker_reset')
       await this.loadRankerStatus()
+    },
+
+    // ── 任务接入
+
+    async loadTaskCategories() {
+      try {
+        this.taskCategories = await invoke('cognition_task_categories')
+      } catch (e) {
+        logger.warn('cognition_task_categories failed', e)
+        this.taskCategories = null
+      }
+    },
+
+    async loadTasks(days = 7) {
+      this.taskLoading = true
+      try {
+        this.taskOverview = await invoke('cognition_task_overview', { days })
+      } catch (e) {
+        logger.warn('cognition_task_overview failed', e)
+        this.taskOverview = null
+      } finally {
+        this.taskLoading = false
+      }
+    },
+
+    /** 设置接入哪些分类。空数组 = 全部关闭；写入后立刻重取概览。 */
+    async setTaskCategories(categories) {
+      await invoke('cognition_set_task_categories', { categories })
+      await Promise.all([this.loadTaskCategories(), this.loadTasks()])
     },
 
     /** 首屏一次性拉齐看板需要的东西。 */

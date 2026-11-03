@@ -51,6 +51,7 @@ pub mod recall;
 pub mod runtime;
 pub mod store;
 pub mod tools;
+pub mod tasks;
 
 pub use runtime::{init_app_handle, shutdown, start_background_loops};
 pub use hooks::{hook_agent_start, hook_chat_failed, hook_chat_start, hook_percept};

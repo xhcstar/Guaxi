@@ -569,6 +569,70 @@
         </div>
       </n-tab-pane>
 
+      <!--
+        任务：只读接入白名单里的分类（设置里可逐类关闭，比如把 work 留在大脑之外）。
+        到期提醒也走同一份白名单，因此这里的开关同时决定"大脑会不会为工作待办提醒你"。
+      -->
+      <n-tab-pane name="tasks">
+        <template #tab>
+          <span class="cog-tab"><n-icon :component="CalendarClock20Regular" />任务</span>
+        </template>
+        <div ref="taskRootEl" class="task-root">
+          <div class="task-intro">
+            <div class="task-cats">
+              <button
+                v-for="c in taskCategories?.categories || []"
+                :key="c.key"
+                type="button"
+                class="task-cat"
+                :class="{ on: c.enabled }"
+                :title="c.enabled ? `已接入：${c.label}任务会出现在大脑与到期提醒里` : `未接入：${c.label}任务不会进入大脑`"
+                @click="toggleTaskCategory(c.key)"
+              >
+                {{ c.label }}<i>{{ c.enabled ? '接入' : '不接入' }}</i>
+              </button>
+            </div>
+            <n-button size="tiny" quaternary @click="openTaskManager">打开任务管理</n-button>
+            <GuaxiIconButton
+              icon-only
+              quaternary
+              :icon="ArrowSync20Regular"
+              label="刷新任务"
+              hint="重新读取接入分类里的到期任务。分类开关一改，到期提醒也会按新白名单重算。"
+              :loading="store.taskLoading"
+              @click="store.loadTasks()"
+            />
+          </div>
+          <div class="task-summary">
+            <span><b>{{ taskOverview?.overdue ?? 0 }}</b>已过期</span>
+            <span><b>{{ taskOverview?.dueToday ?? 0 }}</b>今天</span>
+            <span><b>{{ taskOverview?.dueSoon ?? 0 }}</b>接下来 {{ taskOverview?.windowDays ?? 7 }} 天</span>
+          </div>
+          <n-spin :show="store.taskLoading">
+            <template v-if="taskGroups.length">
+              <section v-for="g in taskGroups" :key="g.key" class="task-group">
+                <div class="task-group-title" :class="g.tone">
+                  {{ g.label }}<i>{{ g.items.length }}</i>
+                </div>
+                <div v-for="t in g.items" :key="t.internalId" class="task-row">
+                  <span class="task-date">{{ shortDate(t.deadline) }}</span>
+                  <span class="task-title" :class="{ overdue: t.overdue }" :title="t.title">{{ t.title }}</span>
+                  <span class="task-meta">
+                    {{ t.categoryLabel }}<template v-if="t.priority"> · P{{ t.priority }}</template> · {{ t.status }}
+                  </span>
+                </div>
+              </section>
+            </template>
+            <div v-else-if="!taskAllowed.length" class="cog-empty">
+              任务接入已全部关闭。打开上面的分类开关，或到设置 → 认知层 → 任务接入里调整。
+            </div>
+            <div v-else class="cog-empty">
+              接入的分类里，未来 {{ taskOverview?.windowDays ?? 7 }} 天没有到期任务；无截止日期的条目留在任务管理里。
+            </div>
+          </n-spin>
+        </div>
+      </n-tab-pane>
+
       <n-tab-pane name="brief">
         <template #tab>
           <span class="cog-tab"><n-icon :component="News20Regular" />简报</span>
@@ -1017,15 +1081,57 @@ const refreshLearning = async () => {
     message.error(String(e))
   }
 }
+
+// ── 任务接入
+const taskRootEl = ref(null)
+const taskCategories = computed(() => store.taskCategories)
+const taskOverview = computed(() => store.taskOverview)
+const taskAllowed = computed(() => store.taskCategories?.allowed || [])
+const todayKey = () => {
+  const d = new Date()
+  const pad = (n) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+}
+const shortDate = (iso) => String(iso || '').slice(5)
+const taskGroups = computed(() => {
+  const items = store.taskOverview?.items || []
+  const today = todayKey()
+  const overdue = items.filter((t) => t.overdue)
+  const dueToday = items.filter((t) => !t.overdue && t.deadline === today)
+  const soon = items.filter((t) => !t.overdue && t.deadline !== today)
+  return [
+    { key: 'overdue', label: '已过期', tone: 'is-overdue', items: overdue },
+    { key: 'today', label: '今天', tone: '', items: dueToday },
+    { key: 'soon', label: '接下来', tone: '', items: soon },
+  ].filter((g) => g.items.length)
+})
+const toggleTaskCategory = async (key) => {
+  const allowed = new Set(store.taskCategories?.allowed || [])
+  if (allowed.has(key)) allowed.delete(key)
+  else allowed.add(key)
+  try {
+    await store.setTaskCategories([...allowed])
+  } catch (e) {
+    message.error(String(e))
+  }
+}
+const openTaskManager = () => {
+  window.location.hash = '/task-manager'
+}
+
 watch(tab, async (value) => {
-  if (value !== 'learning') return
-  // 页签共用同一个滚动容器：从长列表切过来时保留旧 scrollTop，会把顶部的统计卡
-  // 滚出视野（截图里只看到半截掌握带）。每次进入学习页签都回到顶部。
   await nextTick()
-  const pane = learningRootEl.value?.closest('.n-tab-pane') || learningRootEl.value?.parentElement
+  // 页签共用滚动容器：切换后回到顶部，避免上一条长列表的 scrollTop 带过来。
+  const root =
+    value === 'learning' ? learningRootEl.value : value === 'tasks' ? taskRootEl.value : null
+  const pane = root?.closest('.n-tab-pane') || root?.parentElement
   if (pane) pane.scrollTop = 0
-  // 只在概览过期时重算，避免来回切页签反复扫全表；30 秒内的点击不重复触发。
-  void store.refreshLearningIfStale(30)
+  if (value === 'learning') {
+    void store.refreshLearningIfStale(30)
+  } else if (value === 'tasks') {
+    if (!store.taskCategories) void store.loadTaskCategories()
+    void store.loadTasks()
+  }
 })
 
 const CHANNELS = {
@@ -1248,6 +1354,10 @@ onActivated(() => {
   }
   if (tab.value === 'learning') {
     void store.refreshLearningIfStale(30)
+  }
+  if (tab.value === 'tasks') {
+    if (!store.taskCategories) void store.loadTaskCategories()
+    void store.loadTasks()
   }
 })
 
@@ -1835,4 +1945,525 @@ onUnmounted(() => {
   text-decoration: underline dotted;
 }
 .today-link:hover { text-decoration-style: solid; }
+
+/* ════════════════════════════════════════════════════════════════
+ * 「观测台账本」皮肤（仅大脑页）
+ *
+ * 这一页的内容都是"按时间发生的记录"：提醒、读完、到期、摘录。卡片会把它
+ * 切成互不相关的方块；台账本用横向细线与留白表达同一条时间轴上的条目。
+ * 标题用衬线（阅读与记录感），数据与元信息用等宽（仪器感），黄铜色只表示
+ * "当前与注意力"，其余一律石墨与纸面。圆角只保留 2px 给标签。
+ * ════════════════════════════════════════════════════════════════ */
+.cog-inbox {
+  --cog-rule: color-mix(in srgb, var(--guaxi-text-primary) 12%, transparent);
+  --cog-rule-strong: color-mix(in srgb, var(--guaxi-text-primary) 22%, transparent);
+  --cog-brass: #8f7226;
+  --cog-alert: #a63d40;
+  --cog-wash: color-mix(in srgb, var(--guaxi-text-primary) 4%, transparent);
+  --cog-display: 'Noto Serif SC', 'Source Han Serif SC', 'Songti SC', 'SimSun', Georgia, 'Times New Roman', serif;
+  --cog-mono: var(--guaxi-editor-font-family);
+  padding: 12px 16px;
+}
+:global(:root[data-guaxi-theme='dark']) .cog-inbox,
+:global(html.dark-mode) .cog-inbox {
+  --cog-brass: #d2ae63;
+  --cog-alert: #d37862;
+}
+
+/* ── 顶部信号条：标签压平，指标之间用竖线分隔 ── */
+.cog-bar {
+  padding: 0 0 10px;
+  margin-bottom: 2px;
+  border-bottom: 1px solid var(--cog-rule);
+  gap: 10px;
+}
+.cog-bar-left {
+  gap: 0;
+  font-size: 11.5px;
+}
+.cog-bar-left :deep(.n-tag) {
+  margin-right: 10px;
+  border: 1px solid var(--cog-rule-strong);
+  border-radius: 2px;
+  background: transparent;
+  font-family: var(--cog-mono);
+  font-size: 10.5px;
+}
+.cog-metric {
+  padding: 0 12px;
+  border-left: 1px solid var(--cog-rule);
+  line-height: 1.5;
+}
+.cog-bar-left :deep(.n-tag) + .cog-metric {
+  border-left: 0;
+  padding-left: 0;
+}
+.cog-metric b {
+  font-family: var(--cog-mono);
+  font-size: 13px;
+  color: var(--guaxi-text-primary);
+  margin: 0 2px;
+}
+.cog-metric :deep(.n-icon) {
+  font-size: 13px;
+  margin-right: 4px;
+  opacity: 0.55;
+}
+.cog-bar-right :deep(.n-button) {
+  border-radius: 2px;
+}
+
+/* ── 页签：细底线 + 黄铜指示条 ── */
+.cog-tabs :deep(.n-tabs-nav) {
+  border-bottom: 1px solid var(--cog-rule);
+}
+.cog-tabs :deep(.n-tabs-tab) {
+  padding: 6px 2px 9px;
+  margin-right: 24px;
+  font-size: 13px;
+  color: var(--guaxi-text-secondary);
+  transition: color 0.15s ease;
+}
+.cog-tabs :deep(.n-tabs-tab.n-tabs-tab--active) {
+  color: var(--guaxi-text-primary);
+}
+.cog-tabs :deep(.n-tabs-bar) {
+  height: 2px;
+  background: var(--cog-brass);
+}
+.cog-tabs :deep(.n-tab-pane) {
+  padding-top: 10px;
+}
+
+/* ── 今日：日期做刊头，条目是台账行 ── */
+.today-head {
+  margin: 14px 0 8px;
+}
+.today-date {
+  font-family: var(--cog-display);
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  line-height: 1.25;
+}
+.today-meta {
+  font-family: var(--cog-mono);
+  font-size: 11px;
+}
+.today-brief {
+  align-items: baseline;
+  gap: 12px;
+  padding: 6px 0 6px 12px;
+  margin: 10px 0 14px;
+  border: 0;
+  border-left: 2px solid var(--cog-brass);
+  border-radius: 0;
+  background: transparent;
+}
+.today-brief-label {
+  font-family: var(--cog-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+}
+.today-brief-text {
+  font-size: 13px;
+  line-height: 1.7;
+}
+.today-item {
+  gap: 12px;
+  padding: 13px 0;
+  margin: 0;
+  border: 0;
+  border-bottom: 1px solid var(--cog-rule);
+  border-radius: 0;
+  background: transparent;
+}
+.today-item:hover {
+  background: var(--cog-wash);
+}
+.today-dot {
+  width: 2px;
+  height: 30px;
+  border-radius: 0;
+  opacity: 0.9;
+}
+.today-title {
+  font-family: var(--cog-display);
+  font-size: 15.5px;
+  font-weight: 600;
+}
+.today-sub {
+  font-family: var(--cog-mono);
+  font-size: 10.5px;
+  margin-top: 2px;
+}
+.today-actions {
+  opacity: 0.72;
+  transition: opacity 0.15s ease;
+}
+.today-item:hover .today-actions,
+.today-item:focus-within .today-actions {
+  opacity: 1;
+}
+.today-foot {
+  justify-content: flex-start;
+  padding: 10px 0 14px;
+  border-top: 1px solid var(--cog-rule);
+}
+
+/* ── 提醒 / 感知：无卡片，只有一条条带日期的记录 ── */
+.cog-card {
+  border: 0;
+  border-bottom: 1px solid var(--cog-rule);
+  border-radius: 0;
+  padding: 14px 0 13px;
+  margin: 0;
+}
+.cog-card:hover {
+  background: var(--cog-wash);
+}
+.cog-card-title {
+  font-family: var(--cog-display);
+  font-size: 15.5px;
+}
+.cog-card-head :deep(.n-tag) {
+  border: 1px solid var(--cog-rule);
+  border-radius: 2px;
+  background: transparent;
+  font-family: var(--cog-mono);
+  font-size: 10.5px;
+}
+.cog-card-score {
+  font-family: var(--cog-mono);
+  font-size: 11.5px;
+}
+.cog-card-body {
+  font-size: 13px;
+  line-height: 1.8;
+}
+.cog-untrusted {
+  border-left: 2px solid var(--cog-alert);
+  padding-left: 10px;
+}
+.cog-why {
+  border-left: 1px solid var(--cog-rule);
+  padding-left: 12px;
+  font-size: 12px;
+}
+.cog-refs {
+  gap: 14px;
+}
+.cog-ref {
+  padding: 0;
+  border: 0;
+  border-bottom: 1px dotted var(--cog-rule-strong);
+  border-radius: 0;
+  color: var(--guaxi-text-secondary);
+  font-family: var(--cog-mono);
+  font-size: 11.5px;
+}
+.cog-ref:hover {
+  border-color: var(--cog-brass);
+  color: var(--cog-brass);
+}
+.cog-card-actions {
+  margin-top: 10px;
+  flex-wrap: wrap;
+  opacity: 0.72;
+  transition: opacity 0.15s ease;
+}
+.cog-card:hover .cog-card-actions,
+.cog-card:focus-within .cog-card-actions {
+  opacity: 1;
+}
+.cog-card-actions :deep(.n-button),
+.cog-actions :deep(.n-button),
+.today-actions :deep(.n-button) {
+  border-radius: 2px;
+}
+.cog-meters {
+  font-family: var(--cog-mono);
+  font-size: 11px;
+  gap: 14px;
+}
+
+/* ── 学习：统计变成一条仪表带，主题是带刻度的心得清单 ── */
+.learn-root {
+  padding-bottom: 24px;
+}
+.learn-stats {
+  flex-wrap: nowrap;
+  gap: 0;
+  margin: 14px 0 8px;
+  border-top: 1px solid var(--cog-rule);
+  border-bottom: 1px solid var(--cog-rule);
+}
+.learn-stat {
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 12px 16px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+.learn-stat + .learn-stat {
+  border-left: 1px solid var(--cog-rule);
+}
+.learn-stat b {
+  font-family: var(--cog-mono);
+  font-size: 26px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+}
+.learn-stat span {
+  font-size: 11px;
+}
+.learn-bands {
+  gap: 16px;
+  margin: 8px 0 2px;
+  font-family: var(--cog-mono);
+  font-size: 10.5px;
+}
+.learn-band {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  border-radius: 0;
+  background: none;
+}
+.learn-band::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.72;
+}
+.learn-updated {
+  font-size: 10.5px;
+}
+.learn-actions {
+  margin: 8px 0 16px;
+}
+.learn-actions :deep(.n-button) {
+  border-radius: 2px;
+}
+.learn-actions-hint {
+  font-family: var(--cog-mono);
+  font-size: 10.5px;
+}
+.learn-section-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 20px 0 8px;
+  font-family: var(--cog-display);
+  font-size: 15px;
+  font-weight: 600;
+}
+.learn-section-title::after {
+  content: '';
+  flex: 1 1 auto;
+  height: 1px;
+  background: var(--cog-rule);
+}
+.learn-topic-name {
+  font-family: var(--cog-display);
+  font-size: 13.5px;
+}
+.learn-topic-bar {
+  height: 3px;
+  border-radius: 0;
+  background: var(--cog-rule);
+}
+.learn-topic-bar b {
+  border-radius: 0;
+  background: var(--cog-brass);
+  transition: width 0.4s ease;
+}
+.learn-topic-pct {
+  font-family: var(--cog-mono);
+  font-size: 11.5px;
+}
+.learn-topic-meta {
+  font-family: var(--cog-mono);
+  font-size: 10.5px;
+}
+.learn-due-row,
+.learn-finished-row {
+  border-bottom: 1px solid var(--cog-rule);
+}
+.learn-due-name,
+.learn-finished-title {
+  font-family: var(--cog-display);
+  font-size: 13.5px;
+}
+.learn-due-meta,
+.learn-finished-meta {
+  font-family: var(--cog-mono);
+  font-size: 10.5px;
+}
+
+/* ── 任务：分类是开关，条目与学习同一套台账行 ── */
+.task-root {
+  padding-bottom: 24px;
+}
+.task-intro {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 14px 0 10px;
+}
+.task-cats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.task-cat {
+  appearance: none;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 4px 10px;
+  border: 1px solid var(--cog-rule-strong);
+  border-radius: 2px;
+  background: transparent;
+  color: var(--guaxi-text-secondary);
+  font-family: var(--cog-mono);
+  font-size: 11px;
+  cursor: pointer;
+}
+.task-cat i {
+  font-style: normal;
+  font-size: 10px;
+  opacity: 0.65;
+}
+.task-cat:hover {
+  border-color: var(--cog-brass);
+}
+.task-cat.on {
+  border-color: var(--cog-brass);
+  color: var(--guaxi-text-primary);
+  box-shadow: inset 0 -2px 0 var(--cog-brass);
+}
+.task-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 20px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--cog-rule);
+  font-family: var(--cog-mono);
+  font-size: 10.5px;
+  color: var(--guaxi-text-secondary);
+}
+.task-summary b {
+  margin-right: 4px;
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--guaxi-text-primary);
+}
+.task-group-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 18px 0 4px;
+  font-family: var(--cog-display);
+  font-size: 14.5px;
+  font-weight: 600;
+}
+.task-group-title::after {
+  content: '';
+  flex: 1 1 auto;
+  height: 1px;
+  background: var(--cog-rule);
+}
+.task-group-title i {
+  font-family: var(--cog-mono);
+  font-style: normal;
+  font-size: 10.5px;
+  color: var(--guaxi-text-secondary);
+}
+.task-group-title.is-overdue {
+  color: var(--cog-alert);
+}
+.task-row {
+  display: grid;
+  grid-template-columns: 58px minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: baseline;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--cog-rule);
+}
+.task-row:hover {
+  background: var(--cog-wash);
+}
+.task-date {
+  font-family: var(--cog-mono);
+  font-size: 10.5px;
+  color: var(--guaxi-text-secondary);
+}
+.task-title {
+  font-family: var(--cog-display);
+  font-size: 14px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.task-title.overdue {
+  color: var(--cog-alert);
+}
+.task-meta {
+  font-family: var(--cog-mono);
+  font-size: 10.5px;
+  color: var(--guaxi-text-secondary);
+  white-space: nowrap;
+}
+
+/* ── 空状态：给方向，不营造气氛 ── */
+.cog-empty {
+  padding: 16px 0;
+  text-align: left;
+  font-family: var(--cog-mono);
+  font-size: 11.5px;
+  line-height: 1.8;
+  color: var(--guaxi-text-secondary);
+  border-bottom: 1px solid var(--cog-rule);
+}
+
+/* ── 一键就绪引导：与台账同一套边线 ── */
+.cog-setup {
+  border: 1px solid var(--cog-rule);
+  border-left: 2px solid var(--cog-brass);
+  border-radius: 0;
+  background: transparent;
+}
+.cog-setup-icon {
+  color: var(--cog-brass);
+}
+
+@media (max-width: 720px) {
+  .learn-stats {
+    flex-wrap: wrap;
+  }
+  .learn-stat {
+    flex-basis: 45%;
+  }
+  .learn-stat + .learn-stat {
+    border-left: 0;
+  }
+  .task-row {
+    grid-template-columns: 52px minmax(0, 1fr);
+  }
+  .task-meta {
+    grid-column: 2;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .learn-topic-bar b {
+    transition: none;
+  }
+}
 </style>

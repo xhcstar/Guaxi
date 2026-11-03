@@ -512,4 +512,111 @@ onActivated(async () => {
 .cog-left :deep(.n-tag) {
   font-family: var(--guaxi-editor-font-family);
 }
+
+/* ════════════════════════════════════════════════════════════════
+ * 台账本皮肤（与正文同一套语言，见 GuaxiCognitionInbox 的皮肤注释）
+ * 左栏只做三件事：显示分类、显示数量、把当前筛选钉在一条黄铜竖线上。
+ * ════════════════════════════════════════════════════════════════ */
+.cog-left {
+  --cog-rule: color-mix(in srgb, var(--guaxi-text-primary) 12%, transparent);
+  --cog-rule-strong: color-mix(in srgb, var(--guaxi-text-primary) 22%, transparent);
+  --cog-brass: #8f7226;
+  --cog-alert: #a63d40;
+  --cog-wash: color-mix(in srgb, var(--guaxi-text-primary) 4%, transparent);
+  --cog-display: 'Noto Serif SC', 'Source Han Serif SC', 'Songti SC', 'SimSun', Georgia, 'Times New Roman', serif;
+  --cog-mono: var(--guaxi-editor-font-family);
+  padding: 12px 14px 24px;
+}
+:global(:root[data-guaxi-theme='dark']) .cog-left,
+:global(html.dark-mode) .cog-left {
+  --cog-brass: #d2ae63;
+  --cog-alert: #d37862;
+}
+
+.cl-head {
+  padding-bottom: 12px;
+  margin-bottom: 2px;
+  border-bottom: 1px solid var(--cog-rule);
+}
+.cl-head-icon {
+  color: var(--cog-brass);
+}
+.cl-title {
+  font-family: var(--cog-display);
+  font-size: 17px;
+  letter-spacing: 0.01em;
+}
+.cog-left :deep(.n-collapse-item__header-main) {
+  font-size: 14px;
+}
+.cl-sec {
+  gap: 8px;
+  font-family: var(--cog-display);
+  font-size: 13.5px;
+  font-weight: 600;
+}
+.cl-sec :deep(.n-icon) {
+  color: var(--cog-brass);
+  opacity: 0.85;
+}
+.cl-sec-num {
+  padding: 0 6px;
+  border: 1px solid var(--cog-rule-strong);
+  border-radius: 2px;
+  background: transparent;
+  font-family: var(--cog-mono);
+  font-size: 10.5px;
+}
+.cl-sec-num.hot {
+  border-color: transparent;
+  background: var(--cog-alert);
+  color: #fff;
+}
+.cl-row {
+  border-radius: 0;
+  padding: 6px 8px;
+}
+.cl-row:hover {
+  background: var(--cog-wash);
+}
+.cl-row.on {
+  background: transparent;
+  color: var(--guaxi-text-primary);
+  box-shadow: inset 2px 0 0 var(--cog-brass);
+}
+.cl-row.on .cl-row-icon {
+  color: var(--cog-brass);
+}
+.cl-row-num {
+  font-family: var(--cog-mono);
+  font-size: 11.5px;
+}
+.cl-unread {
+  border-radius: 2px;
+}
+.cl-empty,
+.cl-note {
+  font-family: var(--cog-mono);
+  font-size: 10.5px;
+  line-height: 1.8;
+}
+.cl-quota {
+  border-top: 1px solid var(--cog-rule);
+}
+.cl-quota-top {
+  font-size: 12px;
+}
+.cl-quota-top b {
+  font-family: var(--cog-mono);
+  font-size: 12.5px;
+}
+.cl-quota-bar {
+  height: 3px;
+  border-radius: 0;
+  background: var(--cog-rule);
+}
+.cl-quota-bar i {
+  border-radius: 0;
+  background: var(--cog-brass);
+}
 </style>

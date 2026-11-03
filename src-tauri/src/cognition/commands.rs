@@ -3,7 +3,7 @@
 //! 命名统一 `cognition_*`，避免与既有 500 多个命令冲突。所有命令都很薄——
 //! 逻辑在各子模块里，这里只做参数适配与错误透传。
 
-use crate::cognition::{activity, belief, brief, episode, evolve, learning, memory, nudge, percept, profile, ranker, recall, runtime, store, tools};
+use crate::cognition::{activity, belief, brief, episode, evolve, learning, memory, nudge, percept, profile, ranker, recall, runtime, store, tasks, tools};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -248,6 +248,26 @@ pub async fn cognition_ranker_train() -> Result<ranker::TrainReport, String> {
 #[tauri::command]
 pub fn cognition_ranker_reset() -> Result<(), String> {
     ranker::reset()
+}
+
+// ───────────────────────── 任务接入 ─────────────────────────
+
+/// 三个分类与当前允许接入的白名单。
+#[tauri::command]
+pub fn cognition_task_categories() -> tasks::TaskCategories {
+    tasks::category_settings()
+}
+
+/// 设置允许接入的分类。传空数组表示全部关闭。
+#[tauri::command]
+pub fn cognition_set_task_categories(categories: Vec<String>) -> Result<Vec<String>, String> {
+    tasks::set_categories(categories)
+}
+
+/// 大脑「任务」页签：白名单分类里未来 N 天内到期或已过期的未完成任务。
+#[tauri::command]
+pub fn cognition_task_overview(days: Option<i64>) -> Result<tasks::TaskOverview, String> {
+    tasks::overview(days)
 }
 
 /// 手动触发一批打分（设置页的"立即处理"按钮）。

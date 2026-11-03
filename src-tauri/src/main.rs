@@ -1299,6 +1299,10 @@ async fn app_main() {
             cognition::commands::cognition_ranker_status,
             cognition::commands::cognition_ranker_train,
             cognition::commands::cognition_ranker_reset,
+            // 任务接入：分类白名单与大脑任务概览
+            cognition::commands::cognition_task_categories,
+            cognition::commands::cognition_set_task_categories,
+            cognition::commands::cognition_task_overview,
             cognition::commands::cognition_score_percepts,
             cognition::commands::cognition_recall,
             cognition::commands::cognition_nudge_list,
