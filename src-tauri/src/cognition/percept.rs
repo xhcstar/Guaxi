@@ -1255,8 +1255,11 @@ pub fn stats() -> Result<PerceptStats, String> {
     s.unread_keep_days =
         crate::cognition::store::get_i64("percept_unread_keep_days", DEFAULT_UNREAD_KEEP_DAYS);
 
+    // 只统计「未处理」的感知：左栏的来源筛选与「全部」用的是同一个口径，
+    // 否则会出现「全部 22，整站抓取 22 + RSS 7」这种自相矛盾的数字。
     if let Ok(mut stmt) = conn.prepare(
-        "SELECT source_kind, COUNT(*) FROM percepts GROUP BY source_kind ORDER BY 2 DESC",
+        "SELECT source_kind, COUNT(*) FROM percepts WHERE state='new' \
+         GROUP BY source_kind ORDER BY 2 DESC",
     ) {
         if let Ok(rows) = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))) {
             s.by_kind = rows.filter_map(|x| x.ok()).collect();

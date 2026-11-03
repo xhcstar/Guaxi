@@ -89,6 +89,8 @@ export const useCognitionStore = defineStore('cognitionStore', {
     learningOverview: null,
     learningLoading: false,
     learningRefreshing: false,
+    /** 上次成功拉取学习概览的时刻（毫秒），用于切页签时的去抖刷新。 */
+    learningLoadedAt: 0,
 
     /** 引证排序器状态（训练/回滚用）。 */
     rankerStatus: null,
@@ -305,6 +307,13 @@ export const useCognitionStore = defineStore('cognitionStore', {
         this.brief = await invoke('cognition_brief_get', { day: day ?? null, kind })
         if (this.brief) {
           await invoke('cognition_brief_mark_opened', { day: this.brief.day, kind })
+          // 左栏的「新」角标与未读数读的是 briefHistory；看完简报要就地翻成已读，
+          // 否则内容区已经读过了，左栏还挂着一个「新」。
+          this.briefHistory = this.briefHistory.map((b) =>
+            b.day === this.brief.day && (b.kind ?? 'morning') === (this.brief.kind ?? kind)
+              ? { ...b, opened: true }
+              : b,
+          )
         }
       } catch (e) {
         logger.warn('cognition_brief_get failed', e)
@@ -680,12 +689,22 @@ export const useCognitionStore = defineStore('cognitionStore', {
       this.learningLoading = true
       try {
         this.learningOverview = await invoke('cognition_learning_overview', { days })
+        this.learningLoadedAt = Date.now()
       } catch (e) {
         logger.warn('cognition_learning_overview failed', e)
         this.learningOverview = null
       } finally {
         this.learningLoading = false
       }
+    },
+
+    /**
+     * 切到学习页签 / 回到大脑页时调用：超过 minIntervalMs 就重算一次掌握度。
+     * 直接调 loadLearning 会吃到 overview 的 10 分钟节流，用户会觉得「刚读完的书没算进去」。
+     */
+    async refreshLearningIfStale(days = 30, minIntervalMs = 30_000) {
+      if (this.learningOverview && Date.now() - this.learningLoadedAt < minIntervalMs) return
+      await this.refreshLearning(days)
     },
 
     async refreshLearning(days = 30) {

@@ -175,7 +175,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onActivated, onMounted, ref } from 'vue'
 import { useMessage } from 'naive-ui'
 import {
   Alert20Regular,
@@ -278,6 +278,15 @@ async function purge() {
 }
 
 onMounted(async () => {
+  await cog.refreshStatus()
+  if (cog.enabled) {
+    await Promise.all([cog.refreshNudges(), cog.refreshBriefHistory()])
+  }
+})
+
+// 大脑页被 KeepAlive 缓存：从阅读器/图谱切回来时，左栏的计数与简报名单要跟上，
+// 否则正文区已经读完/看过的内容，左栏还停在离开时的数字上。
+onActivated(async () => {
   await cog.refreshStatus()
   if (cog.enabled) {
     await Promise.all([cog.refreshNudges(), cog.refreshBriefHistory()])

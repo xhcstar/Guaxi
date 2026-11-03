@@ -493,75 +493,79 @@
         <template #tab>
           <span class="cog-tab"><n-icon :component="Gauge20Regular" />学习</span>
         </template>
-        <div class="learn-stats">
-          <div class="learn-stat">
-            <b>{{ learn?.finishedBooks ?? 0 }}</b>
-            <span>近 {{ learn?.days ?? 30 }} 天读完</span>
-          </div>
-          <div class="learn-stat">
-            <b>{{ learn?.dueReviews ?? 0 }}</b>
-            <span>待复习</span>
-          </div>
-          <div class="learn-stat">
-            <b>{{ learn?.streakDays ?? 0 }}</b>
-            <span>连续阅读天数</span>
-          </div>
-          <div class="learn-stat">
-            <b>{{ learn?.mastered ?? 0 }}/{{ learn?.topicsTotal ?? 0 }}</b>
-            <span>已掌握主题</span>
-          </div>
-        </div>
-        <div class="learn-bands">
-          <span class="learn-band is-weak">待加强 {{ learn?.weak ?? 0 }}</span>
-          <span class="learn-band is-learning">进行中 {{ learn?.learning ?? 0 }}</span>
-          <span class="learn-band is-mastered">已掌握 {{ learn?.mastered ?? 0 }}</span>
-          <span class="learn-updated">更新于 {{ shortTime(learn?.updatedAt) || '—' }}</span>
-        </div>
-
-        <n-spin :show="store.learningLoading">
-          <div class="learn-section-title">该补的</div>
-          <div v-if="weakTopics.length" class="learn-topic-list">
-            <div v-for="t in weakTopics" :key="t.key" class="learn-topic">
-              <span class="learn-topic-name" :title="t.topic">{{ t.topic }}</span>
-              <span class="learn-topic-bar"><b :style="{ width: pct(t.mastery) }"></b></span>
-              <span class="learn-topic-pct">{{ Math.round(t.mastery * 100) }}%</span>
-              <span class="learn-topic-meta">
-                {{ t.source === 'node' ? '复习' : '阅读' }} · {{ t.sessions }} 次
-              </span>
+        <div ref="learningRootEl" class="learn-root">
+          <div class="learn-stats">
+            <div class="learn-stat">
+              <b>{{ learn?.finishedBooks ?? 0 }}</b>
+              <span>近 {{ learn?.days ?? 30 }} 天读完</span>
+            </div>
+            <div class="learn-stat">
+              <b>{{ learn?.dueReviews ?? 0 }}</b>
+              <span>待复习</span>
+            </div>
+            <div class="learn-stat">
+              <b>{{ learn?.streakDays ?? 0 }}</b>
+              <span>连续阅读天数</span>
+            </div>
+            <div class="learn-stat">
+              <b>{{ learn?.mastered ?? 0 }}/{{ learn?.topicsTotal ?? 0 }}</b>
+              <span>已掌握主题</span>
             </div>
           </div>
-          <div v-else class="cog-empty">还没有可统计的主题。读一本书或复习一处笔记后就会出现在这里。</div>
-
-          <div class="learn-section-title">今天该复习</div>
-          <div v-if="learn?.due?.length" class="learn-due">
-            <div v-for="d in learn.due" :key="d.nodeId" class="learn-due-row">
-              <span class="learn-due-name" :title="d.label">{{ d.label }}</span>
-              <span class="learn-due-meta">{{ d.kbName }} · 已复习 {{ d.reps }} 次 · {{ d.dueDate }}</span>
-            </div>
+          <div class="learn-bands">
+            <span class="learn-band is-weak">待加强 {{ learn?.weak ?? 0 }}</span>
+            <span class="learn-band is-learning">进行中 {{ learn?.learning ?? 0 }}</span>
+            <span class="learn-band is-mastered">已掌握 {{ learn?.mastered ?? 0 }}</span>
+            <span class="learn-updated">更新于 {{ shortTime(learn?.updatedAt) || '—' }}</span>
           </div>
-          <div v-else class="cog-empty">今天没有到期的复习。</div>
 
-          <div class="learn-section-title">最近读完</div>
-          <div v-if="learn?.recentFinished?.length" class="learn-finished">
-            <div v-for="(f, i) in learn.recentFinished" :key="i" class="learn-finished-row">
-              <span class="learn-finished-title" :title="f.title">{{ f.title }}</span>
-              <span class="learn-finished-meta">
-                {{ shortTime(f.endedAt) }}<template v-if="f.minutes"> · {{ f.minutes }} 分钟</template>
-              </span>
-            </div>
+          <!-- 操作放在首屏：列表会很长，放到底部时用户要先滚到最后才找得到刷新。 -->
+          <div class="learn-actions">
+            <GuaxiIconButton
+              :icon="ArrowSync20Regular"
+              label="刷新学习状态"
+              hint="重算主题掌握度并读取看板。阅读活动与复习反馈会自动带进来。"
+              :loading="store.learningRefreshing"
+              @click="refreshLearning"
+            />
+            <n-button size="tiny" quaternary @click="tab = 'brief'">去看简报</n-button>
+            <span class="learn-actions-hint">阅读进度、读完情节与复习反馈会自动计入</span>
           </div>
-          <div v-else class="cog-empty">还没有读完的书。</div>
-        </n-spin>
 
-        <div class="cog-actions">
-          <GuaxiIconButton
-            :icon="ArrowSync20Regular"
-            label="刷新学习状态"
-            hint="重算主题掌握度并读取看板。阅读活动与复习反馈会自动带进来。"
-            :loading="store.learningRefreshing"
-            @click="refreshLearning"
-          />
-          <n-button size="tiny" quaternary @click="tab = 'brief'">去看简报</n-button>
+          <n-spin :show="store.learningLoading">
+            <div class="learn-section-title">该补的</div>
+            <div v-if="weakTopics.length" class="learn-topic-list">
+              <div v-for="t in weakTopics" :key="t.key" class="learn-topic">
+                <span class="learn-topic-name" :title="t.topic">{{ t.topic }}</span>
+                <span class="learn-topic-bar"><b :style="{ width: pct(t.mastery) }"></b></span>
+                <span class="learn-topic-pct">{{ Math.round(t.mastery * 100) }}%</span>
+                <span class="learn-topic-meta">
+                  {{ t.source === 'node' ? '复习' : '阅读' }} · {{ t.sessions }} 次
+                </span>
+              </div>
+            </div>
+            <div v-else class="cog-empty">还没有可统计的主题。读一本书或复习一处笔记后就会出现在这里。</div>
+
+            <div class="learn-section-title">今天该复习</div>
+            <div v-if="learn?.due?.length" class="learn-due">
+              <div v-for="d in learn.due" :key="d.nodeId" class="learn-due-row">
+                <span class="learn-due-name" :title="d.label">{{ d.label }}</span>
+                <span class="learn-due-meta">{{ d.kbName }} · 已复习 {{ d.reps }} 次 · {{ d.dueDate }}</span>
+              </div>
+            </div>
+            <div v-else class="cog-empty">今天没有到期的复习。</div>
+
+            <div class="learn-section-title">最近读完</div>
+            <div v-if="learn?.recentFinished?.length" class="learn-finished">
+              <div v-for="(f, i) in learn.recentFinished" :key="i" class="learn-finished-row">
+                <span class="learn-finished-title" :title="f.title">{{ f.title }}</span>
+                <span class="learn-finished-meta">
+                  {{ shortTime(f.endedAt) }}<template v-if="f.minutes"> · {{ f.minutes }} 分钟</template>
+                </span>
+              </div>
+            </div>
+            <div v-else class="cog-empty">还没有读完的书。</div>
+          </n-spin>
         </div>
       </n-tab-pane>
 
@@ -688,7 +692,7 @@
 </template>
 
 <script setup>
-import { computed, onActivated, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onActivated, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useMessage } from 'naive-ui'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
@@ -997,6 +1001,7 @@ const pct = (v) => `${Math.round(Math.max(0, Math.min(1, Number(v) || 0)) * 100)
 
 // ── 学习看板
 const learn = computed(() => store.learningOverview)
+const learningRootEl = ref(null)
 const weakTopics = computed(() =>
   (store.learningOverview?.topics || []).filter((t) => t.mastery < 0.7).slice(0, 8),
 )
@@ -1012,8 +1017,15 @@ const refreshLearning = async () => {
     message.error(String(e))
   }
 }
-watch(tab, (value) => {
-  if (value === 'learning' && !store.learningOverview) void store.loadLearning(30)
+watch(tab, async (value) => {
+  if (value !== 'learning') return
+  // 页签共用同一个滚动容器：从长列表切过来时保留旧 scrollTop，会把顶部的统计卡
+  // 滚出视野（截图里只看到半截掌握带）。每次进入学习页签都回到顶部。
+  await nextTick()
+  const pane = learningRootEl.value?.closest('.n-tab-pane') || learningRootEl.value?.parentElement
+  if (pane) pane.scrollTop = 0
+  // 只在概览过期时重算，避免来回切页签反复扫全表；30 秒内的点击不重复触发。
+  void store.refreshLearningIfStale(30)
 })
 
 const CHANNELS = {
@@ -1182,6 +1194,7 @@ async function reload() {
 let offNudge = null
 let offBrief = null
 let offNoteRefined = null
+let offWindowFocus = null
 
 onMounted(async () => {
   await reload()
@@ -1211,6 +1224,18 @@ onMounted(async () => {
     }
     message.success('摘要已提炼完成')
   })
+  // 阅读器是独立窗口：从那边读完回来，路由没变，onActivated 不会触发。
+  // 主窗口重新获得焦点时，如果正停在「学习」页签，就顺手刷新一次概览。
+  try {
+    const { getCurrentWindow } = await import('@tauri-apps/api/window')
+    offWindowFocus = await getCurrentWindow().onFocusChanged(({ payload }) => {
+      if (payload && tab.value === 'learning') {
+        void store.refreshLearningIfStale(30, 15_000)
+      }
+    })
+  } catch {
+    offWindowFocus = null
+  }
 })
 
 // 中间区被 <KeepAlive> 缓存：从"读文章"切回大脑页时不会重跑 onMounted，
@@ -1222,7 +1247,7 @@ onActivated(() => {
     store.refreshPercepts()
   }
   if (tab.value === 'learning') {
-    void store.loadLearning(30)
+    void store.refreshLearningIfStale(30)
   }
 })
 
@@ -1230,6 +1255,7 @@ onUnmounted(() => {
   if (offNudge) offNudge()
   if (offBrief) offBrief()
   if (offNoteRefined) offNoteRefined()
+  if (offWindowFocus) offWindowFocus()
 })
 </script>
 
@@ -1398,6 +1424,22 @@ onUnmounted(() => {
   flex-wrap: wrap;
   gap: 10px;
   margin: 12px 0 8px;
+}
+
+/* 学习页签的操作行：放在首屏、用 flex 对齐。之前这排按钮落在一个没有样式的
+   普通 div 里，图标与文字按 inline 基线排，视觉上就是错位的。 */
+.learn-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 2px 0 12px;
+}
+
+.learn-actions-hint {
+  margin-left: auto;
+  font-size: 11.5px;
+  color: var(--guaxi-text-secondary);
 }
 
 .learn-stat {
