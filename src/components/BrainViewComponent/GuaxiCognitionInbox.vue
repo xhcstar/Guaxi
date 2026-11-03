@@ -1131,8 +1131,25 @@ const toggleTaskCategory = async (key) => {
     message.error(String(e))
   }
 }
-const openTaskManager = () => {
-  window.location.hash = '/task-manager'
+const openTaskManager = async () => {
+  // 与顶栏入口同一套做法：任务管理在自己的窗口里跑，而不是把主窗口切到
+  // /task-manager 路由。路由方式会把大脑页从「当前工作区」里挤走，而且任务管理
+  // 页是按独立窗口的尺寸与生命周期设计的。
+  try {
+    await invoke('create_task_manager_window', {
+      label: 'task_manager',
+      title: '任务管理面板',
+      theme: settingsStore.appearanceTheme,
+    })
+  } catch (e) {
+    const msg = String(e?.message || e || '')
+    if (msg.includes('已存在')) {
+      message.info('任务管理面板已打开')
+      return
+    }
+    logger.error('打开任务管理面板失败', { error: msg })
+    message.error(`打开任务管理失败：${msg}`)
+  }
 }
 
 // ── 语音播报：把"今天需要你知道的"拼成一段口语稿
