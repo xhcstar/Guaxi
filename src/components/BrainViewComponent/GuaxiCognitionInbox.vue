@@ -31,6 +31,19 @@
           <template #icon><n-icon :component="Warning20Regular" /></template>
           语义服务未就绪，召回与打分暂停
         </n-tag>
+        <!-- 打分失败不再只写日志：把原因放在最显眼处，点一下就能重试。 -->
+        <n-tag
+          v-if="store.pendingScoreCount && st?.scoringLastError"
+          :bordered="false"
+          type="warning"
+          size="small"
+          style="cursor: pointer;"
+          :title="st.scoringLastError"
+          @click="scoreNow"
+        >
+          <template #icon><n-icon :component="Warning20Regular" /></template>
+          {{ store.pendingScoreCount }} 条未打分 · 点此重试
+        </n-tag>
         <span class="cog-metric" title="等你处理的提醒条数">
           <n-icon :component="Alert20Regular" />待处理 <b>{{ store.openNudgeCount }}</b>
         </span>
@@ -74,10 +87,134 @@
           :loading="store.statusLoading"
           @click="reload"
         />
+        <GuaxiIconButton
+          icon-only
+          quaternary
+          :icon="Settings20Regular"
+          label="高级设置"
+          hint="主张抽取、矛盾检测、策略训练与评测都收在设置页的「认知」里。"
+          @click="openAdvancedSettings"
+        />
       </div>
     </div>
 
     <n-tabs v-model:value="tab" type="line" size="small" class="cog-tabs">
+      <!-- 今日：把"该干什么"放在第一屏。提醒和值得读的材料合成一张行动清单，
+           每条就地处理，不再需要在三个 tab 之间来回找。 -->
+      <n-tab-pane name="today">
+        <template #tab>
+          <span class="cog-tab">
+            <n-icon :component="WeatherSunny20Regular" />今日
+          </span>
+        </template>
+        <div class="today-head">
+          <span class="today-date">{{ todayLabel }}</span>
+          <span class="today-meta">
+            提醒 {{ store.openNudgeCount }} · 值得读 {{ store.topPercepts.length }} ·
+            <a
+              v-if="store.pendingScoreCount"
+              class="today-link"
+              :title="st?.scoringLastError || '点击立即给待处理内容打分'"
+              @click="scoreNow"
+            >待打分 {{ store.pendingScoreCount }}</a>
+            <span v-else>待打分 0</span>
+          </span>
+        </div>
+        <!-- 简报开场一句话：每日先看结论，再决定展开或直接处理下面的清单。 -->
+        <div v-if="briefTeaser" class="today-brief">
+          <span class="today-brief-label">今日简报</span>
+          <span class="today-brief-text">{{ briefTeaser }}</span>
+          <n-button size="tiny" quaternary @click="tab = 'brief'">展开</n-button>
+        </div>
+        <div v-if="!todayItems.length" class="cog-empty">
+          今天没有必须处理的事。采集和提醒仍会在后台继续，有新内容再来这里。
+        </div>
+        <div v-for="it in todayItems" :key="it.key" class="today-item">
+          <span class="today-dot" :style="{ background: it.color }"></span>
+          <div class="today-body">
+            <div class="today-title">{{ it.title }}</div>
+            <div class="today-sub">{{ it.sub }}</div>
+          </div>
+          <div class="today-actions">
+            <template v-if="it.type === 'nudge'">
+              <GuaxiIconButton
+                v-if="it.data.kind === 'review'"
+                icon-only
+                type="primary"
+                :icon="CheckmarkCircle20Regular"
+                label="还记得"
+                hint="记得住：拉长这条复习提醒的间隔，并采纳它。"
+                @click="reviewAll(it.data, true)"
+              />
+              <GuaxiIconButton
+                v-else
+                icon-only
+                type="primary"
+                :icon="CheckmarkCircle20Regular"
+                label="采纳"
+                hint="这条有用。系统会据此调高同类提醒的权重。"
+                @click="decide(it.data, true)"
+              />
+              <GuaxiIconButton
+                icon-only
+                quaternary
+                :icon="DismissCircle20Regular"
+                label="忽略"
+                hint="这条没用。系统会调低同类提醒，少来烦你。"
+                @click="decide(it.data, false)"
+              />
+              <GuaxiIconButton
+                icon-only
+                quaternary
+                :icon="Open20Regular"
+                label="去看"
+                hint="打开这条提醒引用的内容。"
+                @click="jumpNudge(it.data)"
+              />
+              <GuaxiIconButton
+                v-if="it.data.kind === 'review'"
+                icon-only
+                quaternary
+                :icon="CalendarClock20Regular"
+                label="忘了"
+                hint="把这条复习提醒引用的章节重排到明天。"
+                @click="reviewAll(it.data, false)"
+              />
+            </template>
+            <template v-else>
+              <GuaxiIconButton
+                icon-only
+                type="primary"
+                :icon="BookAdd20Regular"
+                label="提炼成笔记"
+                hint="用模型提炼摘要与要点，写进选定的知识库。"
+                @click="openNoteDialog(it.data)"
+              />
+              <GuaxiIconButton
+                icon-only
+                quaternary
+                :icon="DocumentOnePage20Regular"
+                label="查看全文"
+                hint="在弹窗里读清洗后的全文。"
+                @click="viewFull(it.data)"
+              />
+              <GuaxiIconButton
+                icon-only
+                quaternary
+                :icon="Archive20Regular"
+                label="归档"
+                hint="留着但不再算「未处理」。"
+                @click="setState(it.data, 'archived')"
+              />
+            </template>
+          </div>
+        </div>
+        <div class="today-foot">
+          <n-button size="tiny" quaternary @click="tab = 'brief'">查看今天简报</n-button>
+          <n-button size="tiny" quaternary @click="tab = 'percepts'">打开全部收件箱</n-button>
+        </div>
+      </n-tab-pane>
+
       <n-tab-pane name="nudges">
         <template #tab>
           <span class="cog-tab">
@@ -154,6 +291,16 @@
 
             <div class="cog-card-actions">
               <GuaxiIconButton
+                v-if="n.kind === 'review'"
+                icon-only
+                type="primary"
+                :icon="CheckmarkCircle20Regular"
+                label="还记得"
+                hint="记得住：拉长这条复习提醒的间隔，并采纳它。"
+                @click="reviewAll(n, true)"
+              />
+              <GuaxiIconButton
+                v-else
                 icon-only
                 type="primary"
                 :icon="CheckmarkCircle20Regular"
@@ -177,6 +324,31 @@
                 label="忘了，明天再来"
                 hint="把这条提醒引用的章节全部重排到明天再问，同时缩短它们的复习间隔。"
                 @click="reviewAll(n, false)"
+              />
+              <GuaxiIconButton
+                v-if="n.refs?.length"
+                icon-only
+                quaternary
+                :icon="Open20Regular"
+                label="跳到原文"
+                hint="打开这条提醒引用的那一处内容。"
+                @click="jumpNudge(n)"
+              />
+              <GuaxiIconButton
+                icon-only
+                quaternary
+                :icon="Add20Regular"
+                label="加入任务"
+                hint="把这条提醒写成任务管理里的一条 TODO。"
+                @click="addTask(n)"
+              />
+              <GuaxiIconButton
+                icon-only
+                quaternary
+                :icon="BookQuestionMark20Regular"
+                label="生成自测"
+                hint="根据引用章节出 3 道自测题，答案折叠，先自己回想。"
+                @click="openQuiz(n)"
               />
             </div>
           </div>
@@ -223,7 +395,7 @@
           <div v-if="!store.percepts.length" class="cog-empty">
             这一档没有内容。抓取、采集、本地文件都会自动流入这里。
           </div>
-          <div v-for="p in store.percepts" :key="p.id" class="cog-card">
+          <div v-for="p in visiblePercepts" :key="p.id" class="cog-card">
             <div class="cog-card-head">
               <span class="cog-card-title">{{ p.title || '（无标题）' }}</span>
               <n-tag size="tiny" :bordered="false">
@@ -249,8 +421,8 @@
                 <i class="cog-meter-bar"><b :style="{ width: pct(p.salience) }"></b></i>
               </span>
               <span class="cog-meter" title="新颖度：1 减去与知识库最相近内容的余弦相似度">
-                新颖 {{ p.novelty.toFixed(2) }}
-                <i class="cog-meter-bar"><b class="alt" :style="{ width: pct(p.novelty) }"></b></i>
+                新颖 {{ p.novelty < 0 ? '待打分' : p.novelty.toFixed(2) }}
+                <i class="cog-meter-bar"><b class="alt" :style="{ width: pct(p.novelty < 0 ? 0 : p.novelty) }"></b></i>
               </span>
               <span v-if="p.anchorNodeId" class="cog-meter" :title="p.anchorNodeId">
                 <n-icon :component="Link20Regular" />已锚定到知识库
@@ -261,6 +433,14 @@
               v-html="perceptHtml[p.id] || escapeText(p.excerpt)"></div>
 
             <div class="cog-card-actions">
+              <GuaxiIconButton
+                icon-only
+                type="primary"
+                :icon="BookAdd20Regular"
+                label="提炼成笔记"
+                hint="用模型提炼摘要与要点，写进选定的知识库；原文链接会一并保留。"
+                @click="openNoteDialog(p)"
+              />
               <GuaxiIconButton
                 v-if="p.uri"
                 icon-only
@@ -295,6 +475,12 @@
               />
             </div>
           </div>
+          <!-- 默认只露显著性最高的 10 条，避免一屏噪声；其余折叠。 -->
+          <div v-if="store.percepts.length > PERCEPT_PAGE" class="cog-more">
+            <n-button size="tiny" quaternary @click="showAllPercepts = !showAllPercepts">
+              {{ showAllPercepts ? '收起' : `显示全部 ${store.percepts.length} 条` }}
+            </n-button>
+          </div>
         </n-spin>
       </n-tab-pane>
 
@@ -303,6 +489,13 @@
           <span class="cog-tab"><n-icon :component="News20Regular" />简报</span>
         </template>
         <div class="cog-filters">
+          <n-button
+            v-if="todayItems.length"
+            size="tiny"
+            type="primary"
+            quaternary
+            @click="tab = 'today'"
+          >去处理今天的 {{ todayItems.length }} 件事</n-button>
           <n-select
             v-model:value="briefDay"
             size="tiny"
@@ -328,82 +521,6 @@
         </n-spin>
       </n-tab-pane>
 
-      <!-- 知识：从材料抽出的主张（信念）、矛盾检测，以及进化闩等高级维护。
-           这些能力后端一直存在，之前大脑页没有入口，这里补上。 -->
-      <n-tab-pane name="knowledge">
-        <template #tab>
-          <span class="cog-tab"><n-icon :component="Lightbulb20Regular" />知识</span>
-        </template>
-
-        <div class="cog-filters">
-          <span class="cog-count-hint">
-            活跃主张 {{ st?.belief?.active ?? 0 }}｜已被反驳 {{ st?.belief?.contradicted ?? 0 }}
-          </span>
-          <GuaxiIconButton
-            icon-only
-            :icon="Lightbulb20Regular"
-            label="抽取主张"
-            :hint="kbName ? `从知识库「${kbName}」里抽取可被反驳的结论（消耗少量 token）。` : '先在图谱视图选中一个知识库。'"
-            :loading="busy.belief"
-            @click="extractBeliefs"
-          />
-          <GuaxiIconButton
-            icon-only
-            :icon="Warning20Regular"
-            label="检测矛盾"
-            hint="两两比对主张，找出互相冲突的结论并标记（消耗少量 token）。"
-            :loading="busy.contradict"
-            @click="detectContradictions"
-          />
-        </div>
-
-        <n-spin :show="store.beliefsLoading">
-          <div v-if="!store.beliefs.length" class="cog-empty">
-            还没有主张。点「抽取主张」从选中的知识库里提取，之后新读到的材料若与它冲突会自动标记。
-          </div>
-          <div v-for="b in store.beliefs" :key="b.id" class="cog-card">
-            <div class="cog-card-head">
-              <span class="cog-card-title">{{ b.statement }}</span>
-              <n-tag size="tiny" :bordered="false"
-                :type="b.status === 'contradicted' ? 'warning' : (b.status === 'active' ? 'success' : 'default')">
-                {{ beliefStatusLabel(b.status) }}
-              </n-tag>
-              <span class="cog-card-score" :title="`置信度 ${(b.confidence ?? 0).toFixed(2)}`">
-                {{ (b.confidence ?? 0).toFixed(2) }}
-              </span>
-            </div>
-            <div v-if="b.kb_name" class="cog-belief-kb">来源库：{{ b.kb_name }}</div>
-            <div class="cog-card-actions">
-              <GuaxiIconButton
-                v-if="b.status !== 'archived'"
-                icon-only quaternary :icon="Archive20Regular"
-                label="归档" hint="不再参与矛盾检测，但保留记录。"
-                @click="setBeliefStatus(b.id, 'archived')"
-              />
-              <GuaxiIconButton
-                icon-only quaternary :icon="DismissCircle20Regular"
-                label="删除" hint="彻底删除这条主张。"
-                @click="removeBelief(b.id)"
-              />
-            </div>
-          </div>
-        </n-spin>
-
-        <!-- 进化闩：召回质量评测/调参（本地、可回滚）。开发向，收进折叠区。 -->
-        <n-collapse class="cog-adv">
-          <n-collapse-item title="进化闩（召回评测与调参）" name="evo">
-            <p class="cog-adv-desc">
-              在本地评测集上度量召回质量，只有不退化才落库参数，可回滚。全程本地、不花 token。
-            </p>
-            <div class="cog-adv-row">
-              <n-button size="small" :loading="busy.eval" @click="runEval">跑评测</n-button>
-              <n-button size="small" :loading="busy.tune" @click="tuneRecall">调参（不退化才采纳）</n-button>
-              <n-button size="small" @click="trainPolicy">训练提醒策略</n-button>
-            </div>
-            <div v-if="lastEvalNote" class="cog-adv-note">{{ lastEvalNote }}</div>
-          </n-collapse-item>
-        </n-collapse>
-      </n-tab-pane>
     </n-tabs>
 
     <!-- 外部原文：单独弹窗展示，且视觉上标成不可信区域。
@@ -417,6 +534,86 @@
            退回纯文本时仍用 pre 保留换行。 -->
       <div v-if="fullHtml" class="cog-full markdown-body" v-html="fullHtml" @mouseup="onInboxMouseUp"></div>
       <pre v-else class="cog-full" @mouseup="onInboxMouseUp">{{ fullText }}</pre>
+    </n-modal>
+
+    <!-- 提炼成笔记：选目标知识库/子目录 → 模型提炼 → 写入并回显落点。 -->
+    <n-modal
+      v-model:show="noteDialog.show"
+      preset="card"
+      class="cog-modal"
+      title="提炼成笔记"
+      style="width: 760px; max-width: 94vw;"
+    >
+      <div class="note-form">
+        <div class="note-row">
+          <span class="note-label">目标知识库</span>
+          <n-select
+            v-model:value="noteDialog.kbName"
+            size="small"
+            :options="kbOptions"
+            placeholder="选择知识库"
+            style="width: 240px;"
+          />
+          <span class="note-label">子目录</span>
+          <n-input
+            v-model:value="noteDialog.folder"
+            size="small"
+            placeholder="收件箱"
+            style="width: 200px;"
+          />
+        </div>
+        <div v-if="noteDialog.error" class="note-error">{{ noteDialog.error }}</div>
+        <div class="note-preview">
+          <pre v-if="noteDialog.result" class="note-pre">{{ noteDialog.result.markdown }}</pre>
+          <div v-else class="note-hint">
+            模型会生成「摘要 / 要点 / 对我有什么用」，并保留原文链接与摘录。
+            模型不可用时退回原文摘录，不会阻塞入库。
+          </div>
+        </div>
+        <div v-if="noteDialog.result" class="note-path">
+          已写入 <code>{{ noteDialog.result.path }}</code>
+          <span v-if="!noteDialog.result.usedLlm">（模型不可用，本次为原文摘录）</span>
+        </div>
+      </div>
+      <template #footer>
+        <div class="note-footer">
+          <n-button v-if="noteDialog.result" size="small" @click="openNoteFile">打开笔记</n-button>
+          <n-button size="small" :disabled="noteDialog.busy" @click="noteDialog.show = false">关闭</n-button>
+          <n-button
+            size="small"
+            type="primary"
+            :loading="noteDialog.busy"
+            :disabled="!noteDialog.kbName || !!noteDialog.result"
+            @click="confirmNote"
+          >
+            写入知识库
+          </n-button>
+        </div>
+      </template>
+    </n-modal>
+
+    <!-- 自测：答案默认折叠，先回想再看。 -->
+    <n-modal
+      v-model:show="quiz.show"
+      preset="card"
+      class="cog-modal"
+      :title="`自测 · ${quiz.title}`"
+      style="width: 700px; max-width: 94vw;"
+    >
+      <n-spin :show="quiz.busy">
+        <div v-if="quiz.error" class="note-error">{{ quiz.error }}</div>
+        <n-collapse v-if="quiz.items.length" class="quiz-list">
+          <n-collapse-item
+            v-for="(q, i) in quiz.items"
+            :key="i"
+            :name="`q${i}`"
+            :title="`${i + 1}. ${q.question}`"
+          >
+            <div class="quiz-answer">{{ q.answer }}</div>
+          </n-collapse-item>
+        </n-collapse>
+        <div v-else-if="!quiz.busy && !quiz.error" class="cog-empty">没有生成题目。</div>
+      </n-spin>
     </n-modal>
 
     <!-- 划词翻译面板：与主界面编辑器同款富面板。 -->
@@ -450,10 +647,13 @@ import { computed, onActivated, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useMessage } from 'naive-ui'
 import { invoke } from '@tauri-apps/api/core'
 import {
+  Add20Regular,
   Alert20Regular,
   Archive20Regular,
   ArrowClockwise20Regular,
   ArrowSync20Regular,
+  BookAdd20Regular,
+  BookQuestionMark20Regular,
   BrainCircuit20Regular,
   CalendarClock20Regular,
   CheckmarkCircle20Regular,
@@ -466,9 +666,11 @@ import {
   Mail20Regular,
   News20Regular,
   Open20Regular,
+  Settings20Regular,
   ShieldKeyhole20Regular,
   ThumbDislike20Regular,
   Warning20Regular,
+  WeatherSunny20Regular,
 } from '@vicons/fluent'
 import GuaxiIconButton from '../GuaxiIconButton.vue'
 import {
@@ -477,6 +679,9 @@ import {
   PERCEPT_SOURCE_LABELS,
 } from '../../stores/cognitionStore'
 import { useKnowledgeBaseStore } from '../../stores/knowledgeBaseStore'
+import { useFileTreeStore } from '../../stores/fileTreeStore'
+import { useEditorStore } from '../../stores/editorStore'
+import { useSettingsStore } from '../../stores/settingsStore'
 import { channelIcon, nudgeIcon, sourceIcon } from '../../utils/cognitionIcons'
 import { onCognitionNudge, onCognitionBrief } from '../../utils/cognitionEvents'
 import { createLogger } from '../../utils/logger'
@@ -497,82 +702,163 @@ const store = useCognitionStore()
 const message = useMessage()
 const KINDS = NUDGE_KINDS
 
-const tab = ref('nudges')
+const tab = ref('today')
 const briefDay = ref(null)
+const showAllPercepts = ref(false)
+const PERCEPT_PAGE = 10
 const busy = ref({
   deliberate: false, score: false, enable: false, embed: false,
-  belief: false, contradict: false, eval: false, tune: false,
 })
 const kbStore = useKnowledgeBaseStore()
+const fileTreeStore = useFileTreeStore()
+const editorStore = useEditorStore()
+const settingsStore = useSettingsStore()
 const kbName = computed(() => kbStore.selectedKnowledgeBase?.knowledge_base_name || '')
-const lastEvalNote = ref('')
+const kbOptions = computed(() =>
+  (kbStore.knowledgeBases || []).map((k) => ({
+    label: k.knowledge_base_name,
+    value: k.knowledge_base_name,
+  })),
+)
 
-const beliefStatusLabel = (s) => ({
-  active: '活跃', contradicted: '已被反驳', archived: '已归档',
-}[s] || s || '')
+// ── 今日看板：提醒 + 值得读，合成一张行动清单
+const todayLabel = computed(() => {
+  const d = new Date()
+  const wd = ['日', '一', '二', '三', '四', '五', '六'][d.getDay()]
+  return `${d.getMonth() + 1} 月 ${d.getDate()} 日 · 周${wd}`
+})
+const visiblePercepts = computed(() =>
+  showAllPercepts.value ? store.percepts : store.percepts.slice(0, PERCEPT_PAGE),
+)
+/** 简报的第一段正文：优先开场引用，其次第一段正文；跳过标题/表格/列表符号。 */
+const briefTeaser = computed(() => {
+  const md = String(store.brief?.markdown || '')
+  if (!md.trim()) return ''
+  const lines = md.split('\n').map((l) => l.trim())
+  const quote = lines.find((l) => l.startsWith('> '))
+  const body = lines.find(
+    (l) =>
+      l &&
+      !l.startsWith('#') &&
+      !l.startsWith('>') &&
+      !l.startsWith('-') &&
+      !l.startsWith('*') &&
+      !l.startsWith('|') &&
+      l.length > 12,
+  )
+  const line = (quote ? quote.replace(/^>\s*/, '') : body || '').trim()
+  if (!line) return ''
+  return line.length > 120 ? `${line.slice(0, 120)}…` : line
+})
+const todayItems = computed(() => {
+  const nudges = store.nudges.slice(0, 3).map((n) => ({
+    type: 'nudge',
+    key: `n-${n.id}`,
+    data: n,
+    title: n.title,
+    sub: n.body || kindHint(n.kind),
+    color: kindColor(n.kind),
+  }))
+  const percepts = (store.topPercepts || []).map((p) => ({
+    type: 'percept',
+    key: `p-${p.id}`,
+    data: p,
+    title: p.title || '（无标题）',
+    sub:
+      Number(p.salience) > 0.25
+        ? `显著 ${Number(p.salience).toFixed(2)} · ${sourceLabel(p.sourceKind)}`
+        : `待打分 · ${sourceLabel(p.sourceKind)}`,
+    color: '#3b82c4',
+  }))
+  return [...nudges, ...percepts]
+})
 
-async function extractBeliefs() {
-  if (!kbName.value) { message.warning('请先在图谱视图选中一个知识库'); return }
-  busy.value.belief = true
+// ── 提醒的三种行动：跳转 / 加入任务 / 生成自测
+function jumpNudge(n) {
+  const r = (n.refs || [])[0]
+  if (!r) {
+    message.info('这条提醒没有可跳转的引用')
+    return
+  }
+  openRef(r)
+}
+
+async function addTask(n) {
   try {
-    const r = await store.extractBeliefs(kbName.value)
-    message.success(`已抽取 ${r?.extracted ?? r?.count ?? ''} 条主张`)
+    const path = await store.nudgeToTask(n.id, 'work')
+    message.success(`已加入任务：${path}`)
   } catch (e) {
     message.error(String(e))
-  } finally {
-    busy.value.belief = false
   }
 }
 
-async function detectContradictions() {
-  busy.value.contradict = true
+const quiz = ref({ show: false, busy: false, title: '', items: [], error: '' })
+async function openQuiz(n) {
+  quiz.value = { show: true, busy: true, title: n.title, items: [], error: '' }
   try {
-    const found = await store.detectContradictions()
-    message.success(found ? `发现 ${found} 处矛盾` : '未发现新的矛盾')
-    await store.refreshBeliefs({ kbName: kbName.value })
+    quiz.value.items = await store.nudgeQuiz(n.id)
   } catch (e) {
-    message.error(String(e))
+    quiz.value.error = String(e)
   } finally {
-    busy.value.contradict = false
+    quiz.value.busy = false
   }
 }
 
-async function setBeliefStatus(id, status) {
-  try { await store.setBeliefStatus(id, status) } catch (e) { message.error(String(e)) }
+// ── 提炼成笔记
+const noteDialog = ref({
+  show: false,
+  percept: null,
+  kbName: '',
+  folder: '收件箱',
+  busy: false,
+  result: null,
+  error: '',
+})
+function openNoteDialog(p) {
+  noteDialog.value = {
+    show: true,
+    percept: p,
+    // 优先用这条资料锚定的知识库,其次当前选中的,最后列表第一个。
+    kbName: p.kbName || kbName.value || kbOptions.value[0]?.value || '',
+    folder: '收件箱',
+    busy: false,
+    result: null,
+    error: '',
+  }
 }
-async function removeBelief(id) {
-  try { await store.removeBelief(id) } catch (e) { message.error(String(e)) }
+async function confirmNote() {
+  const d = noteDialog.value
+  if (!d.percept || !d.kbName) return
+  d.busy = true
+  d.error = ''
+  try {
+    const r = await store.perceptToNote(d.percept.id, d.kbName, d.folder)
+    d.result = r
+    message.success(`已写入：${r.path}`)
+  } catch (e) {
+    d.error = String(e)
+  } finally {
+    d.busy = false
+  }
 }
 
-async function runEval() {
-  busy.value.eval = true
-  try {
-    const r = await store.runEval()
-    lastEvalNote.value = r?.note || '评测完成'
-  } catch (e) {
-    message.error(String(e))
-  } finally {
-    busy.value.eval = false
-  }
+function openAdvancedSettings() {
+  settingsStore.setSelectedMenu('cognition')
+  window.location.hash = '/setting'
 }
-async function tuneRecall() {
-  busy.value.tune = true
+
+/** 笔记写完后直接在主编辑器打开,不用自己去文件树里找。 */
+async function openNoteFile() {
+  const path = noteDialog.value.result?.path
+  if (!path) return
   try {
-    const r = await store.tuneRecall()
-    lastEvalNote.value = r?.note || '调参完成'
-    message.success(lastEvalNote.value)
+    await fileTreeStore.openFileInTab(path)
+    const content = fileTreeStore.selectedFile?.content || noteDialog.value.result?.markdown || ''
+    editorStore.setFile({ path, content })
+    noteDialog.value.show = false
+    window.location.hash = '/'
   } catch (e) {
-    message.error(String(e))
-  } finally {
-    busy.value.tune = false
-  }
-}
-async function trainPolicy() {
-  try {
-    await store.trainPolicy()
-    message.success('提醒策略已训练')
-  } catch (e) {
-    message.error(String(e))
+    message.error(`打开失败：${e}`)
   }
 }
 
@@ -631,9 +917,13 @@ const briefOptions = computed(() =>
 // 左侧边栏点击"简报日期 / 感知来源 / 待处理分类"时，只更新了 store，
 // 中间收件箱不会自动跳到对应板块。这里监听 store 变化，把内部 tab 同步过去，
 // 让点击左栏条目 = 中间区域直接切到该内容。
+// 首次 bootstrap 也会写 store.brief,不能把默认的「今日」顶掉;
+// 只有挂载之后用户点左栏日期/新一天简报到达时才切到简报 tab。
+let briefWatchReady = false
 watch(
   () => store.brief?.day,
   (day) => {
+    if (!briefWatchReady) return
     if (day) {
       briefDay.value = day
       tab.value = 'brief'
@@ -651,12 +941,11 @@ watch(
   () => store.nudgeFilterKind,
   () => { tab.value = 'nudges' }
 )
-// 切到"知识"tab 时按需拉取主张列表。
-watch(tab, (t) => {
-  if (t === 'knowledge' && !store.beliefs.length && !store.beliefsLoading) {
-    store.refreshBeliefs({ kbName: kbName.value })
-  }
-})
+// 换筛选条件时回到前 10 条,避免"显示全部"的展开状态沿用上一次筛选。
+watch(
+  () => [store.perceptFilter.state, store.perceptFilter.sourceKind],
+  () => { showAllPercepts.value = false },
+)
 
 const kindLabel = (k) => KINDS[k]?.label || k
 const kindColor = (k) => KINDS[k]?.color || '#888'
@@ -835,6 +1124,7 @@ let offBrief = null
 
 onMounted(async () => {
   await reload()
+  briefWatchReady = true
   offNudge = await onCognitionNudge((evt) => {
     store.refreshNudges()
     store.refreshStatus()
@@ -854,7 +1144,7 @@ onMounted(async () => {
 onActivated(() => {
   reload()
   // 当前在收件箱页时，顺带刷新感知列表，确保新入库的 percept 立即出现。
-  if (tab.value === 'percepts') {
+  if (tab.value === 'percepts' || tab.value === 'today') {
     store.refreshPercepts()
   }
 })
@@ -1001,33 +1291,6 @@ onUnmounted(() => {
   font-size: 12px;
   color: var(--guaxi-text-secondary);
   white-space: nowrap;
-}
-.cog-belief-kb {
-  font-size: 12px;
-  color: var(--guaxi-text-secondary);
-  margin: 2px 0 4px;
-}
-.cog-adv {
-  margin-top: 14px;
-  border-top: 1px dashed var(--guaxi-border);
-  padding-top: 8px;
-}
-.cog-adv-desc {
-  font-size: 12.5px;
-  line-height: 1.7;
-  color: var(--guaxi-text-secondary);
-  margin: 0 0 8px;
-}
-.cog-adv-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-.cog-adv-note {
-  margin-top: 8px;
-  font-size: 12.5px;
-  color: var(--guaxi-text-secondary);
-  white-space: pre-wrap;
 }
 .cog-select {
   width: 128px;
@@ -1236,4 +1499,116 @@ onUnmounted(() => {
 .cog-inbox :deep(.n-tag) {
   font-family: var(--guaxi-editor-font-family);
 }
+
+/* ── 今日看板 */
+.today-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin: 8px 0 10px;
+}
+.today-date { font-weight: 600; }
+.today-meta { font-size: 12px; color: var(--guaxi-text-secondary); }
+.today-item {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 10px 12px;
+  border: 1px solid var(--guaxi-border);
+  border-radius: 8px;
+  margin-bottom: 8px;
+  background: var(--guaxi-panel-bg);
+}
+.today-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+}
+.today-body { flex: 1; min-width: 0; }
+.today-title {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.today-sub {
+  font-size: 12px;
+  color: var(--guaxi-text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.today-actions { display: flex; gap: 4px; flex: 0 0 auto; }
+
+/* ── 提炼成笔记 / 自测 */
+.cog-more { display: flex; justify-content: center; padding: 6px 0 12px; }
+.note-form { display: flex; flex-direction: column; gap: 10px; }
+.note-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.note-label { font-size: 12px; color: var(--guaxi-text-secondary); }
+.note-error { color: #e04f5f; font-size: 12.5px; white-space: pre-wrap; }
+.note-preview {
+  border: 1px solid var(--guaxi-border);
+  border-radius: 8px;
+  background: var(--guaxi-app-bg);
+  max-height: 42vh;
+  overflow: auto;
+}
+.note-pre {
+  margin: 0;
+  padding: 12px;
+  white-space: pre-wrap;
+  font-family: var(--guaxi-editor-font-family);
+  font-size: 13px;
+  line-height: 1.7;
+}
+.note-hint {
+  padding: 16px;
+  font-size: 12.5px;
+  color: var(--guaxi-text-secondary);
+  line-height: 1.7;
+}
+.note-path { font-size: 12px; color: var(--guaxi-text-secondary); word-break: break-all; }
+.note-path code { font-family: var(--guaxi-editor-font-family); color: var(--guaxi-text-primary); }
+.note-footer { display: flex; justify-content: flex-end; gap: 8px; }
+.quiz-list { max-height: 60vh; overflow: auto; }
+.quiz-answer { white-space: pre-wrap; line-height: 1.8; }
+
+.today-foot {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+  padding: 4px 0 12px;
+}
+
+.today-brief {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  margin-bottom: 10px;
+  border-left: 3px solid var(--n-color-primary, #2dd4bf);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--n-color-primary, #2dd4bf) 7%, transparent);
+}
+.today-brief-label {
+  font-size: 11px;
+  color: var(--guaxi-text-secondary);
+  flex: 0 0 auto;
+}
+.today-brief-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+
+.today-link {
+  color: var(--n-color-primary, #2dd4bf);
+  cursor: pointer;
+  text-decoration: underline dotted;
+}
+.today-link:hover { text-decoration-style: solid; }
 </style>

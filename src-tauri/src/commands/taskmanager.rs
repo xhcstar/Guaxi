@@ -1088,6 +1088,53 @@ fn category_label(cat: &str) -> String {
     }
 }
 
+/// 「大脑」提醒一键转任务：追加一个标准任务块到 `<task_root>/<category>/inbox.org`。
+/// 与导入共用同一套扫尾（重扫描索引），任务页无需手动刷新。
+pub async fn quick_add(title: String, content: String, category: Option<String>) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let _scan_guard = SCAN_LOCK.lock().map_err(|e| e.to_string())?;
+        let root = resolve_task_root()?;
+        let cat = category
+            .filter(|c| CATEGORIES.contains(&c.as_str()))
+            .unwrap_or_else(|| "work".to_string());
+        let dir = root.join(&cat);
+        fs::create_dir_all(&dir).map_err(|e| format!("创建任务目录失败: {e}"))?;
+        let target = dir.join("inbox.org");
+
+        let block = TaskBlock {
+            internal_id: uuid::Uuid::new_v4().to_string(),
+            manage_type: cat,
+            task_type: "task".into(),
+            description: title,
+            content,
+            origin: "大脑提醒".into(),
+            status: "TODO".into(),
+            priority: "B".into(),
+            create_time: Local::now().to_rfc3339(),
+            ..Default::default()
+        };
+        let text = task_block::serialize_block(&block);
+
+        let mut existing = fs::read_to_string(&target).unwrap_or_default();
+        if !existing.is_empty() && !existing.ends_with('\n') {
+            existing.push('\n');
+        }
+        if !existing.is_empty() {
+            existing.push('\n');
+        }
+        existing.push_str(&text);
+        existing.push('\n');
+        fs::write(&target, &existing).map_err(|e| format!("写入任务失败: {e}"))?;
+
+        let conn = init()?;
+        scan_and_index_locked(&conn, &[])?;
+        info!(path = %target.display(), "task quick add from cognition");
+        Ok(target.to_string_lossy().to_string())
+    })
+    .await
+    .map_err(|e| format!("加入任务失败: {e}"))?
+}
+
 /// 读 .org 文件内容（供面板内编辑）。
 #[tauri::command]
 pub fn task_read_file(path: String) -> Result<String, String> {

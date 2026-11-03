@@ -19,6 +19,34 @@ use tracing::{debug, info, warn};
 
 static APP: OnceCell<AppHandle> = OnceCell::new();
 static LOOPS_STARTED: AtomicBool = AtomicBool::new(false);
+// 入库后的即时打分已经在排队时,不再重复排(一波抓取只触发一次)。
+static SCORING_KICK: AtomicBool = AtomicBool::new(false);
+
+/// 入库后立刻排一小批打分。
+///
+/// 后台循环 20 秒才跑一轮,新抓的内容会长时间停在「新颖 -1.00 / 显著 0.00」,
+/// 看起来像功能坏了。这里做一个防抖的一次性补跑;失败同样落到 scoring_last_error。
+pub fn kick_scoring() {
+    if !enabled() || SCORING_KICK.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    // 同步命令线程不一定带 tokio 运行时上下文,走 Tauri 的 async runtime 最稳。
+    tauri::async_runtime::spawn(async {
+        sleep(Duration::from_millis(900)).await;
+        match crate::cognition::percept::score_pending(24).await {
+            Ok(n) if n > 0 => {
+                let _ = store::set_setting("scoring_last_error", "");
+                debug!("[cognition] 入库触发打分 {} 条", n);
+            }
+            Ok(_) => {}
+            Err(e) => {
+                let _ = store::set_setting("scoring_last_error", &e.to_string());
+                debug!("[cognition] 入库触发打分失败: {}", e);
+            }
+        }
+        SCORING_KICK.store(false, Ordering::SeqCst);
+    });
+}
 
 /// 由 main.rs 的 setup 注入。没有它，后台循环产出的提醒无法广播到前端。
 pub fn init_app_handle(handle: AppHandle) {
@@ -126,8 +154,17 @@ fn spawn_scoring_loop() {
             }
             match crate::cognition::percept::score_pending(24).await {
                 Ok(0) => {}
-                Ok(n) => debug!("[cognition] 已给 {} 条感知打分", n),
-                Err(e) => debug!("[cognition] 感知打分暂不可用: {}", e),
+                Ok(n) => {
+                    debug!("[cognition] 已给 {} 条感知打分", n);
+                    // 成功一次就清掉上次的错误,顶栏的警告随之消失。
+                    let _ = crate::cognition::store::set_setting("scoring_last_error", "");
+                }
+                Err(e) => {
+                    // 只写 debug 日志时,用户看到的是"待打分 34 / 显著 0.00",看起来像功能坏了。
+                    // 落一份错误原因,由 cognition_status 透出给顶栏。
+                    debug!("[cognition] 感知打分暂不可用: {}", e);
+                    let _ = crate::cognition::store::set_setting("scoring_last_error", &e.to_string());
+                }
             }
             // 三个补齐任务各让一小步，避免某一类把 embedding 服务长期占住。
             let _ = crate::cognition::episode::embed_pending(16).await;

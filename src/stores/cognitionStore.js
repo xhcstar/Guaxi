@@ -87,6 +87,11 @@ export const useCognitionStore = defineStore('cognitionStore', {
     pendingScoreCount: (s) => Number(s.status?.percept?.pendingScore || 0),
     filteredNudges: (s) =>
       s.nudgeFilterKind ? s.nudges.filter((n) => n.kind === s.nudgeFilterKind) : s.nudges,
+    /** 今日看板:值得读的感知(显著优先,未打分的新内容兜底)。 */
+    topPercepts: (s) => {
+      const scored = s.percepts.filter((p) => Number(p.salience) > 0.25)
+      return (scored.length ? scored : s.percepts).slice(0, 3)
+    },
   },
 
   actions: {
@@ -174,7 +179,7 @@ export const useCognitionStore = defineStore('cognitionStore', {
       const f = { ...this.perceptFilter, ...overrides }
       this.perceptFilter = f
       try {
-        this.percepts = await invoke('cognition_percept_list', {
+        const list = await invoke('cognition_percept_list', {
           query: {
             state: f.state || null,
             sourceKind: f.sourceKind || null,
@@ -182,6 +187,12 @@ export const useCognitionStore = defineStore('cognitionStore', {
             limit: 60,
           },
         })
+        // 显著性优先、时间兜底:未打分的条目沉到后面,不再把"最新抓的"顶在最上面。
+        this.percepts = [...(list || [])].sort(
+          (a, b) =>
+            (Number(b.salience) || 0) - (Number(a.salience) || 0) ||
+            String(b.capturedAt || '').localeCompare(String(a.capturedAt || '')),
+        )
       } catch (e) {
         logger.warn('cognition_percept_list failed', e)
         this.percepts = []
@@ -198,6 +209,28 @@ export const useCognitionStore = defineStore('cognitionStore', {
 
     async getPerceptText(id) {
       return invoke('cognition_percept_get', { id })
+    },
+
+    /** 把一条感知提炼成笔记写进知识库。成功后它从「未处理」里消失。 */
+    async perceptToNote(id, kbName, folder) {
+      const r = await invoke('cognition_percept_to_note', {
+        id,
+        kbName,
+        folder: folder || null,
+      })
+      this.percepts = this.percepts.filter((p) => p.id !== id)
+      await Promise.all([this.refreshStatus(), this.refreshPercepts()])
+      return r
+    },
+
+    /** 提醒 → 3 道自测题。 */
+    async nudgeQuiz(id) {
+      return invoke('cognition_nudge_quiz', { id })
+    },
+
+    /** 提醒 → 任务管理里的一条任务。 */
+    async nudgeToTask(id, category = 'work') {
+      return invoke('cognition_nudge_to_task', { id, category })
     },
 
     /** 手动触发一批打分（"立即处理"按钮）。 */

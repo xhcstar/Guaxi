@@ -404,6 +404,82 @@
           />
         </div>
       </n-collapse-item>
+      <n-collapse-item name="beliefs">
+        <template #header>
+          <span class="cog-sec"><n-icon :component="Lightbulb20Regular" />知识主张与矛盾</span>
+        </template>
+        <div class="cog-note">
+          从知识库里抽出<b>可被反驳的结论</b>（主张），再用新材料两两比对，找出互相冲突的地方。
+          结果只进入提醒的证据链，不会改动你的笔记。从大脑首页移到这里，避免日常界面被高级维护占满。
+        </div>
+        <div class="cog-row-hint">
+          活跃 <b>{{ st?.belief?.active ?? 0 }}</b> 条｜已被反驳
+          <b>{{ st?.belief?.contradicted ?? 0 }}</b> 条
+        </div>
+        <div class="cog-mine">
+          <n-select
+            v-model:value="beliefKb"
+            size="tiny"
+            class="cog-select"
+            :options="kbOptions"
+            placeholder="选择知识库"
+          />
+          <GuaxiIconButton
+            :icon="Lightbulb20Regular"
+            label="抽取主张"
+            hint="从选中的知识库抽取可被反驳的结论（消耗少量 token）。"
+            :disabled="!beliefKb"
+            :loading="busy.belief"
+            @click="extractBeliefs"
+          />
+          <GuaxiIconButton
+            :icon="Warning20Regular"
+            label="检测矛盾"
+            hint="两两比对主张，找出互相冲突的结论并标记。"
+            :loading="busy.contradict"
+            @click="detectContradictions"
+          />
+        </div>
+        <div v-if="store.beliefs.length" class="cog-beliefs">
+          <div v-for="b in store.beliefs" :key="b.id" class="cog-belief">
+            <span class="cog-belief-st">{{ b.statement }}</span>
+            <n-tag
+              size="tiny"
+              :bordered="false"
+              :type="b.status === 'contradicted' ? 'warning' : (b.status === 'active' ? 'success' : 'default')"
+            >
+              {{ beliefStatusLabel(b.status) }}
+            </n-tag>
+            <GuaxiIconButton
+              v-if="b.status !== 'archived'"
+              icon-only
+              quaternary
+              :icon="Archive20Regular"
+              label="归档"
+              hint="不再参与矛盾检测，但保留记录。"
+              @click="setBeliefStatus(b.id, 'archived')"
+            />
+            <GuaxiIconButton
+              icon-only
+              quaternary
+              :icon="DismissCircle20Regular"
+              label="删除"
+              hint="彻底删除这条主张。"
+              @click="removeBelief(b.id)"
+            />
+          </div>
+        </div>
+        <div v-else class="cog-actions">
+          <GuaxiIconButton
+            quaternary
+            :icon="ArrowClockwise20Regular"
+            label="加载主张"
+            hint="读取已抽取的主张列表。"
+            :loading="store.beliefsLoading"
+            @click="loadBeliefs"
+          />
+        </div>
+      </n-collapse-item>
       <n-collapse-item name="evolve">
         <template #header>
           <span class="cog-sec"><n-icon :component="Beaker20Regular" />自调与评测闩</span>
@@ -545,6 +621,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { writeText } from '@tauri-apps/plugin-clipboard-manager'
 import {
   Alert20Regular,
+  Archive20Regular,
   ArrowClockwise20Regular,
   ArrowSync20Regular,
   ArrowTrendingLines20Regular,
@@ -556,12 +633,14 @@ import {
   Cursor20Regular,
   Database20Regular,
   DatabaseSearch20Regular,
+  DismissCircle20Regular,
   Edit20Regular,
   Eye20Regular,
   Flash20Regular,
   Gauge20Regular,
   Globe20Regular,
   History20Regular,
+  Lightbulb20Regular,
   Mail20Regular,
   Person20Regular,
   PlugConnected20Regular,
@@ -589,12 +668,15 @@ const busy = ref({
   maint: false,
   purge: false,
   score: false,
+  belief: false,
+  contradict: false,
 })
 const audit = ref([])
 const mcp = ref(null)
 const profileDraft = ref('')
 const mineKb = ref(null)
 const mineN = ref(40)
+const beliefKb = ref(null)
 const kbOptions = ref([])
 
 const acceptPct = computed(() => {
@@ -926,6 +1008,62 @@ watch(
   },
 )
 
+const beliefStatusLabel = (s) =>
+  ({ active: '活跃', contradicted: '已被反驳', archived: '已归档' }[s] || s || '')
+
+async function loadBeliefs() {
+  try {
+    await store.refreshBeliefs({ kbName: beliefKb.value || '' })
+  } catch (e) {
+    message.error(String(e))
+  }
+}
+
+async function extractBeliefs() {
+  if (!beliefKb.value) {
+    message.warning('请先选择知识库')
+    return
+  }
+  busy.value.belief = true
+  try {
+    const r = await store.extractBeliefs(beliefKb.value)
+    message.success(`已抽取 ${r?.extracted ?? r?.count ?? ''} 条主张`)
+  } catch (e) {
+    message.error(String(e))
+  } finally {
+    busy.value.belief = false
+  }
+}
+
+async function detectContradictions() {
+  busy.value.contradict = true
+  try {
+    const found = await store.detectContradictions()
+    message.success(found ? `发现 ${found} 处矛盾` : '未发现新的矛盾')
+    await store.refreshBeliefs({ kbName: beliefKb.value || '' })
+  } catch (e) {
+    message.error(String(e))
+  } finally {
+    busy.value.contradict = false
+  }
+}
+
+async function setBeliefStatus(id, status) {
+  try {
+    await store.setBeliefStatus(id, status)
+  } catch (e) {
+    message.error(String(e))
+  }
+}
+
+async function removeBelief(id) {
+  try {
+    await store.removeBelief(id)
+  } catch (e) {
+    message.error(String(e))
+  }
+}
+
 onMounted(async () => {
   await store.refreshStatus()
   await Promise.all([store.refreshSources(), store.refreshTools()])
@@ -939,6 +1077,8 @@ onMounted(async () => {
     logger.debug('kg_kb_summaries failed', e)
     kbOptions.value = []
   }
+  if (!beliefKb.value) beliefKb.value = kbOptions.value[0]?.value || null
+  if (beliefKb.value) store.refreshBeliefs({ kbName: beliefKb.value }).catch(() => {})
 })
 </script>
 
@@ -1289,5 +1429,28 @@ onMounted(async () => {
 .cog-set :deep(.n-base-selection-label),
 .cog-set :deep(.n-button) {
   font-family: var(--guaxi-editor-font-family);
+}
+
+/* 知识主张：窄屏也能一行读完，操作按钮贴右 */
+.cog-beliefs {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.cog-belief {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--guaxi-border);
+  border-radius: 6px;
+}
+.cog-belief-st {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 </style>
