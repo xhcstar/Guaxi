@@ -738,8 +738,7 @@ async fn fetch_remote_image(url_str: &str) -> Result<(String, Vec<u8>), String> 
     Ok((remote_image_content_type(ext).to_string(), bytes.to_vec()))
 }
 
-#[get("/markdown/api/remote_image")]
-async fn remote_image(query: web::Query<RemoteImageQuery>) -> HttpResponse {
+async fn remote_image_response(query: web::Query<RemoteImageQuery>) -> HttpResponse {
     match fetch_remote_image(query.url.trim()).await {
         Ok((content_type, bytes)) => HttpResponse::Ok()
             .insert_header(("Content-Type", content_type))
@@ -754,13 +753,26 @@ async fn remote_image(query: web::Query<RemoteImageQuery>) -> HttpResponse {
     }
 }
 
+#[get("/markdown/api/remote_image")]
+async fn remote_image(query: web::Query<RemoteImageQuery>) -> HttpResponse {
+    remote_image_response(query).await
+}
+
+/// 兼容别名：早期版本的代理改写用的是 /api/markdown/remote_image，
+/// 已经渲染并缓存的 HTML 可能还留着那个地址。新内容只生成 /markdown/api/…。
+#[get("/api/markdown/remote_image")]
+async fn remote_image_legacy(query: web::Query<RemoteImageQuery>) -> HttpResponse {
+    remote_image_response(query).await
+}
+
 pub fn config(cfg: &mut web::ServiceConfig) {
     cfg.service(process_markdown)
         .service(process_chat_markdown)
         .service(serve_image)
         .service(serve_bed_image)
         .service(register_resource)
-        .service(remote_image);
+        .service(remote_image)
+        .service(remote_image_legacy);
 }
 
 #[cfg(test)]

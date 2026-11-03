@@ -23288,8 +23288,29 @@ const renderMarkdownForExportHtml = async (context) => {
   return html
 }
 
+/**
+ * 预览渲染会把外链图片改写成 http://localhost:8888/markdown/api/remote_image?url=…
+ * （见后端 markdown_image_process 的远程图片代理）。导出的 HTML 是要离开应用打开的，
+ * 而代理只存在于本机 8888：必须还原成原始外链，否则换台机器或关掉应用后图片全部失效。
+ * PDF 导出不还原——它在当前进程内立刻打印，走代理反而更稳，不依赖第三方站点可达。
+ */
+const restoreRemoteImageProxyUrls = (html) => {
+  const source = String(html || '')
+  if (!source.includes('/markdown/api/remote_image?url=')) return source
+  return source.replace(
+    /http:\/\/localhost:8888\/markdown\/api\/remote_image\?url=([^"'<>)\s]+)/g,
+    (match, encoded) => {
+      try {
+        return decodeURIComponent(encoded)
+      } catch {
+        return match
+      }
+    },
+  )
+}
+
 const exportMarkdownRenderedHtml = async (context, outputPath) => {
-  const html = await renderMarkdownForExportHtml(context)
+  const html = restoreRemoteImageProxyUrls(await renderMarkdownForExportHtml(context))
   const { writeFile } = await import('@tauri-apps/plugin-fs')
   const bytes = new TextEncoder().encode(html)
 
