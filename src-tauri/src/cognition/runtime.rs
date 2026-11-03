@@ -118,6 +118,12 @@ pub fn start_background_loops() {
                 ),
                 Err(e) => warn!("[cognition] 旧感知重洗失败: {}", e),
             }
+            // 质量闸上线前积下来的促销/广告页：标记为不感兴趣，不再占收件箱。
+            match crate::cognition::percept::reject_noise_percepts() {
+                Ok(0) => {}
+                Ok(n) => info!("[cognition] 启动清理：{} 条促销/广告噪声已移出收件箱", n),
+                Err(e) => warn!("[cognition] 促销/广告噪声清理失败: {}", e),
+            }
             match crate::cognition::percept::purge_stale_unread(None) {
                 Ok(0) => {}
                 Ok(n) => info!("[cognition] 启动清理：移除 {} 条未读的自动采集内容", n),

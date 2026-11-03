@@ -151,8 +151,14 @@ const onMouseUpRightSidebar = () => {
   document.removeEventListener("mouseup", onMouseUpRightSidebar)
 }
 
-onMounted(() => {
-  store.init()
+onMounted(async () => {
+  await store.init()
+  // 防御：首屏若仍为空（例如 init 被并发请求打断），主动补拉当前/第一个分类，
+  // 不让用户必须先点一下左栏才有内容。
+  if (!store.articles.value?.length) {
+    const first = store.selectedCategory.value || store.categories.value?.[0]?.id || null
+    if (first) await store.fetchArticles(first)
+  }
 })
 
 onBeforeUnmount(() => {

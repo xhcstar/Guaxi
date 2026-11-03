@@ -351,7 +351,7 @@ fn ensure_article_columns(conn: &Connection) -> Result<(), String> {
     Ok(())
 }
 
-fn save_articles_to_cache(feed_id: &str, items: &[Article]) -> Result<(), String> {
+fn save_articles_to_cache(feed_id: &str, items: &[Article], source_kind: Option<&'static str>) -> Result<(), String> {
     if items.is_empty() {
         return Ok(());
     }
@@ -429,10 +429,20 @@ fn save_articles_to_cache(feed_id: &str, items: &[Article]) -> Result<(), String
     for a in items {
         // 仅当有抽取出的正文（clean_content_markdown，深解析产物）才入库。
         let body = a.clean_content_markdown.trim();
-        if body.chars().count() < 200 {
+        if body.chars().count() < 400 {
             continue;
         }
-        crate::cognition::hook_percept("crawl", &a.title, body, &a.url, feed_id, "");
+        // 促销/广告与"链接比正文还多"的列表碎片页，不配进大脑。
+        // relevance_score 只有在该源配置了兴趣画像时才有意义（-1 = 未评分）。
+        if is_globally_muted(&a)
+            || looks_like_fragment(body)
+            || (a.relevance_score >= 0 && a.relevance_score < 25)
+        {
+            continue;
+        }
+        if let Some(kind) = source_kind {
+            crate::cognition::hook_percept(kind, &a.title, body, &a.url, feed_id, "");
+        }
     }
     Ok(())
 }
@@ -495,8 +505,34 @@ fn persist_hydrated_article(a: &Article) -> Result<(), String> {
     } else {
         a.content.as_str()
     };
-    if body.chars().count() >= 200 {
-        crate::cognition::hook_percept("crawl", &a.title, body, url, "", "");
+    if body.chars().count() >= 400
+        && !is_globally_muted(a)
+        && !looks_like_fragment(body)
+        && !(a.relevance_score >= 0 && a.relevance_score < 25)
+    {
+        // 按文章所属订阅源打来源标签（RSS / 整站抓取）。
+        let feed_id: Option<String> = conn
+            .query_row(
+                "SELECT feed_id FROM article_cache WHERE url=?1 LIMIT 1",
+                params![url],
+                |r| r.get(0),
+            )
+            .ok();
+        let kind = feed_id
+            .as_deref()
+            .and_then(|id| {
+                FEEDS
+                    .lock()
+                    .ok()
+                    .and_then(|feeds| {
+                        feeds
+                            .iter()
+                            .find(|f| f.id.as_str() == id)
+                            .map(|f| feed_kind(&f.source_type))
+                    })
+            })
+            .unwrap_or("crawl");
+        crate::cognition::hook_percept(kind, &a.title, body, url, "", "");
     }
     Ok(())
 }
@@ -1969,6 +2005,8 @@ pub async fn search_articles(
         .cloned()
         .collect();
 
+    // 展示层统一拦掉促销/广告噪声，即使它们已经落进了旧缓存。
+    let results: Vec<Article> = results.into_iter().filter(|a| !is_globally_muted(a)).collect();
     Ok(results)
 }
 
@@ -2698,7 +2736,21 @@ fn apply_relevance(mut articles: Vec<Article>, feed: &FeedSource) -> Vec<Article
 /// 全局黑名单：命中即丢弃。复用 cognition 画像的"不要提醒我"静音词
 /// (`profile::is_muted`)，再叠加一组通用的标题党/广告噪声特征。
 /// 目的：不管来自哪个源，垃圾资讯统一在展示前被拦掉。
+/// 订阅源类型 → 感知来源标签。RSS 与整站抓取的正文质量、可信度不同，
+/// 大脑收件箱里必须能区分，否则所有内容都显示成「整站抓取」。
+fn feed_kind(source_type: &str) -> &'static str {
+    if source_type.to_lowercase().contains("rss") {
+        "rss"
+    } else {
+        "crawl"
+    }
+}
+
 fn is_globally_muted(article: &Article) -> bool {
+    // 与大脑共用同一套噪声判定：促销/广告页在展示与感知入库两侧都拦掉。
+    if crate::cognition::percept::looks_like_noise(&article.title, &article.url) {
+        return true;
+    }
     let text = format!("{} {}", article.title, article.description);
     if crate::cognition::profile::is_muted(&text) {
         return true;
@@ -2709,6 +2761,17 @@ fn is_globally_muted(article: &Article) -> bool {
         "点击查看", "震惊", "不看后悔", "限时抢购", "立即下载",
     ];
     NOISE.iter().any(|n| l.contains(n))
+}
+
+/// 抓取页的正文里链接密度过高，通常是导航/列表/聚合碎片，而不是一篇文章。
+fn looks_like_fragment(markdown: &str) -> bool {
+    let body = markdown.trim();
+    let chars = body.chars().count();
+    if chars < 400 {
+        return true;
+    }
+    let links = body.matches("](").count();
+    links * 250 > chars
 }
 
 fn normalize_category_filter(category: &Option<String>) -> Option<String> {
@@ -3213,7 +3276,7 @@ pub async fn fetch_knowledge_from_feed_ids(
 
         match collect_articles_for_feed(&selected_feed).await {
             Ok(mut list) => {
-                let _ = save_articles_to_cache(&feed.id, &list);
+                let _ = save_articles_to_cache(&feed.id, &list, Some(feed_kind(&feed.source_type)));
                 out.append(&mut list)
             }
             Err(e) => warn!(
@@ -3268,7 +3331,10 @@ pub async fn get_cached_articles(
     let max_limit = limit.unwrap_or(80).max(1);
     let category_ref = category.as_deref();
     let topic_ref = topic.as_deref();
-    let list = load_cached_articles(category_ref, topic_ref, max_limit)?;
+    let list: Vec<Article> = load_cached_articles(category_ref, topic_ref, max_limit)?
+        .into_iter()
+        .filter(|a| !is_globally_muted(a))
+        .collect();
     {
         let mut lock = ARTICLES.lock().unwrap();
         let mut merged = lock.clone();
@@ -4466,9 +4532,29 @@ fn is_noise_crawl_path(path: &str) -> bool {
         || p.starts_with("/register")
         || p.starts_with("/search")
         || p.starts_with("/cart")
+        || p.starts_with("/checkout")
         || p.starts_with("/account")
         || p.starts_with("/wp-admin")
         || p.starts_with("/wp-login")
+        // 电商/促销页不是知识。整站抓取最容易从导航里把这些全捞进来。
+        || p.starts_with("/coupon")
+        || p.starts_with("/coupons")
+        || p.starts_with("/promo")
+        || p.starts_with("/promos")
+        || p.starts_with("/deal")
+        || p.starts_with("/deals")
+        || p.starts_with("/discount")
+        || p.starts_with("/discounts")
+        || p.starts_with("/voucher")
+        || p.starts_with("/vouchers")
+        || p.starts_with("/sale")
+        || p.starts_with("/sales")
+        || p.starts_with("/shop")
+        || p.starts_with("/store")
+        || p.starts_with("/product")
+        || p.starts_with("/products")
+        || p.starts_with("/author/")
+        || p.starts_with("/page/")
         || p.ends_with(".css")
         || p.ends_with(".js")
         || p.ends_with(".png")
@@ -5241,7 +5327,7 @@ pub async fn run_feed_scheduler_tick(
                     update_schedule_after_success(&mut s, now, interval, 0, fingerprint);
                 } else {
                     update_schedule_after_success(&mut s, now, interval, list.len(), fingerprint);
-                    let _ = save_articles_to_cache(&feed.id, &list);
+                    let _ = save_articles_to_cache(&feed.id, &list, Some(feed_kind(&feed.source_type)));
                     new_articles.extend(list);
                 }
                 let next_run_at = s.next_run_at;
@@ -5424,12 +5510,13 @@ pub async fn refresh_articles_from_feeds(
     }
 
     all_articles = dedup_articles_by_identity(all_articles);
+    all_articles.retain(|a| !is_globally_muted(a));
     all_articles.sort_by(|a, b| b.published_at.cmp(&a.published_at));
 
     all_articles.truncate(max_limit);
 
     if !all_articles.is_empty() {
-        let _ = save_articles_to_cache("all", &all_articles);
+        let _ = save_articles_to_cache("all", &all_articles, None);
     }
 
     let mut lock = ARTICLES.lock().unwrap();

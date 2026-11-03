@@ -3741,6 +3741,11 @@ const revealPathInTree = async (absPath, options = {}) => {
   const activeRepo = normalizePath(fileTreeStore.activeRepoPath)
 
   try {
+    // 目标仓库即使已经是当前仓库，也要确保它是展开态：
+    // 否则树体被收起，展开目录/选中节点都发生在看不见的地方。
+    if (repoRoot) {
+      fileTreeStore.expandedRepos.set(repoRoot, true)
+    }
     if (repoRoot && repoRoot !== activeRepo) {
       logger.info('[BreadcrumbReveal] switch repo', { from: activeRepo, to: repoRoot })
       fileTreeStore.setActiveRepoPath(repoRoot)
@@ -4153,6 +4158,21 @@ onMounted(async () => {
 
   await nextTick()
   updateActiveRepoMaxHeight()
+
+  // 从大脑等页面先 openFileInTab、再跳回主界面时，activeTab 在树挂载前就已变化，
+  // watch(activeTab) 收不到事件。这里按当前激活标签补一次展开 + 选中。
+  const initialRevealPath = fileTreeStore.activeTab
+  if (initialRevealPath) {
+    try {
+      const ok = await revealPathInSidebar(initialRevealPath, { align: 'nearest' })
+      logger.info('[TreeReveal] initial reveal from active tab', {
+        path: initialRevealPath,
+        ok,
+      })
+    } catch (e) {
+      logger.debug('[TreeReveal] initial reveal failed', e)
+    }
+  }
 
   window.addEventListener('resize', updateActiveRepoMaxHeight)
 

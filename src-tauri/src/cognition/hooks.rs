@@ -101,6 +101,11 @@ pub fn hook_percept(
     if !source_enabled(source_kind) {
         return;
     }
+    // 自动采集的促销/广告页不进大脑。用户主动采集(capture/manual)不受影响。
+    if matches!(source_kind, "crawl" | "rss") && percept::looks_like_noise(title, uri) {
+        debug!("[cognition] 感知入库跳过（噪声）: {} {}", title, uri);
+        return;
+    }
     let input = percept::PerceptInput {
         source_kind: source_kind.to_string(),
         source_id: source_id.to_string(),

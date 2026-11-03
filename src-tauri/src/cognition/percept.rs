@@ -331,6 +331,54 @@ fn is_noise_line(l: &str) -> bool {
 /// 这类东西进了收件箱既占额度又难读，宁可在入口就丢掉。
 ///
 /// 返回 Err(原因) 表示拒收。
+/// 明显的促销/广告噪声。自动采集链路（整站抓取、RSS）在入库前用它挡掉，
+/// 用户主动采集/手动录入不走这里——那些是用户明确想要的。
+pub fn looks_like_noise(title: &str, uri: &str) -> bool {
+    let t = title.to_lowercase();
+    let u = uri.to_lowercase();
+    const TITLE_NOISE: &[&str] = &[
+        "coupon",
+        "promo code",
+        "promocode",
+        "promo codes",
+        "discount code",
+        "voucher",
+        "% off",
+        "best deals",
+        "deal of the day",
+        "cashback",
+        "free shipping",
+        "buy now",
+        "clearance",
+        "sponsored",
+        "advertisement",
+        "广告",
+        "推广",
+        "赞助",
+    ];
+    if TITLE_NOISE.iter().any(|p| t.contains(p)) {
+        return true;
+    }
+    const URL_NOISE: &[&str] = &[
+        "/coupon",
+        "/coupons",
+        "/promo",
+        "/promos",
+        "/deal/",
+        "/deals",
+        "/discount",
+        "/voucher",
+        "/sales",
+        "/cart",
+        "/checkout",
+        "?coupon",
+        "?promo",
+        "&coupon",
+        "&promo",
+    ];
+    URL_NOISE.iter().any(|p| u.contains(p))
+}
+
 fn quality_gate(title: &str, text: &str) -> Result<(), String> {
     let n = text.chars().count();
     if n < 80 {
@@ -359,6 +407,46 @@ fn quality_gate(title: &str, text: &str) -> Result<(), String> {
         return Err("正文只是标题的重复堆叠".to_string());
     }
     Ok(())
+}
+
+/// 把已经入库的自动采集噪声标记为「不感兴趣」，不删除原文。
+///
+/// 只处理 state='new' 的 crawl/rss 条目：用户主动采集、手动录入的内容不在此列。
+/// 返回被标记的条数。启动时跑一次，把质量闸上线前积下来的促销页清出收件箱。
+pub fn reject_noise_percepts() -> Result<usize, String> {
+    let conn = ensure_db()?;
+    let rows: Vec<(String, String, String)> = {
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, COALESCE(title,''), COALESCE(uri,'') FROM percepts \
+                 WHERE state='new' AND source_kind IN ('crawl','rss')",
+            )
+            .map_err(|e| e.to_string())?;
+        let it = stmt
+            .query_map([], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?))
+            })
+            .map_err(|e| e.to_string())?;
+        it.filter_map(|x| x.ok()).collect()
+    };
+    let mut n = 0usize;
+    for (id, title, uri) in rows {
+        if !looks_like_noise(&title, &uri) {
+            continue;
+        }
+        let ok = conn
+            .execute(
+                "UPDATE percepts SET state='rejected', archive_reason='noise' \
+                 WHERE id=?1 AND state='new'",
+                params![id],
+            )
+            .unwrap_or(0);
+        n += ok;
+    }
+    if n > 0 {
+        info!("[cognition] 已把 {} 条自动采集的促销/广告噪声移出收件箱", n);
+    }
+    Ok(n)
 }
 
 fn normalize_text(raw: &str) -> String {

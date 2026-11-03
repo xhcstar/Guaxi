@@ -905,20 +905,6 @@ export const useFlipboardStore = () => {
 
   // 启动清理：仅保留收藏文章，其余缓存全部删除（避免磁盘/数据库无限增长）。
   // 每次进程启动只跑一次。
-  const purgeUnbookmarkedOnce = async () => {
-    if (window.__flipboardPurgedThisSession) return
-    window.__flipboardPurgedThisSession = true
-    try {
-      const keepUrls = (Array.isArray(bookmarks.value) ? bookmarks.value : [])
-        .map(b => String(b?.url || '').trim())
-        .filter(Boolean)
-      const removed = await invoke('purge_unbookmarked_articles', { keepUrls })
-      console.log('FlipboardStore: purged unbookmarked cached articles', { removed, kept: keepUrls.length })
-    } catch (error) {
-      console.warn('FlipboardStore: purge_unbookmarked_articles failed:', error)
-    }
-  }
-
   // 初始化
   const init = async () => {
     loadLocalData()
@@ -951,10 +937,12 @@ export const useFlipboardStore = () => {
       ? String(categories.value[0]?.id || '')
       : ''
     const firstCategory = first || null
+    // 先把选中态落到第一个分类上：左栏高亮与中间内容从第一帧就是一致的。
+    selectedCategory.value = firstCategory
 
-    // 清理未收藏缓存要在拉取之前（拉取会重新填充当前分类的新鲜内容）。
-    await purgeUnbookmarkedOnce()
-    // 先用第一个分类拉一轮文章，让中间区域立刻有卡片。
+    // 注意：这里**不再清空**未收藏缓存。
+    // 旧逻辑每次启动删光缓存，首屏只能重新抓取，空窗期看起来像"没加载、必须点一下"。
+    // 磁盘增长由后端按保留期清理（cleanup_old_cached_articles_if_due）负责。
     await fetchArticles(firstCategory)
 
     // 3) 订阅源导入与刷新放到首屏之后的后台，不阻塞"分类 + 首屏卡片"的呈现。

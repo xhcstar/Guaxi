@@ -566,13 +566,14 @@
         <div class="note-preview">
           <pre v-if="noteDialog.result" class="note-pre">{{ noteDialog.result.markdown }}</pre>
           <div v-else class="note-hint">
-            模型会生成「摘要 / 要点 / 对我有什么用」，并保留原文链接与摘录。
-            模型不可用时退回原文摘录，不会阻塞入库。
+            先本地生成摘要与要点、立即写入知识库；模型在后台提炼完成后自动覆盖，
+            不会卡住界面。原文链接与摘录始终保留。
           </div>
         </div>
         <div v-if="noteDialog.result" class="note-path">
           已写入 <code>{{ noteDialog.result.path }}</code>
-          <span v-if="!noteDialog.result.usedLlm">（模型不可用，本次为原文摘录）</span>
+          <span v-if="noteDialog.result.refining">（本地摘要已写入，正在后台提炼…）</span>
+          <span v-else-if="!noteDialog.result.usedLlm">（模型未完成，本次为本地摘要）</span>
         </div>
       </div>
       <template #footer>
@@ -646,6 +647,7 @@
 import { computed, onActivated, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useMessage } from 'naive-ui'
 import { invoke } from '@tauri-apps/api/core'
+import { listen } from '@tauri-apps/api/event'
 import {
   Add20Regular,
   Alert20Regular,
@@ -834,7 +836,7 @@ async function confirmNote() {
   try {
     const r = await store.perceptToNote(d.percept.id, d.kbName, d.folder)
     d.result = r
-    message.success(`已写入：${r.path}`)
+    message.success(r.refining ? '已写入，摘要会在后台补全' : '已写入')
   } catch (e) {
     d.error = String(e)
   } finally {
@@ -1121,6 +1123,7 @@ async function reload() {
 
 let offNudge = null
 let offBrief = null
+let offNoteRefined = null
 
 onMounted(async () => {
   await reload()
@@ -1137,6 +1140,19 @@ onMounted(async () => {
     await store.loadBrief()
     await store.refreshBriefHistory()
   })
+  // 笔记的后台模型提炼完成：若弹窗还停在同一篇，实时替换预览。
+  offNoteRefined = await listen('cognition_note_refined', (evt) => {
+    const payload = evt?.payload || {}
+    const cur = noteDialog.value.result
+    if (!cur || payload.path !== cur.path) return
+    noteDialog.value.result = {
+      ...cur,
+      markdown: payload.markdown || cur.markdown,
+      usedLlm: true,
+      refining: false,
+    }
+    message.success('摘要已提炼完成')
+  })
 })
 
 // 中间区被 <KeepAlive> 缓存：从"读文章"切回大脑页时不会重跑 onMounted，
@@ -1152,6 +1168,7 @@ onActivated(() => {
 onUnmounted(() => {
   if (offNudge) offNudge()
   if (offBrief) offBrief()
+  if (offNoteRefined) offNoteRefined()
 })
 </script>
 
