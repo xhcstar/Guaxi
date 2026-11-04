@@ -240,6 +240,31 @@ export const useFlipboardStore = () => {
 
     try {
       if (!forceRefresh) {
+        // 先走新的检索接口：只返回 state=ready 且 canonical 的条目，
+        // 按质量分排序。这是 Phase 4 的列表契约。
+        try {
+          const res = await invoke('search_items', {
+            query: {
+              query: normalizedTopic || null,
+              collection: normalizedCategory || null,
+              limit: 80,
+              offset: 0,
+              sort: 'quality',
+            },
+          })
+          if (isStale()) return
+          const list = Array.isArray(res?.items) ? res.items : []
+          if (list.length) {
+            articles.value = list
+            inMemoryArticleCache.set(cacheKey, list.slice(0, 120))
+            isLoading.value = false
+            if (list.length >= 40) return
+          }
+        } catch (e) {
+          // 新接口不可用时（例如库里还没有 ready 条目）回落到旧接口。
+          console.warn('FlipboardStore: search_items unavailable, falling back', e)
+        }
+
         const memoryCached = inMemoryArticleCache.get(cacheKey)
         if (Array.isArray(memoryCached) && memoryCached.length) {
           articles.value = memoryCached.slice(0, 80)
@@ -487,6 +512,88 @@ export const useFlipboardStore = () => {
       console.error('FlipboardStore: fetchFeedHealth failed:', error)
       throw error
     }
+  }
+
+  // ===== Phase 4：检索、诊断、回收站 =====
+
+  // 采集管线各状态计数（未处理 / 就绪 / 失败 / 等登录…）。
+  const pipelineStats = ref([])
+  const fetchPipelineStats = async () => {
+    try {
+      const data = await invoke('get_pipeline_stats')
+      pipelineStats.value = Array.isArray(data) ? data : []
+      return pipelineStats.value
+    } catch (e) {
+      console.warn('FlipboardStore: get_pipeline_stats failed:', e)
+      pipelineStats.value = []
+      return []
+    }
+  }
+
+  // Feeds 库占用（文件数 / 图片数 / 字节数）。
+  const feedsStorage = ref(null)
+  const fetchFeedsStorage = async () => {
+    try {
+      feedsStorage.value = await invoke('get_feeds_storage_stats')
+      return feedsStorage.value
+    } catch (e) {
+      console.warn('FlipboardStore: get_feeds_storage_stats failed:', e)
+      return null
+    }
+  }
+
+  // 带筛选条件的检索（集合 / 语言 / 时间窗 / 排序）。
+  const searchItems = async (params = {}) => {
+    return await invoke('search_items', {
+      query: {
+        query: params.query || null,
+        collection: params.collection || null,
+        source_id: params.sourceId || null,
+        lang: params.lang || null,
+        min_quality: params.minQuality ?? null,
+        days: params.days ?? null,
+        limit: params.limit ?? 60,
+        offset: params.offset ?? 0,
+        sort: params.sort || 'quality',
+      },
+    })
+  }
+
+  // 回收站：列出可撤销的删除 / 撤销 / 立即清理。
+  const trashedItems = ref([])
+  const fetchTrashed = async (limit = 50) => {
+    try {
+      const res = await invoke('list_trashed_documents', { limit })
+      trashedItems.value = Array.isArray(res?.items) ? res.items : []
+      return trashedItems.value
+    } catch (e) {
+      console.warn('FlipboardStore: list_trashed_documents failed:', e)
+      trashedItems.value = []
+      return []
+    }
+  }
+  const restoreTrashed = async (urlNorm) => {
+    const path = await invoke('restore_trashed_document', { urlNorm })
+    await fetchTrashed()
+    return path
+  }
+  const purgeExpired = async () => {
+    const n = await invoke('purge_expired_documents')
+    await Promise.all([fetchFeedsStorage(), fetchPipelineStats()])
+    return n
+  }
+
+  // 从本地原始 HTML 重放抽取（不重新请求站点）。
+  const replayExtraction = async (url) => {
+    return await invoke('replay_article_extraction', { url })
+  }
+
+  // Feeds 设置读写。
+  const fetchFeedsSettings = async () => {
+    return await invoke('get_feeds_settings')
+  }
+  const saveFeedsSettings = async (settings, retention) => {
+    await invoke('save_feeds_settings', { settings, retention })
   }
 
   // 添加信息源
@@ -1002,6 +1109,19 @@ export const useFlipboardStore = () => {
     fetchCategories,
     fetchFeeds,
     fetchFeedHealth,
+    // Phase 4
+    pipelineStats,
+    feedsStorage,
+    trashedItems,
+    fetchPipelineStats,
+    fetchFeedsStorage,
+    searchItems,
+    fetchTrashed,
+    restoreTrashed,
+    purgeExpired,
+    replayExtraction,
+    fetchFeedsSettings,
+    saveFeedsSettings,
     runSchedulerTick,
     fetchFeedSchedule,
     createKbNoteFromTopic,

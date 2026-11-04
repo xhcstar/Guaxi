@@ -25,6 +25,7 @@ import LLMModalSetting from './LLMModalSetting.vue';
 import GuaxiManual from './GuaxiManual.vue';
 import TaskManagerContent from './TaskManagerContent.vue';
 import CognitionSetting from './CognitionSetting.vue';
+import FeedsSetting from './FeedsSetting.vue';
 import { useSettingsStore } from '../../stores/settingsStore';
 
 const settingsStore = useSettingsStore();
@@ -34,6 +35,8 @@ const currentComponent = computed(() => {
   switch (settingsStore.selectedMenu) {
     case 'noterepo':
       return NoteRepoContent;
+    case 'feeds':
+      return FeedsSetting;
     case 'appearance':
       return AppearanceContent;
     case 'editor':

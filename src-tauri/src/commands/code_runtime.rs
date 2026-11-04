@@ -11,8 +11,8 @@ use std::hash::{Hash, Hasher};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, OnceLock, TryLockError};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 use tauri::{command, AppHandle, Emitter};
@@ -3646,34 +3646,24 @@ fn with_python_worker_for_key<R>(
     f: impl FnOnce(&mut PythonWorkerState) -> Result<R, String>,
 ) -> Result<R, String> {
     let worker = ensure_python_worker_for_key(worker_key)?;
-    let worker_probe = Arc::clone(&worker);
-    let active_worker = match worker_probe.try_lock() {
-        Ok(state) => {
-            drop(state);
-            worker
-        }
-        Err(TryLockError::WouldBlock) => {
-            warn!(
-                worker_key,
-                "[PythonRuntime] worker state is still locked, replace cached worker to avoid hanging requests"
-            );
-            let _ = remove_python_worker_by_key(worker_key)?;
-            ensure_python_worker_for_key(worker_key)?
-        }
-        Err(TryLockError::Poisoned(_)) => {
-            warn!(
-                worker_key,
-                "[PythonRuntime] worker state lock poisoned, replace cached worker"
-            );
-            let _ = remove_python_worker_by_key(worker_key)?;
-            ensure_python_worker_for_key(worker_key)?
-        }
-    };
-    let mut state = active_worker
+
+    // 关键：这里必须**等待**，不能 `try_lock` 失败就重建 worker。
+    //
+    // 旧实现遇到 `WouldBlock` 会把正在被另一个线程使用的 worker 从池里摘掉并新建一个，
+    // 结果是并发调用互相踩：A 正在跑 180s 的抽取，B 一来就把 A 的 worker 标记为"待死"，
+    // 并额外冷启动一个 Python 进程（要重新 `import trafilatura`）。
+    // 抓取管线本身是并发的（preheat_display_articles 是 4 并发），所以这不是偶发。
+    //
+    // 正确语义是排队：同一个 worker key 的请求串行执行。阻塞有上界——
+    // 正在执行的那个请求自身带超时看门狗（`python_worker_timeout_secs_for_cmd`），
+    // 超时会 kill 该进程，持有锁的线程随后返回，这里自然被唤醒。
+    let mut state = worker
         .lock()
         .map_err(|_| "lock python worker state failed".to_string())?;
 
     if !worker_is_alive(&mut state) {
+        // 进程已死（崩溃/被看门狗杀掉）。此时锁在我们手里，可以先摘除再重建，
+        // 不会与别的线程抢同一个半死实例。
         drop(state);
         if let Some(stale_worker) = remove_python_worker_by_key(worker_key)? {
             terminate_python_worker_state(worker_key, stale_worker);
@@ -3812,13 +3802,21 @@ fn send_worker_request(payload: &Value) -> Result<Value, String> {
 /// 设计：复用既有 worker 协议（`send_worker_request`）。trafilatura 未安装时
 /// worker 会返回 `{"ok": false, "error": "trafilatura unavailable..."}`，调用方
 /// （flipboard 抽取层）据此回退到本地 Rust 抽取，保证链路不中断。
+///
+/// 并发：抽取是抓取管线里最重的一步，且天然可并行。这里按 round-robin 把请求
+/// 分派到 N 个独立 worker（不同 session key → 不同进程），避免所有抽取串行在
+/// 一个 Python 进程上。worker 由 `ensure_python_worker_for_key` 惰性创建。
 pub fn extract_article_via_python(html: &str, url: &str) -> Result<Value, String> {
+    static NEXT_SLOT: AtomicUsize = AtomicUsize::new(0);
+    let slots = extract_worker_slots();
+    let slot = NEXT_SLOT.fetch_add(1, Ordering::Relaxed) % slots;
+
     let payload = json!({
         "cmd": "extract_article",
         "html": html,
         "url": url,
-        // 固定 worker key，避免污染用户的交互式会话 worker。
-        "session_id": "__guaxi_flipboard_extract__",
+        // 与用户交互式会话 worker 隔离；按 slot 分散到多个抽取进程。
+        "session_id": format!("{}{}", EXTRACT_WORKER_PREFIX, slot),
     });
     let response = send_worker_request(&payload)?;
     let ok = response.get("ok").and_then(Value::as_bool).unwrap_or(false);
@@ -3834,6 +3832,19 @@ pub fn extract_article_via_python(html: &str, url: &str) -> Result<Value, String
         .get("article")
         .cloned()
         .ok_or_else(|| "extract response missing article".to_string())
+}
+
+/// 抽取 worker 的 session key 前缀（实际 key 会是 `session::__guaxi_flipboard_extract_0`）。
+const EXTRACT_WORKER_PREFIX: &str = "__guaxi_flipboard_extract_";
+
+/// 抽取 worker 进程数：每个约占 80–150MB 峰值内存（trafilatura + lxml），
+/// 所以在低内存机器上要保守。上限 4，下限 1。
+fn extract_worker_slots() -> usize {
+    let cpus = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(2);
+    // 每 2 个核给一个抽取进程，与下载/渲染阶段的 IO 并发错开。
+    (cpus / 2).clamp(1, 4)
 }
 
 /// 确保 trafilatura 已安装到管理化运行时（best-effort，幂等）。

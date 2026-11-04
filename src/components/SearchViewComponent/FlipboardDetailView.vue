@@ -56,7 +56,24 @@
               </n-icon>
             </n-button>
           </template>
-          重新深解析（重新抓取完整图文）
+          重新抓取并解析（重新请求原站）
+        </n-tooltip>
+
+        <n-tooltip placement="bottom" trigger="hover">
+          <template #trigger>
+            <n-button
+              circle
+              size="small"
+              :loading="replaying"
+              :disabled="!currentArticle?.url || replaying"
+              @click="replayExtraction"
+            >
+              <n-icon>
+                <ReloadIcon />
+              </n-icon>
+            </n-button>
+          </template>
+          从本地原文重放抽取（不重新请求站点）
         </n-tooltip>
 
         <n-tooltip placement="bottom" trigger="hover">
@@ -231,6 +248,7 @@ import {
   DocumentTextOutline,
   OpenOutline,
   RefreshOutline,
+  SyncOutline,
   LanguageOutline
 } from '@vicons/ionicons5'
 import { useBilingualPreview } from '../../composables/useBilingualPreview.js'
@@ -244,6 +262,7 @@ const CloseIcon = CloseOutline
 const DocumentTextIcon = DocumentTextOutline
 const OpenIcon = OpenOutline
 const RefreshIcon = RefreshOutline
+const ReloadIcon = SyncOutline
 const TranslateIcon = LanguageOutline
 
 const props = defineProps({
@@ -358,8 +377,17 @@ const looksLikeMarkdown = (text) => {
     || /\[[^\]]+\]\([^)]+\)/.test(s)        // 链接
 }
 
-// 选出用于渲染的原始内容：干净 HTML 优先；若它"只有图没正文"而 content 更全则用 content。
+// 选出用于渲染的原始内容。
+//
+// 数据侧契约（Phase 3 之后）：`clean_content_markdown` 是正文真源，
+// 由抽取器产出并经过块级清洗；`clean_content_html` 是由它渲染出来的 HTML。
+// 所以这里**优先 Markdown**——它是唯一经过清洗的形态。
+//
+// 保留 HTML / 纯文本两条退路，仅为兼容旧缓存行（Phase 3 之前入库的数据
+// 可能只有 HTML 或纯 content）。新数据不会再走到它们。
 const contentSource = computed(() => {
+  const md = String(props.currentArticle?.clean_content_markdown || '').trim()
+  if (md) return md
   const cleanHtml = String(props.currentArticle?.clean_content_html || '').trim()
   const raw = String(props.currentArticle?.content || '').trim()
   if (cleanHtml && !(htmlTextLen(cleanHtml) < 40 && htmlTextLen(raw) > htmlTextLen(cleanHtml))) {
@@ -547,11 +575,30 @@ const reparseArticle = async () => {
   reparsing.value = true
   try {
     await store.reparseArticle(props.currentArticle)
-    message.success('已重新深解析', { duration: 1500 })
+    message.success('已重新抓取并解析', { duration: 1500 })
   } catch (error) {
-    message.error(`深解析失败：${error?.message || error}`, { duration: 2500 })
+    message.error(`重新解析失败：${error?.message || error}`, { duration: 2500 })
   } finally {
     reparsing.value = false
+  }
+}
+
+// 从本地 raw HTML 重放抽取：抽取器升级或规则调整后，用来验证新规则，
+// 不需要重新请求站点（原站可能已不可达）。
+const replaying = ref(false)
+const replayExtraction = async () => {
+  const url = props.currentArticle?.url
+  if (!url) return
+  replaying.value = true
+  try {
+    await store.replayExtraction(url)
+    message.success('已从本地原文重新抽取', { duration: 1500 })
+    // 重新拉取详情以显示新结果
+    await store.fetchArticleDetail(props.currentArticle)
+  } catch (error) {
+    message.error(`重放失败：${error?.message || error}`, { duration: 3000 })
+  } finally {
+    replaying.value = false
   }
 }
 

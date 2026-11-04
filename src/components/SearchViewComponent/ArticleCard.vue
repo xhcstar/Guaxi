@@ -22,6 +22,7 @@
         <div class="meta-info">
           <span class="relevance-dot" v-if="relevanceLabel" :class="relevanceClass" :title="`相关度 ${article.relevance_score}`">{{ relevanceLabel }}</span>
           <span class="source">{{ article.source }}</span>
+          <span class="alias-badge" v-if="aliasCount > 1" :title="`同一内容另有 ${aliasCount - 1} 个来源`">×{{ aliasCount }}源</span>
           <span class="time">{{ formatTime(article.published_at) }}</span>
         </div>
       </div>
@@ -86,13 +87,31 @@ const cardImage = computed(() => {
 })
 
 // 摘要：优先 description / summary；都空时退回抽取正文前若干字（去掉多余空白）。
+// 数据侧契约：description 已是纯文本（后端入库时用 html_to_text 处理过），
+// 这里再兜一次去标签是为了兼容旧缓存行，不依赖它。
 const cardSummary = computed(() => {
   const a = props.article
-  const primary = String(a?.description || a?.summary || '').trim()
+  const strip = (s) => String(s || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim()
+  const primary = strip(a?.summary || a?.description)
   if (primary) return primary
-  const content = String(a?.content || '').replace(/\s+/g, ' ').trim()
+  const content = strip(a?.content)
   if (!content) return ''
   return content.length > 140 ? `${content.slice(0, 140)}…` : content
+})
+
+// 转载来源数：后端在 search_items 里用 `__aliases:N` 标记同一个 canonical
+// 被几个源抓到。>1 时卡片上显示，让用户知道这不是唯一报道方。
+const aliasCount = computed(() => {
+  const tags = Array.isArray(props.article?.tags) ? props.article.tags : []
+  const hit = tags.find(t => typeof t === 'string' && t.startsWith('__aliases:'))
+  return hit ? Number(hit.split(':')[1]) || 0 : 0
+})
+
+// 页面类型（article / index / product…），用于在卡片上标记非正常文章。
+const pageKind = computed(() => {
+  const tags = Array.isArray(props.article?.tags) ? props.article.tags : []
+  const hit = tags.find(t => typeof t === 'string' && t.startsWith('__kind:'))
+  return hit ? hit.split(':')[1] : ''
 })
 
 // 相关度指示：>=0 才显示（-1 为未评分）。高/中/低三档，与阅读页配色一致。
@@ -269,6 +288,16 @@ const formatTime = (timeString) => {
   align-items: center;
   font-size: 12px;
   color: var(--guaxi-text-secondary);
+}
+
+/* 同一内容被多个源抓到时显示，提示用户这不是唯一报道方。 */
+.alias-badge {
+  padding: 1px 6px;
+  border-radius: 8px;
+  background: var(--guaxi-panel-bg);
+  border: 1px solid var(--guaxi-border);
+  font-size: 11px;
+  opacity: 0.8;
 }
 
 .relevance-dot {

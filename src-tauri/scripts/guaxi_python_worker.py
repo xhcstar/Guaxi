@@ -2461,7 +2461,25 @@ def _handle_extract_article(payload):
         excerpt = _meta_get("description") or _meta_get("excerpt")
         lang = _meta_get("language")
         lead_image = _meta_get("image")
-        body_html = _meta_get("body") or _meta_get("text") or ""
+        # 注意：trafilatura 2.x 的 `body` 是 lxml 的 `_Element`，不是字符串。
+        # 直接 `str(body)` 会得到 "<Element body at 0x...>" 这种垃圾，
+        # 进而让 Rust 侧的 `clean_html` 变成一行无意义文本。
+        # 必须先序列化回 HTML 字符串。
+        body_raw = _meta_get("body")
+        if body_raw is None:
+            body_html = ""
+        elif isinstance(body_raw, str):
+            body_html = body_raw
+        else:
+            try:
+                # lxml 元素 → HTML 字符串
+                from lxml import etree
+                body_html = etree.tostring(
+                    body_raw, encoding="unicode", method="html"
+                )
+            except Exception:
+                # 取不到就留空，让 Rust 侧走 markdown→HTML 的路径，而不是塞垃圾。
+                body_html = ""
         plain_text = _meta_get("text") or ""
 
         # 从 markdown 里收集图片 URL（![](url) 与裸 http 图片链接）。
@@ -2478,7 +2496,7 @@ def _handle_extract_article(payload):
         if not lead_image and images:
             lead_image = images[0]
 
-        if not (markdown.strip() or str(body_html).strip()):
+        if not (markdown.strip() or body_html.strip()):
             return {"ok": False, "error": "trafilatura produced empty content"}
 
         return {
@@ -2486,7 +2504,7 @@ def _handle_extract_article(payload):
             "article": {
                 "title": title or "",
                 "markdown": markdown,
-                "html": str(body_html or ""),
+                "html": body_html,
                 "text": str(plain_text or ""),
                 "lead_image": lead_image or "",
                 "images": images,

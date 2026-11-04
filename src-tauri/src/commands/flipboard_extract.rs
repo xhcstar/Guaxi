@@ -46,7 +46,14 @@ pub fn extract(html: &str, base_url: &str) -> Result<ExtractedArticle, String> {
 
     match code_runtime::extract_article_via_python(html, base_url) {
         Ok(article) => match build_from_trafilatura(&article, base_url) {
-            Ok(extracted) if !extracted.clean_html.trim().is_empty() => return Ok(extracted),
+            Ok(mut extracted) if !extracted.clean_html.trim().is_empty() => {
+                // trafilatura 2.x 经常不填 language（实测页面有 lang="en-us" 却返回 None）。
+                // 从原始 HTML 的 <html lang> 兜底取一次——质量分里的语言项靠它。
+                if extracted.lang.as_deref().map(|l| l.trim().is_empty()).unwrap_or(true) {
+                    extracted.lang = html_lang_attr(html);
+                }
+                return Ok(extracted);
+            }
             _ => {
                 tracing::warn!("flipboard_extract: trafilatura produced empty content, fallback to scraper");
             }
@@ -61,6 +68,45 @@ pub fn extract(html: &str, base_url: &str) -> Result<ExtractedArticle, String> {
     }
 
     extract_with_scraper(html, base_url)
+}
+
+/// 从 `<html lang="...">` 取语言。取不到返回 None。
+///
+/// trafilatura 2.x 的 `language` 字段实测经常为空（页面明写 `lang="en-us"` 也返回 None），
+/// 而质量分里语言占一档，所以补这个兜底。
+fn html_lang_attr(html: &str) -> Option<String> {
+    // 只看文档开头的 4000 个**字符**（不是字节）——按字节切片会切在多字节
+    // 字符中间直接 panic，中文页面必踩。取不到边界就安全回退到整个字符串。
+    let head: String = if html.chars().count() > 4000 {
+        html.chars().take(4000).collect()
+    } else {
+        html.to_string()
+    };
+    let lower = head.to_lowercase();
+    let start = lower.find("<html")?;
+    let tag_end = lower[start..].find('>')? + start;
+    let tag = &head[start..tag_end];
+    let tag_lower = tag.to_lowercase();
+    let attr = tag_lower.find("lang=")?;
+    let rest = &tag[attr + 5..];
+    let rest = rest.trim_start();
+    let quote = rest.chars().next()?;
+    if quote != '"' && quote != '\'' {
+        // 未加引号的写法
+        let value: String = rest
+            .chars()
+            .take_while(|c| !c.is_whitespace() && *c != '>')
+            .collect();
+        return if value.is_empty() { None } else { Some(value) };
+    }
+    let inner = &rest[1..];
+    let end = inner.find(quote)?;
+    let value = inner[..end].trim();
+    if value.is_empty() {
+        None
+    } else {
+        Some(value.to_string())
+    }
 }
 
 /// 首次发现 trafilatura 缺失时，后台异步安装一次（不阻塞当前抓取）。
@@ -134,6 +180,8 @@ fn build_from_trafilatura(article: &serde_json::Value, base_url: &str) -> Result
         images,
         byline: get_str("byline"),
         published: get_str("published"),
+        // trafilatura 2.x 经常不填 language（实测页面有 lang="en-us" 也返回 None），
+        // 所以这里再从原始 HTML 的 <html lang> 兜底取一次。
         lang: get_str("lang"),
         excerpt: get_str("excerpt"),
         engine: "trafilatura",
@@ -379,4 +427,36 @@ fn escape_html(s: &str) -> String {
 
 fn escape_attr(s: &str) -> String {
     s.replace('&', "&amp;").replace('"', "&quot;")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reads_html_lang_double_quotes() {
+        let html = r#"<!DOCTYPE html><html lang="en-us"><head></head><body>x</body></html>"#;
+        assert_eq!(html_lang_attr(html), Some("en-us".to_string()));
+    }
+
+    #[test]
+    fn reads_html_lang_single_quotes_and_uppercase() {
+        let html = r#"<HTML LANG='zh-CN'><body>x</body></HTML>"#;
+        assert_eq!(html_lang_attr(html), Some("zh-CN".to_string()));
+    }
+
+    #[test]
+    fn returns_none_without_lang() {
+        let html = "<html><body>no lang here</body></html>";
+        assert_eq!(html_lang_attr(html), None);
+    }
+
+    #[test]
+    fn only_looks_at_document_head() {
+        // 正文深处出现 lang= 不应该被当页面语言
+        let mut html = String::from("<html><body>");
+        html.push_str(&"填".repeat(5000));
+        html.push_str(r#"<pre lang="python">code</pre></body></html>"#);
+        assert_eq!(html_lang_attr(&html), None);
+    }
 }
