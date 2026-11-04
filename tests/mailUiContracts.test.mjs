@@ -234,9 +234,13 @@ test('列表：滚到附近自动续页，不满一屏自动补齐', () => {
     /\} else if \(firstNew > 0 && manualMore\) \{/.test(listPane),
     '只有点按钮要的那一页才移动视口',
   )
+  // 「没有下一页」不只是 hasMore=false：本地翻完了但服务器上还有更早的邮件时，
+  // canBackfill 仍然允许再要一页（否则老邮件永远读不到）。两个都没有才停。
   assert.ok(
-    /if \(!props\.hasMore \|\| props\.loadingMore\) return/.test(listPane),
-    '没有下一页或有在途请求时不再触发',
+    /if \(!props\.hasMore && !props\.canBackfill\) return[\s\S]{0,120}if \(props\.loadingMore\) return/.test(
+      listPane,
+    ),
+    '既没有下一页、也没有更早邮件可回溯，或有在途请求时不再触发',
   )
 })
 // 切文件夹时同时跑着两条列表请求（先查本地库、同步完再查一次），谁后落地谁覆盖列表；

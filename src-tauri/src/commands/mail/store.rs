@@ -9,6 +9,7 @@
 //!   （`searcher.rs` 同款）：写入前用 jieba 把文本切成空格分隔的词，查询串也切一遍，
 //!   再交给 `unicode61`。索引里存的是词序列，中文两字词照样能命中。
 
+use super::mime;
 use super::model::{
     Account, FolderRole, MailFolder, MailRule, MailSettings, MailTemplate, MessageDetail,
     MessageSummary, OutboxItem, SearchQuery, SenderRule,
@@ -104,7 +105,7 @@ fn open() -> Result<Connection, String> {
 /// 为什么必须做版本化迁移：老用户的 `mail.db` 已经存在，`CREATE TABLE IF NOT EXISTS`
 /// 只会补新表、不会补新列；一旦某天查询里用到新列，整个邮件页会直接报
 /// 「no such column」而不是「少一个功能」。
-pub const SCHEMA_VERSION: i32 = 8;
+pub const SCHEMA_VERSION: i32 = 9;
 
 pub fn init(app: &AppHandle) -> Result<(), String> {
     let path = db_path(app)?;
@@ -166,6 +167,8 @@ pub fn init(app: &AppHandle) -> Result<(), String> {
             deleted INTEGER NOT NULL DEFAULT 0,
             has_attachments INTEGER NOT NULL DEFAULT 0,
             thread_key TEXT NOT NULL DEFAULT '',
+            in_reply_to TEXT NOT NULL DEFAULT '',
+            msg_refs TEXT NOT NULL DEFAULT '',
             labels TEXT NOT NULL DEFAULT '',
             outgoing INTEGER NOT NULL DEFAULT 0,
             PRIMARY KEY (account_id, folder, uid)
@@ -405,6 +408,32 @@ fn migrate(conn: &mut Connection) -> Result<(), String> {
     if version < 8 {
         // v8：本地 Exchange 的 EWS 端点。留空表示通过 Autodiscover 找。
         add_column(&tx, "accounts", "ews_url", "TEXT NOT NULL DEFAULT ''")?;
+    }
+    if version < 9 {
+        // v9：会话归并改用 `References` / `In-Reply-To`（业界通行做法），主题只当兜底。
+        //
+        // 只按主题归并会在两种常见情况下把一条会话撕成几段：
+        // 1) 有人回信时改了主题（`[bug 801882]…` → `BUG #131561 …`）；
+        // 2) 某些客户端回信不带 `Re:` 前缀，甚至把主题重写成一句话。
+        // 这两种在 Outlook / Gmail 里都还是一条会话，因为它们按消息号链归并。
+        add_column(&tx, "messages", "in_reply_to", "TEXT NOT NULL DEFAULT ''")?;
+        add_column(&tx, "messages", "msg_refs", "TEXT NOT NULL DEFAULT ''")?;
+        tx.execute_batch(
+            r#"
+            -- 按消息号反查「这条回信属于哪条会话」，每次同步都会走。
+            CREATE INDEX IF NOT EXISTS idx_messages_msgid ON messages (account_id, message_id);
+            -- 主题 → 会话键的别名表。主题被改过的回信先按新主题自成一组，
+            -- 一旦有带 References 的信把它接回原会话，就把「新主题 → 原会话」记下来；
+            -- 之后再来的同主题回信（哪怕客户端没带 References）也能挂回原会话。
+            CREATE TABLE IF NOT EXISTS thread_aliases (
+                account_id TEXT NOT NULL,
+                alias TEXT NOT NULL,
+                thread_key TEXT NOT NULL,
+                PRIMARY KEY (account_id, alias)
+            );
+            "#,
+        )
+        .map_err(|e| format!("迁移到 v9 失败: {e}"))?;
     }
     tx.pragma_update(None, "user_version", SCHEMA_VERSION)
         .map_err(|e| format!("写入 schema 版本失败: {e}"))?;
@@ -740,6 +769,9 @@ pub fn delete_account(id: &str, delete_local_mail: bool) -> Result<(), String> {
                 "DELETE FROM message_bodies WHERE account_id = ?1",
                 "DELETE FROM pop3_uids WHERE account_id = ?1",
                 "DELETE FROM folders WHERE account_id = ?1",
+                // 主题别名指向的是被删掉的会话键；留着的话重新添加同一账户时，
+                // 新邮件会被塞进一个已经不存在的会话里。
+                "DELETE FROM thread_aliases WHERE account_id = ?1",
             ] {
                 tx.execute(sql, params![id])
                     .map_err(|e| format!("清理本机邮件失败: {e}"))?;
@@ -1528,7 +1560,7 @@ pub fn uids_in_folder(account_id: &str, folder: &str) -> Result<Vec<u32>, String
 
 const MSG_COLS: &str = "account_id, folder, uid, message_id, subject, from_name, from_addr, \
     to_json, cc_json, date, size, snippet, seen, flagged, answered, draft, deleted, \
-    has_attachments, thread_key, labels, outgoing";
+    has_attachments, thread_key, labels, outgoing, in_reply_to, msg_refs";
 
 fn row_to_summary(row: &Row<'_>) -> rusqlite::Result<MessageSummary> {
     Ok(MessageSummary {
@@ -1553,6 +1585,8 @@ fn row_to_summary(row: &Row<'_>) -> rusqlite::Result<MessageSummary> {
         thread_key: row.get(18)?,
         labels: row.get(19)?,
         outgoing: row.get::<_, i32>(20)? != 0,
+        in_reply_to: row.get(21)?,
+        references: row.get(22)?,
     })
 }
 
@@ -1577,11 +1611,14 @@ pub fn upsert_summaries_on(
         return Ok(());
     }
     for m in items {
+        // 落库前先把会话归属算清楚：References 命中的旧邮件说了算，主题只是兜底。
+        // 这一步还可能顺手合并历史上被主题拆开的几段会话（见 resolve_thread_key）。
+        let thread_key = resolve_thread_key(conn, m)?;
         conn.execute(
             r#"INSERT INTO messages (account_id, folder, uid, message_id, subject, from_name, from_addr,
                     to_json, cc_json, date, size, snippet, seen, flagged, answered, draft, deleted,
-                    has_attachments, thread_key, labels, outgoing)
-               VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21)
+                    has_attachments, thread_key, labels, outgoing, in_reply_to, msg_refs)
+               VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23)
                ON CONFLICT(account_id, folder, uid) DO UPDATE SET
                     message_id=excluded.message_id, subject=excluded.subject,
                     from_name=excluded.from_name, from_addr=excluded.from_addr,
@@ -1589,7 +1626,8 @@ pub fn upsert_summaries_on(
                     size=excluded.size, snippet=excluded.snippet, seen=excluded.seen,
                     flagged=excluded.flagged, answered=excluded.answered, draft=excluded.draft,
                     deleted=excluded.deleted, has_attachments=excluded.has_attachments,
-                    thread_key=excluded.thread_key, labels=excluded.labels"#,
+                    thread_key=excluded.thread_key, labels=excluded.labels,
+                    in_reply_to=excluded.in_reply_to, msg_refs=excluded.msg_refs"#,
             params![
                 m.account_id,
                 m.folder,
@@ -1609,15 +1647,168 @@ pub fn upsert_summaries_on(
                 m.draft as i32,
                 m.deleted as i32,
                 m.has_attachments as i32,
-                m.thread_key,
+                thread_key,
                 m.labels,
                 m.outgoing as i32,
+                m.in_reply_to,
+                m.references,
             ],
         )
         .map_err(|e| format!("写入邮件失败: {e}"))?;
         reindex_message(conn, &m.account_id, &m.folder, m.uid)?;
     }
     Ok(())
+}
+
+// ---------------- 会话归并 ----------------
+
+/// 一封邮件该挂到哪条会话上。
+///
+/// 归并顺序与 Outlook / Gmail 一致：
+/// 1. `References` / `In-Reply-To` 指向的本地邮件所在的会话（最可靠 —— 消息号是
+///    RFC 5322 里唯一确定「谁在回谁」的东西）；
+/// 2. 主题别名表里记过的归属（主题被改过、但之前已经被接回原会话）；
+/// 3. 都没有时退回「去掉 Re:/回复: 的主题」。
+///
+/// 命中多段会话时把它们合并成一段，并记住主题别名 —— 这样「有人改了主题回信」
+/// 之后，同一主题下客户端没带 References 的后续回信也能挂回原会话。
+fn resolve_thread_key(conn: &Connection, m: &MessageSummary) -> Result<String, String> {
+    let base = if m.thread_key.trim().is_empty() {
+        mime::thread_key(&m.subject)
+    } else {
+        m.thread_key.trim().to_string()
+    };
+    // 归并「同主题那一段」只对像样的主题做。像 `re:`（前缀被剥光）、`hi` 这种
+    // 退化主题本身就是一堆不相干邮件，把它们整段并进某条会话比拆开更糟。
+    let mergeable = base.chars().count() >= 3;
+
+    // 1) 引用链指向哪段会话。
+    let mut linked: Vec<String> = Vec::new();
+    for id in mime::message_ids(&m.in_reply_to, &m.references) {
+        if let Some(key) = lookup_thread_key_by_message_id(conn, &m.account_id, &id)? {
+            if !key.is_empty() && !linked.iter().any(|k| k == &key) {
+                linked.push(key);
+            }
+        }
+    }
+    let canonical = if let Some(first) = linked.first() {
+        // 同一条链命中多段（历史上被主题拆开过）：并成一段，取最先命中的那一段。
+        for other in linked.iter().skip(1) {
+            merge_threads(conn, &m.account_id, other, first)?;
+        }
+        first.clone()
+    } else if mergeable {
+        match alias_thread_key(conn, &m.account_id, &base)? {
+            Some(alias) => {
+                merge_threads(conn, &m.account_id, &base, &alias)?;
+                alias
+            }
+            None => base.clone(),
+        }
+    } else {
+        base.clone()
+    };
+
+    // 2) 主题被改过的回信：把「新主题」记到原会话上，并把同主题的旧行一起接过来。
+    if mergeable && base != canonical {
+        merge_threads(conn, &m.account_id, &base, &canonical)?;
+        set_thread_alias(conn, &m.account_id, &base, &canonical)?;
+    }
+    Ok(canonical)
+}
+
+/// 按消息号找它所在的会话键。信箱里 `message_id` 的存法不统一（有带尖括号的、
+/// 有不带的、Exchange 的还有自己的 id），三种写法都试一遍。
+fn lookup_thread_key_by_message_id(
+    conn: &Connection,
+    account_id: &str,
+    message_id: &str,
+) -> Result<Option<String>, String> {
+    let trimmed = message_id.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    let bare = trimmed.trim_start_matches('<').trim_end_matches('>');
+    let candidates = [
+        trimmed.to_string(),
+        bare.to_string(),
+        format!("<{bare}>"),
+    ];
+    for candidate in candidates {
+        if candidate.is_empty() {
+            continue;
+        }
+        let found = conn
+            .query_row(
+                "SELECT thread_key FROM messages
+                 WHERE account_id=?1 AND message_id=?2
+                 ORDER BY date ASC LIMIT 1",
+                params![account_id, candidate],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(|e| format!("按消息号查会话失败: {e}"))?;
+        if found.is_some() {
+            return Ok(found);
+        }
+    }
+    Ok(None)
+}
+
+fn alias_thread_key(
+    conn: &Connection,
+    account_id: &str,
+    alias: &str,
+) -> Result<Option<String>, String> {
+    conn.query_row(
+        "SELECT thread_key FROM thread_aliases WHERE account_id=?1 AND alias=?2",
+        params![account_id, alias],
+        |row| row.get::<_, String>(0),
+    )
+    .optional()
+    .map_err(|e| format!("读取会话别名失败: {e}"))
+}
+
+fn set_thread_alias(
+    conn: &Connection,
+    account_id: &str,
+    alias: &str,
+    thread_key: &str,
+) -> Result<(), String> {
+    if alias.is_empty() || thread_key.is_empty() || alias == thread_key {
+        return Ok(());
+    }
+    conn.execute(
+        "INSERT INTO thread_aliases (account_id, alias, thread_key) VALUES (?1, ?2, ?3)
+         ON CONFLICT(account_id, alias) DO UPDATE SET thread_key=excluded.thread_key",
+        params![account_id, alias, thread_key],
+    )
+    .map(|_| ())
+    .map_err(|e| format!("写入会话别名失败: {e}"))
+}
+
+/// 把一段会话并进另一段：改走 `messages.thread_key`，并把别名一起迁过去。
+/// 只影响同一个账户 —— 不同账户恰好同主题的邮件不该被并成一条。
+fn merge_threads(
+    conn: &Connection,
+    account_id: &str,
+    from: &str,
+    to: &str,
+) -> Result<(), String> {
+    if from.is_empty() || to.is_empty() || from == to {
+        return Ok(());
+    }
+    conn.execute(
+        "UPDATE messages SET thread_key=?1 WHERE account_id=?2 AND thread_key=?3",
+        params![to, account_id, from],
+    )
+    .map_err(|e| format!("合并会话失败: {e}"))?;
+    conn.execute(
+        "UPDATE thread_aliases SET thread_key=?1 WHERE account_id=?2 AND thread_key=?3",
+        params![to, account_id, from],
+    )
+    .map_err(|e| format!("迁移会话别名失败: {e}"))?;
+    set_thread_alias(conn, account_id, from, to)
 }
 
 /// 整封原文缓存的大小上限。超过这个值的邮件不缓存原文：
@@ -2823,10 +3014,13 @@ pub fn clear_cache(account_id: Option<&str>) -> Result<(), String> {
                 .ok();
             tx.execute("DELETE FROM message_bodies WHERE account_id=?1", params![id])
                 .ok();
+            tx.execute("DELETE FROM thread_aliases WHERE account_id=?1", params![id])
+                .ok();
         }
         None => {
             tx.execute("DELETE FROM messages", []).ok();
             tx.execute("DELETE FROM message_bodies", []).ok();
+            tx.execute("DELETE FROM thread_aliases", []).ok();
         }
     }
     tx.commit().map_err(|e| e.to_string())?;
@@ -2877,8 +3071,11 @@ pub fn base_detail(summary: &MessageSummary) -> MessageDetail {
         bcc: Vec::new(),
         reply_to: Vec::new(),
         date: summary.date,
-        in_reply_to: String::new(),
-        references: String::new(),
+        // 引用头跟着摘要走：正文命中缓存时也要能拼出正确的回复链，
+        // 否则从这里发出去的回复会丢 In-Reply-To，对方（和本机）就会把同一条
+        // 会话拆成两段——「回复着回复着变成新会话」正是这么来的。
+        in_reply_to: summary.in_reply_to.clone(),
+        references: summary.references.clone(),
         html: None,
         text: String::new(),
         attachments: Vec::new(),

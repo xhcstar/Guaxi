@@ -1770,6 +1770,11 @@ pub async fn mail_get_message(
         )?;
         summary.message_id = summary.message_id.or(parsed.message_id.clone());
         summary.has_attachments = summary.has_attachments || parsed.has_attachments;
+        // 顺手把引用链补进摘要：老库里的邮件是这套字段上线前入库的，
+        // 只要用户打开过一封，它就能凭 References 找回自己的会话，
+        // 历史上被主题拆开的几段会话也会在这一刻并回去。
+        summary.in_reply_to = parsed.in_reply_to.clone();
+        summary.references = parsed.references.clone();
         store::upsert_summaries(&[summary.clone()])?;
 
         detail.html = parsed.html;

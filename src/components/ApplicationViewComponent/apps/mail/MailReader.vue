@@ -110,7 +110,14 @@
           </button>
         </div>
 
-        <h1 class="mail-reader-subject">{{ detail.subject || '（无主题）' }}</h1>
+        <h1 class="mail-reader-subject">
+          {{ detail.subject || '（无主题）' }}
+          <!-- 会话封数：一眼能看出「这条线一共几封往来」，
+               不用靠往下滚去数卡片，也不会误以为回复丢了。 -->
+          <span v-if="isThread" class="mail-reader-thread-count">
+            {{ threadTotal || threadMessages.length }} 封往来
+          </span>
+        </h1>
       </header>
 
       <!-- 邮件头信息：与 Outlook 一样把「谁发给谁、什么时候」摊开写清楚。
@@ -245,6 +252,10 @@
 
           <!-- 会话视图：同一 thread 的每封邮件一张独立卡片，不再把历史塞进当前正文。 -->
           <div v-if="isThread" class="mail-thread">
+            <!-- 超出渲染上限时把话说清楚：宁可多一行提示，也不能让用户以为邮件丢了。 -->
+            <div v-if="threadTruncated" class="mail-thread-notice">
+              这条会话共有 {{ threadTotal }} 封，当前显示最近 {{ threadMessages.length }} 封。
+            </div>
             <article
               v-for="msg in threadMessages"
               :key="threadKeyOf(msg)"
@@ -401,6 +412,8 @@ const props = defineProps({
   detail: { type: Object, default: null },
   /** 会话内每封邮件的详情（按时间升序）；为空表示普通单封阅读。 */
   thread: { type: Array, default: () => [] },
+  /** 这条会话在本地库里的总封数；大于 `thread.length` 说明被渲染上限截断了。 */
+  threadTotal: { type: Number, default: 0 },
   loading: { type: Boolean, default: false },
   settings: { type: Object, default: () => ({}) },
   themeMode: { type: String, default: 'dark' },
@@ -453,7 +466,17 @@ watch(
 )
 
 const isThread = computed(() => (props.thread?.length || 0) > 1)
-const threadMessages = computed(() => (isThread.value ? props.thread : []))
+/**
+ * 会话卡片按「最新在上」排列（与 Outlook / Gmail 一致）。
+ *
+ * store 是按时间升序存的（回复时要拼引用、取最新一封都依赖这个顺序），
+ * 但阅读时用户第一眼要的是最新那条回复；升序渲染会把最早的一封顶在最上面，
+ * 看起来就像「邮件没同步到最新」（真实反馈）。这里只反转展示顺序，不动数据。
+ */
+const threadMessages = computed(() => (isThread.value ? [...props.thread].reverse() : []))
+const threadTruncated = computed(
+  () => isThread.value && props.threadTotal > threadMessages.value.length,
+)
 
 const hasRemoteImages = computed(() => {
   const html = isThread.value
@@ -514,6 +537,24 @@ function maskBlockedImages(html) {
 }
 
 const scrollRef = ref(null)
+
+/**
+ * 换邮件 / 换会话时回到顶部。
+ *
+ * 滚动容器是复用的，上一封读到一半的位置会留下来——打开新邮件先看到中间一段，
+ * 用户会以为「信的开头丢了」。会话视图里最新一封排在最上面，回顶就是最新回复。
+ */
+watch(
+  () =>
+    `${props.detail?.accountId}:${props.detail?.folder}:${props.detail?.uid}:${
+      props.thread?.length || 0
+    }`,
+  () => {
+    const el = scrollRef.value
+    if (el) el.scrollTop = 0
+  },
+  { flush: 'post' },
+)
 
 /**
  * 划词翻译：拖选正文里的文字即出译文面板。

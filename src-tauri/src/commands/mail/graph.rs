@@ -398,6 +398,9 @@ fn summary_from_graph(
         } else {
             conversation.to_string()
         },
+        // Graph 的 conversationId 已经由服务端归并好，本地不再按引用链重算。
+        in_reply_to: String::new(),
+        references: String::new(),
         labels,
         outgoing: folder_role == FolderRole::Sent,
     })

@@ -899,6 +899,9 @@ fn fetch_and_store(
             deleted,
             has_attachments: parsed.has_attachments,
             thread_key: mime::thread_key(&parsed.subject),
+            // 会话归并的第一依据：谁在回谁。主题只在没有引用头时才起作用。
+            in_reply_to: parsed.in_reply_to.clone(),
+            references: parsed.references.clone(),
             labels: String::new(),
             outgoing: outgoing_folder,
         });

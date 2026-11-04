@@ -40,8 +40,10 @@ pub struct ParsedMessage {
 }
 
 /// 线程归并键：去掉回复/转发前缀、折叠空白、转小写后的主题。
-/// 只用主题是刻意的——`References` 头在邮件客户端之间经常断链，
-/// 而「同一主题的来回」在绝大多数场景下就是同一会话。
+///
+/// 主题只是**兜底**：真正可靠的会话归属靠 `References` / `In-Reply-To`（见
+/// `message_ids` 与 `store::resolve_thread_key`）。主题这一层必须保留，因为
+/// 不少客户端回信时不带引用头，那时只有主题能把它们串起来。
 pub fn thread_key(subject: &str) -> String {
     const PREFIXES: [&str; 15] = [
         "re:", "re：", "回复:", "回复：", "答复:", "答复：", "aw:", "sv:", "antw:", "fw:",
@@ -78,6 +80,55 @@ fn normalize_msg_id(raw: &str) -> Option<String> {
         return Some(trimmed.to_string());
     }
     Some(format!("<{trimmed}>"))
+}
+
+/// 把 `In-Reply-To` / `References` 拆成规范化（带尖括号）的消息号列表。
+///
+/// 顺序保持不变：`References` 里最前面的是会话根，最后面的是直接父级。
+/// `In-Reply-To` 排在前面，因为它是「这封信在回谁」的准确答案。
+/// 兼容两种写法：
+/// - 标准写法 `<a@x> <b@x>`；
+/// - 不带尖括号的坏客户端（Outlook 某些版本、国产客户端），按空白切分再补尖括号。
+pub fn message_ids(in_reply_to: &str, references: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for raw in [in_reply_to, references] {
+        for id in split_message_ids(raw) {
+            if !out.iter().any(|existing| existing == &id) {
+                out.push(id);
+            }
+        }
+    }
+    out
+}
+
+fn split_message_ids(raw: &str) -> Vec<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Vec::new();
+    }
+    let mut ids = Vec::new();
+    if trimmed.contains('<') {
+        // 按 <...> 逐个取出；中间的空白、逗号都当分隔符。
+        let mut rest = trimmed;
+        while let Some(open) = rest.find('<') {
+            let after = &rest[open + 1..];
+            let Some(close) = after.find('>') else { break };
+            let id = after[..close].trim();
+            if !id.is_empty() {
+                ids.push(format!("<{id}>"));
+            }
+            rest = &after[close + 1..];
+        }
+    }
+    if ids.is_empty() {
+        for token in trimmed.split_whitespace() {
+            let bare = token.trim().trim_matches(|c| c == '<' || c == '>');
+            if bare.contains('@') {
+                ids.push(format!("<{bare}>"));
+            }
+        }
+    }
+    ids
 }
 
 fn parse_one(addr: &mail_parser::Addr<'_>) -> MailAddress {
@@ -657,6 +708,28 @@ mod tests {
         assert_eq!(thread_key("Re: 季度报告"), thread_key("季度报告"));
         assert_eq!(thread_key("RE: Re:   quarterly report "), "quarterly report");
         assert_eq!(thread_key("回复：甲方确认"), "甲方确认");
+    }
+
+    #[test]
+    fn message_ids_normalizes_both_forms() {
+        // 标准写法：按 <...> 逐个取。
+        assert_eq!(
+            message_ids("", "<a@x> <b@x>"),
+            vec!["<a@x>".to_string(), "<b@x>".to_string()]
+        );
+        // In-Reply-To 排在 References 前面（它才是「在回谁」的准确答案）。
+        assert_eq!(
+            message_ids("<b@x>", "<a@x>"),
+            vec!["<b@x>".to_string(), "<a@x>".to_string()]
+        );
+        // 不带尖括号的坏客户端：补上尖括号，垃圾片断丢掉。
+        assert_eq!(
+            message_ids("b@x", "a@x garbage"),
+            vec!["<b@x>".to_string(), "<a@x>".to_string()]
+        );
+        // 重复的消息号只留一次。
+        assert_eq!(message_ids("<a@x>", "<a@x> <b@x>").len(), 2);
+        assert!(message_ids("", "").is_empty());
     }
 
 

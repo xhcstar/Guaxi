@@ -321,6 +321,8 @@ fn fetch_one(
         deleted: false,
         has_attachments: parsed.has_attachments,
         thread_key: mime::thread_key(&parsed.subject),
+        in_reply_to: parsed.in_reply_to.clone(),
+        references: parsed.references.clone(),
         labels: String::new(),
         outgoing: false,
     };
@@ -404,6 +406,8 @@ pub fn save_copy_to(
         deleted: false,
         has_attachments: parsed.has_attachments,
         thread_key: mime::thread_key(&parsed.subject),
+        in_reply_to: parsed.in_reply_to.clone(),
+        references: parsed.references.clone(),
         labels: String::new(),
         outgoing,
     };

@@ -175,6 +175,7 @@
           v-if="store.detail || store.detailLoading"
           :detail="store.detail"
           :thread="store.thread"
+          :thread-total="store.threadTotal"
           :loading="store.detailLoading"
           :settings="settings"
           :theme-mode="store.theme?.mode || 'dark'"

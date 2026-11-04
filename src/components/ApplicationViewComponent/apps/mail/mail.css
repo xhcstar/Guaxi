@@ -865,6 +865,18 @@
   word-break: break-word;
 }
 
+.mail-reader-thread-count {
+  margin-left: 8px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--mail-bg-sunken);
+  color: var(--mail-text-muted);
+  font-size: 11.5px;
+  font-weight: 500;
+  vertical-align: 3px;
+  white-space: nowrap;
+}
+
 .mail-reader-meta {
   display: flex;
   align-items: flex-start;
@@ -972,9 +984,36 @@
 .mail-reader-scroll {
   flex: 1 1 auto;
   min-height: 0;
-  overflow-y: auto;
+  /* 与列表同一套处理（见 .mail-list-scroll）：显式保留滚动条槽位并强制显示轨道。
+     用 `auto` 时 WebView2 的覆盖式滚动条只在「正在滚动」的那一小会儿画出来，
+     长邮件读到底部想拖回去就没抓手了（真实反馈：只能滚轮，拖不到进度条）。 */
+  overflow-y: scroll;
+  scrollbar-gutter: stable;
+  scrollbar-width: auto;
+  scrollbar-color: var(--mail-text-muted) var(--mail-reader-bg);
   /* 内边距挪到内容层：内联回复要占满一屏高度，不能被滚动容器的 padding 削掉。 */
   padding: 0;
+}
+/* 全局 ::-webkit-scrollbar 是「10px 槽 + 3px 透明边框」的极细滑块，
+   在纸色底上等于看不见。阅读区单独加宽、加深，并给轨道上底色。 */
+.mail-reader-scroll::-webkit-scrollbar {
+  width: 12px;
+  background: var(--mail-reader-bg);
+}
+.mail-reader-scroll::-webkit-scrollbar-track {
+  background: var(--mail-reader-bg);
+  border-radius: 6px;
+}
+.mail-reader-scroll::-webkit-scrollbar-thumb {
+  min-height: 44px;
+  border: 2px solid var(--mail-reader-bg);
+  border-radius: 7px;
+  background: var(--mail-text-muted);
+  background-clip: padding-box;
+}
+.mail-reader-scroll::-webkit-scrollbar-thumb:hover {
+  background: var(--mail-text-secondary);
+  background-clip: padding-box;
 }
 .mail-reader-content {
   padding: 18px var(--mail-pad) 40px;
@@ -1051,6 +1090,16 @@
   border-radius: 12px;
   background: var(--mail-reader-bg);
   overflow: hidden;
+}
+/* 会话被渲染上限截断时的说明条：不要静默少画几封。 */
+.mail-thread-notice {
+  padding: 7px 12px;
+  border: 1px dashed var(--mail-border-strong);
+  border-radius: 8px;
+  background: var(--mail-bg-sunken);
+  color: var(--mail-text-muted);
+  font-size: 12px;
+  text-align: center;
 }
 .mail-thread-head {
   display: flex;

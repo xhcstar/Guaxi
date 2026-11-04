@@ -599,6 +599,10 @@ fn summary_from_item(
             .map(|item| item.text_trim().eq_ignore_ascii_case("true"))
             .unwrap_or(false),
         thread_key: conversation.unwrap_or_default(),
+        // Exchange 的 ConversationId 本身就是服务端算好的会话归属，比本地按
+        // 引用链拼更准；引用头这里留空，免得两套规则互相打架。
+        in_reply_to: String::new(),
+        references: String::new(),
         labels: String::new(),
         outgoing: role == FolderRole::Sent,
     })

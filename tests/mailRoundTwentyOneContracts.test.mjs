@@ -30,7 +30,9 @@ test('同步不再「猜」哪些是用户的文件夹', () => {
 })
 
 test('v6 迁移把被误标的自定义文件夹清回「不是用户的」', () => {
-  assert.ok(/pub const SCHEMA_VERSION: i32 = 8;/.test(storeRs), 'schema 版本要 +1')
+  // 版本号本身会随每次改表继续往上走，这里只要求它不低于引入 v6 的那一版。
+  const version = Number((storeRs.match(/pub const SCHEMA_VERSION: i32 = (\d+);/) || [])[1])
+  assert.ok(version >= 6, 'schema 版本要覆盖 v6 迁移')
   assert.ok(
     /if version < 6 \{[\s\S]{0,700}UPDATE folders SET user_created = 0 WHERE role = 'custom'/.test(storeRs),
     '一次性清掉自定义角色的误标',

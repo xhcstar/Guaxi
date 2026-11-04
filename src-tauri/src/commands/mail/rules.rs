@@ -604,6 +604,8 @@ mod tests {
             deleted: false,
             has_attachments: has_att,
             thread_key: String::new(),
+            in_reply_to: String::new(),
+            references: String::new(),
             labels: String::new(),
             outgoing: false,
         }
@@ -820,6 +822,8 @@ mod logic_tests {
             deleted: false,
             has_attachments: false,
             thread_key: String::new(),
+            in_reply_to: String::new(),
+            references: String::new(),
             labels: String::new(),
             outgoing: false,
         }

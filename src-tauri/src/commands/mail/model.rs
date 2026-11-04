@@ -345,6 +345,13 @@ pub struct MessageSummary {
     /// 归一化后的线程键（去掉 Re:/答复: 前缀后的主题）。
     #[serde(default)]
     pub thread_key: String,
+    /// `In-Reply-To` 头（RFC 5322 消息号，带尖括号）。
+    /// 会话归并的第二依据：比主题可靠，一条回信只要能对上上一条就能接回原会话。
+    #[serde(default)]
+    pub in_reply_to: String,
+    /// `References` 头：整条会话的消息号链，会话归并的第一依据。
+    #[serde(default)]
+    pub references: String,
     /// 本地分类（规则打上的标签），逗号分隔。
     #[serde(default)]
     pub labels: String,

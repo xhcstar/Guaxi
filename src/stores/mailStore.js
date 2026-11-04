@@ -41,8 +41,57 @@ const DEFERRED_DELETE_KEY = 'guaxi.mail.pending-deletes'
 const pendingDeleteKeys = new Set()
 const deferredDeleteTimers = new Map()
 
+/**
+ * 一次会话最多渲染多少封邮件。
+ *
+ * 设这个上限只是为了防异常数据（几十年的邮件列表）把阅读区拖死。
+ * 关键是**截断要说得出来**：超过时阅读区会明确提示「仅显示最近 N 封」，
+ * 而不是让用户以为后一半回复丢了。
+ */
+const THREAD_RENDER_LIMIT = 200
+
 function deleteKeyOf(row) {
   return `${row.accountId}:${row.folder}:${row.uid}`
+}
+
+/**
+ * 会话里某一封的正文没能取回时的占位详情。
+ *
+ * 摘要（发件人 / 主题 / 时间 / 收件人）本地都有，足够把卡片画出来；正文位置写明原因。
+ * 这样「这一封加载失败」不会变成「这一封不见了」——会话里少一封比正文空着更伤人。
+ */
+function placeholderDetail(item) {
+  const parseAddrs = (raw) => {
+    try {
+      const list = JSON.parse(raw || '[]')
+      return Array.isArray(list) ? list.filter((addr) => addr?.address) : []
+    } catch {
+      return []
+    }
+  }
+  return {
+    accountId: item.accountId,
+    folder: item.folder,
+    uid: item.uid,
+    messageId: item.messageId || null,
+    subject: item.subject || '',
+    fromName: item.fromName || '',
+    fromAddr: item.fromAddr || '',
+    to: parseAddrs(item.toJson),
+    cc: parseAddrs(item.ccJson),
+    bcc: [],
+    replyTo: [],
+    date: item.date || 0,
+    inReplyTo: item.inReplyTo || '',
+    references: item.references || '',
+    html: null,
+    text: '（这封的正文没能取回：本地没有缓存，服务器这次也没有响应。稍后重新打开这条会话会再取一次。）',
+    attachments: [],
+    headers: [],
+    labels: item.labels || '',
+    seen: true,
+    flagged: Boolean(item.flagged),
+  }
 }
 
 /**
@@ -188,6 +237,8 @@ export const useMailStore = defineStore('mail', {
     detail: null,
     /** 会话视图：同一 thread 内每封邮件的详情（按时间升序）。 */
     thread: [],
+    /** 这条会话在本地库里一共多少封（可能大于 thread.length，超出渲染上限时用来说清楚）。 */
+    threadTotal: 0,
     detailLoading: false,
     composing: null,
     outbox: [],
@@ -522,6 +573,7 @@ export const useMailStore = defineStore('mail', {
         this.activeAccountId = this.accounts[0]?.id || null
         this.detail = null
         this.thread = []
+        this.threadTotal = 0
         this.selected = null
         this.messages = []
         await this.loadMessages({ silent: true }).catch(() => {})
@@ -567,6 +619,7 @@ export const useMailStore = defineStore('mail', {
       this.activeLabel = ''
       this.detail = null
       this.thread = []
+      this.threadTotal = 0
       this.selected = null
       this.clearSelection()
       this.loadMessages()
@@ -642,6 +695,7 @@ export const useMailStore = defineStore('mail', {
       this.activeLabel = ''
       this.detail = null
       this.thread = []
+      this.threadTotal = 0
       this.selected = null
       this.clearSelection()
       this.loadMessages()
@@ -654,6 +708,7 @@ export const useMailStore = defineStore('mail', {
       this.activeLabel = label
       this.detail = null
       this.thread = []
+      this.threadTotal = 0
       this.selected = null
       this.clearSelection()
       this.loadMessages()
@@ -1361,9 +1416,20 @@ export const useMailStore = defineStore('mail', {
 
     // ---------------- 阅读 ----------------
 
-    async openMessage(row, { reloadCounts = true } = {}) {
+    async openMessage(row, { reloadCounts = true, resolveThread = true } = {}) {
+      // 选中态先落，会话查询/正文加载都不会让列表「点了没反应」。
       this.selected = row
+      // 列表有没有按会话聚合，不该决定阅读区能看见几封。
+      // 以前只有「聚合行」才进会话视图，于是关掉聚合（或在搜索结果 / 快捷键里
+      // 打开一封回复）时，阅读区只画当前这一封，早期的来回全被压进正文底部的
+      // 引用卡片里——看起来就像「丢了很多回复」（真实反馈）。这里统一先按
+      // thread_key 把整条会话捞出来，不止一封就直接进会话视图。
+      if (resolveThread && row?.threadKey) {
+        const rows = await this.threadRowsFor(row)
+        if (rows.length > 1) return this.openThread(row, { rows })
+      }
       this.thread = []
+      this.threadTotal = 0
       this.detailLoading = true
       const wasUnseen = !row.seen
       try {
@@ -1401,32 +1467,45 @@ export const useMailStore = defineStore('mail', {
     },
 
     /**
+     * 同一个 thread 的全部邮件（同账户、可跨文件夹），按原样返回摘要行。
+     *
+     * 列表里的聚合行只包含「当前文件夹 + 当前这一页」的邮件，拿它当会话来源
+     * 一定会漏（回复常常在已发送、或早就在下一页）。这里统一回库里按
+     * thread_key 查一次，再把列表那一批并进来，谁多听谁的。
+     */
+    async threadRowsFor(row) {
+      const keyOf = (item) => `${item.accountId}:${item.folder}:${item.uid}`
+      const listed = (row?.threadUids?.length ? row.threadUids : [row])
+        .filter(Boolean)
+        .filter((item) => !pendingDeleteKeys.has(keyOf(item)))
+      if (!row?.threadKey) return listed
+      try {
+        const threadRows = await invoke('mail_thread', { threadKey: row.threadKey })
+        const sameAccount = (threadRows || []).filter(
+          (item) => item.accountId === row.accountId && !pendingDeleteKeys.has(keyOf(item)),
+        )
+        return sameAccount.length > listed.length ? sameAccount : listed
+      } catch (error) {
+        logger.warn('加载会话列表失败', error)
+        return listed
+      }
+    },
+
+    /**
      * 打开一个会话：把同一 thread 的每封邮件都取出来，按时间升序展示成独立卡片。
      * 以前只打开最新一封、把历史留在正文的引用块里；现在阅读区本身就是会话。
      */
-    async openThread(row) {
-      const keyOf = (item) => `${item.accountId}:${item.folder}:${item.uid}`
-      let rows = (row.threadUids || [])
-        .filter(Boolean)
-        .filter((item) => !pendingDeleteKeys.has(keyOf(item)))
-      // 列表里的聚合行只包含当前文件夹的邮件；到库里按 thread_key 再查一次，
-      // 才能把「已发送」里的回复也带进会话。只取同一个账户，避免不同账户
-      // 恰好同主题的邮件被误并进同一个会话。
-      if (row.threadKey) {
-        try {
-          const threadRows = await invoke('mail_thread', { threadKey: row.threadKey })
-          const sameAccount = (threadRows || []).filter(
-            (item) => item.accountId === row.accountId && !pendingDeleteKeys.has(keyOf(item)),
-          )
-          if (sameAccount.length > rows.length) rows = sameAccount
-        } catch (error) {
-          logger.warn('加载会话列表失败', error)
-        }
-      }
-      rows = rows.slice().sort((a, b) => (Number(a.date) || 0) - (Number(b.date) || 0)).slice(-30)
-      if (rows.length < 2) return this.openMessage(row)
+    async openThread(row, { rows: prepared = null } = {}) {
+      let rows = prepared || (await this.threadRowsFor(row))
+      rows = rows.slice().sort((a, b) => (Number(a.date) || 0) - (Number(b.date) || 0))
+      const total = rows.length
+      // 上限只是防止异常数据（几十年的邮件列表）把阅读区拖死；
+      // 截断时阅读区会明确提示，不会静默少画几封。
+      rows = rows.slice(-THREAD_RENDER_LIMIT)
+      if (rows.length < 2) return this.openMessage(row, { resolveThread: false })
       this.selected = row
       this.thread = []
+      this.threadTotal = total
       this.detailLoading = true
       const deltas = new Map()
       for (const item of rows) {
@@ -1451,8 +1530,10 @@ export const useMailStore = defineStore('mail', {
             }).catch(() => null),
           ),
         )
-        const list = details
-          .filter(Boolean)
+        // 取不到正文的那几封也要留在会话里：直接 filter 掉等于「静默少一封」，
+        // 而用户最不能接受的就是这个。用摘要拼一张占位卡片，把原因写在正文位置。
+        const list = rows
+          .map((item, index) => details[index] || placeholderDetail(item))
           .sort((a, b) => (Number(a.date) || 0) - (Number(b.date) || 0))
         if (!list.length) throw new Error('会话内容加载失败')
         this.thread = list
@@ -1476,6 +1557,7 @@ export const useMailStore = defineStore('mail', {
         logger.error('打开会话失败', error)
         this.lastError = String(error?.message || error)
         this.thread = []
+        this.threadTotal = 0
         this.detail = null
       } finally {
         this.detailLoading = false
