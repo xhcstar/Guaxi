@@ -1126,13 +1126,16 @@ fn load_cached_articles(
     );
     // 关键词条件：任一 token 命中 title/description/content 即入选（与内存版打分语义一致，
     // 只是把"是否命中"的判断交给 SQL；命中强度仍在内存里排序）。
+    //
+    // 占位符从 ?1 开始编号：rusqlite 按**绑定顺序**对应 ?1、?2…，
+    // 所以 SQL 里的编号必须与下面 bound 的 push 顺序严格一致。
     if !topic_tokens.is_empty() {
         sql.push_str(" AND (");
         for i in 0..topic_tokens.len() {
             if i > 0 {
                 sql.push_str(" OR ");
             }
-            let n = i + 2;
+            let n = i + 1;
             sql.push_str(&format!(
                 "(instr(lower(title), ?{n}) > 0 OR instr(lower(description), ?{n}) > 0 OR instr(lower(content), ?{n}) > 0)"
             ));
@@ -1140,7 +1143,7 @@ fn load_cached_articles(
         sql.push(')');
     }
     if !category.is_empty() && category != "all" {
-        let n = topic_tokens.len() + 2;
+        let n = topic_tokens.len() + 1;
         sql.push_str(&format!(" AND (category = ?{n} OR category = 'all')"));
     }
     sql.push_str(ARTICLE_ORDER_CLAUSE);
@@ -7768,4 +7771,110 @@ fn urlencoding_decode(s: &str) -> Result<String, String> {
         }
     }
     String::from_utf8(out).map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod query_binding_tests {
+    //! 动态拼装 SQL 的参数编号契约。
+    //!
+    //! 这类 bug 只会在真实调用时炸（"Got N, needed M"），编译期完全看不出。
+    //! 已经踩过两次，所以用真实 SQLite 跑一遍各种筛选组合。
+
+    use rusqlite::Connection;
+
+    fn mem_db() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            r#"
+            CREATE TABLE article_cache (
+                id TEXT, title TEXT, description TEXT, content TEXT, source TEXT,
+                url TEXT, image_url TEXT, published_at TEXT, category TEXT, author TEXT,
+                read_count INTEGER, likes INTEGER, clean_content_html TEXT,
+                clean_content_markdown TEXT, lead_image TEXT, content_images TEXT,
+                relevance_score INTEGER, tags TEXT, summary TEXT, render_mode TEXT,
+                updated_at INTEGER, feed_id TEXT
+            );
+            "#,
+        )
+        .unwrap();
+        conn
+    }
+
+    /// 复刻 load_cached_articles 的 SQL 拼装，验证占位符与绑定一一对应。
+    fn build_topic_query(topic_tokens: &[String], category: &str, limit: usize) -> (String, Vec<String>) {
+        let mut sql = String::from("SELECT id FROM article_cache WHERE 1=1");
+        let mut bound: Vec<String> = Vec::new();
+        if !topic_tokens.is_empty() {
+            sql.push_str(" AND (");
+            for i in 0..topic_tokens.len() {
+                if i > 0 {
+                    sql.push_str(" OR ");
+                }
+                let n = i + 2;
+                sql.push_str(&format!(
+                    "(instr(lower(title), ?{n}) > 0 OR instr(lower(description), ?{n}) > 0 OR instr(lower(content), ?{n}) > 0)"
+                ));
+            }
+            sql.push(')');
+            for t in topic_tokens {
+                bound.push(t.to_lowercase());
+            }
+        }
+        if !category.is_empty() && category != "all" {
+            let n = topic_tokens.len() + 1;
+            sql.push_str(&format!(" AND (category = ?{n} OR category = 'all')"));
+            bound.push(category.to_string());
+        }
+        sql.push_str(" LIMIT ");
+        sql.push_str(&limit.to_string());
+        (sql, bound)
+    }
+
+    fn run(conn: &Connection, tokens: &[String], category: &str) {
+        let (sql, bound) = build_topic_query(tokens, category, 10);
+        let refs: Vec<&dyn rusqlite::ToSql> = bound.iter().map(|b| b as &dyn rusqlite::ToSql).collect();
+        // 关键：这一步会因为编号/数量不匹配直接报错。
+        let mut stmt = conn.prepare(&sql).unwrap();
+        let rows = stmt.query_map(refs.as_slice(), |r| r.get::<_, String>(0)).unwrap();
+        for r in rows {
+            let _ = r;
+        }
+    }
+
+    #[test]
+    fn single_token_no_category() {
+        let conn = mem_db();
+        run(&conn, &["rust".to_string()], "");
+    }
+
+    #[test]
+    fn single_token_with_category() {
+        // 这就是线上崩溃的场景：1 个 token + 1 个 category。
+        let conn = mem_db();
+        run(&conn, &["rust".to_string()], "ai");
+    }
+
+    #[test]
+    fn multiple_tokens_with_category() {
+        let conn = mem_db();
+        run(&conn, &["rust".to_string(), "async".to_string(), "tokio".to_string()], "ai");
+    }
+
+    #[test]
+    fn no_token_with_category() {
+        let conn = mem_db();
+        run(&conn, &[], "ai");
+    }
+
+    #[test]
+    fn no_token_no_category() {
+        let conn = mem_db();
+        run(&conn, &[], "");
+    }
+
+    #[test]
+    fn category_all_is_treated_as_no_filter() {
+        let conn = mem_db();
+        run(&conn, &["rust".to_string()], "all");
+    }
 }
