@@ -7810,7 +7810,7 @@ mod query_binding_tests {
                 if i > 0 {
                     sql.push_str(" OR ");
                 }
-                let n = i + 2;
+                let n = i + 1;
                 sql.push_str(&format!(
                     "(instr(lower(title), ?{n}) > 0 OR instr(lower(description), ?{n}) > 0 OR instr(lower(content), ?{n}) > 0)"
                 ));
@@ -7830,51 +7830,82 @@ mod query_binding_tests {
         (sql, bound)
     }
 
-    fn run(conn: &Connection, tokens: &[String], category: &str) {
+    /// 跑一次查询，返回命中的 id 集合。
+    ///
+    /// 除了"不报错"，还要验证**绑定到了正确的位置**——只检查不 panic 是不够的：
+    /// 如果两个占位符同时错位，可能互相抵消而不报错，但结果是错的。
+    fn run(conn: &Connection, tokens: &[String], category: &str) -> Vec<String> {
         let (sql, bound) = build_topic_query(tokens, category, 10);
         let refs: Vec<&dyn rusqlite::ToSql> = bound.iter().map(|b| b as &dyn rusqlite::ToSql).collect();
-        // 关键：这一步会因为编号/数量不匹配直接报错。
         let mut stmt = conn.prepare(&sql).unwrap();
         let rows = stmt.query_map(refs.as_slice(), |r| r.get::<_, String>(0)).unwrap();
-        for r in rows {
-            let _ = r;
-        }
+        rows.flatten().collect()
+    }
+
+    fn insert(conn: &Connection, id: &str, title: &str, category: &str) {
+        conn.execute(
+            "INSERT INTO article_cache (id, title, description, content, category) VALUES (?1,?2,'','',?3)",
+            rusqlite::params![id, title, category],
+        )
+        .unwrap();
     }
 
     #[test]
     fn single_token_no_category() {
         let conn = mem_db();
-        run(&conn, &["rust".to_string()], "");
+        insert(&conn, "hit", "Learning Rust", "ai");
+        insert(&conn, "miss", "Python tips", "ai");
+        let got = run(&conn, &["rust".to_string()], "");
+        assert_eq!(got, vec!["hit".to_string()], "must match on the token, not on a shifted param");
     }
 
     #[test]
     fn single_token_with_category() {
         // 这就是线上崩溃的场景：1 个 token + 1 个 category。
         let conn = mem_db();
-        run(&conn, &["rust".to_string()], "ai");
+        insert(&conn, "hit", "Learning Rust", "ai");
+        insert(&conn, "wrongcat", "Learning Rust", "law");
+        insert(&conn, "miss", "Python tips", "ai");
+        let got = run(&conn, &["rust".to_string()], "ai");
+        assert_eq!(
+            got,
+            vec!["hit".to_string()],
+            "token and category must bind to their own placeholders"
+        );
     }
 
     #[test]
     fn multiple_tokens_with_category() {
         let conn = mem_db();
-        run(&conn, &["rust".to_string(), "async".to_string(), "tokio".to_string()], "ai");
+        insert(&conn, "a", "Rust async runtime", "ai");
+        insert(&conn, "b", "Redis internals", "ai");
+        let got = run(&conn, &["rust".to_string(), "async".to_string()], "ai");
+        assert_eq!(got, vec!["a".to_string()]);
     }
 
     #[test]
     fn no_token_with_category() {
         let conn = mem_db();
-        run(&conn, &[], "ai");
+        insert(&conn, "in", "随便一篇文章", "ai");
+        insert(&conn, "out", "另一篇", "law");
+        let got = run(&conn, &[], "ai");
+        assert_eq!(got, vec!["in".to_string()]);
     }
 
     #[test]
     fn no_token_no_category() {
         let conn = mem_db();
-        run(&conn, &[], "");
+        insert(&conn, "x", "anything", "ai");
+        insert(&conn, "y", "other", "law");
+        assert_eq!(run(&conn, &[], "").len(), 2);
     }
 
     #[test]
     fn category_all_is_treated_as_no_filter() {
         let conn = mem_db();
-        run(&conn, &["rust".to_string()], "all");
+        insert(&conn, "x", "Rust", "ai");
+        insert(&conn, "y", "Rust", "law");
+        // category="all" 不加 category 条件，两篇都该命中。
+        assert_eq!(run(&conn, &["rust".to_string()], "all").len(), 2);
     }
 }
