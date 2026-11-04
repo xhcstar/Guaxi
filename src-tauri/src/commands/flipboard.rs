@@ -3947,7 +3947,6 @@ pub async fn search_items(query: ItemQuery) -> Result<serde_json::Value, String>
             param_idx
         ));
         bound.push(Box::new(q.trim().to_lowercase()));
-        param_idx += 1;
     }
 
     let order = match query.sort.as_deref().unwrap_or("quality") {
@@ -6896,10 +6895,7 @@ pub async fn export_corpus_jsonl(options: CorpusExportOptions) -> Result<serde_j
             .to_string();
         sql.push_str(&format!(" AND a.published_at >= ?{}", idx));
         bound.push(Box::new(cutoff));
-        idx += 1;
-    }
-    let _ = idx;
-    sql.push_str(" ORDER BY i.quality DESC, a.published_at DESC");
+    }    sql.push_str(" ORDER BY i.quality DESC, a.published_at DESC");
     if let Some(n) = options.limit.filter(|n| *n > 0) {
         sql.push_str(&format!(" LIMIT {}", n));
     }
