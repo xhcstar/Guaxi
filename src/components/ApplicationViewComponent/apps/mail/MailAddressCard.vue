@@ -6,7 +6,7 @@
       v-if="card"
       ref="cardRef"
       class="mail-addr-card"
-      :style="{ left: `${card.x}px`, top: `${card.y}px` }"
+      :style="[themeStyle, { left: `${card.x}px`, top: `${card.y}px` }]"
       @mouseenter="cancelHide"
       @mouseleave="scheduleHide"
     >
@@ -40,7 +40,13 @@
       </div>
 
       <div class="mail-addr-card-actions">
-        <button class="mail-btn" @click="copyEmail">复制地址</button>
+        <button
+          class="mail-btn"
+          :class="{ 'is-copied': copyState === 'done', 'is-copy-failed': copyState === 'error' }"
+          @click="copyEmail"
+        >
+          {{ copyLabel }}
+        </button>
         <button v-if="!card.data.contactId" class="mail-btn is-primary" @click="saveContact">
           加进通讯录
         </button>
@@ -54,11 +60,27 @@ import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'v
 import { invoke } from '@tauri-apps/api/core'
 import { avatarSeed } from './theme'
 
+/**
+ * 卡片 Teleport 到 body，拿不到 `.mail-root` 上的 `--mail-*` 主题变量；
+ * 由阅读区把根节点的主题变量（inline style）传进来，卡片才能跟随明暗主题。
+ */
+defineProps({
+  themeStyle: { type: Object, default: () => ({}) },
+})
+
 const HIDE_DELAY = 260
 
 /** 当前悬停的地址：`{ data, x, y }`。`data` 来自后端的一次性批量查询。 */
 const card = ref(null)
 let hideTimer = null
+/** 复制按钮的反馈：`idle` → `done` / `error`，1.6 秒后复原。 */
+const copyState = ref('idle')
+let copyTimer = null
+const copyLabel = computed(() => {
+  if (copyState.value === 'done') return '已复制 ✓'
+  if (copyState.value === 'error') return '复制失败'
+  return '复制地址'
+})
 
 const seed = computed(() => {
   const data = card.value?.data || {}
@@ -98,6 +120,7 @@ function hide() {
 function show(address, data, rect) {
   if (!address) return
   cancelHide()
+  copyState.value = 'idle'
   const gap = 6
   const below = rect.bottom + gap
   const x = Math.max(8, Math.min(rect.left, window.innerWidth - 288))
@@ -164,12 +187,26 @@ function emptyCard(address) {
 async function copyEmail() {
   const text = card.value?.data?.email
   if (!text) return
+  let ok = false
   try {
     const { writeText } = await import('@tauri-apps/plugin-clipboard-manager')
     await writeText(text)
+    ok = true
   } catch {
-    navigator.clipboard?.writeText?.(text)
+    try {
+      const fallback = navigator.clipboard?.writeText
+      if (!fallback) throw new Error('浏览器不支持剪贴板写入')
+      await fallback.call(navigator.clipboard, text)
+      ok = true
+    } catch {
+      ok = false
+    }
   }
+  copyState.value = ok ? 'done' : 'error'
+  clearTimeout(copyTimer)
+  copyTimer = setTimeout(() => {
+    copyState.value = 'idle'
+  }, 1600)
 }
 
 async function saveContact() {
@@ -206,6 +243,7 @@ function relative(unix) {
 onMounted(() => window.addEventListener('resize', onWindowResize))
 onBeforeUnmount(() => {
   clearTimeout(hideTimer)
+  clearTimeout(copyTimer)
   window.removeEventListener('resize', onWindowResize)
 })
 

@@ -152,14 +152,14 @@
               <label class="mail-check"><input v-model="draft.stopProcessing" type="checkbox" />命中后停止后续规则</label>
             </div>
 
-            <div style="display: flex; gap: 8px; margin-top: 12px; align-items: center">
+            <div class="mail-rule-save-row">
               <button class="mail-btn is-primary" :disabled="saving" @click="saveDraft">
                 {{ savingLabel }}
               </button>
               <button class="mail-btn" @click="editing = false">取消</button>
               <!-- 规则平时只作用于「同步到的新邮件」，新建规则后老邮件纹丝不动，
                    用户建完文件夹点进去是空的。这里给一个「立刻对已有邮件也执行」。 -->
-              <label class="mail-check" style="margin-left: auto">
+              <label class="mail-check mail-rule-apply">
                 <input v-model="applyExisting" type="checkbox" />
                 保存后立即对已有的邮件执行
               </label>
@@ -747,6 +747,21 @@ async function removeRule(rule) {
 
 /* 多值输入框：内容多了往下长（上限 5 行），之后自身滚动。
    不用单行 input——从通讯录加几个人就被横向截断，用户看不到加了谁。 */
+/* 保存行与上方动作字段隔开：以前贴着「转发到」输入框，复选框像是被上一行压住。 */
+.mail-rule-save-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--mail-border);
+}
+.mail-rule-save-row .mail-check {
+  margin-bottom: 0;
+}
+.mail-rule-apply {
+  margin-left: auto;
+}
 .mail-rule-grow {
   min-height: 31px;
   max-height: 96px;

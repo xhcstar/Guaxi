@@ -186,7 +186,7 @@
         <span class="mail-reader-when" :title="fullDateLabel">{{ dateLabel }}</span>
       </div>
 
-      <MailAddressCard ref="addressCard" />
+      <MailAddressCard ref="addressCard" :theme-style="themeStyle" />
 
       <!-- 划词翻译：与 PDF / 电子书 / 认知收件箱同一个面板组件，交互一致。 -->
       <GuaxiSelectionTranslatePanel
@@ -220,7 +220,7 @@
         <!-- 内联回复卡片：占满一屏正文高度，原文/历史卡片在它下面，滚动查看。 -->
         <slot name="inline-composer" />
 
-        <div class="mail-reader-content">
+        <div class="mail-reader-content" @mouseover="onBodyAddressOver" @mouseout="onBodyAddressOut">
           <!-- 远端图片默认不加载：先问一句，避免打开即给发件人回一个「已读+IP」的信标 -->
           <div v-if="hasRemoteImages && imagesBlocked" class="mail-remote-banner">
             <span>这封邮件包含外部图片，默认没有加载。</span>
@@ -258,10 +258,46 @@
                   {{ threadSeed(msg).letter }}
                 </span>
                 <div class="mail-thread-who">
-                  <span class="mail-thread-name">{{ threadName(msg) }}</span>
+                  <button
+                    class="mail-thread-name mail-thread-addr"
+                    @mouseenter="showAddressCard(msg.fromAddr, $event)"
+                    @mouseleave="addressCard?.scheduleHide()"
+                    @click="showAddressCard(msg.fromAddr, $event)"
+                  >
+                    {{ threadName(msg) }}
+                  </button>
                   <span class="mail-thread-subject">{{ msg.subject || '（无主题）' }}</span>
-                  <span v-if="threadRecipients(msg)" class="mail-thread-to">
-                    {{ threadRecipients(msg) }}
+                  <span
+                    v-if="threadToList(msg).length || threadCcList(msg).length"
+                    class="mail-thread-to"
+                  >
+                    <template v-if="threadToList(msg).length">
+                      发给
+                      <button
+                        v-for="addr in threadToList(msg)"
+                        :key="'to-' + addr.address"
+                        class="mail-thread-addr"
+                        @mouseenter="showAddressCard(addr.address, $event)"
+                        @mouseleave="addressCard?.scheduleHide()"
+                        @click="showAddressCard(addr.address, $event)"
+                      >
+                        {{ addr.name || addr.address }}
+                      </button>
+                    </template>
+                    <template v-if="threadToList(msg).length && threadCcList(msg).length"> · </template>
+                    <template v-if="threadCcList(msg).length">
+                      抄送
+                      <button
+                        v-for="addr in threadCcList(msg)"
+                        :key="'cc-' + addr.address"
+                        class="mail-thread-addr"
+                        @mouseenter="showAddressCard(addr.address, $event)"
+                        @mouseleave="addressCard?.scheduleHide()"
+                        @click="showAddressCard(addr.address, $event)"
+                      >
+                        {{ addr.name || addr.address }}
+                      </button>
+                    </template>
                   </span>
                 </div>
                 <span class="mail-thread-date">{{ threadDate(msg) }}</span>
@@ -368,6 +404,8 @@ const props = defineProps({
   loading: { type: Boolean, default: false },
   settings: { type: Object, default: () => ({}) },
   themeMode: { type: String, default: 'dark' },
+  /** 邮件主题变量（与 MailApp 根节点同一份）：地址卡片 Teleport 到 body 后要靠它取色。 */
+  themeStyle: { type: Object, default: () => ({}) },
   monoFont: { type: String, default: '' },
   /** 列表收起时「返回列表」没有目标，换成「收起邮件」。 */
   closeLabel: { type: String, default: '返回列表' },
@@ -592,18 +630,13 @@ function threadDate(message) {
   })
 }
 
-function threadRecipients(message) {
-  const names = (list) =>
-    (list || [])
-      .map((item) => item?.name || item?.address)
-      .filter(Boolean)
-      .slice(0, 4)
-  const to = names(message.to)
-  const cc = names(message.cc)
-  const parts = []
-  if (to.length) parts.push(`发给 ${to.join('、')}`)
-  if (cc.length) parts.push(`抄送 ${cc.join('、')}`)
-  return parts.join(' · ')
+/** 会话卡片里的收件人 / 抄送：拆成一个个可悬停的地址，而不是一整串文字。 */
+function threadToList(message) {
+  return (message.to || []).filter((item) => item?.address).slice(0, 4)
+}
+
+function threadCcList(message) {
+  return (message.cc || []).filter((item) => item?.address).slice(0, 4)
 }
 
 /** 会话里每封邮件的正文：历史和嵌套引用已经由上方卡片呈现，这里直接去掉。 */
@@ -797,9 +830,15 @@ const addressCard = ref(null)
 const addressCache = ref({})
 
 async function loadAddressCards() {
-  const d = props.detail
-  if (!d) return
-  const addresses = [d.fromAddr, ...(d.to || []).map((a) => a.address), ...(d.cc || []).map((a) => a.address)]
+  // 会话里每封邮件的发件人 / 收件人 / 抄送都要预取：卡片按地址命中缓存，
+  // 只有把整条会话的地址都算进来，悬停任意一封的地址才不会退化成「空卡片」。
+  const docs = [props.detail, ...(props.thread || [])].filter(Boolean)
+  const addresses = docs
+    .flatMap((d) => [
+      d.fromAddr,
+      ...(d.to || []).map((a) => a.address),
+      ...(d.cc || []).map((a) => a.address),
+    ])
     .map((a) => String(a || '').trim())
     .filter(Boolean)
   if (!addresses.length) return
@@ -820,11 +859,69 @@ watch(
 )
 
 function showAddressCard(address, event) {
-  if (!address || !addressCard.value) return
-  const data = addressCache.value[String(address).toLowerCase()]
-  const rect = event.currentTarget?.getBoundingClientRect?.()
-  if (!rect) return
-  addressCard.value.show(address, data, rect)
+  showAddressCardFor(address, event?.currentTarget, event?.type === 'click')
+}
+
+/**
+ * 显示地址卡片；缓存里没有的地址（正文里的 mailto 链接）现查一次。
+ * `allowUnhovered` 用于点击：点完鼠标不一定还停在元素上，仍要出卡片。
+ */
+async function showAddressCardFor(address, element, allowUnhovered = false) {
+  const target = String(address || '').trim()
+  if (!target || !element || !addressCard.value) return
+  const key = target.toLowerCase()
+  let data = addressCache.value[key]
+  if (!data) {
+    data = await fetchAddressCard(key, target)
+    if (!element.isConnected) return
+    if (!allowUnhovered && !element.matches?.(':hover')) return
+  }
+  addressCard.value.show(target, data, element.getBoundingClientRect())
+}
+
+async function fetchAddressCard(key, address) {
+  try {
+    const cards = await invoke('mail_address_cards', { addresses: [address] })
+    const found = (cards || []).find(
+      (item) => String(item.email || '').toLowerCase() === key,
+    )
+    if (!found) return null
+    addressCache.value = { ...addressCache.value, [key]: found }
+    return found
+  } catch {
+    return null
+  }
+}
+
+/** 正文里的 mailto 链接：委托到内容区，悬停同样出卡片。 */
+let bodyAddressAnchor = null
+
+function mailtoAddress(anchor) {
+  const href = anchor?.getAttribute?.('href') || ''
+  if (!/^mailto:/i.test(href)) return ''
+  const raw = href.slice('mailto:'.length).split('?')[0]
+  try {
+    return decodeURIComponent(raw).trim()
+  } catch {
+    return raw.trim()
+  }
+}
+
+function onBodyAddressOver(event) {
+  const anchor = event.target?.closest?.('a[href]')
+  if (!anchor || anchor === bodyAddressAnchor) return
+  const address = mailtoAddress(anchor)
+  if (!address.includes('@')) return
+  bodyAddressAnchor = anchor
+  showAddressCardFor(address, anchor)
+}
+
+function onBodyAddressOut(event) {
+  const anchor = event.target?.closest?.('a[href]')
+  if (!anchor || anchor !== bodyAddressAnchor) return
+  if (event.relatedTarget && anchor.contains(event.relatedTarget)) return
+  bodyAddressAnchor = null
+  addressCard.value?.scheduleHide()
 }
 
 const headerText = computed(() =>

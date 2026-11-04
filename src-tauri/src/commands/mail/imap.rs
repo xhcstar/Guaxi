@@ -704,8 +704,11 @@ pub fn delete_folder(account: &Account, password: &str, name: &str) -> Result<()
 // 同步
 // ---------------------------------------------------------------------------
 
-/// 同步进度回调：每落库一批就通知一次，列表可以先显示已取回的部分。
-pub type SyncProgress<'a> = &'a (dyn Fn(usize) + Send + Sync);
+/// 同步进度回调：每落库一批就通知一次。
+///
+/// 回调拿到的是这一批的摘要，不只是数量——前端据此刷新列表，规则也可以
+/// 在下一批还在下载时就先把这一批该移动的邮件移走，而不是等整箱收完。
+pub type SyncProgress<'a> = &'a (dyn Fn(&[MessageSummary]) + Send + Sync);
 
 /// 单次 FETCH 的邮件数。
 ///
@@ -795,11 +798,12 @@ pub fn sync_folder_with(
     let mut summaries: Vec<MessageSummary> = Vec::new();
     for chunk in uids.chunks(FETCH_CHUNK) {
         let mut part = fetch_and_store(account, session, folder_name, chunk, snippet_len)?;
-        summaries.append(&mut part);
-        // 每块都已落库：通知前端先刷新列表，而不是等整批结束。
+        // 每块都已落库：通知前端先刷新列表，规则也可以立刻处理这一批，
+        // 而不是等整批结束。
         if let Some(progress) = on_progress {
-            progress(summaries.len());
+            progress(&part);
         }
+        summaries.append(&mut part);
     }
 
     store::update_folder_counts(

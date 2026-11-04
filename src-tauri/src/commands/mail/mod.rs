@@ -980,24 +980,38 @@ async fn sync_folder_guarded(
     let account_id = account.id.clone();
     let folder_name = folder.to_string();
     let acc = account.clone();
+    // 规则在每批邮件落库后立刻执行。
+    //
+    // 以前要等整箱下载完才跑规则：POP3 首次同步几千封时，用户会看到邮件在收件箱里
+    // 停几分钟才慢慢消失。现在同步函数把每批摘要通过进度回调交回来，这里边收边跑；
+    // Graph / EWS 没有分批接口，仍然在收尾时统一处理。
+    let rules = if settings.rules_enabled {
+        store::list_rules().unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    let batched = !graph::is_graph(account) && !ews::is_ews(account);
+    let (batch_tx, mut batch_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<MessageSummary>>();
     // 分块落库时通知前端刷新列表：首次同步几百封邮件时，用户不用盯着空白列表
     // 等整批下载完。`partial` 让前端只刷新首屏，别把已经翻到很下面的列表拽回顶部。
     let progress_app = app.clone();
     let progress_account = account_id.clone();
     let progress_folder = folder_name.clone();
-    let on_progress = move |count: usize| {
+    let on_progress = move |batch: &[MessageSummary]| {
         let _ = progress_app.emit(
             MAIL_SYNC_EVENT,
             serde_json::json!({
                 "accountId": progress_account,
                 "folder": progress_folder,
-                "added": count,
+                "added": batch.len(),
                 "partial": true,
             }),
         );
+        // 交给下面「边收边跑规则」的循环。无界通道，发送不会阻塞下载。
+        let _ = batch_tx.send(batch.to_vec());
     };
 
-    let items = tauri::async_runtime::spawn_blocking(move || -> Result<Vec<MessageSummary>, String> {
+    let sync_task = tauri::async_runtime::spawn_blocking(move || -> Result<Vec<MessageSummary>, String> {
         let _guard = sync::lock_account(&account_id);
         // Microsoft Graph：文件夹、消息、标记都在 Graph JSON 里。
         if graph::is_graph(&acc) {
@@ -1064,18 +1078,28 @@ async fn sync_folder_guarded(
             }
         }
         Ok(items)
-    })
-    .await
-    .map_err(|e| format!("同步任务失败: {e}"))??;
+    });
+
+    // 边下载边处理已落库的批次：规则移动邮件与继续下载互不等待。
+    if batched {
+        let rule_account = account.clone();
+        while let Some(batch) = batch_rx.recv().await {
+            if !batch.is_empty() && !rules.is_empty() {
+                apply_rules_to_new(&rule_account, &batch, &rules).await;
+            }
+        }
+    }
+
+    let items = sync_task
+        .await
+        .map_err(|e| format!("同步任务失败: {e}"))??;
 
     store::touch_account_sync(&account.id, chrono::Utc::now().timestamp())?;
     collect_contacts(account, &items);
 
-    if settings.rules_enabled && !items.is_empty() {
-        let rules = store::list_rules()?;
-        if !rules.is_empty() {
-            apply_rules_to_new(account, &items, &rules).await;
-        }
+    // Graph / EWS 没有分批回调：整批同步完再跑一次规则。
+    if !batched && !rules.is_empty() && !items.is_empty() {
+        apply_rules_to_new(account, &items, &rules).await;
     }
     Ok(items)
 }

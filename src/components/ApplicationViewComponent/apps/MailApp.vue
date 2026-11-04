@@ -178,6 +178,7 @@
           :loading="store.detailLoading"
           :settings="settings"
           :theme-mode="store.theme?.mode || 'dark'"
+          :theme-style="rootStyle"
           :mono-font="settings.monoFont"
           :search-query="store.searchQuery"
           :can-recall="canRecallCurrent"

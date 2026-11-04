@@ -202,11 +202,16 @@
             :class="{ 'is-native': nativeFontsUnavailable }"
             title="字体（含本机已安装的全部字体）"
             aria-label="字体"
+            :value="fontSelectValue"
             :style="{ fontFamily: currentFontFamily || 'inherit' }"
             @mousedown="rememberSelection"
             @change="onFontFamily($event)"
           >
-            <option value="">字体</option>
+            <!-- 光标处的字体不在内置 / 本机字体列表里时补一个临时项：
+                 下拉要显示「当前字体」，不能退回占位文案。 -->
+            <option v-if="orphanFontOption" :value="orphanFontOption.value">
+              {{ orphanFontOption.label }}
+            </option>
             <optgroup label="常用">
               <option v-for="font in FONT_FAMILIES" :key="font.value" :value="font.value">
                 {{ font.label }}
@@ -219,15 +224,16 @@
             </optgroup>
           </select>
           <select
-            class="mail-select mail-fmt-select"
+            class="mail-select mail-fmt-select mail-fmt-size"
             title="字号"
             aria-label="字号"
+            :value="formatState.fontSize || ''"
             :style="{ fontFamily: currentFontFamily || 'inherit' }"
             @mousedown="rememberSelection"
             @change="onFontSize($event)"
           >
-            <option value="">字号</option>
-            <option v-for="size in FONT_SIZES" :key="size" :value="size">{{ size }} px</option>
+            <option v-if="!formatState.fontSize" value="">默认</option>
+            <option v-for="size in fontSizeOptions" :key="size" :value="size">{{ size }} px</option>
           </select>
           <span class="mail-fmt-sep"></span>
 
@@ -1201,7 +1207,7 @@ const FONT_FAMILIES = [
   { label: 'Times New Roman', value: "'Times New Roman', Times, serif" },
   { label: '等宽', value: "Consolas, 'Courier New', monospace" },
 ]
-const FONT_SIZES = [12, 13, 14, 15, 16, 18, 20, 24, 28, 32]
+const FONT_SIZES = [8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 20, 22, 24, 28, 32, 36, 42, 48, 64, 72]
 
 /**
  * 本机已安装的字体家族。
@@ -1224,11 +1230,43 @@ function quoteFamily(name) {
   return /[\s,]/.test(clean) || /[^\x00-\x7F]/.test(clean) ? `'${clean.replace(/'/g, "\\'")}'` : clean
 }
 
+/** 取字体栈里的第一项（去掉引号），用来和下拉里的选项比对。 */
+function firstFamily(value) {
+  return String(value || '')
+    .split(',')[0]
+    .trim()
+    .replace(/^["']|["']$/g, '')
+}
+
 /** 光标所在位置实际用的字体（工具栏下拉回显）。 */
-const currentFontFamily = computed(() => {
-  const family = formatState.fontFamily
-  if (!family) return ''
-  return family.split(',')[0].trim().replace(/^["']|["']$/g, '')
+const currentFontFamily = computed(() => firstFamily(formatState.fontFamily))
+
+/**
+ * 下拉要显示「当前字体」，不能停在「字体」这种占位文案：
+ * 先和内置 / 本机字体列表对上，对不上（例如邮件自带的特殊字体）就临时补一项。
+ */
+const fontMatch = computed(() => {
+  const first = firstFamily(formatState.fontFamily)
+  if (!first) return { value: '', label: '系统默认', known: true }
+  const builtin = FONT_FAMILIES.find(
+    (font) => font.value && firstFamily(font.value).toLowerCase() === first.toLowerCase(),
+  )
+  if (builtin) return { value: builtin.value, label: builtin.label, known: true }
+  const system = systemFonts.value.find((name) => name.toLowerCase() === first.toLowerCase())
+  if (system) return { value: quoteFamily(system), label: system, known: true }
+  return { value: quoteFamily(first), label: first, known: false }
+})
+const fontSelectValue = computed(() => fontMatch.value.value)
+const orphanFontOption = computed(() =>
+  !fontMatch.value.known && fontMatch.value.value ? fontMatch.value : null,
+)
+
+/** 字号选项：内置档位 + 光标处的实际值（不在档位里时补一项，避免下拉显示空白）。 */
+const fontSizeOptions = computed(() => {
+  const values = [...FONT_SIZES]
+  const current = Math.round(Number(formatState.fontSize) || 0)
+  if (current && !values.includes(current)) values.push(current)
+  return values.sort((a, b) => a - b)
 })
 
 async function loadSystemFonts() {
@@ -1261,6 +1299,8 @@ const formatState = reactive({
   quote: false,
   align: '',
   fontFamily: '',
+  /** 光标处实际字号（px）；0 表示还没量到（显示「默认」）。 */
+  fontSize: 0,
 })
 const lastTextColor = ref('#1a5fd0')
 const lastHiliteColor = ref('#fff3a3')
@@ -1354,7 +1394,15 @@ function refreshFormatState() {
   const selection = window.getSelection()
   // 表格工具行跟着光标走：光标进出表格时它要跟着出现 / 收起。
   refreshTableTools()
-  if (!editor || !selection?.rangeCount || !editor.contains(selection.anchorNode)) return
+  if (!editor) return
+  // 光标不在正文里（刚打开写信、点了工具栏）时，也要显示编辑器当前的默认字体 / 字号，
+  // 否则两个下拉会停在「字体 / 字号」这种没有信息量的占位文案上。
+  if (!selection?.rangeCount || !editor.contains(selection.anchorNode)) {
+    const style = getComputedStyle(editor)
+    formatState.fontFamily = style.fontFamily || ''
+    formatState.fontSize = Math.round(parseFloat(style.fontSize) || 0)
+    return
+  }
   // 选区一变就记下来：否则先加粗 A、再选中 B 点斜体时，会拿旧的 A 去应用格式。
   savedRange = selection.getRangeAt(0).cloneRange()
   try {
@@ -1371,16 +1419,15 @@ function refreshFormatState() {
     formatState.quote = String(document.queryCommandValue('formatBlock') || '')
       .toLowerCase()
       .includes('blockquote')
-    // 字体下拉要回显「选区现在用的字体」：execCommand 查不到时退回计算样式。
+    // 字体 / 字号下拉要回显「光标现在用的样式」：execCommand 只用来查字体名，
+    // 字号（px）与字体兜底都取光标所在元素的计算样式。
+    const anchor = selection.anchorNode?.nodeType === 1
+      ? selection.anchorNode
+      : selection.anchorNode?.parentElement
+    const computed = anchor instanceof Element ? getComputedStyle(anchor) : null
     const queried = String(document.queryCommandValue('fontName') || '').trim()
-    if (queried) {
-      formatState.fontFamily = queried
-    } else {
-      const anchor = selection.anchorNode?.nodeType === 1
-        ? selection.anchorNode
-        : selection.anchorNode?.parentElement
-      formatState.fontFamily = anchor ? getComputedStyle(anchor).fontFamily || '' : ''
-    }
+    formatState.fontFamily = queried || computed?.fontFamily || ''
+    formatState.fontSize = Math.round(parseFloat(computed?.fontSize || '') || 0)
   } catch {
     /* WebView 对部分命令的查询会抛错：保持上一次状态即可 */
   }
@@ -1424,6 +1471,8 @@ onMounted(async () => {
   scheduleQuoteTheme()
   await nextTick()
   editorRef.value.focus()
+  // 初始化字体 / 字号下拉：不依赖「用户先点一下正文」才回显。
+  refreshFormatState()
 })
 
 // 从「源码模式」切回所见即所得时，把编辑区的 DOM 同步成最新的源码。
@@ -2592,7 +2641,7 @@ onBeforeUnmount(() => {
 // ---------------- 编辑器右键菜单 ----------------
 
 /** 单元格可选的填充色 / 文字色 / 字号（右键菜单里的快捷项）。 */
-const CELL_FONT_SIZES = [11, 12, 13, 14, 16]
+const CELL_FONT_SIZES = [9, 10, 11, 12, 13, 14, 16, 18, 20, 24]
 /** 取色器的初始值：菜单里只放一个色块，具体颜色由系统取色器给。 */
 const DEFAULT_CELL_FILL = '#ddebf7'
 const DEFAULT_TEXT_COLOR = '#44546a'
@@ -3020,8 +3069,11 @@ function onFontFamily(event) {
 
 function onFontSize(event) {
   const size = Number(event.target.value)
-  event.target.value = ''
-  if (size) applyFontSize(size)
+  if (!size) return
+  applyFontSize(size)
+  // 没有选区时 applyFontSize 会直接返回：这里再量一次真实字号，
+  // 让下拉退回当前状态，而不是停在一个没有生效的选项上。
+  refreshFormatState()
 }
 
 /** execCommand('fontSize') 只支持 1-7 档；这里用 span 包选区，能精确到 px。 */

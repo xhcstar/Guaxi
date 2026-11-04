@@ -1081,6 +1081,33 @@
   font-weight: 600;
   color: var(--mail-text);
 }
+/* 会话卡片里的发件人 / 收件人：外观像普通文字，悬停才出现下划线，
+   与顶部邮件头里的地址保持同一套交互（都能出通讯录卡片）。 */
+.mail-thread-addr {
+  padding: 0;
+  border: 0;
+  border-bottom: 1px solid transparent;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: default;
+  text-align: left;
+}
+.mail-thread-addr:hover {
+  border-bottom-color: var(--mail-text-muted);
+}
+.mail-thread-name.mail-thread-addr {
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--mail-text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mail-thread-to .mail-thread-addr {
+  margin-right: 6px;
+  color: var(--mail-text-muted);
+  font-size: 12.5px;
+}
 .mail-thread-subject,
 .mail-thread-to {
   font-size: 12.5px;
@@ -3713,6 +3740,14 @@ body.mail-dragging * {
   border-color: transparent;
   background: var(--mail-accent, #7aa2f7);
   color: var(--mail-accent-text, #0d1014);
+}
+.mail-addr-card .mail-btn.is-copied {
+  border-color: color-mix(in srgb, var(--mail-success, #45b26b) 55%, transparent);
+  color: var(--mail-success, #45b26b);
+}
+.mail-addr-card .mail-btn.is-copy-failed {
+  border-color: color-mix(in srgb, var(--mail-danger, #e5534b) 55%, transparent);
+  color: var(--mail-danger, #e5534b);
 }
 
 /* 定时待发的那条：与失败提示区分开，用中性色而不是警告色。 */
