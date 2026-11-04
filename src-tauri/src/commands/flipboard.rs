@@ -6895,7 +6895,8 @@ pub async fn export_corpus_jsonl(options: CorpusExportOptions) -> Result<serde_j
             .to_string();
         sql.push_str(&format!(" AND a.published_at >= ?{}", idx));
         bound.push(Box::new(cutoff));
-    }    sql.push_str(" ORDER BY i.quality DESC, a.published_at DESC");
+    }
+    sql.push_str(" ORDER BY i.quality DESC, a.published_at DESC");
     if let Some(n) = options.limit.filter(|n| *n > 0) {
         sql.push_str(&format!(" LIMIT {}", n));
     }
