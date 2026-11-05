@@ -831,6 +831,32 @@ const formatTime = (timeString) => {
   transition: background 0.18s ease, box-shadow 0.18s ease;
 }
 
+/* 嵌套块不重复高亮。
+ *
+ * markdown-it 的"松散列表"（项之间有空行）会渲染成 <li><p>…</p></li>，
+ * 于是鼠标悬停时 li:hover 和 p:hover 同时命中：背景 alpha 从 5% 叠成 9.75%、
+ * 左侧强调条也画两次，看起来比相邻段落明显更重（实测截图里一眼能看出）。
+ *
+ * 处理方式是让内层块透明、把 hover 交给外层：
+ * - 列表项里的段落放弃自己的高亮与内边距（li 已经提供了）
+ * - 引用块里的段落同理
+ * 这样无论渲染成紧凑还是松散列表，视觉都是"一个块亮一次"。
+ */
+.article-content :deep(li > p),
+.article-content :deep(blockquote > p) {
+  padding: 0;
+  margin-left: 0;
+  margin-right: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.article-content :deep(li > p:hover),
+.article-content :deep(blockquote > p:hover) {
+  background: transparent;
+  box-shadow: none;
+}
+
 .article-content :deep(p:hover),
 .article-content :deep(li:hover),
 .article-content :deep(h2:hover),
