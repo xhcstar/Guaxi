@@ -65,9 +65,9 @@
         <option value="affectedRelease">影响版本</option>
       </select>
       <input v-model="search" class="otp-search" placeholder="搜索…" @keydown.enter.prevent="gotoMatch(1)" />
-      <span class="otp-search-count">{{ matches.length ? (matchIdx + 1) + '/' + matches.length : '0/0' }}</span>
-      <button class="otp-btn icon sm" title="上一个" :disabled="!matches.length" @click="gotoMatch(-1)">↑</button>
-      <button class="otp-btn icon sm" title="下一个" :disabled="!matches.length" @click="gotoMatch(1)">↓</button>
+      <span class="otp-search-count">{{ occurrences.length ? (matchIdx + 1) + '/' + occurrences.length : '0/0' }}</span>
+      <button class="otp-btn icon sm" title="上一个" :disabled="!occurrences.length" @click="gotoMatch(-1)">↑</button>
+      <button class="otp-btn icon sm" title="下一个" :disabled="!occurrences.length" @click="gotoMatch(1)">↓</button>
     </div>
 
     <div class="otp-main">
@@ -159,7 +159,7 @@
             </div>
 
             <!-- 可折叠分区 -->
-            <section v-for="sec in sectionsOf(b)" :key="sec.key" class="otp-sec">
+            <section v-for="sec in sectionsOf(b)" :key="sec.key" class="otp-sec" :data-sec-key="sec.key">
               <div class="otp-sec-head" @click="toggleSec(b.blockStartLine, sec.key, sec.defaultCollapsed)">
                 <span class="otp-sec-caret">{{ isCollapsed(b.blockStartLine, sec.key, sec.defaultCollapsed) ? '▸' : '▾' }}</span>
                 <h4>{{ sec.title }}</h4>
@@ -729,15 +729,117 @@ const blockMatches = (b) => {
     return String(b[f] || '').toLowerCase().includes(q)
   })
 }
-const matches = computed(() => (search.value.trim() ? blocks.value.filter(blockMatches).map((b) => b.blockStartLine) : []))
+// 命中按「关键字出现次数」计数与导航：一个块里出现多次就有多个停靠点。
+// 顺序必须与卡片 DOM 中 <mark> 的先后一致（标题 → 状态 → 属性 → 各分区），
+// 这样第 N 次命中可以直接落到卡片内第 N 个 <mark> 上。
+const countOccurrences = (text, needle) => {
+  if (!text || !needle) return 0
+  const hay = String(text).toLowerCase()
+  const ned = needle.toLowerCase()
+  let count = 0
+  let from = 0
+  while (from <= hay.length) {
+    const i = hay.indexOf(ned, from)
+    if (i < 0) break
+    count += 1
+    from = i + ned.length
+  }
+  return count
+}
+const occurrenceKeysOfBlock = (b, q) => {
+  // 返回每次命中所属的分区 key（'' 表示卡片头部/属性区），下标即块内序号。
+  const keys = []
+  const push = (text, secKey = '') => {
+    for (let i = 0, n = countOccurrences(text, q); i < n; i += 1) keys.push(secKey)
+  }
+  push(b.description || b.id || '')
+  push(statusLabel(b.status))
+  for (const f of ['id', 'parentId', 'severity', 'origin', 'fixStatus', 'progress', 'deadline', 'createTime', 'completedTime', 'affectedRelease']) {
+    push(b[f])
+  }
+  for (const sec of sectionsOf(b)) {
+    // Review 是纯文本链接，不做高亮，不计入停靠点。
+    if (sec.type === 'link') continue
+    if (sec.type === 'extra') {
+      for (const item of sec.value || []) push(item, sec.key)
+    } else if (sec.type === 'notes') {
+      push(sec.value?.value || '', sec.key)
+    } else {
+      push(sec.value, sec.key)
+    }
+  }
+  return keys
+}
+const occurrences = computed(() => {
+  const q = search.value.trim()
+  if (!q) return []
+  const out = []
+  for (const b of displayBlocks.value) {
+    if (!blockMatches(b)) continue
+    // 正在编辑的卡片显示的是表单而不是高亮文本，没有可停靠的 mark。
+    if (b.blockStartLine === editingLine.value) continue
+    const keys = occurrenceKeysOfBlock(b, q)
+    keys.forEach((secKey, ordinal) => out.push({ blockStartLine: b.blockStartLine, ordinal, secKey }))
+  }
+  return out
+})
 const matchIdx = ref(0)
-watch(matches, () => { matchIdx.value = 0 })
+let lastJumpLine = 0
+let currentMark = null
+const clearCurrentMark = () => {
+  if (currentMark?.isConnected) currentMark.classList.remove('otp-hit-current')
+  currentMark = null
+}
+watch(occurrences, () => {
+  if (matchIdx.value >= occurrences.value.length) matchIdx.value = 0
+})
+watch(search, () => {
+  matchIdx.value = 0
+  lastJumpLine = 0
+  clearCurrentMark()
+})
+// Markdown 渲染与高亮都是异步的：目标可能刚进视口还没渲染完，等对应标记出现再定位。
+// 原文兜底（.guaxi-org-md__raw）里的 mark 会在渲染完成后消失，不能当作停靠目标。
+const marksOfCard = (card) => Array.from(card.querySelectorAll('mark.otp-hit'))
+  .filter((m) => !m.closest('.guaxi-org-md__raw'))
+const openCollapsedSection = (card, secKey) => {
+  if (!secKey) return false
+  const sec = Array.from(card.querySelectorAll('.otp-sec')).find((el) => el.dataset.secKey === secKey)
+  const body = sec?.querySelector('.otp-sec-body')
+  if (!body || (body.offsetParent !== null && body.getClientRects().length > 0)) return false
+  sec.querySelector('.otp-sec-head')?.click()
+  return true
+}
+const revealOccurrence = async (occ) => {
+  let card = cardRefs.get(occ.blockStartLine)
+  if (!card) return
+  card.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  for (let attempt = 0; attempt < 25; attempt += 1) {
+    card = cardRefs.get(occ.blockStartLine)
+    if (!card) return
+    openCollapsedSection(card, occ.secKey)
+    const marks = marksOfCard(card)
+    if (marks.length > occ.ordinal) {
+      clearCurrentMark()
+      currentMark = marks[occ.ordinal]
+      currentMark.classList.add('otp-hit-current')
+      currentMark.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      return
+    }
+    await new Promise((resolve) => setTimeout(resolve, 80))
+  }
+}
 const gotoMatch = (dir) => {
-  if (!matches.value.length) return
-  matchIdx.value = (matchIdx.value + dir + matches.value.length) % matches.value.length
-  emit('goto-line', matches.value[matchIdx.value])
-  const el = cardRefs.get(matches.value[matchIdx.value])
-  if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  const total = occurrences.value.length
+  if (!total) return
+  matchIdx.value = (matchIdx.value + dir + total) % total
+  const occ = occurrences.value[matchIdx.value]
+  // 同一块内的多个命中不重复挪编辑器光标，避免光标在源码里来回跳。
+  if (occ.blockStartLine !== lastJumpLine) {
+    lastJumpLine = occ.blockStartLine
+    emit('goto-line', occ.blockStartLine)
+  }
+  void revealOccurrence(occ)
 }
 // 高亮工具：转义 + <mark> 包裹匹配（用于 v-html 字段）
 const escapeHtml = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -1108,6 +1210,8 @@ export default { name: 'GuaxiOrgTaskPreview' }
 .otp-extra-list { display: flex; flex-direction: column; gap: 8px; }
 .otp-link, .otp-notes-file { color: #2080f0; word-break: break-all; font-size: var(--otp-content-font-size); }
 :deep(mark.otp-hit) { background: var(--otp-hit); color: var(--otp-hit-fg); border-radius: 3px; padding: 0 1px; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.06); }
+/* 当前停靠的命中：与其余命中区分开，避免"跳过去了但看不出跳到了哪" */
+:deep(mark.otp-hit-current) { background: #ff9632; color: #1f2328; border-radius: 3px; padding: 0 1px; box-shadow: 0 0 0 2px rgba(255, 150, 50, 0.45); }
 
 /* 编辑表单：大字段全宽 + 高文本域 */
 .otp-edit-head { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; font-size: 16px; }
@@ -1143,17 +1247,18 @@ export default { name: 'GuaxiOrgTaskPreview' }
 .otp-field-head { display: inline-flex; align-items: center; gap: 6px; }
 .otp-zoom { line-height: 1; }
 
-/* 放大编辑浮层：接近整窗的大文本编辑区 */
-.otp-bigedit-mask { position: fixed; inset: 0; z-index: 3000; background: rgba(0,0,0,0.45); display: flex; align-items: center; justify-content: center; }
-.otp-bigedit { width: 92vw; height: 88vh; background: var(--otp-card); color: var(--otp-text); border: 1px solid var(--otp-border); border-radius: 12px; display: flex; flex-direction: column; padding: 14px 16px; box-shadow: 0 12px 40px rgba(0,0,0,0.3); }
-.otp-bigedit-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; font-size: 16px; }
+/* 放大编辑浮层：全屏沉浸式编辑（无边框/圆角/留白，内容贴满视口） */
+.otp-bigedit-mask { position: fixed; inset: 0; z-index: 3000; background: var(--otp-bg); display: flex; }
+.otp-bigedit { width: 100%; height: 100%; background: var(--otp-card); color: var(--otp-text); display: flex; flex-direction: column; padding: 0; box-shadow: none; }
+.otp-bigedit-head { display: flex; align-items: center; gap: 8px; padding: 10px 16px; border-bottom: 1px solid var(--otp-border); font-size: 16px; flex: 0 0 auto; }
 .otp-bigedit-views { display: inline-flex; gap: 4px; }
-.otp-bigedit-body { flex: 1 1 auto; min-height: 0; display: flex; gap: 10px; }
+.otp-bigedit-body { flex: 1 1 auto; min-height: 0; display: flex; gap: 0; }
 .otp-bigedit-body.view-split .otp-bigedit-area,
 .otp-bigedit-body.view-split .otp-bigedit-preview { flex: 1 1 50%; width: 50%; }
-.otp-bigedit-area { flex: 1 1 auto; width: 100%; box-sizing: border-box; resize: none; background: var(--otp-bg); border: 1px solid var(--otp-border); color: var(--otp-text); border-radius: 8px; padding: 12px 14px; font-size: 15px; line-height: 1.75; font-family: inherit; }
-.otp-bigedit-area:focus { outline: none; border-color: #2080f0; box-shadow: 0 0 0 2px rgba(32,128,240,0.18); }
-.otp-bigedit-preview { flex: 1 1 auto; min-width: 0; overflow: auto; background: var(--otp-bg); border: 1px solid var(--otp-border); border-radius: 8px; padding: 12px 14px; font-size: 15px; line-height: 1.75; }
+/* 内部 Monaco 字段编辑器直接铺满浮层，去掉它自带的边框与圆角，避免看起来还有"框" */
+.otp-bigedit-body .otp-bigedit-area { flex: 1 1 auto; width: 100%; border: none; border-radius: 0; background: var(--otp-bg); }
+.otp-bigedit-preview { flex: 1 1 auto; min-width: 0; overflow: auto; background: var(--otp-bg); padding: 12px 18px; font-size: 15px; line-height: 1.75; border: none; border-radius: 0; }
+.otp-bigedit-body.view-split .otp-bigedit-preview { border-left: 1px solid var(--otp-border); }
 
 /* 截止/创建时间：单输入框 + 右侧日历图标。
  * 原生日期控件以透明层叠加在图标上方，真实点击落在“日历指示器”上即可弹出系统日历，
