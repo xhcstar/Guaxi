@@ -5,7 +5,10 @@
 
       <n-space align="center" :wrap="true">
         <n-select v-model:value="filterCategory" size="small" clearable placeholder="筛选分类" :options="categoryOptions"
-          :disabled="loading" style="width: 160px" />
+          :disabled="loading" style="width: 140px" />
+
+        <n-select v-model:value="filterKind" size="small" clearable placeholder="内容类型" :options="kindOptions"
+          :disabled="loading" style="width: 130px" />
 
         <n-input v-model:value="keyword" size="small" clearable placeholder="搜索名称 / URL" :disabled="loading"
           style="width: 240px">
@@ -21,6 +24,16 @@
             </n-button>
           </template>
           刷新列表
+        </n-tooltip>
+
+        <n-tooltip trigger="hover">
+          <template #trigger>
+            <n-button size="small" :loading="probing" :disabled="probing" @click="runProbe(null)">
+              <template #icon><n-icon :component="PulseIcon" /></template>
+              健康检查
+            </n-button>
+          </template>
+          逐个实际拉取，检查每个源是否可用、有多少条目、多久没更新
         </n-tooltip>
 
         <n-tooltip trigger="hover">
@@ -71,7 +84,7 @@
       </div>
     </transition>
 
-    <n-data-table class="table" :columns="columns" :data="filteredFeeds" :row-key="rowKey" :loading="loading"
+    <n-data-table class="table" size="small" :columns="columns" :data="filteredFeeds" :row-key="rowKey" :loading="loading"
       :pagination="pagination" :scroll-x="scrollX" :bordered="false" :striped="true"
       v-model:checked-row-keys="checkedRowKeys" />
 
@@ -164,8 +177,10 @@ import {
   TrashOutline as TrashIcon,
   CheckmarkCircleOutline as EnableIcon,
   CloseCircleOutline as DisableIcon,
-  StopCircleOutline as StopIcon
+  StopCircleOutline as StopIcon,
+  PulseOutline as PulseIcon
 } from '@vicons/ionicons5'
+import { invoke } from '@tauri-apps/api/core'
 import { useFlipboardStore } from '../../stores/flipboardStore.js'
 import FeedSourceConfigDialog from './FeedSourceConfigDialog.vue'
 
@@ -192,6 +207,7 @@ const { message, dialog } = createDiscreteApi(['message', 'dialog'], {
 const loading = ref(false)
 const keyword = ref('')
 const filterCategory = ref('')
+const filterKind = ref('')
 const showDialog = ref(false)
 const editingFeed = ref(null)
 
@@ -259,6 +275,33 @@ const busyIds = ref(new Set())
 const checkedRowKeys = ref([])
 const batchLoading = ref(false)
 const stoppingAll = ref(false)
+const probing = ref(false)
+const probeSummary = ref(null)
+
+// 逐个实际拉取源，检查可用性与活跃度。
+// ids 为 null 时检查全部——用户点"健康检查"就是要看全貌。
+const runProbe = async (ids) => {
+  probing.value = true
+  try {
+    const results = await invoke('probe_feeds', { ids: ids || null })
+    const list = Array.isArray(results) ? results : []
+    const ok = list.filter(r => r.status === 'ok').length
+    const stale = list.filter(r => r.status === 'ok' && (r.age_days ?? 0) > 90).length
+    const bad = list.length - ok
+    probeSummary.value = { total: list.length, ok, stale, bad }
+    if (bad > 0) {
+      message.warning(`${ok} 个正常，${bad} 个有问题${stale ? `，${stale} 个超过 90 天未更新` : ''}`, { duration: 4000 })
+    } else {
+      message.success(`${ok} 个源全部正常${stale ? `（${stale} 个更新缓慢）` : ''}`, { duration: 3000 })
+    }
+    await refresh()
+  } catch (e) {
+    logger.error('FlipboardFeedManager: probe_feeds failed', e)
+    message.error(`健康检查失败：${e?.message || e}`)
+  } finally {
+    probing.value = false
+  }
+}
 
 const stopAll = async () => {
   stoppingAll.value = true
@@ -397,6 +440,12 @@ const filteredFeeds = computed(() => {
     out = out.filter(f => String(f?.category || '') === activeCategory)
   }
 
+  // 内容类型筛选：默认不过滤，但用户可按"只要知识型"收窄。
+  const kind = (filterKind.value || '').trim()
+  if (kind) {
+    out = out.filter(f => (String(f?.content_kind || '').trim() || 'knowledge') === kind)
+  }
+
   const kw = (keyword.value || '').trim().toLowerCase()
   if (kw) {
     out = out.filter(f => {
@@ -420,6 +469,35 @@ const pagination = ref({
   prefix: (info) => `共 ${info.itemCount} 条`
 })
 
+// 内容类型的展示元数据。tag 用 naive-ui 的语义色：
+// 知识=绿（要的就是它）、资讯=灰（不主动推）、讨论=蓝、视频=紫。
+const KIND_META = {
+  knowledge: { label: '知识', tag: 'success' },
+  mixed: { label: '混合', tag: 'default' },
+  news: { label: '资讯', tag: 'warning' },
+  discussion: { label: '讨论', tag: 'info' },
+  video: { label: '视频', tag: 'primary' }
+}
+
+// 探测结果的展示元数据。
+// 类型筛选下拉项
+const kindOptions = [
+  { label: '知识型', value: 'knowledge' },
+  { label: '混合', value: 'mixed' },
+  { label: '讨论/问答', value: 'discussion' },
+  { label: '视频', value: 'video' },
+  { label: '资讯', value: 'news' }
+]
+
+const PROBE_META = {
+  ok: { label: '正常', color: 'var(--guaxi-success, #18a058)' },
+  empty: { label: '无条目', color: 'var(--guaxi-text-secondary)' },
+  http_error: { label: 'HTTP 错误', color: 'var(--guaxi-error, #d03050)' },
+  parse_error: { label: '格式无效', color: 'var(--guaxi-error, #d03050)' },
+  unreachable: { label: '不可达', color: 'var(--guaxi-error, #d03050)' },
+  unknown: { label: '未知', color: 'var(--guaxi-text-secondary)' }
+}
+
 const columns = computed(() => {
   const titleStyle = {
     fontSize: '13px',
@@ -440,9 +518,50 @@ const columns = computed(() => {
       render: (row) => h('span', { title: row?.name || '' }, row?.name || '')
     },
     {
+      title: () => h('span', { style: titleStyle }, '类型'),
+      key: 'content_kind',
+      width: 96,
+      render: (row) => {
+        // 内容类型决定这个源产出的是知识还是资讯——这是选源时最先要看的。
+        const kind = String(row?.content_kind || '').trim() || 'knowledge'
+        const meta = KIND_META[kind] || KIND_META.knowledge
+        return h(
+          NTag,
+          { size: 'small', bordered: false, type: meta.tag },
+          { default: () => meta.label }
+        )
+      }
+    },
+    {
+      title: () => h('span', { style: titleStyle }, '健康'),
+      key: 'health',
+      width: 110,
+      render: (row) => {
+        const probe = String(row?.last_probe || '').trim()
+        const items = Number(row?.last_probe_items || 0)
+        if (!probe) {
+          return h('span', { style: { color: 'var(--guaxi-text-secondary)', fontSize: '12px' } }, '未检查')
+        }
+        const meta = PROBE_META[probe] || PROBE_META.unknown
+        // 单行呈现：状态 + 条数，避免把行高撑起来。
+        const suffix = items > 0 ? ` · ${items}条` : ''
+        return h(
+          'span',
+          {
+            style: { color: meta.color, fontSize: '12px', fontWeight: 600 },
+            title: `${meta.label}${suffix}`
+          },
+          `${meta.label}${suffix}`
+        )
+      }
+    },
+    {
       title: () => h('span', { style: titleStyle }, 'URL'),
       key: 'url',
-      width: 360,
+      // 单行截断 + ellipsis：URL 很长，换行会把行高撑到 60px 以上，
+      // 10 条就溢出一屏，反而看不清。
+      width: 300,
+      ellipsis: { tooltip: true },
       render: (row) => {
         const url = row?.url || ''
         return h(
@@ -454,7 +573,11 @@ const columns = computed(() => {
             title: url,
             style: {
               color: 'var(--guaxi-link, #4c8bf5)',
-              textDecoration: 'none'
+              textDecoration: 'none',
+              display: 'block',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap'
             }
           },
           url

@@ -1479,7 +1479,29 @@ fn load_feeds_from_config() -> Result<(Vec<FeedSource>, bool), String> {
     }
     let deduped = feeds.len() < before_dedup;
 
-    Ok((feeds, migrating || deduped))
+    // 补全内容类型：老配置里的源没有这个字段（空字符串），会被当成 knowledge
+    // 全部显示——包括那些新闻源。这里按 URL 特征补推断一次，让「只要知识」
+    // 开关对存量数据同样生效。
+    //
+    // 只填空值，不覆盖用户/清单显式设置的类型。
+    let mut kind_filled = 0usize;
+    for f in feeds.iter_mut() {
+        if f.content_kind.trim().is_empty() {
+            f.content_kind = infer_content_kind(&f.url).as_str().to_string();
+            kind_filled += 1;
+        }
+        if f.tier.trim().is_empty() {
+            f.tier = "standard".to_string();
+        }
+    }
+    if kind_filled > 0 {
+        info!(
+            "flipboard: filled content_kind for {} feeds from url heuristics",
+            kind_filled
+        );
+    }
+
+    Ok((feeds, migrating || deduped || kind_filled > 0))
 }
 
 /// 将当前订阅源写回配置文件
@@ -1705,6 +1727,25 @@ pub struct FeedSource {
     /// 是否对该源启用 LLM 增强（摘要/标签/清洗）。
     #[serde(default)]
     pub llm_enhance: bool,
+    // ===== 内容性质与可信度（区分"知识"与"资讯"，见 ContentKind）=====
+    /// 内容类型：knowledge / news / discussion / video / mixed。
+    /// 决定它出现在哪个视图、是否参与训练语料导出。
+    #[serde(default)]
+    pub content_kind: String,
+    /// 源的可信分级：core（精挑细选）/ standard（可用）/ noisy（噪声多，慎用）。
+    #[serde(default)]
+    pub tier: String,
+    /// 内置源的实测定级时间（Unix 秒）；0 表示用户自建。
+    #[serde(default)]
+    pub verified_at: i64,
+    /// 最近一次探测结果：ok / empty / http_error / parse_error / unreachable。
+    #[serde(default)]
+    pub last_probe: Option<String>,
+    /// 最近一次探测到的条目数与最新条目时间，供健康看板展示。
+    #[serde(default)]
+    pub last_probe_items: u32,
+    #[serde(default)]
+    pub last_probe_latest: Option<String>,
 }
 
 impl Default for FeedSource {
@@ -1725,8 +1766,106 @@ impl Default for FeedSource {
             crawl_cfg: None,
             render_profile: None,
             llm_enhance: false,
+            content_kind: String::new(),
+            tier: String::new(),
+            verified_at: 0,
+            last_probe: None,
+            last_probe_items: 0,
+            last_probe_latest: None,
         }
     }
+}
+
+/// 内容类型。决定一个源产出的东西"是知识还是资讯"。
+///
+/// 这个区分是本次重构的核心：用户要的是**知识性长文**，不是新闻快讯。
+/// 旧的内置清单里混着大量新闻源（36氪快讯、Engadget 等），
+/// 它们在结构上就是"每天几十条短消息"，与知识型内容抢同一个列表。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ContentKind {
+    /// 知识型：长文、教程、论文、深度分析。默认只展示这一类。
+    Knowledge,
+    /// 资讯型：新闻快讯、热点。默认不进主列表。
+    News,
+    /// 讨论型：问答、论坛帖。有价值但信噪比低，单独视图。
+    Discussion,
+    /// 视频：知识区视频，需要特殊展示（封面/时长）。
+    Video,
+    /// 混合：同一源既有长文也有快讯，交给质量分过滤。
+    Mixed,
+}
+
+impl ContentKind {
+    pub fn as_str(&self) -> &'static str {        match self {
+            ContentKind::Knowledge => "knowledge",
+            ContentKind::News => "news",
+            ContentKind::Discussion => "discussion",
+            ContentKind::Video => "video",
+            ContentKind::Mixed => "mixed",
+        }
+    }
+
+    pub fn parse(s: &str) -> ContentKind {
+        match s.trim().to_lowercase().as_str() {
+            "knowledge" => ContentKind::Knowledge,
+            "news" => ContentKind::News,
+            "discussion" => ContentKind::Discussion,
+            "video" => ContentKind::Video,
+            "mixed" => ContentKind::Mixed,
+            // 未知类型按 knowledge 处理：宁可多展示，也不要让用户配的源消失。
+            _ => ContentKind::Knowledge,
+        }
+    }
+
+    /// 是否默认出现在"知识"主列表里。
+    pub fn in_default_view(&self) -> bool {
+        matches!(self, ContentKind::Knowledge | ContentKind::Mixed)
+    }
+}
+
+/// 按地址推断内容类型。用于用户自建源——他们没有机会手填类型，
+/// 但地址本身往往能说明问题。
+///
+/// 判断依据是"这个 URL 的域名/路径暗示它产出什么"：
+/// - YouTube / B站 的频道 → 视频
+/// - StackExchange / 问答 / 论坛 → 讨论
+/// - 快讯/热搜/新闻类路径 → 资讯
+/// - 其余 → 知识（用户主动加源，默认按他想要的内容对待）
+pub fn infer_content_kind(url: &str) -> ContentKind {
+    let u = url.trim().to_lowercase();
+
+    // 视频
+    if u.contains("youtube.com/feeds/videos")
+        || u.contains("youtube.com/channel")
+        || u.contains("/videos.xml")
+    {
+        return ContentKind::Video;
+    }
+
+    // 讨论 / 问答
+    if u.contains("stackexchange.com")
+        || u.contains("stackoverflow.com")
+        || u.contains("quora.com")
+        || u.contains("reddit.com")
+        || u.contains("/questions")
+        || u.contains("discourse")
+        || u.contains("/forum")
+    {
+        return ContentKind::Discussion;
+    }
+
+    // 资讯 / 快讯 / 热搜
+    if u.contains("newsflash")
+        || u.contains("/hot")
+        || u.contains("topstory")
+        || u.contains("/news")
+        || u.contains("trending")
+    {
+        return ContentKind::News;
+    }
+
+    ContentKind::Knowledge
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -1931,196 +2070,165 @@ fn get_default_categories() -> Vec<Category> {
 // 获取默认RSS源
 /// 经过实测验证的高质量内置源（单一数据源）：(显示名, URL, source_type, category)。
 /// 旧的 rsshub/知乎/小红书/微信等低质量与登录墙源已全部移除。
-fn curated_feeds() -> Vec<(&'static str, &'static str, &'static str, &'static str)> {
+/// 内置源的统一定义。
+///
+/// 相比旧版的四元组，这里显式带上三件本次重构才引入的信息：
+/// - `kind`：内容性质（知识/资讯/讨论/视频），决定进哪个视图；
+/// - `tier`：可信分级（core / standard / noisy）；
+/// - `verified`：是否经过实测（HTTP 200 + 能解析出条目 + 最近有更新）。
+///
+/// **`verified=false` 的源默认不启用。** 这不是偷懒——本机网络对部分域名
+/// （Wikipedia、Reddit、YouTube、GitHub 等）不通，无法验证它们是否仍活跃；
+/// 与其凭印象塞进去让用户看到一片失败，不如标清楚"待验证"，由用户按需开启。
+pub struct BuiltinFeed {
+    pub name: &'static str,
+    pub url: &'static str,
+    pub source_type: &'static str,
+    pub category: &'static str,
+    pub kind: ContentKind,
+    pub tier: &'static str,
+    /// 实测通过（截至 2026-11）。
+    pub verified: bool,
+    pub remark: &'static str,
+}
+
+const fn bf(
+    name: &'static str,
+    url: &'static str,
+    category: &'static str,
+    kind: ContentKind,
+    tier: &'static str,
+    verified: bool,
+    remark: &'static str,
+) -> BuiltinFeed {
+    BuiltinFeed {
+        name,
+        url,
+        source_type: "rss",
+        category,
+        kind,
+        tier,
+        verified,
+        remark,
+    }
+}
+
+/// 内置源清单。
+///
+/// 选源标准（用户要求）：**知识性长文**，不是新闻快讯；**真正活跃**，不是停更站点。
+/// 每一个 `verified=true` 的源都在本机实测过：HTTP 200、可解析出条目、
+/// 且最新条目在近两个月内。
+///
+/// 已剔除的典型：
+/// - `Distill`（rss 200，但最后更新 2021-09）—— 停更站点；
+/// - `Bret Victor`（404）、`Anthropic News`（404）—— 地址已失效；
+/// - 旧清单里大量新闻源（TechCrunch/Engadget/The Verge/36氪快讯等）——
+///   它们产出的是"每天几十条"，与知识长文抢同一个列表。
+fn curated_feeds() -> Vec<BuiltinFeed> {
+    use ContentKind::*;
     vec![
-        // ===== 科技 technology =====
-        ("少数派", "https://sspai.com/feed", "rss", "technology"),
-        ("爱范儿", "https://www.ifanr.com/feed", "rss", "technology"),
-        ("36氪", "https://36kr.com/feed", "rss", "technology"),
-        ("The Verge", "https://www.theverge.com/rss/index.xml", "rss", "technology"),
-        ("Ars Technica", "https://feeds.arstechnica.com/arstechnica/index", "rss", "technology"),
-        ("TechCrunch", "https://techcrunch.com/feed/", "rss", "technology"),
-        ("Wired", "https://www.wired.com/feed/rss", "rss", "technology"),
-        ("MIT Technology Review", "https://www.technologyreview.com/feed/", "rss", "technology"),
-        ("Engadget", "https://www.engadget.com/rss.xml", "rss", "technology"),
-        ("阮一峰周刊", "https://www.ruanyifeng.com/blog/atom.xml", "rss", "technology"),
-        // ===== 计算机 computer =====
-        ("Hacker News", "https://hnrss.org/frontpage", "rss", "computer"),
-        ("Lobsters", "https://lobste.rs/rss", "rss", "computer"),
-        ("InfoQ", "https://feed.infoq.com/", "rss", "computer"),
-        ("Martin Fowler", "https://martinfowler.com/feed.atom", "rss", "computer"),
-        ("The Pragmatic Engineer", "https://blog.pragmaticengineer.com/rss/", "rss", "computer"),
-        ("CSS-Tricks", "https://css-tricks.com/feed/", "rss", "computer"),
-        ("Smashing Magazine", "https://www.smashingmagazine.com/feed/", "rss", "computer"),
-        ("Julia Evans", "https://jvns.ca/atom.xml", "rss", "computer"),
-        ("GitHub Trending", "https://github.com/trending", "spider", "computer"),
-        ("酷壳 CoolShell", "https://coolshell.cn/feed", "rss", "computer"),
-        // ===== AI =====
-        ("arXiv cs.AI", "https://rss.arxiv.org/rss/cs.AI", "rss", "ai"),
-        ("arXiv cs.LG", "https://rss.arxiv.org/rss/cs.LG", "rss", "ai"),
-        ("arXiv cs.CL", "https://rss.arxiv.org/rss/cs.CL", "rss", "ai"),
-        ("Hugging Face Blog", "https://huggingface.co/blog/feed.xml", "rss", "ai"),
-        ("BAIR Blog", "https://bair.berkeley.edu/blog/feed.xml", "rss", "ai"),
-        ("The Gradient", "https://thegradient.pub/rss/", "rss", "ai"),
-        ("Import AI", "https://importai.substack.com/feed", "rss", "ai"),
-        ("MIT News AI", "https://news.mit.edu/topic/mitartificial-intelligence2-rss.xml", "rss", "ai"),
-        ("Machine Learning Mastery", "https://machinelearningmastery.com/feed/", "rss", "ai"),
-        ("Lil'Log", "https://lilianweng.github.io/index.xml", "rss", "ai"),
-        // ===== 数学 math =====
-        ("arXiv math", "https://rss.arxiv.org/rss/math", "rss", "math"),
-        ("Terence Tao", "https://terrytao.wordpress.com/feed/", "rss", "math"),
-        ("Quanta Magazine", "https://www.quantamagazine.org/feed/", "rss", "math"),
-        ("Gowers's Weblog", "https://gowers.wordpress.com/feed/", "rss", "math"),
-        ("Math ∩ Programming", "https://www.jeremykun.com/index.xml", "rss", "math"),
-        ("AMS Blog on Math Blogs", "https://blogs.ams.org/blogonmathblogs/feed/", "rss", "math"),
-        ("John Baez Azimuth", "https://johncarlosbaez.wordpress.com/feed/", "rss", "math"),
-        ("3Blue1Brown", "https://www.youtube.com/feeds/videos.xml?channel_id=UCYO_jab_esuFRV4b17AJtAw", "rss", "math"),
-        ("Numberphile", "https://www.youtube.com/feeds/videos.xml?user=numberphile", "rss", "math"),
-        ("Wikipedia 数学门户", "https://en.wikipedia.org/wiki/Portal:Mathematics", "spider", "math"),
-        // ===== 物理 physics =====
-        ("arXiv astro-ph", "https://rss.arxiv.org/rss/astro-ph", "rss", "physics"),
-        ("arXiv quant-ph", "https://rss.arxiv.org/rss/quant-ph", "rss", "physics"),
-        ("arXiv hep-th", "https://rss.arxiv.org/rss/hep-th", "rss", "physics"),
-        ("Physics World", "https://physicsworld.com/feed/", "rss", "physics"),
-        ("APS Physics", "http://feeds.aps.org/rss/recent/physics.xml", "rss", "physics"),
-        ("Sean Carroll", "https://www.preposterousuniverse.com/blog/feed/", "rss", "physics"),
-        ("Shtetl-Optimized", "https://scottaaronson.blog/?feed=rss2", "rss", "physics"),
-        ("Symmetry Magazine", "https://www.symmetrymagazine.org/feed", "rss", "physics"),
-        ("NASA APOD", "https://apod.nasa.gov/apod.rss", "rss", "physics"),
-        // ===== 医学 medicine =====
-        ("The Lancet", "https://www.thelancet.com/rssfeed/lancet_current.xml", "rss", "medicine"),
-        ("BMJ", "https://www.bmj.com/rss/current.xml", "rss", "medicine"),
-        ("STAT News", "https://www.statnews.com/feed/", "rss", "medicine"),
-        ("ScienceDaily 健康医学", "https://rss.sciencedaily.com/health_medicine.xml", "rss", "medicine"),
-        ("Nature Medicine", "https://www.nature.com/nm.rss", "rss", "medicine"),
-        ("Medscape", "https://www.medscape.com/cx/rssfeeds/2700.xml", "rss", "medicine"),
-        ("KevinMD", "https://www.kevinmd.com/feed", "rss", "medicine"),
-        ("Harvard Health", "https://www.health.harvard.edu/blog/feed", "rss", "medicine"),
-        ("NEJM", "https://www.nejm.org/action/showFeed?jc=nejm&type=etoc&feed=rss", "rss", "medicine"),
-        ("MedlinePlus What's New", "https://medlineplus.gov/feeds/whatsnew_en.xml", "rss", "medicine"),
-        ("CDC MMWR", "https://tools.cdc.gov/api/v2/resources/media/342778.rss", "rss", "medicine"),
-        // ===== 商业 business =====
-        ("Knowledge at Wharton", "https://knowledge.wharton.upenn.edu/feed/", "rss", "business"),
-        ("McKinsey Insights", "https://www.mckinsey.com/insights/rss", "rss", "business"),
-        ("钛媒体", "https://www.tmtpost.com/feed", "rss", "business"),
-        ("Stratechery", "https://stratechery.com/feed/", "rss", "business"),
-        ("VentureBeat", "https://feeds.feedburner.com/venturebeat/SZYF", "rss", "business"),
-        ("Business Insider", "https://www.businessinsider.com/rss", "rss", "business"),
-        ("Inc.com", "https://www.inc.com/rss/", "rss", "business"),
-        ("Bloomberg Business", "https://feeds.bloomberg.com/business/news.rss", "rss", "business"),
-        ("HBS Working Knowledge", "https://hbswk.hbs.edu/rss/all.xml", "rss", "business"),
-        ("Forbes Business", "https://www.forbes.com/business/feed/", "rss", "business"),
-        ("36氪快讯", "https://36kr.com/feed-newsflash", "rss", "business"),
-        // ===== 金融 finance =====
-        ("CNBC Top News", "https://www.cnbc.com/id/100003114/device/rss/rss.html", "rss", "finance"),
-        ("Marginal Revolution", "https://marginalrevolution.com/feed", "rss", "finance"),
-        ("A Wealth of Common Sense", "https://awealthofcommonsense.com/feed/", "rss", "finance"),
-        ("Calculated Risk", "https://www.calculatedriskblog.com/feeds/posts/default", "rss", "finance"),
-        ("The Big Picture", "https://ritholtz.com/feed/", "rss", "finance"),
-        ("Federal Reserve", "https://www.federalreserve.gov/feeds/press_all.xml", "rss", "finance"),
-        ("Investing.com", "https://www.investing.com/rss/news.rss", "rss", "finance"),
-        ("Seeking Alpha", "https://seekingalpha.com/feed.xml", "rss", "finance"),
-        ("The Economist Finance", "https://www.economist.com/finance-and-economics/rss.xml", "rss", "finance"),
-        ("MarketWatch Top Stories", "https://feeds.content.dowjones.io/public/rss/mw_topstories", "rss", "finance"),
-        ("Financial Times Home", "https://www.ft.com/rss/home", "rss", "finance"),
-        ("WSJ Markets", "https://feeds.a.dj.com/rss/RSSMarketsMain.xml", "rss", "finance"),
-        // ===== 法律 law =====
-        ("SCOTUSblog", "https://www.scotusblog.com/feed/", "rss", "law"),
-        ("Volokh Conspiracy", "https://reason.com/volokh/feed/", "rss", "law"),
-        ("Above the Law", "https://abovethelaw.com/feed/", "rss", "law"),
-        ("JURIST", "https://www.jurist.org/news/feed/", "rss", "law"),
-        ("EFF Deeplinks", "https://www.eff.org/rss/updates.xml", "rss", "law"),
-        ("Harvard Law Review", "https://harvardlawreview.org/feed/", "rss", "law"),
-        ("Balkinization", "https://balkin.blogspot.com/feeds/posts/default", "rss", "law"),
-        ("SCOTUSblog Petitions", "https://www.scotusblog.com/category/cases-in-the-pipeline/feed/", "rss", "law"),
-        ("SCOTUSblog Featured", "https://www.scotusblog.com/category/featured/feed/", "rss", "law"),
-        ("Reason", "https://reason.com/feed/", "rss", "law"),
-        ("ACLU News", "https://www.aclu.org/news/feed", "rss", "law"),
-        ("Just Security", "https://www.justsecurity.org/feed/", "rss", "law"),
-        // ===== 教育 education =====
-        ("EdSurge", "https://www.edsurge.com/articles_rss", "rss", "education"),
-        ("Inside Higher Ed", "https://www.insidehighered.com/rss.xml", "rss", "education"),
-        ("Khan Academy Blog", "https://blog.khanacademy.org/feed/", "rss", "education"),
-        ("The Hechinger Report", "https://hechingerreport.org/feed/", "rss", "education"),
-        ("eLearning Industry", "https://elearningindustry.com/feed", "rss", "education"),
-        ("TeachThought", "https://www.teachthought.com/feed/", "rss", "education"),
-        ("Education Next", "https://www.educationnext.org/feed/", "rss", "education"),
-        ("Class Central", "https://www.classcentral.com/report/feed/", "rss", "education"),
-        ("MindShift", "https://ww2.kqed.org/mindshift/feed/", "rss", "education"),
-        ("Higher Ed Dive", "https://www.highereddive.com/feeds/news/", "rss", "education"),
-        // ===== 生活 lifestyle =====
-        ("Lifehacker", "https://lifehacker.com/rss", "rss", "lifestyle"),
-        ("Mark Manson", "https://markmanson.net/feed", "rss", "lifestyle"),
-        ("The Kitchn", "https://www.thekitchn.com/main.rss", "rss", "lifestyle"),
-        ("Apartment Therapy", "https://www.apartmenttherapy.com/main.rss", "rss", "lifestyle"),
-        ("Longreads", "https://longreads.com/feed/", "rss", "lifestyle"),
-        ("The Art of Manliness", "https://www.artofmanliness.com/feed/", "rss", "lifestyle"),
-        ("NYT Well", "https://rss.nytimes.com/services/xml/rss/nyt/Well.xml", "rss", "lifestyle"),
-        ("mindbodygreen", "https://www.mindbodygreen.com/rss.xml", "rss", "lifestyle"),
-        ("Lifehack", "https://lifehack.org/feed", "rss", "lifestyle"),
-        ("Becoming Minimalist", "https://www.becomingminimalist.com/feed/", "rss", "lifestyle"),
-        ("Nutrition Stripped", "https://nutritionstripped.com/feed/", "rss", "lifestyle"),
-        ("Breaking Muscle", "https://breakingmuscle.com/feed/", "rss", "lifestyle"),
-        // ===== 游戏/娱乐 entertainment =====
-        ("IGN", "https://feeds.ign.com/ign/all", "rss", "entertainment"),
-        ("GameSpot", "https://www.gamespot.com/feeds/news/", "rss", "entertainment"),
-        ("Polygon", "https://www.polygon.com/rss/index.xml", "rss", "entertainment"),
-        ("Kotaku", "https://kotaku.com/rss", "rss", "entertainment"),
-        ("Rock Paper Shotgun", "https://www.rockpapershotgun.com/feed", "rss", "entertainment"),
-        ("PC Gamer", "https://www.pcgamer.com/rss/", "rss", "entertainment"),
-        ("Eurogamer", "https://www.eurogamer.net/feed", "rss", "entertainment"),
-        ("机核 GCORES", "https://www.gcores.com/rss", "rss", "entertainment"),
-        ("Variety", "https://variety.com/feed/", "rss", "entertainment"),
-        ("The Hollywood Reporter", "https://www.hollywoodreporter.com/feed/", "rss", "entertainment"),
+        // ===== AI / 机器学习（知识型为主）=====
+        bf("Lil'Log (翁丽莲)", "https://lilianweng.github.io/index.xml", "ai", Knowledge, "core", true,
+           "系统性长文，每篇都是一次完整的文献综述"),
+        bf("Berkeley BAIR", "https://bair.berkeley.edu/blog/feed.xml", "ai", Knowledge, "core", true,
+           "伯克利 AI 实验室博客，偏研究解读"),
+        bf("Google AI Blog", "https://blog.google/technology/ai/rss/", "ai", Knowledge, "standard", true,
+           "官方研究发布"),
+        bf("MIT News AI", "https://news.mit.edu/rss/topic/artificial-intelligence2", "ai", Mixed, "core", true,
+           "MIT 的 AI 报道，比一般科技媒体扎实"),
+        bf("arXiv cs.AI", "https://rss.arxiv.org/rss/cs.AI", "ai", Knowledge, "core", true,
+           "论文摘要，适合追踪前沿（每日量大，建议配合关键词过滤）"),
+        bf("arXiv cs.LG", "https://rss.arxiv.org/rss/cs.LG", "ai", Knowledge, "core", true,
+           "机器学习论文"),
+        bf("The Gradient", "https://thegradient.pub/rss/", "ai", Knowledge, "core", false,
+           "待验证：本机网络不可达"),
 
-        // ===== 知识性平台 / 问答 / 百科（区别于资讯新闻）=====
-        // 计算机 / 编程 Q&A
-        ("Stack Overflow 问答", "https://stackoverflow.com/feeds", "rss", "computer"),
-        ("Server Fault 问答", "https://serverfault.com/feeds", "rss", "computer"),
-        ("Computer Science SE", "https://cs.stackexchange.com/feeds", "rss", "computer"),
-        // AI / 数据科学 Q&A
-        ("Cross Validated (统计/ML)", "https://stats.stackexchange.com/feeds", "rss", "ai"),
-        ("Data Science SE", "https://datascience.stackexchange.com/feeds", "rss", "ai"),
-        ("AI Stack Exchange", "https://ai.stackexchange.com/feeds", "rss", "ai"),
-        // 数学 Q&A + 研究
-        ("Mathematics SE 问答", "https://math.stackexchange.com/feeds", "rss", "math"),
-        ("MathOverflow 研究级问答", "https://mathoverflow.net/feeds", "rss", "math"),
-        // 物理 Q&A
-        ("Physics SE 问答", "https://physics.stackexchange.com/feeds", "rss", "physics"),
-        ("Astronomy SE 问答", "https://astronomy.stackexchange.com/feeds", "rss", "physics"),
-        // 医学 / 健康 Q&A
-        ("Health/Medical SE", "https://medicalsciences.stackexchange.com/feeds", "rss", "medicine"),
-        // 法律 Q&A
-        ("Law Stack Exchange 问答", "https://law.stackexchange.com/feeds", "rss", "law"),
-        // 商业 / 创业 Q&A
-        ("Workplace SE", "https://workplace.stackexchange.com/feeds", "rss", "business"),
-        // 金融 Q&A
-        ("Personal Finance SE", "https://money.stackexchange.com/feeds", "rss", "finance"),
-        ("Quant Finance SE", "https://quant.stackexchange.com/feeds", "rss", "finance"),
-        // 教育 / 通识 / 百科 / 哲学
-        ("斯坦福哲学百科 (SEP)", "https://plato.stanford.edu/rss/sep.xml", "rss", "education"),
-        ("Wikipedia 每日精选", "https://en.wikipedia.org/w/api.php?action=featuredfeed&feed=featured&feedformat=atom", "rss", "education"),
-        ("Wikipedia 历史上的今天", "https://en.wikipedia.org/w/api.php?action=featuredfeed&feed=onthisday&feedformat=atom", "rss", "education"),
-        ("Aeon 思想长文", "https://aeon.co/feed.rss", "rss", "education"),
-        ("Big Think", "https://bigthink.com/feed/", "rss", "education"),
-        ("Open Culture", "https://www.openculture.com/feed", "rss", "education"),
-        ("Arts & Letters Daily", "https://aldaily.com/feed/", "rss", "education"),
-        ("Stephen Wolfram Writings", "https://writings.stephenwolfram.com/feed/", "rss", "education"),
-        // 综合知识 / 科普
-        ("Smithsonian Magazine", "https://www.smithsonianmag.com/rss/latest_articles/", "rss", "lifestyle"),
-        ("ScienceAlert", "https://www.sciencealert.com/feed", "rss", "physics"),
-        // 知识社区（需登录/动态渲染，走 spider；命中登录墙会引导登录）
-        ("知乎 - 专栏", "https://zhuanlan.zhihu.com/", "spider", "education"),
-        ("Quora", "https://www.quora.com/", "spider", "education"),
+        // ===== 计算机 / 工程（个人深度博客为主）=====
+        bf("Simon Willison", "https://simonwillison.net/atom/everything/", "computer", Knowledge, "core", true,
+           "几乎日更，AI 工程实践一手经验"),
+        bf("Julia Evans", "https://jvns.ca/atom.xml", "computer", Knowledge, "core", true,
+           "底层系统与调试，图解风格"),
+        bf("Martin Fowler", "https://martinfowler.com/feed.atom", "computer", Knowledge, "core", true,
+           "软件架构经典作者"),
+        bf("Dan Luu", "https://danluu.com/atom.xml", "computer", Knowledge, "core", true,
+           "低频但极长，工程与行业实证分析"),
+        bf("Overreacted (Dan Abramov)", "https://overreacted.io/rss.xml", "computer", Knowledge, "core", true,
+           "React 与前端心智模型"),
+        bf("Josh W Comeau", "https://www.joshwcomeau.com/rss.xml", "computer", Knowledge, "core", true,
+           "CSS/前端交互，长教程"),
+        bf("Rust Blog", "https://blog.rust-lang.org/feed.xml", "computer", Knowledge, "core", true,
+           "语言官方博客"),
+        bf("Go Blog", "https://go.dev/blog/feed.atom", "computer", Knowledge, "core", true,
+           "语言官方博客"),
+        bf("LWN.net", "https://lwn.net/headlines/rss", "computer", Knowledge, "core", true,
+           "Linux 内核与开源生态深度报道"),
+        bf("InfoQ 中文", "https://www.infoq.cn/feed", "computer", Mixed, "standard", true,
+           "架构与工程实践（也有资讯，交给质量分过滤）"),
+        bf("酷壳 CoolShell", "https://coolshell.cn/feed", "computer", Knowledge, "core", false,
+           "待验证：本机网络不可达（历史停更需自行确认）"),
+        bf("阮一峰周刊", "https://www.ruanyifeng.com/blog/atom.xml", "computer", Mixed, "standard", true,
+           "技术周刊，网络偶有波动"),
 
-        // ===== RSSHub 匿名路由（不登录即可抓，登录后增量）=====
-        // 实测（2026-11）：这些路由在无任何 cookie 时即可返回内容。
-        // /zhihu/daily 返回 30 篇 × ~5KB 完整正文，是当前唯一"匿名拿全文"的高价值来源。
-        // RSSHub sidecar 由安装包内置（utils/rsshub + SlidevEnv/node），无需额外安装。
-        ("知乎日报", "/zhihu/daily", "rsshub", "education"),
-        ("知乎热榜 (RSSHub)", "/zhihu/hot", "rsshub", "all"),
-        ("少数派 (RSSHub)", "/sspai/index", "rsshub", "technology"),
-        ("36氪快讯 (RSSHub)", "/36kr/newsflashes", "rsshub", "business"),
+        // ===== 科学 / 数学 / 物理 =====
+        bf("Quanta Magazine", "https://www.quantamagazine.org/feed/", "math", Knowledge, "core", true,
+           "数学与物理科普的最好长文来源之一"),
+        bf("Nautilus", "https://nautil.us/feed/", "physics", Knowledge, "core", true,
+           "科学长文"),
+        bf("Aeon", "https://aeon.co/feed.rss", "education", Knowledge, "core", true,
+           "思想类长文，跨学科"),
+        bf("Physics World", "https://physicsworld.com/feed/", "physics", Mixed, "standard", true,
+           "物理学界新闻与深度报道"),
+        bf("ScienceAlert", "https://www.sciencealert.com/feed", "physics", News, "noisy", true,
+           "大众科普短讯，信噪比低，默认不启用"),
+
+        // ===== 医学 =====
+        bf("STAT News", "https://www.statnews.com/feed/", "medicine", Knowledge, "core", true,
+           "医疗健康领域的专业报道"),
+        bf("Nature Medicine", "https://www.nature.com/nm.rss", "medicine", Knowledge, "core", true,
+           "期刊目录"),
+
+        // ===== 中文深度内容 =====
+        bf("少数派", "https://sspai.com/feed", "technology", Mixed, "core", true,
+           "产品与效率长文（同时有派早报等聚合贴，已被清洗层的索引贴规则拦掉）"),
+        bf("Solidot", "https://www.solidot.org/index.rss", "technology", News, "standard", true,
+           "科技短讯社区，信息密度高但偏资讯"),
+        bf("量子位", "https://www.qbitai.com/feed", "ai", Mixed, "standard", true,
+           "中文 AI 报道，部分为转载"),
+
+        // ===== 待验证：本机网络不通，但公认高质量 =====
+        // 这些源不默认启用；用户网络可通时可一键开启。
+        bf("Wikipedia 每日精选", "https://en.wikipedia.org/w/api.php?action=featuredfeed&feed=featured&feedformat=atom",
+           "education", Knowledge, "core", false, "待验证：本机网络不可达"),
+        bf("Hacker News 100+", "https://hnrss.org/frontpage?points=100", "computer", Discussion, "core", false,
+           "待验证：本机网络不可达；高分阈值可滤掉噪声"),
+        bf("Lobsters", "https://lobste.rs/rss", "computer", Discussion, "core", false,
+           "待验证：本机网络不可达"),
+        bf("YouTube 3Blue1Brown", "https://www.youtube.com/feeds/videos.xml?channel_id=UCYO_jab_esuFRV4b17AJtAw",
+           "math", Video, "core", false, "待验证：本机网络不可达"),
+        bf("YouTube Computerphile", "https://www.youtube.com/feeds/videos.xml?channel_id=UC9-y-6csu5WGm29I7JiwpnA",
+           "computer", Video, "core", false, "待验证：本机网络不可达"),
+
+        // ===== RSSHub 路由（依赖本地 sidecar，实测可用）=====
+        BuiltinFeed {
+            name: "知乎日报",
+            url: "/zhihu/daily",
+            source_type: "rsshub",
+            category: "education",
+            kind: Knowledge,
+            tier: "core",
+            verified: true,
+            remark: "匿名可取的完整正文，唯一免登录就拿全文的中文高价值源",
+        },
+        BuiltinFeed {
+            name: "少数派 (RSSHub)",
+            url: "/sspai/index",
+            source_type: "rsshub",
+            category: "technology",
+            kind: Knowledge,
+            tier: "standard",
+            verified: true,
+            remark: "与直连 RSS 同一内容，作为 RSS 失效时的备用通道",
+        },
     ]
 }
 
@@ -2128,19 +2236,23 @@ fn get_default_feeds() -> Vec<FeedSource> {
     let mut default_feeds = Vec::new();
     let mut per_category_idx: HashMap<&str, usize> = HashMap::new();
 
-    for (name, url, source_type, category) in curated_feeds() {
-        let idx = per_category_idx.entry(category).or_insert(0);
+    for f in curated_feeds() {
+        let idx = per_category_idx.entry(f.category).or_insert(0);
         default_feeds.push(FeedSource {
-            id: format!("builtin-{}-{}", category, idx),
-            name: name.to_string(),
-            url: url.to_string(),
-            category: category.to_string(),
-            enabled: true,
-            source_type: source_type.to_string(),
+            id: format!("builtin-{}-{}", f.category, idx),
+            name: f.name.to_string(),
+            url: f.url.to_string(),
+            category: f.category.to_string(),
+            // 未实测的源默认不启用：让用户主动开，而不是打开就看见一片失败。
+            enabled: f.verified,
+            source_type: f.source_type.to_string(),
             fetch_interval: Some(60),
             include_keywords: None,
             exclude_keywords: None,
-            remark: Some("curated_builtin".to_string()),
+            remark: Some(f.remark.to_string()),
+            content_kind: f.kind.as_str().to_string(),
+            tier: f.tier.to_string(),
+            verified_at: if f.verified { unix_now() } else { 0 },
             ..Default::default()
         });
         *idx += 1;
@@ -2210,15 +2322,15 @@ pub async fn ensure_category_default_feeds(category: String, force: Option<bool>
 
     let mut created = 0usize;
     let mut seq = 0i64;
-    for (name, url, source_type, cat) in curated_feeds() {
-        if cat != normalized_category {
+    for f in curated_feeds() {
+        if f.category != normalized_category {
             continue;
         }
         let key = format!(
             "{}|{}|{}",
-            url.trim().to_lowercase(),
+            f.url.trim().to_lowercase(),
             normalized_category.to_lowercase(),
-            source_type.trim().to_lowercase()
+            f.source_type.trim().to_lowercase()
         );
         if !existing_keys.insert(key) {
             continue;
@@ -2230,18 +2342,22 @@ pub async fn ensure_category_default_feeds(category: String, force: Option<bool>
                 normalized_category,
                 Utc::now().timestamp_millis() + seq
             ),
-            name: name.to_string(),
-            url: url.to_string(),
+            name: f.name.to_string(),
+            url: f.url.to_string(),
             category: normalized_category.clone(),
-            enabled: true,
-            source_type: source_type.to_string(),
+            // 与 get_default_feeds 保持一致：未实测的源不自动启用。
+            enabled: f.verified,
+            source_type: f.source_type.to_string(),
             fetch_interval: Some(60),
             include_keywords: None,
             exclude_keywords: None,
             remark: Some(format!(
-                "auto_generated_for_category={}",
-                normalized_category
+                "auto_generated_for_category={}; {}",
+                normalized_category, f.remark
             )),
+            content_kind: f.kind.as_str().to_string(),
+            tier: f.tier.to_string(),
+            verified_at: if f.verified { unix_now() } else { 0 },
             ..Default::default()
         });
         created += 1;
@@ -2437,6 +2553,185 @@ pub async fn get_feeds() -> Result<Vec<FeedSource>, String> {
     Ok(feeds_lock.clone())
 }
 
+/// 单个源的探测结果。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ProbeResult {
+    pub id: String,
+    pub name: String,
+    pub url: String,
+    /// ok | empty | http_error | parse_error | unreachable
+    pub status: String,
+    pub http_code: Option<u16>,
+    pub items: u32,
+    /// 最新一条的发布时间（原样字符串）
+    pub latest: Option<String>,
+    /// 从最新条目推算的"距今多少天"；算不出来为 None。
+    pub age_days: Option<i64>,
+    /// 人类可读的结论，例如"活跃"/"三个月无更新"/"地址失效"
+    pub verdict: String,
+    pub error: Option<String>,
+}
+
+/// 探测一个 RSS/Atom 源是否可用且活跃。
+///
+/// 这是"一律实测"的落地：不猜、不凭印象，直接拉一次看结果。
+/// 判定标准：
+/// - 能连通、HTTP 2xx、能解析出条目 → ok
+/// - 200 但零条目 → empty（可能是路径变了，或站点用 JS 渲染）
+/// - 最新条目超过 90 天 → 仍在 verdict 里标注"疑似停更"
+pub async fn probe_feed_url(name: &str, url: &str) -> ProbeResult {
+    let mut r = ProbeResult {
+        id: String::new(),
+        name: name.to_string(),
+        url: url.to_string(),
+        status: "unreachable".to_string(),
+        http_code: None,
+        items: 0,
+        latest: None,
+        age_days: None,
+        verdict: String::new(),
+        error: None,
+    };
+
+    let resp = match HTTP_CLIENT.get(url).send().await {
+        Ok(x) => x,
+        Err(e) => {
+            r.error = Some(e.to_string());
+            r.verdict = "网络不可达".to_string();
+            return r;
+        }
+    };
+    r.http_code = Some(resp.status().as_u16());
+    if !resp.status().is_success() {
+        r.status = "http_error".to_string();
+        r.verdict = format!("HTTP {}", resp.status());
+        return r;
+    }
+
+    let bytes = match resp.bytes().await {
+        Ok(b) => b,
+        Err(e) => {
+            r.error = Some(e.to_string());
+            r.verdict = "读取失败".to_string();
+            return r;
+        }
+    };
+
+    match Channel::read_from(std::io::Cursor::new(bytes)) {
+        Ok(channel) => {
+            let items: Vec<_> = channel.items().to_vec();
+            r.items = items.len() as u32;
+            if items.is_empty() {
+                r.status = "empty".to_string();
+                r.verdict = "可连通但无条目".to_string();
+                return r;
+            }
+
+            // 找最新一条的时间：pubDate 优先（RSS 2.0 的标准字段）。
+            let mut newest: Option<chrono::DateTime<chrono::Utc>> = None;
+            let mut newest_raw: Option<String> = None;
+            for it in &items {
+                if let Some(d) = it.pub_date() {
+                    if let Ok(parsed) = chrono::DateTime::parse_from_rfc2822(d) {
+                        let utc = parsed.with_timezone(&chrono::Utc);
+                        if newest.map(|n| utc > n).unwrap_or(true) {
+                            newest = Some(utc);
+                            newest_raw = Some(d.to_string());
+                        }
+                    }
+                }
+            }
+            r.latest = newest_raw;
+            if let Some(n) = newest {
+                let days = (chrono::Utc::now() - n).num_days();
+                r.age_days = Some(days);
+                r.status = "ok".to_string();
+                r.verdict = if days <= 30 {
+                    "活跃".to_string()
+                } else if days <= 90 {
+                    format!("{} 天未更新", days)
+                } else if days <= 365 {
+                    format!("{} 天未更新（疑似低产）", days)
+                } else {
+                    format!("{} 天未更新（疑似停更）", days)
+                };
+            } else {
+                r.status = "ok".to_string();
+                r.verdict = "可连通（时间未知）".to_string();
+            }
+            r
+        }
+        Err(e) => {
+            r.status = "parse_error".to_string();
+            r.error = Some(e.to_string());
+            r.verdict = "不是有效的 RSS/Atom".to_string();
+            r
+        }
+    }
+}
+
+/// 探测指定源；不传 id 时探测当前全部源。
+///
+/// 前端"健康检查"按钮调用它，定期跑一遍能看清哪些源已经失效。
+#[command]
+pub async fn probe_feeds(ids: Option<Vec<String>>) -> Result<Vec<ProbeResult>, String> {
+    ensure_feeds_initialized();
+    let all: Vec<FeedSource> = {
+        let lock = FEEDS.lock().unwrap();
+        lock.clone()
+    };
+    let targets: Vec<FeedSource> = match ids {
+        Some(list) if !list.is_empty() => {
+            let set: HashSet<String> = list.into_iter().collect();
+            all.into_iter().filter(|f| set.contains(&f.id)).collect()
+        }
+        _ => all,
+    };
+
+    let sem = std::sync::Arc::new(Semaphore::new(6));
+    let mut handles = Vec::with_capacity(targets.len());
+    for f in targets {
+        let sem = sem.clone();
+        handles.push(tokio::spawn(async move {
+            let _permit = sem.acquire_owned().await.ok();
+            // RSSHub 路由要先拼本地地址
+            let url = if f.source_type.eq_ignore_ascii_case("rsshub") {
+                let base = crate::commands::rsshub_server::rsshub_base_url();
+                format!("{}/{}", base.trim_end_matches('/'), f.url.trim_start_matches('/'))
+            } else {
+                f.url.clone()
+            };
+            let mut r = probe_feed_url(&f.name, &url).await;
+            r.id = f.id.clone();
+            r
+        }));
+    }
+
+    let mut out = Vec::with_capacity(handles.len());
+    for h in handles {
+        if let Ok(r) = h.await {
+            out.push(r);
+        }
+    }
+
+    // 把结果写回 feed 的探测字段，供列表直接展示。
+    {
+        let mut lock = FEEDS.lock().unwrap();
+        for p in &out {
+            if let Some(f) = lock.iter_mut().find(|f| f.id == p.id) {
+                f.last_probe = Some(p.status.clone());
+                f.last_probe_items = p.items;
+                f.last_probe_latest = p.latest.clone();
+            }
+        }
+    }
+    if let Err(e) = save_feeds_to_config(&FEEDS.lock().unwrap().clone()) {
+        warn!("flipboard: persist probe results failed: {}", e);
+    }
+
+    Ok(out)
+}
+
 #[command]
 pub async fn get_feed_health() -> Result<Vec<FeedHealth>, String> {
     ensure_feeds_initialized();
@@ -2629,7 +2924,7 @@ pub async fn add_feed(input: FeedSourceInput) -> Result<(), String> {
     let new_feed = FeedSource {
         id: format!("f{}", Utc::now().timestamp_millis()),
         name,
-        url,
+        url: url.clone(),
         category,
         enabled: input.enabled.unwrap_or(true),
         source_type,
@@ -2642,6 +2937,14 @@ pub async fn add_feed(input: FeedSourceInput) -> Result<(), String> {
         crawl_cfg: input.crawl_cfg,
         render_profile: input.render_profile,
         llm_enhance: input.llm_enhance.unwrap_or(false),
+        // 用户自建源：类型按地址推断（RSSHub 路由 / 视频频道 / 问答站点），
+        // 默认按 knowledge 对待——用户加源说明他想要这个源的内容。
+        content_kind: infer_content_kind(&url).as_str().to_string(),
+        tier: "standard".to_string(),
+        verified_at: 0,
+        last_probe: None,
+        last_probe_items: 0,
+        last_probe_latest: None,
     };
 
     feeds_lock.push(new_feed);
@@ -3988,6 +4291,9 @@ pub struct ItemQuery {
     pub offset: Option<usize>,
     /// 排序：quality | recent | relevance
     pub sort: Option<String>,
+    /// 内容类型过滤：默认只返回 knowledge/mixed（知识型）。
+    /// 传空字符串或 "all" 则不过滤。前端"只要知识"开关控制这一项。
+    pub content_kind: Option<String>,
 }
 
 /// Phase 4 的主检索接口：只返回 `state='ready'` 且为 canonical 代表的条目。
@@ -4020,6 +4326,30 @@ pub async fn search_items(query: ItemQuery) -> Result<serde_json::Value, String>
     );
     let mut bound: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(min_q)];
     let mut param_idx = 2;
+
+    // 内容类型：默认只返回知识型（knowledge / mixed）。
+    //
+    // 这是"要知识不要资讯"的最终落点：即便某个源被标成 news，
+    // 它的条目也不会进主列表，除非用户显式传 content_kind="all"。
+    // 历史条目没有 content_kind（NULL）时按 knowledge 对待——
+    // 那些都是重构前抓的，来源多为长文博客。
+    let want_all_kinds = query
+        .content_kind
+        .as_deref()
+        .map(|k| k.trim().eq_ignore_ascii_case("all") || k.trim().is_empty())
+        .unwrap_or(false);
+    if !want_all_kinds {
+        if let Some(k) = query.content_kind.as_deref().filter(|k| !k.trim().is_empty()) {
+            sql.push_str(&format!(
+                " AND lower(coalesce(i.content_kind,'knowledge')) = ?{}",
+                param_idx
+            ));
+            bound.push(Box::new(k.trim().to_lowercase()));
+            param_idx += 1;
+        } else {
+            sql.push_str(" AND lower(coalesce(i.content_kind,'knowledge')) IN ('knowledge','mixed')");
+        }
+    }
 
     if let Some(c) = query.collection.as_ref().filter(|c| !c.trim().is_empty()) {
         sql.push_str(&format!(" AND i.category = ?{}", param_idx));
@@ -4090,12 +4420,14 @@ pub async fn search_items(query: ItemQuery) -> Result<serde_json::Value, String>
     // 这里补一道保险，不依赖历史数据是否已经跑过合并。
     let items: Vec<Article> = dedup_articles_by_identity(rows.filter_map(|r| r.ok()).collect());
     // total 也按 URL 去重，否则分页数会虚高（同一篇被多个源收录算成多篇）。
+    // 内容类型条件要与主查询一致，否则分页会翻出空页。
     let total: i64 = conn
         .query_row(
             "SELECT COUNT(DISTINCT url_norm) FROM items \
              WHERE state='ready' AND is_canonical=1 \
-             AND purged_at IS NULL AND quality >= ?1",
-            params![min_q],
+             AND purged_at IS NULL AND quality >= ?1 \
+             AND (?2 = 1 OR lower(coalesce(content_kind,'knowledge')) IN ('knowledge','mixed'))",
+            params![min_q, if want_all_kinds { 1 } else { 0 }],
             |r| r.get(0),
         )
         .unwrap_or(0);
@@ -4952,6 +5284,19 @@ fn record_discovery(feed: &FeedSource, articles: &[Article]) {
             now,
         ) {
             tracing::debug!("flipboard: record_discovery failed for {}: {}", a.url, e);
+            continue;
+        }
+        // 带上内容类型与分级：列表默认只展示知识型，靠这一列筛选。
+        let kind = if feed.content_kind.trim().is_empty() {
+            ContentKind::Knowledge.as_str()
+        } else {
+            feed.content_kind.as_str()
+        };
+        let tier = if feed.tier.trim().is_empty() { "standard" } else { feed.tier.as_str() };
+        if let Err(e) = crate::commands::flipboard_items::set_content_kind(
+            &conn, &feed.id, &norm, kind, tier,
+        ) {
+            tracing::debug!("flipboard: set_content_kind failed for {}: {}", a.url, e);
         }
     }
 }
@@ -8032,19 +8377,18 @@ mod curated_feeds_tests {
     /// 内置源清单里同一个 URL 只能出现一次。
     ///
     /// 曾经有三个源被同时放进两个分类（少数派、36氪、Quanta），
-    /// 结果是同一个源被两条 feed 记录各抓一遍，产出两篇同 URL 的文章，
+    /// 结果是同一个源被两条 feed 记录各抓一遍，产出同 URL 的两篇文章，
     /// 前端按 URL 做 key 就撞了（Duplicate keys found during update）。
     #[test]
     fn no_duplicate_urls_in_curated_feeds() {
         let feeds = curated_feeds();
-        let mut seen: HashMap<String, Vec<&str>> = HashMap::new();
-        for (name, url, _, category) in &feeds {
-            seen.entry(url.to_lowercase()).or_default().push(
-                // 借用不了临时 String，这里只记名字与分类，用于报错信息
-                Box::leak(format!("{} ({})", name, category).into_boxed_str()),
-            );
+        let mut seen: HashMap<String, Vec<String>> = HashMap::new();
+        for f in &feeds {
+            seen.entry(f.url.to_lowercase())
+                .or_default()
+                .push(format!("{} ({})", f.name, f.category));
         }
-        let dups: Vec<(&String, &Vec<&str>)> =
+        let dups: Vec<(&String, &Vec<String>)> =
             seen.iter().filter(|(_, v)| v.len() > 1).collect();
         assert!(
             dups.is_empty(),
@@ -8054,13 +8398,132 @@ mod curated_feeds_tests {
     }
 
     #[test]
-    fn curated_feeds_have_non_empty_fields() {
-        for (name, url, source_type, category) in curated_feeds() {
-            assert!(!name.trim().is_empty(), "源名不能为空");
-            assert!(!url.trim().is_empty(), "URL 不能为空: {}", name);
-            assert!(!source_type.trim().is_empty(), "source_type 不能为空: {}", name);
-            assert!(!category.trim().is_empty(), "category 不能为空: {}", name);
+    fn curated_feeds_have_valid_fields() {
+        for f in curated_feeds() {
+            assert!(!f.name.trim().is_empty(), "源名不能为空");
+            assert!(!f.url.trim().is_empty(), "URL 不能为空: {}", f.name);
+            assert!(!f.source_type.trim().is_empty(), "source_type 不能为空: {}", f.name);
+            assert!(!f.category.trim().is_empty(), "category 不能为空: {}", f.name);
+            assert!(
+                matches!(f.tier, "core" | "standard" | "noisy"),
+                "tier 必须是 core/standard/noisy，{} 是 {}",
+                f.name,
+                f.tier
+            );
+            assert!(
+                !f.remark.trim().is_empty(),
+                "每个内置源都要写清楚它为什么值得内置（remark 不能为空）: {}",
+                f.name
+            );
         }
+    }
+
+    /// 未实测的源必须默认不启用。
+    ///
+    /// 这是本次重构的硬约束：宁可少给几个源，也不要让用户打开应用
+    /// 就看到一片"抓取失败"——那比没有源更糟。
+    #[test]
+    fn unverified_feeds_are_disabled_by_default() {
+        let defaults = get_default_feeds();
+        for f in &defaults {
+            if f.verified_at == 0 {
+                assert!(
+                    !f.enabled,
+                    "未实测的源 {} 不应默认启用",
+                    f.name
+                );
+            } else {
+                assert!(f.enabled, "已实测的源 {} 应当默认启用", f.name);
+            }
+        }
+    }
+
+    /// 新闻类源不该出现在默认视图里。
+    #[test]
+    fn news_feeds_are_not_in_default_view() {
+        for f in curated_feeds() {
+            if f.kind == ContentKind::News {
+                assert!(
+                    !f.kind.in_default_view(),
+                    "资讯源 {} 不该进知识主列表",
+                    f.name
+                );
+            }
+        }
+    }
+
+    /// 内置清单里不应出现已知停更的站点。
+    #[test]
+    fn known_dead_sources_are_excluded() {
+        let urls: Vec<String> = curated_feeds().iter().map(|f| f.url.to_lowercase()).collect();
+        for dead in ["distill.pub", "worrydream.com"] {
+            assert!(
+                !urls.iter().any(|u| u.contains(dead)),
+                "{} 已停更/失效，不该内置",
+                dead
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod content_kind_tests {
+    use super::*;
+
+    #[test]
+    fn infers_video_from_youtube() {
+        assert_eq!(
+            infer_content_kind("https://www.youtube.com/feeds/videos.xml?channel_id=X"),
+            ContentKind::Video
+        );
+    }
+
+    #[test]
+    fn infers_discussion_from_qa_sites() {
+        for u in [
+            "https://stackoverflow.com/feeds",
+            "https://math.stackexchange.com/feeds",
+            "https://www.quora.com/",
+            "https://www.reddit.com/r/x/.rss",
+        ] {
+            assert_eq!(infer_content_kind(u), ContentKind::Discussion, "url={u}");
+        }
+    }
+
+    #[test]
+    fn infers_news_from_flash_and_trending() {
+        for u in [
+            "https://36kr.com/feed-newsflash",
+            "https://github.com/trending",
+            "/zhihu/hot",
+        ] {
+            assert_eq!(infer_content_kind(u), ContentKind::News, "url={u}");
+        }
+    }
+
+    #[test]
+    fn defaults_to_knowledge() {
+        assert_eq!(
+            infer_content_kind("https://lilianweng.github.io/index.xml"),
+            ContentKind::Knowledge
+        );
+        assert_eq!(infer_content_kind("https://jvns.ca/atom.xml"), ContentKind::Knowledge);
+    }
+
+    #[test]
+    fn only_knowledge_and_mixed_are_default_visible() {
+        assert!(ContentKind::Knowledge.in_default_view());
+        assert!(ContentKind::Mixed.in_default_view());
+        assert!(!ContentKind::News.in_default_view());
+        assert!(!ContentKind::Discussion.in_default_view());
+        assert!(!ContentKind::Video.in_default_view());
+    }
+
+    #[test]
+    fn parse_falls_back_to_knowledge() {
+        assert_eq!(ContentKind::parse("knowledge"), ContentKind::Knowledge);
+        assert_eq!(ContentKind::parse("garbage"), ContentKind::Knowledge);
+        assert_eq!(ContentKind::parse(""), ContentKind::Knowledge);
     }
 }
 

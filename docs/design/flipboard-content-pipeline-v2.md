@@ -1161,3 +1161,66 @@ Markdown 文件。现在 `items` 增加 `canonical_id` / `is_canonical` /
 - 前端配置页与回收站只在编译层验证过，**没有在真实 Tauri 窗口里点过**；
 - 图片本地化的真实下载（需要网络与真实图片 URL）；
 - 端到端的"抓取→清洗→落盘→检索→导出"完整链路（受限于可用站点）。
+
+### 14.11 信息源重构：从"什么都能抓"到"只要高质量知识"
+
+用户指出：现有源质量差——大量小众站点、新闻快讯、热搜垃圾。
+要的是知识性长文与专业内容，而不是资讯。
+
+**问题不在抓取能力，在选源标准。** 旧清单 158 个源里混着大量新闻源
+（TechCrunch、Engadget、36氪快讯、The Verge），它们结构上就是
+"每天几十条短消息"，与知识长文抢同一个列表。
+
+#### 新增的两个维度
+
+`FeedSource` 增加：
+
+| 字段 | 含义 |
+|---|---|
+| `content_kind` | knowledge / news / discussion / video / mixed |
+| `tier` | core（精挑）/ standard / noisy |
+| `verified_at` | 实测定级时间；0 = 未验证 |
+| `last_probe*` | 最近探测结果、条目数、最新条目时间 |
+
+`ContentKind::in_default_view()` 只对 knowledge / mixed 返回 true。
+列表查询默认加 `content_kind IN ('knowledge','mixed')`，
+资讯与热搜不会进主列表，除非用户关掉顶栏的「只要知识」开关。
+
+#### 一个个实测
+
+所有 `verified=true` 的内置源都在本机实际拉取过：HTTP 200、能解析出条目、
+最新条目在近两个月内。实测结果（2026-11）：
+
+**确认可用且活跃**：Simon Willison（当日）、Aeon（当日）、Solidot（当日）、
+InfoQ 中文（当日）、Martin Fowler（一周内）、少数派（当日）、
+Julia Evans、Josh W Comeau、Rust/Go 官方博客、LWN、Quanta、Nautilus、
+STAT News、arXiv cs.AI/cs.LG、MIT News AI、Google AI Blog、Berkeley BAIR。
+
+**确认失效/停更，已剔除**：
+- `Distill`（rss 200，但最后更新 2021-09）—— 正是"很久不更新"的典型；
+- `Bret Victor`（404）、`Anthropic News`（404）。
+
+**本机网络不可达，标为待验证且默认不启用**：
+Wikipedia、Reddit、YouTube、Hacker News(hnrss)、Lobsters、The Gradient。
+这些源公认高质量，但无法在这台机器上验证。内置时 `verified=false`，
+`enabled=false`——用户网络可通时一键开启即可。
+
+这个取舍是刻意的：**宁可少给几个源，也不要让用户打开应用就看到一片抓取失败。**
+
+#### 健康检查
+
+新增 `probe_feeds` 命令：逐个实际拉取，报告 HTTP 码、条目数、最新条目时间，
+并给出人话结论（"活跃" / "45 天未更新" / "疑似停更" / "网络不可达"）。
+管理器顶部有「健康检查」按钮，结果直接写回源列表的"健康"列。
+
+#### 管理界面
+
+表格新增「类型」与「健康」两列；顶部加内容类型筛选；
+主界面顶栏加「只要知识」开关（默认开）。
+
+#### 未完成
+
+- 知乎 / B站 / Quora / GitHub 这几类用户点名的源，本机要么网络不可达、
+  要么需要登录态，无法实测，因此**没有**作为 `verified` 内置。
+  它们可以通过「高级配置 → RSSHub 网页探测」按需添加，这条路是通的。
+- RSSHub radar 已有实现（`rsshub_radar_detect`），本次未改动。

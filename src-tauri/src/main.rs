@@ -1144,6 +1144,7 @@ async fn app_main() {
             commands::flipboard::get_categories,
             commands::flipboard::get_feeds,
             commands::flipboard::get_feed_health,
+            commands::flipboard::probe_feeds,
             commands::flipboard::generate_feeds_for_platforms,
             commands::flipboard::ensure_category_default_feeds,
             commands::flipboard::add_feed,

@@ -23,6 +23,17 @@
 
       <!-- 右侧操作按钮 -->
       <div class="header-right">
+        <n-tooltip placement="bottom" trigger="hover">
+          <template #trigger>
+            <div class="kind-toggle">
+              <n-switch size="small" :value="knowledgeOnly" @update:value="toggleKnowledgeOnly" />
+              <span class="kind-label">只要知识</span>
+            </div>
+          </template>
+          开启后只显示长文/教程等知识型内容，隐藏新闻快讯与热搜。
+          关闭则显示全部。
+        </n-tooltip>
+
         <n-button-group>
           <n-tooltip placement="bottom" trigger="hover">
             <template #trigger>
@@ -291,6 +302,14 @@ const handleSearch = (query) => {
   }
 }
 
+// 只要知识型内容：主列表过滤开关。
+const knowledgeOnly = computed(() => store.knowledgeOnly.value)
+const toggleKnowledgeOnly = async (v) => {
+  store.setKnowledgeOnly(v)
+  // 立即重新拉一次，让用户马上看到区别。
+  await store.fetchArticles(store.selectedCategory.value)
+}
+
 const setViewMode = (mode) => {
   store.currentView.value = mode
   localStorage.setItem('flipboard_view_mode', mode)
@@ -378,6 +397,23 @@ const refreshHealth = async () => {
 
 .search-input {
   width: 100%;
+}
+
+.kind-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  height: 26px;
+  border-radius: 13px;
+  border: 1px solid var(--guaxi-border);
+  background: var(--guaxi-panel-bg);
+}
+
+.kind-label {
+  font-size: 12px;
+  color: var(--guaxi-text-secondary);
+  white-space: nowrap;
 }
 
 .header-right {

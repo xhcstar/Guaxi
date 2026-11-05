@@ -36,6 +36,13 @@ export const useFlipboardStore = () => {
   const isHydratingDetail = ref(false)
   // 后台抓取总开关（用户掌控；持久化，默认关闭）。
   const scrapingEnabled = ref(localStorage.getItem('flipboard_scraping_enabled') === '1')
+  // 只要知识型内容（不含资讯/热搜）。默认开启——用户要的是知识，不是新闻。
+  // 关掉后主列表会显示所有类型。
+  const knowledgeOnly = ref(localStorage.getItem('flipboard_knowledge_only') !== '0')
+  const setKnowledgeOnly = (v) => {
+    knowledgeOnly.value = !!v
+    localStorage.setItem('flipboard_knowledge_only', v ? '1' : '0')
+  }
   // 待登录队列（后台命中登录墙时入队，由用户主动打开，不再自动弹窗）。
   const pendingLogins = ref([])
   // 收集面板点击条目时，请求阅读区打开该文章（ReadingCoordinator 监听）。
@@ -250,6 +257,7 @@ export const useFlipboardStore = () => {
               limit: 80,
               offset: 0,
               sort: 'quality',
+              content_kind: knowledgeOnly.value ? null : 'all',
             },
           })
           if (isStale()) return
@@ -555,6 +563,8 @@ export const useFlipboardStore = () => {
         limit: params.limit ?? 60,
         offset: params.offset ?? 0,
         sort: params.sort || 'quality',
+        // 默认只取知识型（knowledge/mixed）。传 'all' 可看全部。
+        content_kind: params.contentKind || null,
       },
     })
   }
@@ -1082,6 +1092,8 @@ export const useFlipboardStore = () => {
     pendingReaderArticle,
     openReaderForArticle,
     scrapingEnabled,
+    knowledgeOnly,
+    setKnowledgeOnly,
     pendingLogins,
     setScrapingEnabled,
     fetchPendingLogins,

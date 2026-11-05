@@ -124,6 +124,8 @@ pub fn ensure_items_schema(conn: &Connection) -> Result<(), String> {
             is_canonical  INTEGER NOT NULL DEFAULT 1,
             alias_count   INTEGER NOT NULL DEFAULT 1,
             simhash       INTEGER,
+            content_kind  TEXT,
+            tier          TEXT,
             priority      INTEGER NOT NULL DEFAULT 0,
             PRIMARY KEY(feed_id, url_norm)
         );
@@ -172,6 +174,8 @@ fn ensure_items_columns(conn: &Connection) -> Result<(), String> {
         ("is_canonical", "INTEGER NOT NULL DEFAULT 1"),
         ("alias_count", "INTEGER NOT NULL DEFAULT 1"),
         ("simhash", "INTEGER"),
+        ("content_kind", "TEXT"),
+        ("tier", "TEXT"),
     ];
     for (name, decl) in columns {
         if !existing.contains(*name) {
@@ -230,6 +234,26 @@ pub fn note_discovered(
             published_at,
             now
         ],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// 记录条目的内容类型与分级（来自所属 feed）。
+///
+/// 单独一个 setter 而不是加进 `note_discovered`：后者有 9 处调用，
+/// 而类型信息只在"从 feed 发现"的路径上才有，其他路径传空即可。
+pub fn set_content_kind(
+    conn: &Connection,
+    feed_id: &str,
+    url_norm: &str,
+    kind: &str,
+    tier: &str,
+) -> Result<(), String> {
+    conn.execute(
+        "UPDATE items SET content_kind = ?3, tier = ?4 \
+         WHERE feed_id = ?1 AND url_norm = ?2",
+        params![feed_id, url_norm, kind, tier],
     )
     .map_err(|e| e.to_string())?;
     Ok(())
