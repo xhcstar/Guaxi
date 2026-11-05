@@ -766,7 +766,7 @@ async fn fetch_remote_image(url_str: &str) -> Result<(String, Vec<u8>), String> 
     }
     ensure_public_host(&url).await?;
 
-    let client = reqwest::Client::builder()
+    let mut builder = reqwest::Client::builder()
         .timeout(Duration::from_secs(20))
         .redirect(reqwest::redirect::Policy::custom(|attempt| {
             if attempt.previous().len() >= 3 || url_host_is_forbidden(attempt.url()) {
@@ -774,9 +774,20 @@ async fn fetch_remote_image(url_str: &str) -> Result<(String, Vec<u8>), String> 
             } else {
                 attempt.follow()
             }
-        }))
-        .build()
-        .map_err(|e| e.to_string())?;
+        }));
+
+    // 图片 CDN 常与文章站同域或同区域，不跟随系统代理时，
+    // 在大陆会表现为连不上（而不是 403）——同样要把代理接上。
+    if let Some(proxy) = crate::commands::mail::net::system_proxy_url() {
+        if let Ok(p) = reqwest::Proxy::all(&proxy) {
+            // 本地图床/库图片走 8888，不能被代理绕出去。
+            builder = builder.proxy(
+                p.no_proxy(reqwest::NoProxy::from_string("localhost,127.0.0.1,::1")),
+            );
+        }
+    }
+
+    let client = builder.build().map_err(|e| e.to_string())?;
 
     let resp = client
         .get(url.clone())

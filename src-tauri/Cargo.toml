@@ -306,6 +306,10 @@ der = { version = "0.7", features = ["alloc", "oid", "std", "pem"] }
 const-oid = { version = "0.9", features = ["db"] }
 # OpenPGP（RFC 9580）：纯 Rust。只开标准特性，bzip2 压缩留给服务器决定（关掉以减小构建）。
 pgp = { version = "0.21.0", default-features = false, features = ["bzip2"] }
+# RSS/Atom 统一解析。`rss` crate 只认 RSS 2.0，遇到 Atom 的 `<feed>` 直接报
+# "the input did not begin with an rss tag" —— YouTube、很多个人博客都是 Atom，
+# 于是它们全被当成抓取失败。feed-rs 同时支持两者，纯 Rust、不引 openssl/aws-lc。
+feed-rs = "3.0.0"
 
 [target.'cfg(windows)'.dependencies]
 keyring = { version = "3", default-features = false, features = ["windows-native"] }

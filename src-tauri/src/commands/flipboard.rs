@@ -10,7 +10,6 @@ use crate::commands::flipboard_pipeline::{
 use crate::commands::site_category_discovery::discover_site_category_feeds_from_html;
 use once_cell::sync::Lazy;
 use rusqlite::{params, Connection, OptionalExtension};
-use rss::Channel;
 use scraper::{Html, Selector};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -158,12 +157,36 @@ static HTTP_CLIENT: Lazy<reqwest::Client> = Lazy::new(|| {
     default_headers.insert(CONNECTION, HeaderValue::from_static("keep-alive"));
     default_headers.insert(UPGRADE_INSECURE_REQUESTS, HeaderValue::from_static("1"));
 
-    reqwest::Client::builder()
+    let mut builder = reqwest::Client::builder()
         .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0 Safari/537.36")
         .default_headers(default_headers)
-        .redirect(reqwest::redirect::Policy::limited(10))
-        .build()
-        .expect("build reqwest client failed")
+        .redirect(reqwest::redirect::Policy::limited(10));
+
+    // 跟随系统代理。
+    //
+    // 这是必需的：Wikipedia / Reddit / YouTube / GitHub / Quora 在大陆无法直连，
+    // 用户已配置系统代理；抓取客户端若不读代理，这些源会全部表现为"网络不可达"——
+    // 之前把它们标成"待验证"正是这个原因。
+    //
+    // 复用 mail 模块已有的解析逻辑（环境变量优先，其次 Windows 注册表/系统设置），
+    // 避免再造一套。
+    if let Some(proxy) = crate::commands::mail::net::system_proxy_url() {
+        match reqwest::Proxy::all(&proxy) {
+            Ok(p) => {
+                tracing::info!("flipboard: using system proxy {}", proxy);
+                // 本地服务绝不能走代理：RSSHub sidecar 在 127.0.0.1:1200，
+                // 经代理转发会变成"连不上自己"，所有 RSSHub 路由源直接失效。
+                builder = builder.proxy(p.no_proxy(
+                    reqwest::NoProxy::from_string("localhost,127.0.0.1,::1,*.local"),
+                ));
+            }
+            Err(e) => {
+                tracing::warn!("flipboard: invalid system proxy {}: {}", proxy, e);
+            }
+        }
+    }
+
+    builder.build().expect("build reqwest client failed")
 });
 
 /// 计算 flipboard 订阅源配置文件路径：可执行文件同级目录下的 config/flipboard_feeds.json
@@ -1848,6 +1871,8 @@ pub fn infer_content_kind(url: &str) -> ContentKind {
         || u.contains("stackoverflow.com")
         || u.contains("quora.com")
         || u.contains("reddit.com")
+        || u.contains("hnrss.org")
+        || u.contains("lobste.rs")
         || u.contains("/questions")
         || u.contains("discourse")
         || u.contains("/forum")
@@ -2140,8 +2165,6 @@ fn curated_feeds() -> Vec<BuiltinFeed> {
            "论文摘要，适合追踪前沿（每日量大，建议配合关键词过滤）"),
         bf("arXiv cs.LG", "https://rss.arxiv.org/rss/cs.LG", "ai", Knowledge, "core", true,
            "机器学习论文"),
-        bf("The Gradient", "https://thegradient.pub/rss/", "ai", Knowledge, "core", false,
-           "待验证：本机网络不可达"),
 
         // ===== 计算机 / 工程（个人深度博客为主）=====
         bf("Simon Willison", "https://simonwillison.net/atom/everything/", "computer", Knowledge, "core", true,
@@ -2195,18 +2218,46 @@ fn curated_feeds() -> Vec<BuiltinFeed> {
         bf("量子位", "https://www.qbitai.com/feed", "ai", Mixed, "standard", true,
            "中文 AI 报道，部分为转载"),
 
-        // ===== 待验证：本机网络不通，但公认高质量 =====
-        // 这些源不默认启用；用户网络可通时可一键开启。
-        bf("Wikipedia 每日精选", "https://en.wikipedia.org/w/api.php?action=featuredfeed&feed=featured&feedformat=atom",
-           "education", Knowledge, "core", false, "待验证：本机网络不可达"),
-        bf("Hacker News 100+", "https://hnrss.org/frontpage?points=100", "computer", Discussion, "core", false,
-           "待验证：本机网络不可达；高分阈值可滤掉噪声"),
-        bf("Lobsters", "https://lobste.rs/rss", "computer", Discussion, "core", false,
-           "待验证：本机网络不可达"),
-        bf("YouTube 3Blue1Brown", "https://www.youtube.com/feeds/videos.xml?channel_id=UCYO_jab_esuFRV4b17AJtAw",
-           "math", Video, "core", false, "待验证：本机网络不可达"),
-        bf("YouTube Computerphile", "https://www.youtube.com/feeds/videos.xml?channel_id=UC9-y-6csu5WGm29I7JiwpnA",
-           "computer", Video, "core", false, "待验证：本机网络不可达"),
+        // ===== 需走代理的国际知识源 =====
+        // 这些站在中国大陆无法直连，抓取客户端会自动跟随系统代理
+        // （见 HTTP_CLIENT 的说明）。已通过代理实测可达且活跃。
+        bf("Wikipedia 每日精选",
+           "https://en.wikipedia.org/w/api.php?action=featuredfeed&feed=featured&feedformat=atom",
+           "education", Knowledge, "core", true, "每日精选条目（Atom，走代理）"),
+        bf("Wikipedia 历史上的今天",
+           "https://en.wikipedia.org/w/api.php?action=featuredfeed&feed=onthisday&feedformat=atom",
+           "education", Knowledge, "core", true, "历史上的今天（Atom，走代理）"),
+        bf("Hacker News 100+", "https://hnrss.org/frontpage?points=100",
+           "computer", Discussion, "core", true, "高分阈值过滤，信噪比高"),
+        bf("Lobsters", "https://lobste.rs/rss", "computer", Discussion, "core", true,
+           "技术社区，邀请制，内容质量稳定"),
+        bf("The Gradient", "https://thegradient.pub/rss/", "ai", Knowledge, "core", true,
+           "AI 深度评论与研究解读"),
+        bf("YouTube 3Blue1Brown",
+           "https://www.youtube.com/feeds/videos.xml?channel_id=UCYO_jab_esuFRV4b17AJtAw",
+           "math", Video, "core", true, "数学可视化（Atom 格式，走代理）"),
+        bf("YouTube Veritasium",
+           "https://www.youtube.com/feeds/videos.xml?channel_id=UCHnyfMqiRRG1u-2MsSQLbXA",
+           "physics", Video, "core", true, "科学实验与解释（走代理）"),
+        bf("YouTube Computerphile",
+           "https://www.youtube.com/feeds/videos.xml?channel_id=UC9-y-6csu5WGm29I7JiwpnA",
+           "computer", Video, "core", true, "计算机科学（走代理）"),
+        bf("YouTube Lex Fridman",
+           "https://www.youtube.com/feeds/videos.xml?channel_id=UCSHZKyawb77ixDdsGog4iWA",
+           "ai", Video, "standard", true, "长访谈（走代理）"),
+        bf("GitHub Blog", "https://github.blog/feed/", "computer", Knowledge, "standard", true,
+           "官方工程博客（走代理）"),
+        bf("Rust 发布记录", "https://github.com/rust-lang/rust/releases.atom",
+           "computer", Knowledge, "standard", true,
+           "GitHub 官方 releases.atom：语言版本发布说明（走代理）"),
+        bf("Reddit r/programming",
+           "https://www.reddit.com/r/programming/top/.rss?t=month",
+           "computer", Discussion, "core", true,
+           "按月前 20 条，社区投票筛选（走代理；匿名抓取有速率限制，偶发 429，退避重试即可）"),
+        bf("Reddit r/MachineLearning",
+           "https://www.reddit.com/r/MachineLearning/top/.rss?t=month",
+           "ai", Discussion, "core", true,
+           "机器学习社区月榜（走代理）"),
 
         // ===== RSSHub 路由（依赖本地 sidecar，实测可用）=====
         BuiltinFeed {
@@ -2617,9 +2668,11 @@ pub async fn probe_feed_url(name: &str, url: &str) -> ProbeResult {
         }
     };
 
-    match Channel::read_from(std::io::Cursor::new(bytes)) {
+    // 与抓取路径保持一致：用 feed-rs 同时支持 RSS 与 Atom。
+    // 两处若用不同解析器，会出现"探测说正常、实际抓取失败"的分裂。
+    match feed_rs::parser::parse(std::io::Cursor::new(bytes)) {
         Ok(channel) => {
-            let items: Vec<_> = channel.items().to_vec();
+            let items = &channel.entries;
             r.items = items.len() as u32;
             if items.is_empty() {
                 r.status = "empty".to_string();
@@ -2627,17 +2680,16 @@ pub async fn probe_feed_url(name: &str, url: &str) -> ProbeResult {
                 return r;
             }
 
-            // 找最新一条的时间：pubDate 优先（RSS 2.0 的标准字段）。
+            // 找最新一条的时间。feed-rs 已经把 RSS 的 <pubDate> 与 Atom 的
+            // <published>/<updated> 统一到 `published` / `updated` 两个字段，
+            // 且都解析成 DateTime<Utc>，不用再自己处理两种时间格式。
             let mut newest: Option<chrono::DateTime<chrono::Utc>> = None;
             let mut newest_raw: Option<String> = None;
-            for it in &items {
-                if let Some(d) = it.pub_date() {
-                    if let Ok(parsed) = chrono::DateTime::parse_from_rfc2822(d) {
-                        let utc = parsed.with_timezone(&chrono::Utc);
-                        if newest.map(|n| utc > n).unwrap_or(true) {
-                            newest = Some(utc);
-                            newest_raw = Some(d.to_string());
-                        }
+            for it in items {
+                if let Some(d) = it.published.or(it.updated) {
+                    if newest.map(|n| d > n).unwrap_or(true) {
+                        newest = Some(d);
+                        newest_raw = Some(d.to_rfc3339());
                     }
                 }
             }
@@ -4530,9 +4582,13 @@ async fn fetch_rss_feed_internal(feed: &FeedSource) -> Result<Vec<Article>, Stri
         e.to_string()
     })?;
 
-    let cursor = std::io::Cursor::new(bytes);
-    let channel = Channel::read_from(cursor).map_err(|e| {
-        error!("flipboard: parse rss channel {} failed: {}", parsed, e);
+    // 用 feed-rs 同时支持 RSS 2.0 与 Atom。
+    //
+    // 之前的 `rss` crate 只认 RSS，遇到 Atom 的 <feed> 直接报
+    // "the input did not begin with an rss tag"——YouTube 频道、大量个人博客
+    // 都是 Atom，于是它们全被算作抓取失败。这是"源明明存在却抓不到"的根因之一。
+    let parsed_feed = feed_rs::parser::parse(std::io::Cursor::new(bytes)).map_err(|e| {
+        error!("flipboard: parse feed {} failed: {}", parsed, e);
         e.to_string()
     })?;
 
@@ -4541,15 +4597,32 @@ async fn fetch_rss_feed_internal(feed: &FeedSource) -> Result<Vec<Article>, Stri
     let policy = crate::commands::flipboard_admit::default_policy_for(&feed.source_type, &feed.url);
     let mut rejected = 0usize;
 
-    for (idx, item) in channel.items().iter().enumerate() {
-        let title = item.title().unwrap_or("无标题").to_string();
-        let description = item.description().unwrap_or("").to_string();
-        let link = item.link().unwrap_or(url).to_string();
+    for (idx, item) in parsed_feed.entries.iter().enumerate() {
+        let title = item
+            .title
+            .as_ref()
+            .map(|t| t.content.clone())
+            .unwrap_or_else(|| "无标题".to_string());
+        let description = item
+            .summary
+            .as_ref()
+            .map(|t| t.content.clone())
+            .unwrap_or_default();
+        // 取第一个链接作为条目地址；Atom 的 <link> 常常只有 rel=self 与
+        // rel=alternate 两种，优先要 alternate。
+        let link = item
+            .links
+            .iter()
+            .find(|l| l.rel.as_deref() == Some("alternate"))
+            .or_else(|| item.links.first())
+            .map(|l| l.href.clone())
+            .unwrap_or_else(|| url.to_string());
         let content = item
-            .content()
-            .or_else(|| item.description())
-            .unwrap_or("")
-            .to_string();
+            .content
+            .as_ref()
+            .and_then(|c| c.body.clone())
+            .or_else(|| item.summary.as_ref().map(|t| t.content.clone()))
+            .unwrap_or_default();
 
         // 准入判定放在解析阶段：能一次网络请求拒掉的，就不要存进库让前端再去过滤。
         let reject_reason = match crate::commands::flipboard_admit::judge_url(&link, &policy) {
@@ -4576,15 +4649,19 @@ async fn fetch_rss_feed_internal(feed: &FeedSource) -> Result<Vec<Article>, Stri
             continue;
         }
 
+        // published 优先，退回 updated：Atom 的 <published> 可选，
+        // 而 <updated> 是必填，比"现在"更可信。
         let published_at = item
-            .pub_date()
-            .map(|d| d.to_string())
+            .published
+            .or(item.updated)
+            .map(|d| d.to_rfc3339())
             .unwrap_or_else(|| now.clone());
 
-        let id = item
-            .guid()
-            .map(|g| g.value().to_string())
-            .unwrap_or_else(|| format!("{}-{}", feed.id, idx));
+        let id = if item.id.trim().is_empty() {
+            format!("{}-{}", feed.id, idx)
+        } else {
+            item.id.clone()
+        };
 
         // RSS 的 description 常带 HTML 标签：直接上屏会把标签渲染给用户。
         // content 保留 HTML（后续抽取阶段要用结构），description 只存纯文本。
@@ -7704,6 +7781,21 @@ pub async fn get_popular_articles() -> Result<Vec<Article>, String> {
 
 /// 采集管线状态统计（各状态的条目数）。供设置页/诊断面板展示，
 /// 回答"到底有多少条卡在失败/未处理/等登录"。只读。
+/// 查询当前抓取用的代理配置。
+///
+/// 用户需要知道"墙外源到底走没走代理"——否则抓取失败时无法判断是
+/// 网络问题还是源的问题。
+#[command]
+pub async fn get_scrape_proxy_status() -> Result<serde_json::Value, String> {
+    let proxy = crate::commands::mail::net::system_proxy_url();
+    Ok(serde_json::json!({
+        "configured": proxy.is_some(),
+        "url": proxy,
+        // 本地地址永远直连（RSSHub sidecar 在 127.0.0.1:1200）。
+        "no_proxy": "localhost,127.0.0.1,::1",
+    }))
+}
+
 #[command]
 pub async fn get_pipeline_stats() -> Result<Vec<(String, i64)>, String> {
     let conn = open_article_cache_db()?;
@@ -8499,6 +8591,24 @@ mod content_kind_tests {
         ] {
             assert_eq!(infer_content_kind(u), ContentKind::News, "url={u}");
         }
+    }
+
+    #[test]
+    fn infers_discussion_from_hn_and_lobsters() {
+        assert_eq!(infer_content_kind("https://hnrss.org/frontpage?points=100"), ContentKind::Discussion);
+        assert_eq!(infer_content_kind("https://lobste.rs/rss"), ContentKind::Discussion);
+    }
+
+    #[test]
+    fn wikipedia_atom_is_knowledge() {
+        // Wikipedia 的 feedformat=atom 路径里没有 news/hot 关键词，
+        // 应当归为知识而不是资讯。
+        assert_eq!(
+            infer_content_kind(
+                "https://en.wikipedia.org/w/api.php?action=featuredfeed&feed=featured&feedformat=atom"
+            ),
+            ContentKind::Knowledge
+        );
     }
 
     #[test]

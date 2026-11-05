@@ -205,6 +205,24 @@ pub async fn ensure_started() -> Result<(), String> {
     for (key, val) in &login_cookies {
         cmd.env(key, val);
     }
+
+    // 把系统代理交给 sidecar。
+    //
+    // RSSHub 自己也要出网抓目标站点，而 Wikipedia / Reddit / YouTube / GitHub
+    // 这类源在大陆必须经代理。不给它代理，那些路由会表现为"超时/503"——
+    // 与主程序连不连得上无关。
+    //
+    // 注意要排除本地地址：sidecar 若把 127.0.0.1 也代理走，会连不上自己。
+    if let Some(proxy) = crate::commands::mail::net::system_proxy_url() {
+        info!("[rsshub] forwarding system proxy to sidecar: {}", proxy);
+        cmd.env("HTTP_PROXY", &proxy)
+            .env("HTTPS_PROXY", &proxy)
+            .env("ALL_PROXY", &proxy)
+            .env("NO_PROXY", "localhost,127.0.0.1,::1")
+            .env("http_proxy", &proxy)
+            .env("https_proxy", &proxy)
+            .env("no_proxy", "localhost,127.0.0.1,::1");
+    }
     apply_no_window(&mut cmd);
 
     let child = cmd.spawn().map_err(|e| format!("启动 RSSHub 失败: {}", e))?;

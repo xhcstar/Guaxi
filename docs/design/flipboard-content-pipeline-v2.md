@@ -1224,3 +1224,68 @@ Wikipedia、Reddit、YouTube、Hacker News(hnrss)、Lobsters、The Gradient。
   要么需要登录态，无法实测，因此**没有**作为 `verified` 内置。
   它们可以通过「高级配置 → RSSHub 网页探测」按需添加，这条路是通的。
 - RSSHub radar 已有实现（`rsshub_radar_detect`），本次未改动。
+
+### 14.12 系统代理与 Atom 支持（本轮）
+
+用户指出：Wikipedia / Reddit / YouTube / GitHub / Quora 是高质量源，必须支持；
+这些站在大陆无法直连，已配置系统代理。
+
+**两个卡点，都是真 bug，不是配置问题。**
+
+#### 卡点一：抓取客户端从不读代理
+
+`HTTP_CLIENT` 构造时没有设置任何代理，所以无论用户在系统里配了什么，
+抓取永远直连。于是这些源全部表现为"网络不可达"——上一轮把它们标成
+"待验证"正是这个原因。
+
+修法：复用 `mail::net::system_proxy_url()`（环境变量优先，其次 Windows
+注册表 / 各平台设置），在三个地方接上：
+
+| 位置 | 说明 |
+|---|---|
+| `HTTP_CLIENT` | 主抓取客户端 |
+| 远程图片代理 | 图片 CDN 在同一网络下同样需要代理 |
+| RSSHub sidecar | 通过 `HTTP_PROXY` 等环境变量传给 node 子进程 |
+
+**每处都必须配 `no_proxy`**：RSSHub 在 `127.0.0.1:1200`，本地图床在
+`127.0.0.1:8888`；若不加排除，代理会把"连自己"也转发出去，本地服务全废。
+
+实测（系统代理 `127.0.0.1:10810`）：
+
+| 站点 | 直连 | 走代理 |
+|---|---|---|
+| Wikipedia API | 超时 | **200 / 88KB** |
+| Reddit RSS | 超时 | **200 / 32KB**（有速率限制，偶发 429） |
+| GitHub | 超时 | **200 / 603KB** |
+| YouTube 频道 | 超时 | **200 / 15 条** |
+| Quora | 超时 | 403（站点自己的反爬，非网络问题） |
+
+#### 卡点二：`rss` crate 不认 Atom
+
+`Channel::read_from` 只解析 RSS 2.0，遇到 Atom 的 `<feed>` 直接报
+`the input did not begin with an rss tag`。而 YouTube 频道、大量个人博客
+都是 Atom 格式——**它们从来没被成功抓取过**。
+
+修法：改用 `feed-rs`（同时支持 RSS / Atom / JSON Feed，纯 Rust，
+不引 openssl / aws-lc，符合 Windows 构建约束）。两处解析点都换：
+`fetch_rss_feed_internal` 与 `probe_feed_url`。
+
+feed-rs 还顺带消除了手写的时间格式判断：它把 RSS 的 `<pubDate>` 与
+Atom 的 `<published>`/`<updated>` 统一成 `DateTime<Utc>`。
+
+#### 内置源更新
+
+| 源 | 状态 |
+|---|---|
+| Wikipedia 每日精选 / 历史上的今天 | 已验证（Atom，走代理） |
+| Hacker News 100+ / Lobsters | 已验证 |
+| The Gradient | 已验证 |
+| YouTube 3Blue1Brown / Veritasium / Computerphile / Lex Fridman | 已验证（视频类） |
+| GitHub Blog / Rust releases.atom | 已验证 |
+| Reddit r/programming / r/MachineLearning | 已验证（注明可能 429） |
+| Quora | **未内置**：站点对匿名抓取返回 403，需要登录态；已说明可走 RSSHub 路由 |
+
+#### UI
+
+管理器标题旁显示「代理已启用 / 未走代理」标签，抓取失败时能立刻判断
+是网络问题还是源的问题。

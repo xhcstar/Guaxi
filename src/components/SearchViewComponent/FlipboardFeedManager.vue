@@ -1,7 +1,13 @@
 <template>
   <div class="page">
     <div class="header">
-      <div class="title">知识源管理</div>
+      <div class="title">
+        知识源管理
+        <span v-if="proxyStatus" class="proxy-chip" :class="{ off: !proxyStatus.configured }"
+          :title="proxyStatus.configured ? `抓取走系统代理 ${proxyStatus.url}` : '未检测到系统代理，墙外源自会连不上'">
+          {{ proxyStatus.configured ? '代理已启用' : '未走代理' }}
+        </span>
+      </div>
 
       <n-space align="center" :wrap="true">
         <n-select v-model:value="filterCategory" size="small" clearable placeholder="筛选分类" :options="categoryOptions"
@@ -277,6 +283,16 @@ const batchLoading = ref(false)
 const stoppingAll = ref(false)
 const probing = ref(false)
 const probeSummary = ref(null)
+const proxyStatus = ref(null)
+
+// 查一次代理状态：用户需要知道墙外源走没走代理。
+const loadProxyStatus = async () => {
+  try {
+    proxyStatus.value = await invoke('get_scrape_proxy_status')
+  } catch {
+    proxyStatus.value = null
+  }
+}
 
 // 逐个实际拉取源，检查可用性与活跃度。
 // ids 为 null 时检查全部——用户点"健康检查"就是要看全貌。
@@ -922,6 +938,7 @@ const confirmDelete = (row) => {
 }
 
 onMounted(async () => {
+  loadProxyStatus()
   // 初始筛选：优先使用路由传入
   filterCategory.value = (props.category || '').trim() || ''
   logger.info('FlipboardFeedManager: mounted', { category: props.category })
@@ -964,6 +981,21 @@ onUnmounted(() => {
   font-size: 18px;
   font-weight: 700;
   color: var(--guaxi-text-primary);
+}
+
+.proxy-chip {
+  margin-left: 10px;
+  padding: 2px 8px;
+  border-radius: 9px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--guaxi-success, #18a058);
+  background: rgba(24, 160, 88, 0.12);
+}
+
+.proxy-chip.off {
+  color: var(--guaxi-text-secondary);
+  background: var(--guaxi-content-bg);
 }
 
 .batch-bar {
