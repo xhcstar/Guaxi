@@ -1008,10 +1008,12 @@ const bodyRef = ref(null)
 const cardRefs = new Map()
 const registerCardRef = (line, el) => { if (el) cardRefs.set(line, el) }
 
-// 设计说明：
-// 1. .org 任务预览的真实滚动容器是 .otp-body，而不是组件根节点。
-// 2. 父组件在切换 tab 前后只需要一个稳定的“阅读比例”，因此这里暴露 scrollRatio/restoreScroll，
-//    避免父组件依赖内部 DOM 结构，也不会影响现有的 goto-line、搜索和卡片编辑交互。
+// 设计说明（关键 · 阅读位置为什么要存「卡片锚点」）：
+// .org 预览按视口渐进渲染：任务字段先显示原文兜底，Markdown / 图片 / 表格随后才落进 DOM，
+// 恢复后几百毫秒里文档高度还会继续变化。只存 scrollTop 或整篇比例的话，同一比例在不同
+// 时刻换算出的像素位置会漂移，表现为「切回来总落在某张卡片后面一点」。
+// 因此再存一个内容锚点：视口顶部所在的卡片（尽量细分到分区）+ 锚点内的像素偏移；
+// 恢复时按帧重新锚定，上方内容高度怎么变，用户看到的都是同一处。
 const clampScrollRatio = (value) => {
   const n = Number(value)
   if (!Number.isFinite(n)) return 0
@@ -1026,24 +1028,119 @@ const scrollRatio = () => {
   const scrollableHeight = Math.max(0, el.scrollHeight - el.clientHeight)
   return scrollableHeight > 0 ? clampScrollRatio(el.scrollTop / scrollableHeight) : 0
 }
-const restoreScroll = (ratio) => {
+// 节点在滚动内容坐标系里的纵坐标（与 scrollTop 同一基准）。
+const contentTopIn = (el, node) => node.getBoundingClientRect().top - el.getBoundingClientRect().top + el.scrollTop
+const findReadAnchor = (el) => {
+  const top = Math.max(0, el.scrollTop || 0) + 1
+  let card = null
+  for (const node of el.querySelectorAll('.otp-card[data-block-line]')) {
+    if (contentTopIn(el, node) + node.offsetHeight > top) {
+      card = node
+      break
+    }
+  }
+  if (!card) return null
+  // 卡片内部再细分：取顶部扫过的最深一个分区，长正文卡片里也能锚住具体段落。
+  let anchorSec = ''
+  let anchorTop = contentTopIn(el, card)
+  for (const sec of card.querySelectorAll('.otp-sec[data-sec-key]')) {
+    const secTop = contentTopIn(el, sec)
+    if (secTop > top) break
+    anchorSec = sec.dataset.secKey || ''
+    anchorTop = secTop
+  }
+  return { blockLine: Number(card.dataset.blockLine) || 0, anchorSec, anchorTop }
+}
+const readPosition = () => {
   const el = bodyRef.value
-  if (!el) {
+  const ratio = scrollRatio()
+  if (ratio === null) return null
+  const scrollTop = Math.max(0, el.scrollTop || 0)
+  const anchor = findReadAnchor(el)
+  return {
+    scrollTop,
+    scrollRatio: ratio,
+    scrollHeight: el.scrollHeight,
+    clientHeight: el.clientHeight,
+    anchorLine: anchor?.blockLine || 0,
+    anchorSec: anchor?.anchorSec || '',
+    anchorOffset: anchor ? scrollTop - anchor.anchorTop : 0,
+  }
+}
+const resolveAnchorTop = (el, entry) => {
+  const line = Number(entry?.anchorLine)
+  if (!Number.isFinite(line) || line <= 0) return null
+  const card = el.querySelector(`.otp-card[data-block-line="${line}"]`)
+  if (!card) return null
+  let baseTop = contentTopIn(el, card)
+  const secKey = String(entry?.anchorSec || '')
+  if (secKey) {
+    const sec = Array.from(card.querySelectorAll('.otp-sec[data-sec-key]'))
+      .find((node) => node.dataset.secKey === secKey)
+    if (sec) baseTop = contentTopIn(el, sec)
+  }
+  return baseTop + (Number(entry?.anchorOffset) || 0)
+}
+const RESTORE_SCROLL_MAX_FRAMES = 28
+const RESTORE_SCROLL_FRAME_MS = 45
+const restoreScroll = async (entryOrRatio) => {
+  const entry = entryOrRatio && typeof entryOrRatio === 'object'
+    ? entryOrRatio
+    : { scrollRatio: Number(entryOrRatio) || 0 }
+  const container = bodyRef.value
+  if (!container) {
     logger.debug('[PreviewReadPosition] skip org restore because body is not ready')
     return false
   }
-  const safeRatio = clampScrollRatio(ratio)
-  const scrollableHeight = Math.max(0, el.scrollHeight - el.clientHeight)
-  el.scrollTop = safeRatio * scrollableHeight
+  // 恢复期间用户主动滚动就立刻让位，不再按帧把位置拽回来。
+  let cancelled = false
+  const cancel = () => { cancelled = true }
+  container.addEventListener('wheel', cancel, { passive: true, once: true })
+  container.addEventListener('touchstart', cancel, { passive: true, once: true })
+  container.addEventListener('pointerdown', cancel, { once: true })
+  container.addEventListener('keydown', cancel, { once: true })
+  let lastMaxTop = -1
+  let stableFrames = 0
+  let anchored = false
+  try {
+    for (let frame = 0; frame < RESTORE_SCROLL_MAX_FRAMES; frame += 1) {
+      await new Promise((resolve) => requestAnimationFrame(resolve))
+      if (cancelled) break
+      const el = bodyRef.value
+      if (!el || !el.isConnected || el.clientHeight <= 0) break
+      const maxTop = Math.max(0, el.scrollHeight - el.clientHeight)
+      if (maxTop === lastMaxTop) stableFrames += 1
+      else stableFrames = 0
+      lastMaxTop = maxTop
+      // 每帧按锚点重算目标：上方内容在渐进渲染中变高时，目标像素跟着走。
+      const anchorTop = resolveAnchorTop(el, entry)
+      anchored = anchorTop !== null
+      const targetTop = anchored
+        ? anchorTop
+        : clampScrollRatio(Number(entry.scrollRatio) || 0) * maxTop
+      el.scrollTop = Math.min(Math.max(0, targetTop), maxTop)
+      // 至少观察一小段，等渐进渲染把高度撑完；连续稳定后再收工。
+      if (frame >= 5 && stableFrames >= 3) break
+      await new Promise((resolve) => setTimeout(resolve, RESTORE_SCROLL_FRAME_MS))
+    }
+  } finally {
+    container.removeEventListener('wheel', cancel)
+    container.removeEventListener('touchstart', cancel)
+    container.removeEventListener('pointerdown', cancel)
+    container.removeEventListener('keydown', cancel)
+  }
   logger.debug('[PreviewReadPosition] restored org body scroll', {
-    ratio: +safeRatio.toFixed(4),
-    scrollTop: Math.round(el.scrollTop || 0),
-    scrollHeight: el.scrollHeight,
-    clientHeight: el.clientHeight,
+    ratio: +clampScrollRatio(Number(entry.scrollRatio) || 0).toFixed(4),
+    anchorLine: Number(entry.anchorLine) || 0,
+    anchorSec: entry.anchorSec || '',
+    anchored,
+    scrollTop: Math.round(bodyRef.value?.scrollTop || 0),
+    scrollHeight: bodyRef.value?.scrollHeight || 0,
+    clientHeight: bodyRef.value?.clientHeight || 0,
   })
   return true
 }
-defineExpose({ scrollRatio, restoreScroll })
+defineExpose({ scrollRatio, readPosition, restoreScroll })
 
 watch(() => props.activeBlockLine, async (line) => {
   if (!line) return

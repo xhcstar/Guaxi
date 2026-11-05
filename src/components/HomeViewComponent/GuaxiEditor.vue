@@ -3044,10 +3044,11 @@ const readPreviewPaneScrollRatio = (viewer) => {
 const captureOrgPreviewReadPosition = (path, reason = 'unknown') => {
   const normalizedPath = normalizePreviewReadPath(path || selectedFile.value?.path || fileTreeStore.activeTab);
   const viewer = orgPreviewRef.value;
-  if (!normalizedPath || !viewer?.scrollRatio) return false;
+  if (!normalizedPath || !viewer?.readPosition) return false;
 
-  const ratio = readPreviewPaneScrollRatio(viewer);
-  if (ratio === null) {
+  // org 预览按视口渐进渲染，整篇比例会随内容高度变化而漂移；这里连同卡片/分区锚点一起保存。
+  const position = viewer.readPosition();
+  if (!position) {
     logger.debug('[PreviewReadPosition] skip org save because the pane is not laid out', {
       reason,
       path: normalizedPath,
@@ -3058,13 +3059,15 @@ const captureOrgPreviewReadPosition = (path, reason = 'unknown') => {
   rememberPreviewReadPosition({
     kind: 'org',
     path: normalizedPath,
-    scrollRatio: ratio,
+    ...position,
   });
 
   logger.debug('[PreviewReadPosition] saved org position', {
     reason,
     path: normalizedPath,
-    ratio: +ratio.toFixed(4),
+    ratio: +Number(position.scrollRatio || 0).toFixed(4),
+    anchorLine: position.anchorLine,
+    anchorSec: position.anchorSec,
   });
   return true;
 };
@@ -3250,12 +3253,15 @@ const restoreOrgPreviewReadPosition = async (path, reason = 'unknown') => {
   try {
     await nextTick();
     await new Promise((resolve) => window.requestAnimationFrame(resolve));
-    const ratio = Number(entry.scrollRatio);
-    viewer.restoreScroll(Number.isFinite(ratio) ? ratio : 0);
+    // 组件内部会按帧重锚直到渐进渲染稳定，必须等它结束再解除保存静音，
+    // 否则恢复过程中的中间滚动位置会被当成阅读位置写回缓存。
+    await viewer.restoreScroll(entry);
     logger.info('[PreviewReadPosition] restored org position', {
       reason,
       path: normalizePreviewReadPath(path),
-      ratio: Number.isFinite(ratio) ? +ratio.toFixed(4) : 0,
+      ratio: Number.isFinite(Number(entry.scrollRatio)) ? +Number(entry.scrollRatio).toFixed(4) : 0,
+      anchorLine: Number(entry.anchorLine) || 0,
+      anchorSec: entry.anchorSec || '',
     });
     return true;
   } finally {
