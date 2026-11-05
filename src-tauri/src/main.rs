@@ -509,6 +509,7 @@ async fn app_main() {
             commands::editor_plugin::get_editor_plugins_dir,
             commands::editor_plugin::list_all_plugins,
             commands::editor_plugin::set_plugin_enabled,
+            commands::editor_plugin::set_plugin_args,
             commands::editor_plugin::delete_plugin,
             commands::editor_plugin::create_plugin,
             commands::editor_plugin::read_plugin_entry,

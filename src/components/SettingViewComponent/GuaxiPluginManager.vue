@@ -7,6 +7,9 @@
       <n-button size="small" :disabled="!newName.trim()" @click="createNew">新建</n-button>
       <n-button size="small" text @click="openDir">打开插件目录</n-button>
     </div>
+    <div class="gpm-hint gpm-hint--tip">
+      带参数的插件可点「参数」设置,编辑器右键运行时会使用已保存的值。
+    </div>
 
     <div v-if="loading" class="gpm-hint">加载中…</div>
     <div v-else-if="!plugins.length" class="gpm-hint">还没有插件。点“新建”或“导入 .zip”添加。</div>
@@ -21,12 +24,66 @@
         </div>
         <div class="gpm-item__ops">
           <n-switch size="small" :value="p.enabled" @update:value="(v) => toggle(p, v)" />
+          <n-button v-if="p.args && p.args.length" size="tiny" @click="editArgs(p)">参数</n-button>
           <n-button size="tiny" @click="edit(p)">编辑</n-button>
           <n-button size="tiny" @click="exportOne(p)">导出</n-button>
-          <n-button size="tiny" type="error" ghost @click="remove(p)">删除</n-button>
+          <n-popconfirm @positive-click="remove(p)">
+            <template #trigger>
+              <n-button size="tiny" type="error" ghost>删除</n-button>
+            </template>
+            确定删除插件「{{ p.name }}」?此操作不可撤销。
+          </n-popconfirm>
         </div>
       </div>
     </div>
+
+    <n-modal
+      v-model:show="argVisible"
+      preset="card"
+      :title="`插件参数 · ${argPlugin?.name || ''}`"
+      class="gpm-arg-modal"
+      :bordered="true"
+    >
+      <div class="gpm-arg-form">
+        <div v-for="spec in argPlugin?.args || []" :key="spec.key" class="gpm-arg-row">
+          <div class="gpm-arg-label">
+            {{ spec.label }}
+            <span v-if="spec.required" class="gpm-arg-required">*</span>
+          </div>
+          <n-switch
+            v-if="spec.type === 'bool'"
+            v-model:value="argDraft[spec.key]"
+            size="small"
+          />
+          <n-input-number
+            v-else-if="spec.type === 'number'"
+            v-model:value="argDraft[spec.key]"
+            size="small"
+            class="gpm-arg-number"
+          />
+          <n-select
+            v-else-if="spec.type === 'select'"
+            v-model:value="argDraft[spec.key]"
+            size="small"
+            :options="(spec.options || []).map((o) => ({ label: o, value: o }))"
+            class="gpm-arg-select"
+          />
+          <n-input
+            v-else
+            v-model:value="argDraft[spec.key]"
+            size="small"
+            :placeholder="spec.placeholder || ''"
+          />
+        </div>
+        <div v-if="!argPlugin?.args?.length" class="gpm-hint">这个插件没有参数。</div>
+      </div>
+      <template #footer>
+        <div class="gpm-arg-footer">
+          <n-button size="small" @click="argVisible = false">取消</n-button>
+          <n-button size="small" type="primary" :loading="argSaving" @click="saveArgs">保存</n-button>
+        </div>
+      </template>
+    </n-modal>
   </div>
 </template>
 
@@ -36,13 +93,18 @@
 import { ref, onMounted } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { emit as emitTauriEvent } from '@tauri-apps/api/event'
-import { open as openFileDialog, confirm as confirmDialog } from '@tauri-apps/plugin-dialog'
+import { open as openFileDialog } from '@tauri-apps/plugin-dialog'
 import { useMessage } from 'naive-ui'
 
 const message = useMessage()
 const plugins = ref([])
 const loading = ref(false)
 const newName = ref('')
+
+const argVisible = ref(false)
+const argPlugin = ref(null)
+const argDraft = ref({})
+const argSaving = ref(false)
 
 const surfaceLabel = (s) =>
   ({ editor: '编辑器', repo: '文件库', 'knowledge-base': '知识库', agent: 'Agent' }[String(s)] || String(s))
@@ -86,12 +148,33 @@ const exportOne = async (p) => {
   }
 }
 
+const editArgs = (p) => {
+  argPlugin.value = p
+  const draft = {}
+  for (const spec of p.args || []) {
+    const saved = p.arg_values?.[spec.key]
+    draft[spec.key] = saved === undefined || saved === null ? spec.default : saved
+  }
+  argDraft.value = draft
+  argVisible.value = true
+}
+
+const saveArgs = async () => {
+  if (!argPlugin.value) return
+  argSaving.value = true
+  try {
+    await invoke('set_plugin_args', { id: argPlugin.value.id, args: { ...argDraft.value } })
+    message.success('参数已保存,下次运行插件时生效')
+    argVisible.value = false
+    await refresh()
+  } catch (e) {
+    message.error('保存失败:' + String(e?.message || e))
+  } finally {
+    argSaving.value = false
+  }
+}
+
 const remove = async (p) => {
-  const ok = await confirmDialog(`确定删除插件“${p.name}”?此操作不可撤销。`, {
-    title: '删除插件',
-    kind: 'warning',
-  })
-  if (!ok) return
   try {
     await invoke('delete_plugin', { id: p.id })
     message.success('已删除')
@@ -166,6 +249,11 @@ onMounted(refresh)
   font-size: 13px;
   padding: 8px 0;
 }
+.gpm-hint--tip {
+  padding: 0;
+  font-size: 12px;
+  opacity: 0.5;
+}
 .gpm-list {
   display: flex;
   flex-direction: column;
@@ -216,6 +304,39 @@ onMounted(refresh)
   align-items: center;
   gap: 6px;
   flex: 0 0 auto;
+}
+.gpm-arg-modal {
+  width: min(560px, 92vw);
+}
+.gpm-arg-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.gpm-arg-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.gpm-arg-label {
+  flex: 0 0 160px;
+  font-size: 13px;
+  opacity: 0.85;
+}
+.gpm-arg-required {
+  color: var(--n-error-color, #e88080);
+  margin-left: 2px;
+}
+.gpm-arg-number {
+  width: 140px;
+}
+.gpm-arg-select {
+  width: 200px;
+}
+.gpm-arg-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
 }
 </style>
 

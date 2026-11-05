@@ -6,6 +6,7 @@ use crate::commands::notebook_lab::{
     dispatch_notebook_data_lab_rpc, notebook_data_lab_health_response,
     NotebookDataLabRpcRequest,
 };
+use crate::commands::plugin_llm::{complete as plugin_llm_run, PluginLlmRequest, PluginLlmResponse};
 use crate::state::SharedState;
 use actix_cors::Cors;
 use actix_web::web::{Data, JsonConfig, PayloadConfig};
@@ -114,6 +115,20 @@ async fn web_model_chat_push(
     HttpResponse::Ok().json(json!({ "success": true }))
 }
 
+/// 插件专用补全：密钥留在 Rust 侧，Python 插件只发 prompt。
+/// 失败也返回 200 + success=false，避免插件侧 urllib 直接抛 HTTPError 丢消息。
+async fn plugin_llm_complete(req: web::Json<PluginLlmRequest>) -> HttpResponse {
+    match plugin_llm_run(req.into_inner()).await {
+        Ok(response) => HttpResponse::Ok().json(response),
+        Err(message) => HttpResponse::Ok().json(PluginLlmResponse {
+            success: false,
+            text: String::new(),
+            message: Some(message),
+            provider: None,
+        }),
+    }
+}
+
 async fn notebook_data_lab_health() -> HttpResponse {
     HttpResponse::Ok().json(notebook_data_lab_health_response())
 }
@@ -203,6 +218,7 @@ pub async fn run_local_backend(state: SharedState) -> Result<(), String> {
             // 音乐播放器音频流代理：给带防盗链的直链补 Referer/UA，透传 Range 供 <audio> 播放与拖动。
             .configure(crate::commands::music::stream::config)
             .route("/api/web-model-chat", web::post().to(web_model_chat_push))
+            .route("/api/plugin/llm", web::post().to(plugin_llm_complete))
             .route("/api/notebook/data-lab/health", web::get().to(notebook_data_lab_health))
             .route("/api/notebook/data-lab/action", web::post().to(notebook_data_lab_rpc_http))
             .route("/lsp/{language}", web::get().to(lsp::lsp_ws_route))

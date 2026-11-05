@@ -6,6 +6,7 @@ pub mod cc_switch;
 pub mod chatview;
 /// 大模型供应商的统一清单与解析：对话、Codex Agent、Python Agent 共用一份。
 pub mod llm_provider;
+pub mod plugin_llm;
 /// 智能助手联网检索：多引擎并发 + 正文摘录，给模型提供可读的联网资料。
 pub mod web_search;
 /// Codex Agent 引擎：以打包进安装包的 codex sidecar 驱动智能助手的 Agent 模式。

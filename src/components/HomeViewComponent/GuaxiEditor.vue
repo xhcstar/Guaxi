@@ -13849,20 +13849,46 @@ const runEditorTransformPlugin = async (plugin) => {
   const targetEditor = getActiveEditor();
   const model = targetEditor?.getModel?.();
   const selection = targetEditor?.getSelection?.();
-  if (!model || !selection || selection.isEmpty()) {
+  if (!model || !selection) {
     message.info('请先选中要处理的文本');
     return;
   }
-  const selectedText = model.getValueInRange(selection);
+  const allowEmpty = !!plugin?.allow_empty_selection;
+  if (selection.isEmpty() && !allowEmpty) {
+    message.info('请先选中要处理的文本');
+    return;
+  }
+  const selectedText = selection.isEmpty() ? '' : model.getValueInRange(selection);
   const documentText = model.getValue();
+  const clipboardText = plugin?.clipboard ? String((await readClipboardText()) || '') : '';
+  if (plugin?.needs_kb && !knowledgeBaseStore?.selectedKnowledgeBase) {
+    try {
+      await knowledgeBaseStore.fetchKnowledgeBases();
+    } catch (e) { /* 没有知识库时由插件给出提示 */ }
+  }
+  const kb = knowledgeBaseStore?.selectedKnowledgeBase;
+  let boundPath = '';
+  try {
+    boundPath = getEditorBoundTabPath(targetEditor) || '';
+  } catch (e) { /* 文件树尚未就绪时忽略 */ }
+  const pluginCtx = {
+    selection: selectedText,
+    document: documentText,
+    args: plugin?.arg_values || {},
+    file_path: boundPath,
+    kb_location: kb?.location || '',
+    kb_name: kb?.knowledge_base_name || '',
+    clipboard: clipboardText,
+  };
   // 脚手架:加载用户插件入口模块并调用 run(ctx),结果放进 _result → result_json 回传。
   const scaffold = [
     'import importlib.util as _ilu',
     '_spec = _ilu.spec_from_file_location("guaxi_user_plugin", _plugin_entry_path)',
     '_mod = _ilu.module_from_spec(_spec)',
     '_spec.loader.exec_module(_mod)',
-    '_result = _mod.run({"selection": selection_text, "document": document_text, "args": {}})',
+    '_result = _mod.run(_plugin_ctx)',
   ].join('\n');
+  const loadingMessage = message.loading('正在运行插件…', { duration: 0 });
   try {
     suppressEditLocationRecording = true;
     const res = await invoke('python_exec', {
@@ -13873,8 +13899,7 @@ const runEditorTransformPlugin = async (plugin) => {
         include_session_vars: false,
         vars: {
           _plugin_entry_path: String(plugin?.entry_path || ''),
-          selection_text: selectedText,
-          document_text: documentText,
+          _plugin_ctx: pluginCtx,
         },
       },
     });
@@ -13883,6 +13908,10 @@ const runEditorTransformPlugin = async (plugin) => {
       return;
     }
     const rj = res?.result_json || {};
+    if (typeof rj.error === 'string' && rj.error.trim()) {
+      message.error(rj.error);
+      return;
+    }
     const newText = typeof rj.text === 'string' ? rj.text : null;
     if (newText === null) {
       message.error('插件需返回 {"text": "..."} 才能写回,请检查 run() 的返回值');
@@ -13896,6 +13925,7 @@ const runEditorTransformPlugin = async (plugin) => {
   } catch (e) {
     message.error('插件运行失败:' + String(e?.message || e));
   } finally {
+    loadingMessage.destroy();
     suppressEditLocationRecording = false;
   }
 };
