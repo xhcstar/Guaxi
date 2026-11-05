@@ -1385,7 +1385,34 @@ fn load_feeds_from_config() -> Result<(Vec<FeedSource>, bool), String> {
 
     merge_feeds_from_website_markdown(&mut feeds);
 
-    Ok((feeds, migrating))
+    // 去重：同一个 URL 只保留一条 feed。
+    //
+    // 内置清单曾把少数派、36氪、Quanta 同时放进两个分类，导致同一个源被
+    // 两条记录各抓一遍，产出同 URL 的两篇文章；前端按 URL 做 v-for key 会撞。
+    // 已经存在用户配置里的重复项也要清掉，所以这一步**不放在升级分支内**，
+    // 每次加载都跑一次（幂等）。
+    //
+    // 保留先出现的那条：内置清单里它通常是主分类，用户手动加的一般在后面，
+    // 也会被保留。
+    let before_dedup = feeds.len();
+    let mut seen_urls: HashSet<String> = HashSet::new();
+    feeds.retain(|f| {
+        let key = format!(
+            "{}|{}",
+            f.url.trim().to_lowercase(),
+            f.source_type.trim().to_lowercase()
+        );
+        seen_urls.insert(key)
+    });
+    if feeds.len() < before_dedup {
+        info!(
+            "flipboard: removed {} duplicate feed entries (same url+type)",
+            before_dedup - feeds.len()
+        );
+    }
+    let deduped = feeds.len() < before_dedup;
+
+    Ok((feeds, migrating || deduped))
 }
 
 /// 将当前订阅源写回配置文件
@@ -1879,7 +1906,6 @@ fn curated_feeds() -> Vec<(&'static str, &'static str, &'static str, &'static st
         ("arXiv hep-th", "https://rss.arxiv.org/rss/hep-th", "rss", "physics"),
         ("Physics World", "https://physicsworld.com/feed/", "rss", "physics"),
         ("APS Physics", "http://feeds.aps.org/rss/recent/physics.xml", "rss", "physics"),
-        ("Quanta Magazine (物理)", "https://www.quantamagazine.org/feed/", "rss", "physics"),
         ("Sean Carroll", "https://www.preposterousuniverse.com/blog/feed/", "rss", "physics"),
         ("Shtetl-Optimized", "https://scottaaronson.blog/?feed=rss2", "rss", "physics"),
         ("Symmetry Magazine", "https://www.symmetrymagazine.org/feed", "rss", "physics"),
@@ -1901,7 +1927,6 @@ fn curated_feeds() -> Vec<(&'static str, &'static str, &'static str, &'static st
         ("McKinsey Insights", "https://www.mckinsey.com/insights/rss", "rss", "business"),
         ("钛媒体", "https://www.tmtpost.com/feed", "rss", "business"),
         ("Stratechery", "https://stratechery.com/feed/", "rss", "business"),
-        ("36氪 (商业)", "https://36kr.com/feed", "rss", "business"),
         ("VentureBeat", "https://feeds.feedburner.com/venturebeat/SZYF", "rss", "business"),
         ("Business Insider", "https://www.businessinsider.com/rss", "rss", "business"),
         ("Inc.com", "https://www.inc.com/rss/", "rss", "business"),
@@ -1947,7 +1972,6 @@ fn curated_feeds() -> Vec<(&'static str, &'static str, &'static str, &'static st
         ("MindShift", "https://ww2.kqed.org/mindshift/feed/", "rss", "education"),
         ("Higher Ed Dive", "https://www.highereddive.com/feeds/news/", "rss", "education"),
         // ===== 生活 lifestyle =====
-        ("少数派 (生活)", "https://sspai.com/feed", "rss", "lifestyle"),
         ("Lifehacker", "https://lifehacker.com/rss", "rss", "lifestyle"),
         ("Mark Manson", "https://markmanson.net/feed", "rss", "lifestyle"),
         ("The Kitchn", "https://www.thekitchn.com/main.rss", "rss", "lifestyle"),
@@ -3981,10 +4005,18 @@ pub async fn search_items(query: ItemQuery) -> Result<serde_json::Value, String>
         })
         .map_err(|e| e.to_string())?;
 
-    let items: Vec<Article> = rows.filter_map(|r| r.ok()).collect();
+    // 再按 URL 去一次重。
+    //
+    // 查询已经过滤了 is_canonical=1，但那是**新写入时**才打的标记：
+    // Phase 4 之前入库的条目全是默认值 1，同一个 URL 被多个源收录时会有多行。
+    // 前端按 URL 做 v-for key，重复就会报 "Duplicate keys found during update"。
+    // 这里补一道保险，不依赖历史数据是否已经跑过合并。
+    let items: Vec<Article> = dedup_articles_by_identity(rows.filter_map(|r| r.ok()).collect());
+    // total 也按 URL 去重，否则分页数会虚高（同一篇被多个源收录算成多篇）。
     let total: i64 = conn
         .query_row(
-            "SELECT COUNT(*) FROM items WHERE state='ready' AND is_canonical=1 \
+            "SELECT COUNT(DISTINCT url_norm) FROM items \
+             WHERE state='ready' AND is_canonical=1 \
              AND purged_at IS NULL AND quality >= ?1",
             params![min_q],
             |r| r.get(0),
@@ -4009,10 +4041,15 @@ pub async fn get_cached_articles(
     let max_limit = limit.unwrap_or(80).max(1);
     let category_ref = category.as_deref();
     let topic_ref = topic.as_deref();
-    let list: Vec<Article> = load_cached_articles(category_ref, topic_ref, max_limit)?
-        .into_iter()
-        .filter(|a| !is_globally_muted(a))
-        .collect();
+    // 必须去重后再返回：同一个 URL 可能被多个源收录（少数派曾同时挂在
+    // 科技与生活两个分类下），items 表按 (feed_id, url_norm) 存会有多行，
+    // 列表里就会出现同 URL 的重复卡片——前端按 URL 做 key 会直接撞车。
+    let list: Vec<Article> = dedup_articles_by_identity(
+        load_cached_articles(category_ref, topic_ref, max_limit)?
+            .into_iter()
+            .filter(|a| !is_globally_muted(a))
+            .collect(),
+    );
     {
         let mut lock = ARTICLES.lock().unwrap();
         let mut merged = lock.clone();
@@ -7907,5 +7944,179 @@ mod query_binding_tests {
         insert(&conn, "y", "Rust", "law");
         // category="all" 不加 category 条件，两篇都该命中。
         assert_eq!(run(&conn, &["rust".to_string()], "all").len(), 2);
+    }
+}
+
+#[cfg(test)]
+mod curated_feeds_tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    /// 内置源清单里同一个 URL 只能出现一次。
+    ///
+    /// 曾经有三个源被同时放进两个分类（少数派、36氪、Quanta），
+    /// 结果是同一个源被两条 feed 记录各抓一遍，产出两篇同 URL 的文章，
+    /// 前端按 URL 做 key 就撞了（Duplicate keys found during update）。
+    #[test]
+    fn no_duplicate_urls_in_curated_feeds() {
+        let feeds = curated_feeds();
+        let mut seen: HashMap<String, Vec<&str>> = HashMap::new();
+        for (name, url, _, category) in &feeds {
+            seen.entry(url.to_lowercase()).or_default().push(
+                // 借用不了临时 String，这里只记名字与分类，用于报错信息
+                Box::leak(format!("{} ({})", name, category).into_boxed_str()),
+            );
+        }
+        let dups: Vec<(&String, &Vec<&str>)> =
+            seen.iter().filter(|(_, v)| v.len() > 1).collect();
+        assert!(
+            dups.is_empty(),
+            "curated_feeds 里有重复 URL（同一个源会被抓两次）：{:?}",
+            dups
+        );
+    }
+
+    #[test]
+    fn curated_feeds_have_non_empty_fields() {
+        for (name, url, source_type, category) in curated_feeds() {
+            assert!(!name.trim().is_empty(), "源名不能为空");
+            assert!(!url.trim().is_empty(), "URL 不能为空: {}", name);
+            assert!(!source_type.trim().is_empty(), "source_type 不能为空: {}", name);
+            assert!(!category.trim().is_empty(), "category 不能为空: {}", name);
+        }
+    }
+}
+
+#[cfg(test)]
+mod list_dedup_tests {
+    use super::*;
+
+    fn art(url: &str, title: &str, body: &str) -> Article {
+        Article {
+            id: format!("{}#{}", url, title),
+            url: url.to_string(),
+            title: title.to_string(),
+            content: body.to_string(),
+            ..Default::default()
+        }
+    }
+
+    /// 同一个 URL 被多个源收录时，列表里只能出现一次。
+    /// 这是前端 "Duplicate keys found during update" 的根因。
+    #[test]
+    fn same_url_appears_once() {
+        let list = vec![
+            art("https://sspai.com/post/118211", "标题", ""),
+            art("https://sspai.com/post/118211", "标题", ""),
+            art("https://sspai.com/post/118211", "标题", ""),
+            art("https://sspai.com/post/1", "另一篇", ""),
+        ];
+        let out = dedup_articles_by_identity(list);
+        assert_eq!(out.len(), 2, "three copies of one URL must collapse to one");
+        assert_eq!(
+            out.iter().filter(|a| a.url.contains("118211")).count(),
+            1
+        );
+    }
+
+    #[test]
+    fn tracking_params_do_not_create_duplicates() {
+        // 同一篇被不同跟踪参数收录，规范化后应视为同一篇。
+        let list = vec![
+            art("https://example.com/a", "文章", ""),
+            art("https://example.com/a?utm_source=rss", "文章", ""),
+            art("https://example.com/a?fbclid=xyz", "文章", ""),
+        ];
+        assert_eq!(dedup_articles_by_identity(list).len(), 1);
+    }
+
+    #[test]
+    fn different_urls_with_no_body_stay_separate() {
+        // 两篇都没有正文（simhash=0）时，只能按 URL 判，不能误合并。
+        let list = vec![
+            art("https://example.com/a", "文章 A", ""),
+            art("https://example.com/b", "文章 B", ""),
+        ];
+        assert_eq!(dedup_articles_by_identity(list).len(), 2);
+    }
+
+    #[test]
+    fn empty_input_is_safe() {
+        assert!(dedup_articles_by_identity(vec![]).is_empty());
+        let one = vec![art("https://example.com/a", "t", "")];
+        assert_eq!(dedup_articles_by_identity(one).len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod feed_dedup_tests {
+    use super::*;
+
+    fn feed(id: &str, url: &str, source_type: &str, category: &str) -> FeedSource {
+        FeedSource {
+            id: id.to_string(),
+            name: id.to_string(),
+            url: url.to_string(),
+            category: category.to_string(),
+            enabled: true,
+            source_type: source_type.to_string(),
+            ..Default::default()
+        }
+    }
+
+    /// 复刻 load_feeds_from_config 末尾的去重步骤。
+    fn dedup(feeds: Vec<FeedSource>) -> Vec<FeedSource> {
+        let mut seen: HashSet<String> = HashSet::new();
+        let mut out = feeds;
+        out.retain(|f| {
+            seen.insert(format!(
+                "{}|{}",
+                f.url.trim().to_lowercase(),
+                f.source_type.trim().to_lowercase()
+            ))
+        });
+        out
+    }
+
+    #[test]
+    fn same_url_same_type_collapses() {
+        // 复现真实配置里的情况：少数派同时挂在科技与生活。
+        let out = dedup(vec![
+            feed("a", "https://sspai.com/feed", "rss", "technology"),
+            feed("b", "https://sspai.com/feed", "rss", "lifestyle"),
+        ]);
+        assert_eq!(out.len(), 1);
+        // 保留先出现的那个
+        assert_eq!(out[0].id, "a");
+        assert_eq!(out[0].category, "technology");
+    }
+
+    #[test]
+    fn same_url_different_type_is_kept() {
+        // RSSHub 路由与直连 RSS 是两种抓取方式，不该互相吃掉。
+        let out = dedup(vec![
+            feed("a", "/sspai/index", "rsshub", "technology"),
+            feed("b", "/sspai/index", "rss", "technology"),
+        ]);
+        assert_eq!(out.len(), 2);
+    }
+
+    #[test]
+    fn url_case_and_space_insensitive() {
+        let out = dedup(vec![
+            feed("a", "https://SSPAI.com/feed", "rss", "technology"),
+            feed("b", "  https://sspai.com/feed ", "rss", "technology"),
+        ]);
+        assert_eq!(out.len(), 1);
+    }
+
+    #[test]
+    fn distinct_urls_survive() {
+        let out = dedup(vec![
+            feed("a", "https://sspai.com/feed", "rss", "technology"),
+            feed("b", "https://36kr.com/feed", "rss", "business"),
+            feed("c", "https://36kr.com/feed-newsflash", "rss", "business"),
+        ]);
+        assert_eq!(out.len(), 3);
     }
 }
