@@ -1828,23 +1828,6 @@ impl ContentKind {
             ContentKind::Mixed => "mixed",
         }
     }
-
-    pub fn parse(s: &str) -> ContentKind {
-        match s.trim().to_lowercase().as_str() {
-            "knowledge" => ContentKind::Knowledge,
-            "news" => ContentKind::News,
-            "discussion" => ContentKind::Discussion,
-            "video" => ContentKind::Video,
-            "mixed" => ContentKind::Mixed,
-            // 未知类型按 knowledge 处理：宁可多展示，也不要让用户配的源消失。
-            _ => ContentKind::Knowledge,
-        }
-    }
-
-    /// 是否默认出现在"知识"主列表里。
-    pub fn in_default_view(&self) -> bool {
-        matches!(self, ContentKind::Knowledge | ContentKind::Mixed)
-    }
 }
 
 /// 按地址推断内容类型。用于用户自建源——他们没有机会手填类型，
@@ -8530,20 +8513,6 @@ mod curated_feeds_tests {
         }
     }
 
-    /// 新闻类源不该出现在默认视图里。
-    #[test]
-    fn news_feeds_are_not_in_default_view() {
-        for f in curated_feeds() {
-            if f.kind == ContentKind::News {
-                assert!(
-                    !f.kind.in_default_view(),
-                    "资讯源 {} 不该进知识主列表",
-                    f.name
-                );
-            }
-        }
-    }
-
     /// 内置清单里不应出现已知停更的站点。
     #[test]
     fn known_dead_sources_are_excluded() {
@@ -8618,22 +8587,6 @@ mod content_kind_tests {
             ContentKind::Knowledge
         );
         assert_eq!(infer_content_kind("https://jvns.ca/atom.xml"), ContentKind::Knowledge);
-    }
-
-    #[test]
-    fn only_knowledge_and_mixed_are_default_visible() {
-        assert!(ContentKind::Knowledge.in_default_view());
-        assert!(ContentKind::Mixed.in_default_view());
-        assert!(!ContentKind::News.in_default_view());
-        assert!(!ContentKind::Discussion.in_default_view());
-        assert!(!ContentKind::Video.in_default_view());
-    }
-
-    #[test]
-    fn parse_falls_back_to_knowledge() {
-        assert_eq!(ContentKind::parse("knowledge"), ContentKind::Knowledge);
-        assert_eq!(ContentKind::parse("garbage"), ContentKind::Knowledge);
-        assert_eq!(ContentKind::parse(""), ContentKind::Knowledge);
     }
 }
 

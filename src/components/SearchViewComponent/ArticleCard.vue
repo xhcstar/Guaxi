@@ -58,6 +58,7 @@
 import { computed } from 'vue'
 import { useFlipboardStore } from '../../stores/flipboardStore.js'
 import { BookmarkOutline, Bookmark, ShareSocialOutline } from '@vicons/ionicons5'
+import { proxiedImageUrl } from '../../utils/imageProxy.js'
 
 const BookmarkIcon = BookmarkOutline
 const BookmarkFilledIcon = Bookmark
@@ -81,9 +82,13 @@ const isBookmarked = computed(() => {
 })
 
 // 配图：优先 RSS 自带 image_url，缺失时回退到抽取出的首图 lead_image。
+// 外部图片统一走本地代理（localhost:8888），避免浏览器 Tracking Prevention
+// 拦截第三方 CDN（如 wp.com、cloudinary.com）的 cookie/storage 访问。
 const cardImage = computed(() => {
   const a = props.article
-  return String(a?.image_url || a?.lead_image || '').trim()
+  const raw = String(a?.image_url || a?.lead_image || '').trim()
+  if (!raw) return ''
+  return proxiedImageUrl(raw)
 })
 
 // 摘要：优先 description / summary；都空时退回抽取正文前若干字（去掉多余空白）。

@@ -615,6 +615,16 @@ IiNjY2MiIHN0cm9rZS13aWR0aD0iMiIvPjx0ZXh0IHg9IjE2MCIgeT0iMTA1IiBmb250LWZhbWlseT0i
 c2Fucy1zZXJpZiIgZm9udC1zaXplPSIxNCIgZmlsbD0iIzk5OSIgdGV4dC1hbmNob3I9Im1pZGRsZSI+\
 aW1hZ2UgdW5hdmFpbGFibGU8L3RleHQ+PC9zdmc+";
 
+/// `BROKEN_IMAGE_DATA_URI` 的未编码形态，用作代理失败时的响应体。
+///
+/// 两者是同一张图：data URI 版用于直接替换 Markdown 里的图片地址，
+/// 这里用于 HTTP 响应（响应体不能是 data URI 字符串本身）。
+const BROKEN_IMAGE_SVG: &str = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"320\" \
+height=\"200\" viewBox=\"0 0 320 200\"><rect width=\"320\" height=\"200\" fill=\"#f2f2f2\"/>\
+<path d=\"M30 30l260 140M290 30L30 170\" stroke=\"#ccc\" stroke-width=\"2\"/>\
+<text x=\"160\" y=\"105\" font-family=\"sans-serif\" font-size=\"14\" fill=\"#999\" \
+text-anchor=\"middle\">image unavailable</text></svg>";
+
 const REMOTE_IMAGE_MAX_BYTES: usize = 20 * 1024 * 1024;
 
 #[derive(Debug, Deserialize)]
@@ -839,9 +849,19 @@ async fn remote_image_response(query: web::Query<RemoteImageQuery>) -> HttpRespo
             .body(bytes),
         Err(error) => {
             warn!(url = %query.url, error = %error, "remote image proxy failed");
-            HttpResponse::BadGateway()
-                .content_type("text/plain; charset=utf-8")
-                .body(format!("远程图片代理失败: {error}"))
+            // 失败时返回占位图（200），而不是 502。
+            //
+            // 这些失败绝大多数是上游图片本身失效——实测 CDC 的旧配图被 Akamai
+            // 直接 403，真实浏览器打开也是 404。既然是用户无法处理的内容问题，
+            // 就不该让它在 DevTools 里刷红色错误：<img> 收到非 2xx 会留下
+            // "GET ... 502 (Bad Gateway)"，而 200 + SVG 只是安静地显示图缺。
+            //
+            // 5 分钟缓存：避免滚动时对同一张失效图反复请求上游，同时保证
+            // 临时性网络故障恢复后能较快重试成功。
+            HttpResponse::Ok()
+                .content_type("image/svg+xml")
+                .insert_header(("Cache-Control", "public, max-age=300"))
+                .body(BROKEN_IMAGE_SVG)
         }
     }
 }

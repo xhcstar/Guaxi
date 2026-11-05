@@ -136,8 +136,8 @@
             <p class="article-summary" v-if="currentArticle.summary">{{ currentArticle.summary }}</p>
           </div>
 
-          <div class="article-image" v-if="currentArticle.image_url">
-            <img :src="currentArticle.image_url" :alt="currentArticle.title" loading="lazy" />
+          <div class="article-image" v-if="coverImageUrl">
+            <img :src="coverImageUrl" :alt="currentArticle.title" loading="lazy" />
           </div>
         </div>
 
@@ -237,6 +237,7 @@ import { openUrl } from '@tauri-apps/plugin-opener'
 import { createLogger } from '../../utils/logger'
 import { useFlipboardStore } from '../../stores/flipboardStore.js'
 import { renderMarkdown } from '../GuaxiMarkdownRender/GuaxiMarker.js'
+import { proxiedImageUrl } from '../../utils/imageProxy.js'
 import SelectionNotesPanel from './SelectionNotesPanel.vue'
 
 const logger = createLogger('FlipboardDetailView')
@@ -319,6 +320,13 @@ const relatedArticles = computed(() => {
       article.category === props.currentArticle.category
     )
     .slice(0, 3)
+})
+
+// 封面图走本地代理，避免 Tracking Prevention 拦截第三方 CDN
+const coverImageUrl = computed(() => {
+  const raw = String(props.currentArticle?.image_url || '').trim()
+  if (!raw) return ''
+  return proxiedImageUrl(raw)
 })
 
 const escapeHtml = (value) => String(value || '')

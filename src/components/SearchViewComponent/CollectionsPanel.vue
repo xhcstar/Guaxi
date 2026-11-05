@@ -143,6 +143,7 @@ import { useFlipboardCollectionsStore } from '../../stores/flipboardCollectionsS
 import { useFlipboardStore } from '../../stores/flipboardStore.js'
 import { useEditorStore } from '../../stores/editorStore'
 import { createLogger } from '../../utils/logger'
+import { proxiedImageUrl } from '../../utils/imageProxy.js'
 
 const logger = createLogger('CollectionsPanel')
 
@@ -218,7 +219,8 @@ const IMG_RE = /!\[[^\]]*\]\(([^)]+)\)/
 const VIDEO_RE = /\[(?:▶\s*)?视频\]\(([^)]+)\)/
 const entryImage = (e) => {
   const m = IMG_RE.exec(String(e?.content || ''))
-  return m ? m[1] : ''
+  if (!m) return ''
+  return proxiedImageUrl(m[1])
 }
 const entryVideo = (e) => {
   const m = VIDEO_RE.exec(String(e?.content || ''))
