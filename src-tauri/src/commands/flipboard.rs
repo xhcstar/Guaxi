@@ -801,6 +801,74 @@ async fn preheat_display_articles(list: &mut [Article], max: usize, concurrency:
     }
 }
 
+/// 清理 article_cache 里同一 URL 的重复行，只保留内容最完整的一条。
+///
+/// 为什么需要：`items` 按 `(feed_id, url_norm)` 存，而同一篇文章常被多个源收录
+/// ——arXiv 上同一篇论文会同时挂在 cs.AI / cs.LG / cs.CL 下，少数派也曾在
+/// 科技与生活两个分类各登记一次。这些行在列表里表现为重复卡片，前端按 URL
+/// 做 v-for key 会报 "Duplicate keys found during update"。
+///
+/// 写入侧已经修好（清单去重 + 列表去重），但**已经入库的历史数据不会自动消失**，
+/// 所以启动时扫一遍。保留规则与 `dedup_articles_by_identity` 一致：
+/// 正文最长的为胜者（完整版优于摘要版）。
+///
+/// 幂等：没有重复时什么也不做，开销只是一次 GROUP BY。
+fn dedup_cached_articles_by_url(conn: &Connection) -> Result<usize, String> {
+    // 找出有重复的 URL
+    let dup_urls: Vec<String> = {
+        let mut stmt = conn
+            .prepare(
+                "SELECT url FROM article_cache GROUP BY url HAVING COUNT(*) > 1",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |r| r.get::<_, String>(0))
+            .map_err(|e| e.to_string())?;
+        rows.flatten().collect()
+    };
+    if dup_urls.is_empty() {
+        return Ok(0);
+    }
+
+    let mut removed = 0usize;
+    for url in &dup_urls {
+        // 选内容最完整的那条：优先有 markdown 正文的，再看长度。
+        let keep_feed: Option<String> = {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT feed_id FROM article_cache WHERE url = ?1 \
+                     ORDER BY (length(clean_content_markdown) > 400) DESC, \
+                              length(clean_content_markdown) DESC, \
+                              length(content) DESC, updated_at DESC \
+                     LIMIT 1",
+                )
+                .map_err(|e| e.to_string())?;
+            stmt.query_row(params![url], |r| r.get::<_, String>(0))
+                .optional()
+                .map_err(|e| e.to_string())?
+        };
+        let Some(keep) = keep_feed else {
+            continue;
+        };
+        let n = conn
+            .execute(
+                "DELETE FROM article_cache WHERE url = ?1 AND feed_id <> ?2",
+                params![url, keep],
+            )
+            .map_err(|e| e.to_string())?;
+        removed += n;
+    }
+
+    if removed > 0 {
+        info!(
+            "flipboard: deduped {} duplicate article rows across {} urls",
+            removed,
+            dup_urls.len()
+        );
+    }
+    Ok(removed)
+}
+
 fn cleanup_old_cached_articles_if_due(now: i64) -> Result<(), String> {
     {
         let guard = LAST_CACHE_CLEANUP_AT
@@ -810,7 +878,6 @@ fn cleanup_old_cached_articles_if_due(now: i64) -> Result<(), String> {
             return Ok(());
         }
     }
-
     let cutoff = now - CACHE_RETENTION_SECONDS;
     let conn = open_article_cache_db()?;
     let removed = conn
@@ -1506,6 +1573,16 @@ fn ensure_feeds_initialized() {
     }
     if let Err(e) = load_http_cache_from_config() {
         warn!("flipboard: load http cache failed: {}", e);
+    }
+
+    // 启动时清一次历史遗留的同 URL 重复行。
+    //
+    // 不放在 cleanup_* 里（那个有 7 天节流）：重复卡片是用户一打开就能看见的问题，
+    // 等一周才修没有意义。这一步幂等且只做一次 GROUP BY，没有重复时代价极小。
+    if let Ok(conn) = open_article_cache_db() {
+        if let Err(e) = dedup_cached_articles_by_url(&conn) {
+            warn!("flipboard: startup dedup failed: {}", e);
+        }
     }
 
     *initialized = true;
@@ -8118,5 +8195,101 @@ mod feed_dedup_tests {
             feed("c", "https://36kr.com/feed-newsflash", "rss", "business"),
         ]);
         assert_eq!(out.len(), 3);
+    }
+}
+
+#[cfg(test)]
+mod cache_dedup_tests {
+    use super::*;
+
+    fn db() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            r#"
+            CREATE TABLE article_cache (
+                id TEXT, feed_id TEXT, url TEXT, title TEXT,
+                description TEXT DEFAULT '', content TEXT DEFAULT '',
+                source TEXT DEFAULT '', image_url TEXT, published_at TEXT DEFAULT '',
+                category TEXT DEFAULT 'all', author TEXT,
+                read_count INTEGER DEFAULT 0, likes INTEGER DEFAULT 0,
+                updated_at INTEGER DEFAULT 0,
+                clean_content_html TEXT DEFAULT '', clean_content_markdown TEXT DEFAULT '',
+                lead_image TEXT, content_images TEXT DEFAULT '[]',
+                relevance_score INTEGER DEFAULT -1, tags TEXT DEFAULT '[]',
+                summary TEXT DEFAULT '', render_mode TEXT DEFAULT ''
+            );
+            "#,
+        )
+        .unwrap();
+        conn
+    }
+
+    fn insert(conn: &Connection, feed: &str, url: &str, md: &str, plain: &str) {
+        conn.execute(
+            "INSERT INTO article_cache (id, feed_id, url, title, content, updated_at,
+                                        clean_content_markdown) VALUES (?1,?2,?3,'t',?4,1,?5)",
+            rusqlite::params![format!("{feed}:{url}"), feed, url, plain, md],
+        )
+        .unwrap();
+    }
+
+    fn count(conn: &Connection, url: &str) -> i64 {
+        conn.query_row(
+            "SELECT COUNT(*) FROM article_cache WHERE url = ?1",
+            [url],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn keeps_the_most_complete_copy() {
+        let conn = db();
+        // 模拟 arXiv 同一篇挂在 cs.AI / cs.LG 下，其中一条有完整正文
+        insert(&conn, "f-ai", "https://arxiv.org/abs/1", "", "短摘要");
+        insert(&conn, "f-lg", "https://arxiv.org/abs/1", &"长正文".repeat(300), "正文");
+        let n = dedup_cached_articles_by_url(&conn).unwrap();
+        assert_eq!(n, 1);
+        assert_eq!(count(&conn, "https://arxiv.org/abs/1"), 1);
+        // 胜者应当是有 markdown 正文的那条
+        let feed: String = conn
+            .query_row(
+                "SELECT feed_id FROM article_cache WHERE url='https://arxiv.org/abs/1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(feed, "f-lg", "must keep the copy with full markdown body");
+    }
+
+    #[test]
+    fn no_duplicates_is_a_noop() {
+        let conn = db();
+        insert(&conn, "f1", "https://x.com/a", "", "a");
+        insert(&conn, "f2", "https://x.com/b", "", "b");
+        assert_eq!(dedup_cached_articles_by_url(&conn).unwrap(), 0);
+        assert_eq!(count(&conn, "https://x.com/a"), 1);
+        assert_eq!(count(&conn, "https://x.com/b"), 1);
+    }
+
+    #[test]
+    fn collapses_many_copies() {
+        let conn = db();
+        for f in ["f1", "f2", "f3", "f4"] {
+            insert(&conn, f, "https://x.com/dup", "", "x");
+        }
+        let n = dedup_cached_articles_by_url(&conn).unwrap();
+        assert_eq!(n, 3);
+        assert_eq!(count(&conn, "https://x.com/dup"), 1);
+    }
+
+    #[test]
+    fn is_idempotent() {
+        let conn = db();
+        insert(&conn, "f1", "https://x.com/d", "", "x");
+        insert(&conn, "f2", "https://x.com/d", "", "x");
+        assert_eq!(dedup_cached_articles_by_url(&conn).unwrap(), 1);
+        // 再跑一次不该再删东西
+        assert_eq!(dedup_cached_articles_by_url(&conn).unwrap(), 0);
     }
 }
