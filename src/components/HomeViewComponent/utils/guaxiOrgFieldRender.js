@@ -155,8 +155,11 @@ export const applyQueryHighlight = (container, query, className = 'otp-hit') => 
   const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, {
     acceptNode(node) {
       if (!node.nodeValue || !node.nodeValue.trim()) return NodeFilter.FILTER_REJECT
-      // 代码块里的高亮会破坏 hljs 的 span 结构，且搜索命中早已在字段列表里体现。
-      if (node.parentElement?.closest('pre, code')) return NodeFilter.FILTER_REJECT
+      // 浮动按钮的文字（复制 / 查看图片…）不是正文，命中了也不该染色。
+      if (node.parentElement?.closest('button')) return NodeFilter.FILTER_REJECT
+      // 代码块要一起高亮：日志缩进四格就会被 markdown 解析成 <pre>，
+      // 早先这里整块跳过，导致「搜到了、也跳过去了，但那个词没亮」。
+      // 替换的是文本节点本身，hljs 的 span 结构原样保留，不会破坏上色。
       return NodeFilter.FILTER_ACCEPT
     },
   })

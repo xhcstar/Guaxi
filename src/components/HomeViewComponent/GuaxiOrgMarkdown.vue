@@ -58,7 +58,8 @@ const currentCacheKey = () => orgFieldCacheKey({
 })
 
 const applyHighlight = () => {
-  applyQueryHighlight(bodyRef.value, props.query)
+  // 从根节点起扫：渲染完成前显示的是原始文本兜底，命中词同样要亮。
+  applyQueryHighlight(rootEl.value, props.query)
 }
 
 const render = async () => {

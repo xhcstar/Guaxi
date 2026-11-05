@@ -1,5 +1,5 @@
 <template>
-  <div class="org-task-preview" :class="theme === 'dark' ? 'theme-dark' : 'theme-light'">
+  <div class="org-task-preview" :class="theme === 'dark' ? 'theme-dark' : 'theme-light'" @click="onContentLinkClick">
     <div class="otp-toolbar">
       <button v-if="canBack" class="otp-btn icon" title="返回" @click="$emit('back')">‹</button>
       <span class="otp-title">{{ titleLabel || '任务预览' }}</span>
@@ -131,7 +131,7 @@
               <button class="otp-mini xs" :class="{ ok: flashed === 'desc:' + b.blockStartLine }" title="复制描述" @click.stop="copyDesc(b)">{{ flashed === 'desc:' + b.blockStartLine ? '✓' : '❏' }}</button>
               <!-- 状态：点击弹原生下拉快速切换 -->
               <span class="otp-status-wrap">
-                <span class="otp-status" :class="'st-' + (b.status || 'TODO')">{{ statusLabel(b.status) }}</span>
+                <span class="otp-status" :class="'st-' + (b.status || 'TODO')" v-html="hl(statusLabel(b.status))" />
                 <select class="otp-quick-overlay" :value="b.status || 'TODO'" title="快速改状态" @click.stop @change="(e) => quickApply(b, { status: e.target.value })">
                   <option v-for="s in statusKeys" :key="s" :value="s">{{ statusLabel(s) }}</option>
                 </select>
@@ -147,15 +147,15 @@
 
             <div class="otp-props">
               <div v-if="b.id" class="otp-prop"><span class="k">ID</span><span class="v" v-html="hl(b.id)" /></div>
-              <div v-if="b.parentId" class="otp-prop"><span class="k">父任务</span><span class="v">{{ b.parentId }}</span></div>
-              <div v-if="b.severity" class="otp-prop"><span class="k">严重度</span><span class="v">{{ b.severity }}</span></div>
-              <div v-if="b.origin" class="otp-prop"><span class="k">来源</span><span class="v">{{ b.origin }}</span></div>
-              <div v-if="b.fixStatus" class="otp-prop"><span class="k">修复</span><span class="v">{{ b.fixStatus }}</span></div>
-              <div v-if="b.progress" class="otp-prop"><span class="k">进度</span><span class="v">{{ b.progress }}</span></div>
-              <div v-if="b.deadline" class="otp-prop"><span class="k">截止</span><span class="v">{{ b.deadline }}</span></div>
-              <div v-if="b.createTime" class="otp-prop"><span class="k">创建</span><span class="v">{{ b.createTime }}</span></div>
-              <div v-if="b.completedTime" class="otp-prop done-t"><span class="k">完成</span><span class="v">{{ b.completedTime }}</span></div>
-              <div v-if="b.affectedRelease" class="otp-prop"><span class="k">影响版本</span><span class="v">{{ b.affectedRelease }}</span></div>
+              <div v-if="b.parentId" class="otp-prop"><span class="k">父任务</span><span class="v" v-html="hl(b.parentId)" /></div>
+              <div v-if="b.severity" class="otp-prop"><span class="k">严重度</span><span class="v" v-html="hl(b.severity)" /></div>
+              <div v-if="b.origin" class="otp-prop"><span class="k">来源</span><span class="v" v-html="hl(b.origin)" /></div>
+              <div v-if="b.fixStatus" class="otp-prop"><span class="k">修复</span><span class="v" v-html="hl(b.fixStatus)" /></div>
+              <div v-if="b.progress" class="otp-prop"><span class="k">进度</span><span class="v" v-html="hl(b.progress)" /></div>
+              <div v-if="b.deadline" class="otp-prop"><span class="k">截止</span><span class="v" v-html="hl(b.deadline)" /></div>
+              <div v-if="b.createTime" class="otp-prop"><span class="k">创建</span><span class="v" v-html="hl(b.createTime)" /></div>
+              <div v-if="b.completedTime" class="otp-prop done-t"><span class="k">完成</span><span class="v" v-html="hl(b.completedTime)" /></div>
+              <div v-if="b.affectedRelease" class="otp-prop"><span class="k">影响版本</span><span class="v" v-html="hl(b.affectedRelease)" /></div>
             </div>
 
             <!-- 可折叠分区 -->
@@ -186,7 +186,7 @@
                     :theme="theme"
                     :query="search"
                   />
-                  <a v-else class="otp-notes-file" href="#" @click.prevent="$emit('open-notes', sec.value.value)">📄 {{ sec.value.value }}（点击打开）</a>
+                  <a v-else class="otp-notes-file" href="#" @click.prevent="$emit('open-notes', sec.value.value)">📄 <span v-html="hl(sec.value.value)" />（点击打开）</a>
                 </template>
                 <div v-else-if="sec.type === 'extra'" class="otp-extra-list">
                   <GuaxiOrgMarkdown
@@ -396,18 +396,18 @@
         </div>
         <div class="otp-cardzoom-body">
           <div class="otp-props">
-            <div v-if="cardZoomBlock.id" class="otp-prop"><span class="k">ID</span><span class="v">{{ cardZoomBlock.id }}</span></div>
-            <div v-if="cardZoomBlock.parentId" class="otp-prop"><span class="k">父任务</span><span class="v">{{ cardZoomBlock.parentId }}</span></div>
-            <div class="otp-prop"><span class="k">状态</span><span class="v">{{ statusLabel(cardZoomBlock.status) }}</span></div>
-            <div v-if="cardZoomBlock.priority" class="otp-prop"><span class="k">优先级</span><span class="v">#{{ cardZoomBlock.priority }}</span></div>
-            <div v-if="cardZoomBlock.severity" class="otp-prop"><span class="k">严重度</span><span class="v">{{ cardZoomBlock.severity }}</span></div>
-            <div v-if="cardZoomBlock.origin" class="otp-prop"><span class="k">来源</span><span class="v">{{ cardZoomBlock.origin }}</span></div>
-            <div v-if="cardZoomBlock.fixStatus" class="otp-prop"><span class="k">修复</span><span class="v">{{ cardZoomBlock.fixStatus }}</span></div>
-            <div v-if="cardZoomBlock.progress" class="otp-prop"><span class="k">进度</span><span class="v">{{ cardZoomBlock.progress }}</span></div>
-            <div v-if="cardZoomBlock.deadline" class="otp-prop"><span class="k">截止</span><span class="v">{{ cardZoomBlock.deadline }}</span></div>
-            <div v-if="cardZoomBlock.createTime" class="otp-prop"><span class="k">创建</span><span class="v">{{ cardZoomBlock.createTime }}</span></div>
-            <div v-if="cardZoomBlock.completedTime" class="otp-prop"><span class="k">完成</span><span class="v">{{ cardZoomBlock.completedTime }}</span></div>
-            <div v-if="cardZoomBlock.affectedRelease" class="otp-prop"><span class="k">影响版本</span><span class="v">{{ cardZoomBlock.affectedRelease }}</span></div>
+            <div v-if="cardZoomBlock.id" class="otp-prop"><span class="k">ID</span><span class="v" v-html="hl(cardZoomBlock.id)" /></div>
+            <div v-if="cardZoomBlock.parentId" class="otp-prop"><span class="k">父任务</span><span class="v" v-html="hl(cardZoomBlock.parentId)" /></div>
+            <div class="otp-prop"><span class="k">状态</span><span class="v" v-html="hl(statusLabel(cardZoomBlock.status))" /></div>
+            <div v-if="cardZoomBlock.priority" class="otp-prop"><span class="k">优先级</span><span class="v" v-html="hl('#' + cardZoomBlock.priority)" /></div>
+            <div v-if="cardZoomBlock.severity" class="otp-prop"><span class="k">严重度</span><span class="v" v-html="hl(cardZoomBlock.severity)" /></div>
+            <div v-if="cardZoomBlock.origin" class="otp-prop"><span class="k">来源</span><span class="v" v-html="hl(cardZoomBlock.origin)" /></div>
+            <div v-if="cardZoomBlock.fixStatus" class="otp-prop"><span class="k">修复</span><span class="v" v-html="hl(cardZoomBlock.fixStatus)" /></div>
+            <div v-if="cardZoomBlock.progress" class="otp-prop"><span class="k">进度</span><span class="v" v-html="hl(cardZoomBlock.progress)" /></div>
+            <div v-if="cardZoomBlock.deadline" class="otp-prop"><span class="k">截止</span><span class="v" v-html="hl(cardZoomBlock.deadline)" /></div>
+            <div v-if="cardZoomBlock.createTime" class="otp-prop"><span class="k">创建</span><span class="v" v-html="hl(cardZoomBlock.createTime)" /></div>
+            <div v-if="cardZoomBlock.completedTime" class="otp-prop"><span class="k">完成</span><span class="v" v-html="hl(cardZoomBlock.completedTime)" /></div>
+            <div v-if="cardZoomBlock.affectedRelease" class="otp-prop"><span class="k">影响版本</span><span class="v" v-html="hl(cardZoomBlock.affectedRelease)" /></div>
           </div>
           <section v-for="sec in sectionsOf(cardZoomBlock)" :key="sec.key" class="otp-sec">
             <div class="otp-sec-head static">
@@ -434,7 +434,7 @@
                   :query="search"
                   immediate
                 />
-                <a v-else class="otp-notes-file" href="#" @click.prevent="$emit('open-notes', sec.value.value)">📄 {{ sec.value.value }}（点击打开）</a>
+                <a v-else class="otp-notes-file" href="#" @click.prevent="$emit('open-notes', sec.value.value)">📄 <span v-html="hl(sec.value.value)" />（点击打开）</a>
               </template>
               <div v-else-if="sec.type === 'extra'" class="otp-extra-list">
                 <GuaxiOrgMarkdown
@@ -513,7 +513,21 @@ const props = defineProps({
   /** 当前 .org 文件路径：本地图片与相对链接按它解析。 */
   documentPath: { type: String, default: '' },
 })
-const emit = defineEmits(['rebuild', 'open-notes', 'goto-line', 'apply-block', 'copy-block', 'export-block', 'back', 'create-block', 'delete-block', 'insert-block', 'move-block', 'batch-delete', 'batch-move', 'batch-create', 'scroll'])
+const emit = defineEmits(['rebuild', 'open-notes', 'open-link', 'goto-line', 'apply-block', 'copy-block', 'export-block', 'back', 'create-block', 'delete-block', 'insert-block', 'move-block', 'batch-delete', 'batch-move', 'batch-create', 'scroll'])
+
+// 字段正文里的链接一律不在 WebView 里导航：URL 交系统默认浏览器、本地路径按类型分流，
+// 这些判定都在宿主 GuaxiEditor 里，与编辑 / 预览 / 探索者共用同一条链路。
+// 这里只做拦截与上报原始 href（用 getAttribute 保住相对路径，a.href 会被解析成绝对 URL）。
+const onContentLinkClick = (e) => {
+  const anchor = e?.target?.closest?.('a')
+  if (!anchor) return
+  const href = String(anchor.getAttribute('href') || '').trim()
+  // 空 href 与纯锚点没有可跳的目标；NOTES 的文件链接走 href="#" + open-notes 那条专门的路。
+  if (!href || href === '#') return
+  e.preventDefault()
+  e.stopPropagation()
+  emit('open-link', { href })
+}
 
 const blocks = computed(() => parseTaskBlocks(props.content, props.category))
 // ── 视图过滤器：仅影响显示，不修改源文件或移动逻辑 ──
@@ -983,8 +997,8 @@ export default { name: 'GuaxiOrgTaskPreview' }
   font-family: var(--otp-editor-font-family) !important;
 }
 
-.theme-light { --otp-bg:#f7f8fa; --otp-card:#ffffff; --otp-border:#e3e6eb; --otp-text:#1f2328; --otp-sub:#57606a; --otp-chip:#eef1f5; --otp-hit:#ffe08a; }
-.theme-dark { --otp-bg:#21252b; --otp-card:#282c34; --otp-border:#3e4451; --otp-text:#abb2bf; --otp-sub:#8b94a3; --otp-chip:#2f343d; --otp-hit:#7a6420; }
+.theme-light { --otp-bg:#f7f8fa; --otp-card:#ffffff; --otp-border:#e3e6eb; --otp-text:#1f2328; --otp-sub:#57606a; --otp-chip:#eef1f5; --otp-hit:#ffd54a; --otp-hit-fg:#1f2328; }
+.theme-dark { --otp-bg:#21252b; --otp-card:#282c34; --otp-border:#3e4451; --otp-text:#abb2bf; --otp-sub:#8b94a3; --otp-chip:#2f343d; --otp-hit:#f0b429; --otp-hit-fg:#1f2328; }
 .org-task-preview { background: var(--otp-bg); color: var(--otp-text); }
 
 .otp-toolbar { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--otp-border); flex: 0 0 auto; }
@@ -1093,7 +1107,7 @@ export default { name: 'GuaxiOrgTaskPreview' }
 .otp-pre { margin: 0 0 6px; font-size: var(--otp-content-font-size); line-height: var(--otp-content-line-height); white-space: pre-wrap; word-break: break-word; background: var(--otp-chip); border-radius: 8px; padding: 10px 12px; }
 .otp-extra-list { display: flex; flex-direction: column; gap: 8px; }
 .otp-link, .otp-notes-file { color: #2080f0; word-break: break-all; font-size: var(--otp-content-font-size); }
-:deep(mark.otp-hit) { background: var(--otp-hit); color: inherit; border-radius: 3px; padding: 0 1px; }
+:deep(mark.otp-hit) { background: var(--otp-hit); color: var(--otp-hit-fg); border-radius: 3px; padding: 0 1px; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.06); }
 
 /* 编辑表单：大字段全宽 + 高文本域 */
 .otp-edit-head { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; font-size: 16px; }

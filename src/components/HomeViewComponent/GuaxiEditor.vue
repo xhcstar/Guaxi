@@ -978,7 +978,7 @@
             :theme="settingsStore.appearanceTheme"
             @update:markdown="applyNotebookMarkdown"
             @outline-change="handleNotebookOutlineChange"
-            @open-local-link="handleNotebookLocalLink"
+            @open-local-link="(payload) => handleRenderedMarkdownLink({ ...payload, source: 'notebook' })"
             @state-change="syncAllPreviewPythonCells"
             @open-console="togglePythonConsolePanel('notebook-open-console')"
             @request-save="saveContent"
@@ -1364,6 +1364,7 @@
         :can-back="orgNavStack.length > 0"
         @rebuild="refreshOrgPreviewContent"
         @open-notes="handleOpenNotesNav"
+        @open-link="(payload) => handleRenderedMarkdownLink({ ...payload, source: 'org-preview' })"
         @goto-line="handleOrgGotoLine"
         @apply-block="handleApplyOrgBlock"
         @copy-block="handleCopyOrgBlock"
@@ -6651,29 +6652,69 @@ const openFsLinkSmart = async (rawLink, { anchor, baseDocPath, source = 'unknown
     return await openMarkdownInEditor(mdPath, anchor);
   }
 
+  // 非 Markdown 的文本文件（run.log、ssl_core.txt、某个 .h ……）交给主编辑器打开。
+  // 笔记里写这种链接的意图就是「去看那份日志/那段代码」，把它丢进文件管理器等于没打开；
+  // 读不出来或后端标记 unsupported（真正的二进制）时，仍退回在文件管理器里定位。
+  const anchorLine = Number(String(anchor || '').match(/^L?(\d+)/i)?.[1] || 0);
+  try {
+    const res = await fileTreeStore.fetchFileContent(abs);
+    if (res?.ok && !res?.unsupported) {
+      await fileTreeStore.openFileInTab(abs, res.content, { unsupported: false });
+      if (anchorLine > 0) {
+        await nextTick();
+        syncEditorToLine(anchorLine, { focus: true });
+      }
+      logger.info('[LinkOpen] open text link in editor', { source, path: abs, anchor: anchor || '' });
+      return true;
+    }
+    logger.debug('[LinkOpen] text link not openable as text, reveal in explorer', {
+      source,
+      path: abs,
+      code: res?.code,
+      unsupported: !!res?.unsupported,
+    });
+  } catch (error) {
+    logger.debug('[LinkOpen] fetchFileContent failed, reveal in explorer', { source, path: abs, error });
+  }
+
   logger.info('[LinkOpen] reveal non-markdown link in file explorer', { source, path: abs });
   await openPathInExplorer(abs);
   return true;
 };
 
-// 探索者模式里点到本地文件链接时由子组件抛上来，走的是和编辑 / 预览 / 分屏完全同一条链路。
-const handleNotebookLocalLink = async (payload = {}) => {
+// 渲染出来的正文里点到链接时由子组件抛上来（探索者 cell、任务卡片预览），
+// 走的是和编辑 / 预览 / 分屏完全同一条链路：URL 交给系统默认浏览器，
+// 本地路径按类型分流（Markdown 进主编辑器、目录进文件管理器、其余在文件管理器里定位）。
+const handleRenderedMarkdownLink = async (payload = {}) => {
   const raw = String(payload?.href || '').trim();
   if (!raw) return;
+  // 纯锚点只在整篇文档预览里有意义（标题在预览 DOM 里）；cell / 卡片正文里没有可跳的目标。
+  if (raw.startsWith('#')) return;
 
+  const source = String(payload?.source || 'rendered-link');
   const baseDocPath = String(payload?.baseDocPath || '')
     || selectedFile.value?.path
     || fileTreeStore.activeTab
     || '';
 
   if (raw.toLowerCase().startsWith('guaxi://wikilink')) {
-    await openWikilinkFromHref(raw, { baseDocPath, source: 'notebook' });
+    await openWikilinkFromHref(raw, { baseDocPath, source });
+    return;
+  }
+
+  if (isHttpUrl(raw) || /^mailto:/i.test(raw)) {
+    try {
+      await openUrl(raw);
+    } catch (err) {
+      logger.error('[LinkOpen] openUrl failed', { href: raw }, err);
+      message.error('打开浏览器失败');
+    }
     return;
   }
 
   const { link, anchor } = splitFsLinkAndAnchor(raw);
   if (!link) return;
-  await openFsLinkSmart(link, { anchor, baseDocPath, source: 'notebook' });
+  await openFsLinkSmart(link, { anchor, baseDocPath, source });
 };
 
 // Monaco：编辑模式 Ctrl+Click 打开 URL/路径
