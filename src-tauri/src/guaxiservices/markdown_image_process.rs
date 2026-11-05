@@ -663,6 +663,26 @@ fn remote_image_cache_key(url: &str) -> String {
     format!("{:x}", hasher.finalize())
 }
 
+/// 图片代理的 User-Agent。
+///
+/// 用浏览器 UA 而不是自定义标识：实测不少图片 CDN 见到 `Guaxi/1.0` 这类
+/// 非浏览器 UA 直接 403，哪怕 Referer 正确。这不是伪装，图片代理本质就是
+/// 替用户浏览器取图。
+const IMAGE_PROXY_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) \
+AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0 Safari/537.36";
+
+/// 为图片请求构造 Referer：取图片 URL 的源（scheme + host）。
+///
+/// 防盗链站点校验的是"这个请求是否来自本站",所以用图片自己的域名做 Referer
+/// 是语义上最贴近真实浏览行为的做法，也不需要把文章来源页传进来。
+fn referer_for(url: &reqwest::Url) -> String {
+    format!(
+        "{}://{}/",
+        url.scheme(),
+        url.host_str().unwrap_or_default()
+    )
+}
+
 fn read_cached_remote(url: &str) -> Option<(String, Vec<u8>)> {
     let dir = remote_image_cache_dir()?;
     let key = remote_image_cache_key(url);
@@ -701,8 +721,12 @@ async fn fetch_remote_image(url_str: &str) -> Result<(String, Vec<u8>), String> 
         .map_err(|e| e.to_string())?;
 
     let resp = client
-        .get(url)
-        .header(reqwest::header::USER_AGENT, "Guaxi/1.0 image proxy")
+        .get(url.clone())
+        .header(reqwest::header::USER_AGENT, IMAGE_PROXY_USER_AGENT)
+        // 防盗链：不少 CDN（实测少数派 cdnfile.sspai.com）要求 Referer 与图片
+        // 所在站点同源，否则一律 403。带上图片域名自身的 Referer 就能通过，
+        // 这比伪造搜索引擎来源更保守，也不涉及跨站伪装。
+        .header(reqwest::header::REFERER, referer_for(&url))
         .send()
         .await
         .map_err(|e| format!("下载失败: {e}"))?;
@@ -778,6 +802,19 @@ pub fn config(cfg: &mut web::ServiceConfig) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn referer_uses_the_image_origin() {
+        // 防盗链站点校验的是"是否来自本站"，所以 Referer 取图片自己的源最合适。
+        let u = reqwest::Url::parse(
+            "https://cdnfile.sspai.com/2026/10/22/a.jpg?imageView2/2/w/1120",
+        )
+        .unwrap();
+        assert_eq!(referer_for(&u), "https://cdnfile.sspai.com/");
+
+        let u2 = reqwest::Url::parse("http://example.com/img.png").unwrap();
+        assert_eq!(referer_for(&u2), "http://example.com/");
+    }
 
     #[test]
     fn proxies_markdown_remote_images() {
