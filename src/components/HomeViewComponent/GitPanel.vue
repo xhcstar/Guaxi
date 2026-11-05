@@ -24,7 +24,6 @@
                 class="scm-icon-button"
                 type="button"
                 title="刷新状态"
-                :disabled="isRefreshingStatus"
                 @click="refreshAll"
               >
                 <Codicon name="refresh" />
@@ -170,14 +169,15 @@
         <!-- 提交区域：输入框在上，提交按钮拆成「提交 + 下拉」两段，行为对齐 VS Code。 -->
         <div class="commit-section">
           <div class="commit-input-wrap">
-            <n-input
-              v-model:value="commitForm.message"
-              type="textarea"
-              :placeholder="commitPlaceholder"
-              :autosize="{ minRows: 2, maxRows: 6 }"
+            <textarea
+              ref="commitInputRef"
+              v-model="commitForm.message"
               class="commit-message-input"
+              :placeholder="commitPlaceholder"
+              rows="2"
+              spellcheck="false"
               @keydown="handleCommitKeydown"
-            />
+            ></textarea>
             <n-dropdown
               trigger="click"
               placement="bottom-end"
@@ -1213,6 +1213,7 @@ const commitFiles = ref([])
 const commitForm = ref({
   message: ''
 })
+const commitInputRef = ref(null)
 
 // 分支面板相关状态
 const branchPopoverVisible = ref(false)
@@ -4826,6 +4827,18 @@ const handleCommit = async ({ all = false, amend = false, push = false } = {}) =
   }
 }
 
+const resizeCommitInput = () => {
+  const el = commitInputRef.value
+  if (!el) return
+  el.style.height = 'auto'
+  el.style.height = `${Math.min(Math.max(el.scrollHeight, 44), 132)}px`
+}
+
+watch(
+  () => commitForm.value.message,
+  () => nextTick(resizeCommitInput)
+)
+
 const handleCommitKeydown = (e) => {
   if (!e) return
   if (e.ctrlKey && e.key === 'Enter') {
@@ -5034,6 +5047,7 @@ onMounted(() => {
 
       // 设置面板高度
       nextTick(() => {
+        resizeCommitInput()
         if (changesSection.value && stagedSection.value && commitsSection.value && panelsContainer.value) {
           // 上次手动拖过就沿用存下来的数值，否则按默认比例摊开。
           const restored = restoreLayoutFromStorage()
@@ -5984,20 +5998,42 @@ onUnmounted(() => {
   flex-shrink: 0;
 }
 
-/* 提交信息输入框：去掉 Naive 默认的底部外边距，间距交给这里的 flex gap 管。 */
+/* 提交信息输入框：原生 textarea，显式占满宽度并自动增高。
+   Naive 的 textarea 在窄窗口/暗色主题下曾出现内容只在左上角一小块的问题。 */
 .commit-input-wrap {
   position: relative;
 }
 
 .commit-message-input {
   display: block;
-  margin-bottom: 6px;
-}
-
-.commit-message-input :deep(.n-input__textarea-el) {
+  width: 100%;
+  min-height: 44px;
+  max-height: 132px;
+  margin: 0 0 6px;
+  padding: 6px 28px 6px 8px;
+  box-sizing: border-box;
+  resize: none;
+  overflow-y: auto;
+  border: 1px solid var(--divider-color);
+  border-radius: 3px;
+  outline: none;
+  background-color: var(--input-bg);
+  color: var(--text-color);
+  font-family: inherit;
   font-size: 12.5px;
   line-height: 1.6;
-  padding-right: 26px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.commit-message-input::placeholder {
+  color: var(--text-color-secondary);
+  opacity: 0.85;
+}
+
+.commit-message-input:focus {
+  border-color: var(--primary-color, #0e639c);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--primary-color, #0e639c) 35%, transparent);
 }
 
 /* VS Code 把提交操作菜单收在输入框右上角的省略号里。 */
