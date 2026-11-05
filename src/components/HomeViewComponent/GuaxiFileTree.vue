@@ -1024,8 +1024,8 @@ const stemname = (p) => {
   return idx > 0 ? b.slice(0, idx) : b
 }
 
-const openImportTemplateModal = async () => {
-  const node = selectedNode.value
+const openImportTemplateModal = async (nodeOverride = null) => {
+  const node = nodeOverride || selectedNode.value
   if (!node || node.is_directory) return
 
   const nodePath = normalizePath(node.id)
@@ -1068,91 +1068,101 @@ const confirmImportAsTemplate = async () => {
   }
 }
 
-// 右键菜单选项
-const contextMenuOptions = ref([
-  {
-    label: '新建文件',
-    key: 'addFile',
-    icon: () => h(NIcon, null, { default: () => h(AddOutline) })
-  },
-  {
-    label: '新建文件夹',
-    key: 'addFolder',
-    icon: () => h(NIcon, null, { default: () => h(FolderOpenOutline) })
-  },
-  {
-    label: '导入Markdown文件',
-    key: 'importAsTemplate',
-    disabled: true,
-    icon: () => h(NIcon, null, { default: () => h(DocumentTextOutline) })
-  },
-  {
-    label: '在一侧打开',
-    key: 'openToSide',
-    icon: () => h(NIcon, null, { default: () => h(BrowsersOutline) })
-  },
-  {
-    label: '选择以进行比较',
-    key: 'markForCompare',
-    icon: () => h(NIcon, null, { default: () => h(GitCompareOutline) })
-  },
-  {
-    // 标签文案在 handleNodeContextMenu 里按已选的那一方动态改写；没选过就整项隐藏
-    label: '与已选比较',
-    key: 'compareWithPending',
-    show: false,
-    icon: () => h(NIcon, null, { default: () => h(SwapHorizontalOutline) })
-  },
-  {
-    label: '复制路径',
-    key: 'copyPath',
-    icon: () => h(NIcon, null, { default: () => h(CopyOutline) })
-  },
-  {
-    label: '复制相对路径',
-    key: 'copyRelativePath',
-    icon: () => h(NIcon, null, { default: () => h(DuplicateOutline) })
-  },
-  {
-    label: '重命名',
-    key: 'rename',
-    icon: () => h(NIcon, null, { default: () => h(CreateOutline) })
-  },
-  {
-    label: '删除',
-    key: 'delete',
-    icon: () => h(NIcon, null, { default: () => h(TrashOutline) })
-  },
-  {
-    label: '移动到',
-    key: 'move',
-    icon: () => h(NIcon, null, { default: () => h(MoveOutline) })
-  },
-  {
-    label: '在文件浏览器中打开',
-    key: 'openInExplorer',
-    icon: () => h(NIcon, null, { default: () => h(FolderOutline) })
-  },
-  {
-    label: '用 Neovim 打开',
-    key: 'openInNeovim',
-    icon: renderNeovimIcon
-  },
-  {
-    label: '在浏览器中查看',
-    key: 'openInBrowser',
-    disabled: true,
-    icon: () => h(NIcon, null, { default: () => h(GlobeOutline) })
-  },
-])
+// ───── 右键菜单：三种模式共用同一份「当前模式支持的操作」清单 ─────
+// 以前知识库、文件编辑、任务编辑各维护一份菜单，结果是同一类节点在不同模式里能做的
+// 事情不一样（比如文件编辑模式没有复制路径、没有差异对比）。现在统一从这里生成：
+// 项目是否出现只看节点本身（文件/目录、是否 Markdown、是否阅读器文档），
+// 具体动作由 runFileTreeMenuAction 按模式路由到各自的实现。
+const menuIcon = (component) => () => h(NIcon, null, { default: () => h(component) })
 
-// 空白处右键只保留"新建文件/新建文件夹"
-const activeContextMenuOptions = computed(() => {
-  if (menuMode.value === 'blank') {
-    return contextMenuOptions.value.filter(o => o.key === 'addFile' || o.key === 'addFolder')
+function buildFileTreeMenuOptions({ mode = 'kb', node = null, isBlank = false, blankRoot = '' } = {}) {
+  const hasNode = !!node && !isBlank
+  const isDirectory = !!node?.is_directory
+  const nodePath = hasNode ? normalizePath(node.id) : ''
+  const root = normalizePath(
+    blankRoot
+      || (mode === 'plain'
+        ? externalDir.value
+        : mode === 'task'
+          ? catPathOf(activeTaskCat.value)
+          : fileTreeStore.activeRepoPath)
+  )
+  const relativePath = hasNode ? toRepoRelativePath(nodePath, root) : ''
+  const pendingDiffPath = diffStore.pending?.path
+  const canCompareWithPending = hasNode
+    && !!pendingDiffPath
+    && normalizePath(pendingDiffPath) !== nodePath
+  // 「浏览器预览」与「导入为模板」都只对 Markdown 文件有意义。
+  const isMarkdownFile = hasNode && !isDirectory && isMarkdownFilePath(nodePath)
+  const canOpenInTab = hasNode && !isDirectory && readerTabStore.isReaderPath(nodePath)
+
+  const options = [
+    { label: '新建文件', key: 'addFile', icon: menuIcon(AddOutline) },
+    { label: '新建文件夹', key: 'addFolder', icon: menuIcon(FolderOpenOutline) },
+    {
+      label: '导入文件',
+      key: 'importFile',
+      icon: menuIcon(DownloadOutline),
+      children: IMPORT_MENU_OPTIONS,
+    },
+  ]
+
+  if (!hasNode) return options
+
+  options.push({ type: 'divider', key: 'menu-div-open' })
+  if (!isDirectory) {
+    options.push({ label: '打开', key: 'openFile', icon: menuIcon(DocumentTextOutline) })
+    options.push({ label: '在一侧打开', key: 'openToSide', icon: menuIcon(BrowsersOutline) })
   }
-  return contextMenuOptions.value
-})
+  if (canOpenInTab) {
+    options.push({ label: '在标签页中打开', key: 'openInTab', icon: menuIcon(DocumentOutline) })
+  }
+  if (isMarkdownFile) {
+    options.push({ label: '在浏览器中查看', key: 'openInBrowser', icon: menuIcon(GlobeOutline) })
+  }
+
+  options.push(
+    { type: 'divider', key: 'menu-div-compare' },
+    { label: '选择以进行比较', key: 'markForCompare', icon: menuIcon(GitCompareOutline) },
+    {
+      label: diffStore.compareWithLabel,
+      key: 'compareWithPending',
+      show: canCompareWithPending,
+      icon: menuIcon(SwapHorizontalOutline),
+    },
+    { type: 'divider', key: 'menu-div-copy' },
+    { label: '复制路径', key: 'copyPath', icon: menuIcon(CopyOutline) },
+    {
+      label: '复制相对路径',
+      key: 'copyRelativePath',
+      disabled: !relativePath,
+      icon: menuIcon(DuplicateOutline),
+    },
+    { label: '复制文件名', key: 'copyName', icon: menuIcon(CopyOutline) },
+    { type: 'divider', key: 'menu-div-edit' },
+    { label: '重命名', key: 'rename', icon: menuIcon(CreateOutline) },
+    { label: '删除', key: 'delete', icon: menuIcon(TrashOutline) },
+    { label: '移动到', key: 'move', icon: menuIcon(MoveOutline) },
+    { type: 'divider', key: 'menu-div-tools' },
+    { label: '在文件浏览器中打开', key: 'openInExplorer', icon: menuIcon(FolderOutline) },
+    { label: '用 Neovim 打开', key: 'openInNeovim', icon: renderNeovimIcon },
+    {
+      label: '导入为模板',
+      key: 'importAsTemplate',
+      show: isMarkdownFile,
+      icon: menuIcon(DocumentTextOutline),
+    },
+  )
+  return options
+}
+
+// 知识库模式的右键菜单：与另外两种模式共用同一份清单。
+const activeContextMenuOptions = computed(() => buildFileTreeMenuOptions({
+  mode: 'kb',
+  node: selectedNode.value,
+  isBlank: menuMode.value === 'blank',
+  blankRoot: fileTreeStore.activeRepoPath,
+}))
 
 const isHiddenPath = (path) => {
   if (!path) return false;
@@ -1332,8 +1342,8 @@ const guessImportTargetDir = (repoPath) => {
  * copy 分支保持与改造前一致的行为，新能力只落在 convert 分支，
  * 因此既有用户的导入结果不会发生变化。
  */
-const handleImportMarkdownFile = async (repoPath, action = 'copy') => {
-  const targetDir = guessImportTargetDir(repoPath);
+const handleImportMarkdownFile = async (repoPath, action = 'copy', targetDirOverride = '') => {
+  const targetDir = normalizePath(targetDirOverride || guessImportTargetDir(repoPath));
   if (!targetDir) {
     message.warning('未找到导入目标目录');
     return;
@@ -2568,6 +2578,39 @@ const genDelete = async (mode, node) => {
   return true
 }
 
+// 文件/任务模式：移动到另一个目录（与知识库模式同一套后端命令与防写盘保护）
+const genMove = async (mode, node) => {
+  const targetDirectoryPath = await selectTargetPath()
+  if (!targetDirectoryPath) return
+
+  const sourcePath = normalizePath(node.id)
+  const targetDir = normalizePath(targetDirectoryPath)
+  if (!sourcePath || !targetDir) return
+  if (sourcePath === targetDir || targetDir.startsWith(`${sourcePath}/`)) {
+    message.warning('不能移动到自身或其子目录')
+    return
+  }
+
+  const name = node.name || sourcePath.split('/').pop()
+  const destinationPath = normalizePath(`${targetDir}/${name}`)
+  if (destinationPath === sourcePath) return
+
+  try {
+    await runPathMutation({ type: 'move', oldPath: sourcePath, newPath: destinationPath }, async () => {
+      await invoke('move_path', { sourcePath, destinationPath })
+      remapOpenTabsForPathChange(sourcePath, destinationPath, name)
+    })
+    await refreshModeDir(mode, parentDirOf(sourcePath))
+    await refreshModeDir(mode, targetDir)
+    message.success('已移动')
+  } catch (error) {
+    logger.error('移动失败:', error)
+    message.error(`移动失败: ${error?.message || error}`)
+    await refreshModeDir(mode, parentDirOf(sourcePath))
+    await refreshModeDir(mode, targetDir)
+  }
+}
+
 // 设计说明：虚拟文件树只负责键盘命令识别，真正的删除仍复用各模式原有确认弹窗和后端命令。
 // 这样 Delete 快捷键与右键菜单行为保持一致，也避免绕过删除确认。
 const handleVirtualDeleteNode = async (mode, node) => {
@@ -2651,42 +2694,14 @@ const genMenuVisible = ref(false)
 const genMenuPos = ref({ x: 0, y: 0 })
 const genMenuContext = ref({ mode: 'plain', node: null, isBlank: false })
 const genMenuOptions = computed(() => {
-  const { node, isBlank } = genMenuContext.value
-  const base = [
-    { label: '新建文件', key: 'addFile', icon: () => h(NIcon, null, { default: () => h(AddOutline) }) },
-    { label: '新建文件夹', key: 'addFolder', icon: () => h(NIcon, null, { default: () => h(FolderOpenOutline) }) },
-    {
-      label: '导入文件',
-      key: 'importFile',
-      icon: () => h(NIcon, null, { default: () => h(DownloadOutline) }),
-      children: IMPORT_MENU_OPTIONS,
-    },
-  ]
-  if (node && !isBlank) {
-    base.push(
-      { label: '重命名', key: 'rename', icon: () => h(NIcon, null, { default: () => h(CreateOutline) }) },
-      { label: '删除', key: 'delete', icon: () => h(NIcon, null, { default: () => h(TrashOutline) }) },
-      { label: '在文件浏览器中打开', key: 'openInExplorer', icon: () => h(NIcon, null, { default: () => h(FolderOutline) }) },
-      { label: '用 Neovim 打开', key: 'openInNeovim', icon: renderNeovimIcon },
-    )
-    // 浏览器预览只对 Markdown 文件有意义，目录与非 Markdown 文件不显示这一项。
-    if (!node.is_directory && isMarkdownFilePath(node.id)) {
-      base.push({ label: '在浏览器中查看', key: 'openInBrowser', icon: () => h(NIcon, null, { default: () => h(GlobeOutline) }) })
-    }
-    // 文档默认开在独立阅读器窗口；这里给一条「仍在标签页里看」的退路，
-    // 便于读者一边读、一边在同一窗口对照编辑其它笔记。
-    if (!node.is_directory && readerTabStore.isReaderPath(node.id)) {
-      base.push({ label: '在标签页中打开', key: 'openInTab', icon: () => h(NIcon, null, { default: () => h(DocumentOutline) }) })
-    }
-  }
-  return base
+  const { mode, node, isBlank, rootOverride } = genMenuContext.value
+  return buildFileTreeMenuOptions({
+    mode,
+    node,
+    isBlank,
+    blankRoot: rootOverride,
+  })
 })
-const actionDirForContext = () => {
-  const { mode, node, rootOverride } = genMenuContext.value
-  if (node) return node.is_directory ? normalizePath(node.id) : parentDirOf(node.id)
-  if (rootOverride) return normalizePath(rootOverride)
-  return mode === 'plain' ? normalizePath(externalDir.value) : catPathOf('work')
-}
 const openGenContextMenu = (mode, { node, x, y }) => {
   genMenuContext.value = { mode, node, isBlank: false, rootOverride: '' }
   genMenuPos.value = { x, y }
@@ -2700,20 +2715,13 @@ const openGenBlankMenu = (mode, { x, y }, rootOverride = '') => {
 const closeGenMenu = () => { genMenuVisible.value = false }
 const handleGenMenuSelect = async (key) => {
   genMenuVisible.value = false
-  const { mode, node } = genMenuContext.value
-  const dir = actionDirForContext()
+  const { mode, node, rootOverride } = genMenuContext.value
   try {
-    if (key === 'addFile') await genAddFile(mode, dir)
-    else if (key === 'addFolder') await genAddFolder(mode, dir)
-    else if (key === 'importFile') await genImportFile(mode, dir, 'copy')
-    else if (key === 'importFileCopy') await genImportFile(mode, dir, 'copy')
-    else if (key === 'importFileConvert') await genImportFile(mode, dir, 'convert')
-    else if (key === 'rename' && node) await genRename(mode, node)
-    else if (key === 'delete' && node) await genDelete(mode, node)
-    else if (key === 'openInExplorer' && node) await genOpenExplorer(node)
-    else if (key === 'openInNeovim' && node) await openNodeInNeovim(node, `file-tree-${mode}`)
-    else if (key === 'openInBrowser' && node) await openMarkdownInBrowser(node.id)
-    else if (key === 'openInTab' && node) await openFileByKind(node.id, { inline: true })
+    await runFileTreeMenuAction(key, {
+      mode,
+      node,
+      blankRoot: rootOverride,
+    })
   } catch (e) {
     logger.error('文件操作失败:', e)
     message.error('操作失败: ' + (e?.message || e))
@@ -2834,30 +2842,9 @@ const getDirDisplayName = (path) => {
 }
 
 // 右键菜单(虚拟树 contextmenu 事件):等价旧 nodeProps 的逻辑
+// 菜单项本身由 buildFileTreeMenuOptions 按节点实时生成，这里只记录上下文与位置。
 const handleNodeContextMenu = ({ node, x, y }) => {
   selectedNode.value = node
-
-  const nodePath = normalizePath(node.id)
-  const canOpenInBrowser = !node.is_directory && isMarkdownFilePath(nodePath)
-  const openInBrowserOpt = contextMenuOptions.value.find(o => o.key === 'openInBrowser')
-  if (openInBrowserOpt) openInBrowserOpt.disabled = !canOpenInBrowser
-
-  const canImportAsTemplate = !node.is_directory && isMarkdownFilePath(nodePath)
-  const importOpt = contextMenuOptions.value.find(o => o.key === 'importAsTemplate')
-  if (importOpt) importOpt.disabled = !canImportAsTemplate
-
-  // "在一侧打开"只对文件有意义，目录置灰。
-  const openToSideOpt = contextMenuOptions.value.find(o => o.key === 'openToSide')
-  if (openToSideOpt) openToSideOpt.disabled = !!node.is_directory
-
-  // 差异对比第二步只在已标记过一方、且不是自己跟自己比时出现，文案带上已选的名字。
-  const compareOpt = contextMenuOptions.value.find(o => o.key === 'compareWithPending')
-  if (compareOpt) {
-    const pending = diffStore.pending
-    compareOpt.show = !!pending?.path && normalizePath(pending.path) !== nodePath
-    compareOpt.label = diffStore.compareWithLabel
-  }
-
   isContextMenuVisible.value = true
   contextMenuPosition.value = { x, y }
   menuMode.value = 'node'
@@ -3007,10 +2994,11 @@ const toNativePath = (p) => {
   return isWindowsPath ? normalized.replace(/\//g, '\\') : normalized
 }
 
-// 相对路径：相对文件树根节点（当前笔记库）。不在根下时退化成绝对路径。
-const toRepoRelativePath = (p) => {
+// 相对路径：相对当前模式的文件树根（知识库 / 外部目录 / 任务分类）。
+// 不在根下时退化成绝对路径。
+const toRepoRelativePath = (p, rootOverride = '') => {
   const target = normalizePath(p)
-  const root = normalizePath(fileTreeStore.activeRepoPath).replace(/\/+$/, '')
+  const root = normalizePath(rootOverride || fileTreeStore.activeRepoPath).replace(/\/+$/, '')
   if (!target) return ''
   if (!root) return target
   if (target === root) return ''
@@ -3021,15 +3009,26 @@ const toRepoRelativePath = (p) => {
   return target
 }
 
-const copyNodePath = async (node, { relative = false } = {}) => {
+const copyNodePath = async (node, { relative = false, root = '' } = {}) => {
   if (!node?.id) return
-  const text = relative ? toRepoRelativePath(node.id) : toNativePath(node.id)
+  const text = relative ? toRepoRelativePath(node.id, root) : toNativePath(node.id)
   if (!text) {
     message.warning(relative ? '该节点就是文件树根目录，没有相对路径' : '无法获取路径')
     return
   }
   const ok = await writeClipboardText(text)
   if (ok) message.success(`已复制${relative ? '相对' : ''}路径: ${text}`)
+  else message.error('复制失败')
+}
+
+const copyNodeName = async (node) => {
+  const name = String(node?.name || normalizePath(node?.id).split('/').pop() || '').trim()
+  if (!name) {
+    message.warning('无法获取文件名')
+    return
+  }
+  const ok = await writeClipboardText(name)
+  if (ok) message.success(`已复制文件名: ${name}`)
   else message.error('复制失败')
 }
 
@@ -3045,85 +3044,105 @@ const openNodeToSide = async (node) => {
   }
 }
 
-const handleContextMenuSelect = async (key) => {
-  isContextMenuVisible.value = false;
-  try {
-    switch (key) {
-      case 'openToSide':
-        await openNodeToSide(selectedNode.value);
-        break;
-      case 'markForCompare':
-        if (selectedNode.value) {
-          const target = normalizePath(selectedNode.value.id);
-          diffStore.markForCompare(target, !!selectedNode.value.is_directory);
-          message.info(`已选择"${diffPathBaseName(target)}"，再右键另一项即可比较`);
-        }
-        break;
-      case 'compareWithPending':
-        if (selectedNode.value) {
-          const res = diffStore.compareWithPending(
-            normalizePath(selectedNode.value.id),
-            !!selectedNode.value.is_directory,
-          );
-          if (!res.ok) message.warning(res.error);
-        }
-        break;
-      case 'copyPath':
-        await copyNodePath(selectedNode.value);
-        break;
-      case 'copyRelativePath':
-        await copyNodePath(selectedNode.value, { relative: true });
-        break;
-      case 'addFile':
-        await addNode(selectedNode.value?.id, false);
-        break;
-      case 'addFolder':
-        await addNode(selectedNode.value?.id, true);
-        break;
-      case 'importAsTemplate':
-        await openImportTemplateModal();
-        break;
-      case 'rename':
-        if (selectedNode.value) {
-          renameNode(selectedNode.value.id);
-        }
-        break;
-      case 'delete':
-        if (selectedNode.value) {
-          deleteNode(selectedNode.value.id);
-        }
-        break;
-      case 'move':
-        if (selectedNode.value) {
-          moveNode(selectedNode.value);
-        }
-        break;
-      case 'openInExplorer':
-        if (selectedNode.value) {
-          const nodePath = normalizePath(selectedNode.value.id);
-          const targetPath = selectedNode.value.is_directory
-            ? nodePath
-            : nodePath.split('/').slice(0, -1).join('/');
-          if (targetPath) {
-            await invoke('open_in_file_explorer', { path: targetPath });
-          }
-        }
-        break;
-      case 'openInNeovim':
-        if (selectedNode.value) {
-          await openNodeInNeovim(selectedNode.value, 'knowledge-tree-context-menu');
-        }
-        break;
-      case 'openInBrowser':
-        if (selectedNode.value && !selectedNode.value.is_directory) {
-          await openMarkdownInBrowser(selectedNode.value.id)
-        }
-        break;
-    }
-  } catch (error) {
-    message.error(`操作失败: ${error.message}`);
+// ───── 右键菜单动作路由：三种模式共用同一入口 ─────
+// 菜单项统一后，动作按“当前模式”分派到各模式自己的实现：
+//   kb    → addNode / renameNode / deleteNode / moveNode / handleImportMarkdownFile
+//   plain / task → genAddFile / genRename / genDelete / genMove / genImportFile
+// 公共动作（打开、复制、比较、浏览器预览、Neovim）只有一份实现。
+const currentMenuRoot = (mode, blankRoot = '') => normalizePath(
+  blankRoot
+    || (mode === 'plain'
+      ? externalDir.value
+      : mode === 'task'
+        ? catPathOf(activeTaskCat.value)
+        : fileTreeStore.activeRepoPath)
+)
+
+const runFileTreeMenuAction = async (key, { mode = 'kb', node = null, blankRoot = '' } = {}) => {
+  const nodePath = normalizePath(node?.id)
+  const targetDir = node
+    ? (node.is_directory ? nodePath : parentDirOf(nodePath))
+    : currentMenuRoot(mode, blankRoot)
+  const root = currentMenuRoot(mode, blankRoot)
+
+  if (key === 'addFile') {
+    return mode === 'kb' ? addNode(targetDir, false) : genAddFile(mode, targetDir)
   }
-};
+  if (key === 'addFolder') {
+    return mode === 'kb' ? addNode(targetDir, true) : genAddFolder(mode, targetDir)
+  }
+  if (key === 'importFile' || key === 'importFileCopy' || key === 'importFileConvert') {
+    const action = key === 'importFileConvert' ? 'convert' : 'copy'
+    return mode === 'kb'
+      ? handleImportMarkdownFile(targetDir, action, targetDir)
+      : genImportFile(mode, targetDir, action)
+  }
+  if (!node) return
+
+  switch (key) {
+    case 'openFile':
+      await openFileByKind(nodePath)
+      break
+    case 'openToSide':
+      await openNodeToSide(node)
+      break
+    case 'openInTab':
+      await openFileByKind(nodePath, { inline: true })
+      break
+    case 'openInBrowser':
+      if (!node.is_directory) await openMarkdownInBrowser(nodePath)
+      break
+    case 'markForCompare':
+      diffStore.markForCompare(nodePath, !!node.is_directory)
+      message.info(`已选择"${diffPathBaseName(nodePath)}"，再右键另一项即可比较`)
+      break
+    case 'compareWithPending': {
+      const res = diffStore.compareWithPending(nodePath, !!node.is_directory)
+      if (!res.ok) message.warning(res.error)
+      break
+    }
+    case 'copyPath':
+      await copyNodePath(node, { root })
+      break
+    case 'copyRelativePath':
+      await copyNodePath(node, { relative: true, root })
+      break
+    case 'copyName':
+      await copyNodeName(node)
+      break
+    case 'rename':
+      if (mode === 'kb') renameNode(nodePath)
+      else await genRename(mode, node)
+      break
+    case 'delete':
+      if (mode === 'kb') await deleteNode(nodePath)
+      else await genDelete(mode, node)
+      break
+    case 'move':
+      if (mode === 'kb') await moveNode(node)
+      else await genMove(mode, node)
+      break
+    case 'openInExplorer':
+      await genOpenExplorer(node)
+      break
+    case 'openInNeovim':
+      await openNodeInNeovim(node, mode === 'kb' ? 'knowledge-tree-context-menu' : `file-tree-${mode}`)
+      break
+    case 'importAsTemplate':
+      await openImportTemplateModal(node)
+      break
+  }
+}
+
+const handleContextMenuSelect = async (key) => {
+  isContextMenuVisible.value = false
+  try {
+    await runFileTreeMenuAction(key, { mode: 'kb', node: selectedNode.value, blankRoot: fileTreeStore.activeRepoPath })
+  } catch (error) {
+    logger.error('知识库右键操作失败:', error)
+    message.error(`操作失败: ${error?.message || error}`)
+  }
+}
 
 // 处理点击外部关闭菜单
 const handleClickoutside = () => {

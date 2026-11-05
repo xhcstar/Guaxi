@@ -2157,6 +2157,9 @@ export const renderMarkdown = async (content, options) => {
     theme = "default",
     deferMathUntilComplete = false,
     smartInlineMathFromCode = false,
+    // 任务条目等「随手记录」的内容往往一行一个步骤，没有空行分段。
+    // 默认保持主预览的 CommonMark 行为，需要时由调用方显式打开。
+    breaks: enableBreaks = false,
   } = options;
 
   try {
@@ -2288,7 +2291,7 @@ export const renderMarkdown = async (content, options) => {
       html: true,
       linkify: true,
       typographer: true,
-      breaks: false, // 禁用单换行转换为 <br>
+      breaks: enableBreaks, // 默认禁用单换行转换；任务字段按需开启，保留逐行记录
       xhtmlOut: true, // 使用XHTML兼容的闭合标签
       highlight: enableCodeHighlight
         ? (code, lang) => {

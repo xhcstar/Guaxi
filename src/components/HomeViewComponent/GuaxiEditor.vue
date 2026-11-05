@@ -1358,6 +1358,7 @@
         :content="orgPreviewContent"
         :category="orgPreviewCategory"
         :theme="settingsStore.appearanceTheme"
+        :document-path="selectedFile?.path || ''"
         title-label="任务预览"
         :active-block-line="activeOrgBlockLine"
         :can-back="orgNavStack.length > 0"

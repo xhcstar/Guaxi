@@ -168,16 +168,36 @@
                 </span>
               </div>
               <div v-show="!isCollapsed(b.blockStartLine, sec.key, sec.defaultCollapsed)" class="otp-sec-body">
-                <div v-if="sec.type === 'text'" class="otp-text" v-html="renderText(sec.value)" />
-                <pre v-else-if="sec.type === 'pre'" class="otp-pre" v-html="renderPreText(sec.value)" />
-                <div v-else-if="sec.type === 'md'" class="otp-md" v-html="renderMd(sec.value)" />
+                <GuaxiOrgMarkdown
+                  v-if="sec.type === 'text' || sec.type === 'pre' || sec.type === 'md'"
+                  class="otp-md"
+                  :content="sec.value"
+                  :base-path="documentPath"
+                  :theme="theme"
+                  :query="search"
+                />
                 <a v-else-if="sec.type === 'link'" class="otp-link" :href="sec.value" target="_blank" rel="noreferrer">{{ sec.value }}</a>
                 <template v-else-if="sec.type === 'notes'">
-                  <div v-if="sec.value.kind === 'inline'" class="otp-md" v-html="renderMd(sec.value.value)" />
+                  <GuaxiOrgMarkdown
+                    v-if="sec.value.kind === 'inline'"
+                    class="otp-md"
+                    :content="sec.value.value"
+                    :base-path="documentPath"
+                    :theme="theme"
+                    :query="search"
+                  />
                   <a v-else class="otp-notes-file" href="#" @click.prevent="$emit('open-notes', sec.value.value)">📄 {{ sec.value.value }}（点击打开）</a>
                 </template>
                 <div v-else-if="sec.type === 'extra'" class="otp-extra-list">
-                  <pre v-for="(ei, i) in sec.value" :key="i" class="otp-pre" v-html="renderPreText(ei)" />
+                  <GuaxiOrgMarkdown
+                    v-for="(ei, i) in sec.value"
+                    :key="i"
+                    class="otp-md otp-extra-item"
+                    :content="ei"
+                    :base-path="documentPath"
+                    :theme="theme"
+                    :query="search"
+                  />
                 </div>
               </div>
             </section>
@@ -253,34 +273,79 @@
               <label class="full">描述<input :ref="setDescInput" v-model="draft.description" /></label>
               <label class="full">
                 <span class="otp-field-head">根本原因<button type="button" class="otp-mini xs otp-zoom" title="放大编辑" @click="openBigEdit('根本原因', draft.rootCause, (v) => (draft.rootCause = v))">⛶</button></span>
-                <textarea v-model="draft.rootCause" class="ta-md" />
+                <GuaxiFieldMarkdownEditor
+                  v-model="draft.rootCause"
+                  :theme="theme"
+                  :document-path="documentPath"
+                  :field-key="editingLine + ':rootCause'"
+                  :min-height="110"
+                />
               </label>
               <label class="full">
                 <span class="otp-field-head">复现步骤<button type="button" class="otp-mini xs otp-zoom" title="放大编辑" @click="openBigEdit('复现步骤', draft.conditionOfOccurrence, (v) => (draft.conditionOfOccurrence = v))">⛶</button></span>
-                <textarea v-model="draft.conditionOfOccurrence" class="ta-lg" />
+                <GuaxiFieldMarkdownEditor
+                  v-model="draft.conditionOfOccurrence"
+                  :theme="theme"
+                  :document-path="documentPath"
+                  :field-key="editingLine + ':condition'"
+                  :min-height="120"
+                />
               </label>
               <label class="full">
                 <span class="otp-field-head">修复详情<button type="button" class="otp-mini xs otp-zoom" title="放大编辑" @click="openBigEdit('修复详情', draft.fixedDetails, (v) => (draft.fixedDetails = v))">⛶</button></span>
-                <textarea v-model="draft.fixedDetails" class="ta-lg" />
+                <GuaxiFieldMarkdownEditor
+                  v-model="draft.fixedDetails"
+                  :theme="theme"
+                  :document-path="documentPath"
+                  :field-key="editingLine + ':fixed'"
+                  :min-height="120"
+                />
               </label>
               <label class="full">
                 <span class="otp-field-head">测试建议<button type="button" class="otp-mini xs otp-zoom" title="放大编辑" @click="openBigEdit('测试建议', draft.testingSuggestions, (v) => (draft.testingSuggestions = v))">⛶</button></span>
-                <textarea v-model="draft.testingSuggestions" class="ta-md" />
+                <GuaxiFieldMarkdownEditor
+                  v-model="draft.testingSuggestions"
+                  :theme="theme"
+                  :document-path="documentPath"
+                  :field-key="editingLine + ':testing'"
+                  :min-height="110"
+                />
               </label>
               <label class="full">
                 <span class="otp-field-head">详情 (CONTENT)<button type="button" class="otp-mini xs otp-zoom" title="放大编辑" @click="openBigEdit('详情 (CONTENT)', draft.content, (v) => (draft.content = v))">⛶</button></span>
-                <textarea v-model="draft.content" class="ta-xl" />
+                <GuaxiFieldMarkdownEditor
+                  v-model="draft.content"
+                  :theme="theme"
+                  :document-path="documentPath"
+                  :field-key="editingLine + ':content'"
+                  :min-height="150"
+                  :max-height="440"
+                />
               </label>
               <label class="full">
                 <span class="otp-field-head">笔记 (NOTES)<button v-if="draft.notes.kind !== 'file'" type="button" class="otp-mini xs otp-zoom" title="放大编辑" @click="openBigEdit('笔记 (NOTES)', draft.notes.value, (v) => (draft.notes.value = v))">⛶</button></span>
-                <textarea v-if="draft.notes.kind !== 'file'" v-model="draft.notes.value" class="ta-xl" />
+                <GuaxiFieldMarkdownEditor
+                  v-if="draft.notes.kind !== 'file'"
+                  v-model="draft.notes.value"
+                  :theme="theme"
+                  :document-path="documentPath"
+                  :field-key="editingLine + ':notes'"
+                  :min-height="150"
+                  :max-height="440"
+                />
                 <input v-else v-model="draft.notes.value" />
               </label>
               <label class="full">Review 链接<input v-model="draft.reviewLink" /></label>
               <div class="full otp-ei-edit">
                 <div class="otp-ei-head"><span>Extra Impact</span><button class="otp-mini" @click="draft.extraImpacts.push('')">＋</button></div>
                 <div v-for="(ei, i) in draft.extraImpacts" :key="i" class="otp-ei-row">
-                  <textarea v-model="draft.extraImpacts[i]" class="ta-md" />
+                  <GuaxiFieldMarkdownEditor
+                    v-model="draft.extraImpacts[i]"
+                    :theme="theme"
+                    :document-path="documentPath"
+                    :field-key="editingLine + ':extra:' + i"
+                    :min-height="96"
+                  />
                   <div class="otp-ei-row-actions">
                     <button type="button" class="otp-mini" title="上移" :disabled="i === 0" @click="moveExtra(i, -1)">↑</button>
                     <button type="button" class="otp-mini" title="下移" :disabled="i === draft.extraImpacts.length - 1" @click="moveExtra(i, 1)">↓</button>
@@ -295,7 +360,14 @@
                 <div v-if="!draft.customFields.length" class="otp-cf-hint">暂无自定义字段。字段名仅限大写字母与空格（如 <code>WEBUI BUG ID</code>），保存后原样写入 .org。</div>
                 <div v-for="(cf, i) in draft.customFields" :key="i" class="otp-cf-row">
                   <input v-model="cf.name" class="otp-cf-name" placeholder="字段名(大写)" @blur="normalizeCfName(i)" />
-                  <textarea v-model="cf.value" class="ta-md otp-cf-val" placeholder="字段值" />
+                  <GuaxiFieldMarkdownEditor
+                    v-model="cf.value"
+                    class="otp-cf-val"
+                    :theme="theme"
+                    :document-path="documentPath"
+                    :field-key="editingLine + ':cf:' + i"
+                    :min-height="96"
+                  />
                   <div class="otp-ei-row-actions">
                     <button type="button" class="otp-mini" title="放大编辑" @click="openBigEdit(cf.name || '自定义字段', cf.value, (v) => (cf.value = v))">⛶</button>
                     <button type="button" class="otp-mini" title="删除" @click="removeCustomField(i)">✕</button>
@@ -342,16 +414,39 @@
               <h4>{{ sec.title }}</h4>
             </div>
             <div class="otp-sec-body">
-              <div v-if="sec.type === 'text'" class="otp-text" v-html="renderText(sec.value)" />
-              <pre v-else-if="sec.type === 'pre'" class="otp-pre" v-html="renderPreText(sec.value)" />
-              <div v-else-if="sec.type === 'md'" class="otp-md" v-html="renderMd(sec.value)" />
+              <GuaxiOrgMarkdown
+                v-if="sec.type === 'text' || sec.type === 'pre' || sec.type === 'md'"
+                class="otp-md"
+                :content="sec.value"
+                :base-path="documentPath"
+                :theme="theme"
+                :query="search"
+                immediate
+              />
               <a v-else-if="sec.type === 'link'" class="otp-link" :href="sec.value" target="_blank" rel="noreferrer">{{ sec.value }}</a>
               <template v-else-if="sec.type === 'notes'">
-                <div v-if="sec.value.kind === 'inline'" class="otp-md" v-html="renderMd(sec.value.value)" />
+                <GuaxiOrgMarkdown
+                  v-if="sec.value.kind === 'inline'"
+                  class="otp-md"
+                  :content="sec.value.value"
+                  :base-path="documentPath"
+                  :theme="theme"
+                  :query="search"
+                  immediate
+                />
                 <a v-else class="otp-notes-file" href="#" @click.prevent="$emit('open-notes', sec.value.value)">📄 {{ sec.value.value }}（点击打开）</a>
               </template>
               <div v-else-if="sec.type === 'extra'" class="otp-extra-list">
-                <pre v-for="(ei, i) in sec.value" :key="i" class="otp-pre" v-html="renderPreText(ei)" />
+                <GuaxiOrgMarkdown
+                  v-for="(ei, i) in sec.value"
+                  :key="i"
+                  class="otp-md otp-extra-item"
+                  :content="ei"
+                  :base-path="documentPath"
+                  :theme="theme"
+                  :query="search"
+                  immediate
+                />
               </div>
             </div>
           </section>
@@ -371,11 +466,28 @@
           </span>
           <span class="otp-spacer" />
           <button class="otp-btn primary" @click="saveBigEdit">保存 (Ctrl+S)</button>
-          <button class="otp-btn" @click="cancelBigEdit">取消 (Esc)</button>
+          <button class="otp-btn" @click="cancelBigEdit">取消</button>
         </div>
         <div class="otp-bigedit-body" :class="'view-' + bigEdit.view">
-          <textarea v-show="bigEdit.view !== 'preview'" ref="bigEditRef" v-model="bigEdit.text" class="otp-bigedit-area" />
-          <div v-show="bigEdit.view !== 'edit'" class="otp-bigedit-preview" v-html="renderMd(bigEdit.text)" />
+          <GuaxiFieldMarkdownEditor
+            v-show="bigEdit.view !== 'preview'"
+            ref="bigEditRef"
+            v-model="bigEdit.text"
+            class="otp-bigedit-area"
+            :theme="theme"
+            :document-path="documentPath"
+            field-key="big-edit"
+            :fill="true"
+            :immediate="true"
+          />
+          <GuaxiOrgMarkdown
+            v-show="bigEdit.view !== 'edit'"
+            class="otp-md otp-bigedit-preview"
+            :content="bigEdit.text"
+            :base-path="documentPath"
+            :theme="theme"
+            immediate
+          />
         </div>
       </div>
     </div>
@@ -384,10 +496,10 @@
 
 <script setup>
 import { ref, reactive, computed, nextTick, watch, onMounted, onBeforeUnmount } from 'vue'
-import { convertFileSrc } from '@tauri-apps/api/core'
 import { parseTaskBlocks, validateTaskBlocks, serializeBlock, STATUS_LABELS } from '../../utils/guaxiTaskParser'
-import { renderOrgMarkdown } from '../../utils/guaxiOrgMarkdown'
 import { createLogger } from '../../utils/logger'
+import GuaxiOrgMarkdown from './GuaxiOrgMarkdown.vue'
+import GuaxiFieldMarkdownEditor from './GuaxiFieldMarkdownEditor.vue'
 
 const logger = createLogger('GuaxiOrgTaskPreview')
 
@@ -398,6 +510,8 @@ const props = defineProps({
   titleLabel: { type: String, default: '任务预览' },
   activeBlockLine: { type: Number, default: 0 },
   canBack: { type: Boolean, default: false },
+  /** 当前 .org 文件路径：本地图片与相对链接按它解析。 */
+  documentPath: { type: String, default: '' },
 })
 const emit = defineEmits(['rebuild', 'open-notes', 'goto-line', 'apply-block', 'copy-block', 'export-block', 'back', 'create-block', 'delete-block', 'insert-block', 'move-block', 'batch-delete', 'batch-move', 'batch-create', 'scroll'])
 
@@ -473,7 +587,7 @@ const onCardClick = (b, ev) => {
   if (editingLine.value === b.blockStartLine) return
   const t = ev?.target
   if (t && typeof t.closest === 'function'
-    && t.closest('button, input, textarea, select, a, .otp-mini, .otp-ins-btn, .otp-sec-head, mark')) {
+    && t.closest('button, input, textarea, select, a, .monaco-editor, .guaxi-field-md-editor, .otp-mini, .otp-ins-btn, .otp-sec-head, mark')) {
     return
   }
   // 批量模式：点击卡片即切换选中，不移动光标。
@@ -489,22 +603,8 @@ const typeOptions = computed(() => (props.category === 'life' || props.category 
 
 const typeLabel = (t) => ({ bug: 'Bug', task: '任务', other: '其他' }[t] || (t || '任务'))
 const statusLabel = (s) => STATUS_LABELS[s] || s || '待办'
-// CONTENT / NOTES 走完整 Markdown（标题、列表、表格、引用、加粗，单换行即换行）。
-// 搜索词在渲染阶段高亮，所以这里要带上 search。
-const renderMd = (text) => renderOrgMarkdown(text, convertFileSrc, { query: search.value })
-
-// 纯文本字段（根本原因 / 自定义字段）与预格式字段（复现步骤 / 修复详情 / 测试建议 / Extra Impact）
-// 不套 Markdown 语法：这些内容常粘着 shell 输出与编号，套上去会把 `#`、`1.` 误当语法改写原意。
-// 它们保持原样文本（换行由 white-space: pre-wrap 呈现），只额外把 `<br>` 折成真正的换行。
-const BR_SPLIT_RE = /<br\s*\/?>/i
-const BR_SPLIT_ALL_RE = /<br\s*\/?>/gi
-const renderText = (text) => {
-  const raw = String(text ?? '')
-  if (!BR_SPLIT_RE.test(raw)) return hl(raw)
-  return raw.split(BR_SPLIT_ALL_RE).map((part) => hl(part)).join('<br/>')
-}
-// 预格式区块里，`<br>` 之外的一切（含缩进与空白）都按原样保留。
-const renderPreText = renderText
+// 字段正文统一交给 GuaxiOrgMarkdown（编辑器同源渲染管线）；
+// 搜索命中由该组件在渲染完成后按文本节点高亮，不再在父组件里拼 HTML。
 
 // ── 分区（含顺序：Review 倒数第二、Extra Impact 最后且默认折叠）──
 const sectionsOf = (b) => {
@@ -665,7 +765,7 @@ const openBigEdit = async (title, value, apply) => {
   bigEdit.view = 'edit'
   bigEdit.open = true
   await nextTick()
-  bigEditRef.value?.focus?.()
+  bigEditRef.value?.focusEditor?.({ cursor: 'end' })
 }
 const saveBigEdit = () => {
   if (typeof bigEdit.apply === 'function') bigEdit.apply(bigEdit.text)
@@ -686,9 +786,13 @@ const onPreviewKeydown = (e) => {
     if (editingLine.value) { e.preventDefault(); saveEdit() }
     return
   }
-  if (e.key === 'Escape' && bigEdit.open) { e.preventDefault(); cancelBigEdit(); return }
-  if (e.key === 'Escape' && cardZoomBlock.value) { e.preventDefault(); closeCardZoom(); return }
-  if (e.key === 'Escape' && editingLine.value && !bigEdit.open) { e.preventDefault(); cancelEdit() }
+  if (e.key !== 'Escape') return
+  // 焦点在 Monaco 里时，Esc 的第一含义是「关掉补全框/悬浮提示」。
+  // 在这里顺手取消编辑会吃掉用户刚写的字段内容，所以让给编辑器自己处理。
+  if (e.target?.closest?.('.monaco-editor')) return
+  if (bigEdit.open) { e.preventDefault(); cancelBigEdit(); return }
+  if (cardZoomBlock.value) { e.preventDefault(); closeCardZoom(); return }
+  if (editingLine.value) { e.preventDefault(); cancelEdit() }
 }
 onMounted(() => { window.addEventListener('keydown', onPreviewKeydown, true) })
 onBeforeUnmount(() => {
@@ -1003,6 +1107,10 @@ export default { name: 'GuaxiOrgTaskPreview' }
 .otp-form textarea.ta-md { min-height: 110px; }
 .otp-form textarea.ta-lg { min-height: 170px; }
 .otp-form textarea.ta-xl { min-height: 240px; }
+/* Monaco 字段编辑器由自身控制高度，这里只保证它在网格/弹性行里占满可用宽度。 */
+.otp-form :deep(.guaxi-field-md-editor) { width: 100%; }
+.otp-ei-row :deep(.guaxi-field-md-editor) { flex: 1 1 auto; min-width: 0; }
+.otp-extra-item { margin: 0; }
 .otp-form input:focus, .otp-form select:focus, .otp-form textarea:focus { outline: none; border-color: #2080f0; box-shadow: 0 0 0 2px rgba(32,128,240,0.18); }
 .otp-ei-edit { display: flex; flex-direction: column; gap: 6px; }
 .otp-ei-head { display: flex; align-items: center; justify-content: space-between; font-size: 14px; color: var(--otp-sub); font-weight: 600; }
