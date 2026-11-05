@@ -233,7 +233,8 @@ fn remote_proxy_url(url: &str) -> String {
 /// 只改写 http(s) 的 src，其余保持原样；返回改写后的内容与映射。
 fn proxy_html_images(content: &str, mappings: &mut Vec<ImageMapping>) -> String {
     let tag_re = Regex::new(r"(?is)<img\b[^>]*>").unwrap();
-    let src_re = Regex::new(r#"(?i)\bsrc\s*=\s*(["'])(https?://[^"']+)["']"#).unwrap();
+    // 匹配任意 src（不再限定 http），以便识别并处理相对路径。
+    let src_re = Regex::new(r#"(?i)\bsrc\s*=\s*(["'])([^"']*)["']"#).unwrap();
     tag_re
         .replace_all(content, |caps: &regex::Captures| {
             let tag = caps.get(0).map(|m| m.as_str().to_string()).unwrap_or_default();
@@ -241,18 +242,44 @@ fn proxy_html_images(content: &str, mappings: &mut Vec<ImageMapping>) -> String 
                 .replace_all(&tag, |src_caps: &regex::Captures| {
                     let quote = src_caps.get(1).map(|m| m.as_str()).unwrap_or("\"");
                     let url = src_caps.get(2).map(|m| m.as_str()).unwrap_or("");
-                    if url.is_empty() || url.starts_with("http://localhost:8888/") {
+                    if url.is_empty() {
                         return src_caps
                             .get(0)
                             .map(|m| m.as_str().to_string())
                             .unwrap_or_default();
                     }
-                    let served = remote_proxy_url(url);
+                    // 已经是本地服务或内联数据，原样保留。
+                    if url.starts_with("http://localhost:8888/")
+                        || url.starts_with("data:")
+                        || url.starts_with("blob:")
+                    {
+                        return src_caps
+                            .get(0)
+                            .map(|m| m.as_str().to_string())
+                            .unwrap_or_default();
+                    }
+                    if url.starts_with("http://") || url.starts_with("https://") {
+                        let served = remote_proxy_url(url);
+                        mappings.push(ImageMapping {
+                            original_path: url.to_string(),
+                            served_path: served.clone(),
+                        });
+                        return format!("src={quote}{served}{quote}");
+                    }
+                    // 相对路径：process_image_paths 已经处理过 Markdown 语法里的，
+                    // 走到这里的只可能是 HTML <img> 中的相对地址。它与 Markdown 分支
+                    // 同样的处境——没有 base_path 就无从解析，留着会让浏览器去请求
+                    // WebView origin 下的不存在文件（net::ERR_CONNECTION_CLOSED）。
+                    // 统一换成内联占位图。
+                    warn!(
+                        src = url,
+                        "relative <img src> cannot be resolved without base_path; replaced with placeholder"
+                    );
                     mappings.push(ImageMapping {
                         original_path: url.to_string(),
-                        served_path: served.clone(),
+                        served_path: BROKEN_IMAGE_DATA_URI.to_string(),
                     });
-                    format!("src={quote}{served}{quote}")
+                    format!("src={quote}{BROKEN_IMAGE_DATA_URI}{quote}")
                 })
                 .to_string()
         })
@@ -315,7 +342,25 @@ fn process_image_paths(content: &str, base_path: &Path) -> (String, Vec<ImageMap
 
             processed = processed.replace(&format!("]({})", img_path), &format!("]({})", served_path));
         } else {
-            info!("Failed to resolve path: {}", img_path);
+            // 相对路径解析不出来（通常是 base_path 为空，或文件已不在）。
+            //
+            // 原来的行为是"保持原样不动"，结果是浏览器拿这个相对路径去请求
+            // WebView 自己的 origin——那里根本没有这个文件，请求以
+            // net::ERR_CONNECTION_CLOSED 收场，控制台一片红。
+            //
+            // 这里换成内联占位图：不产生任何网络请求，用户看到的是一块
+            // 明确的"图片不可用"，而不是无从解释的连接错误。
+            // 同时仍记录映射，让调用方知道这张图被降级了。
+            warn!(
+                path = img_path,
+                "image path unresolved (missing base_path or file gone); replaced with placeholder"
+            );
+            let placeholder = BROKEN_IMAGE_DATA_URI;
+            mappings.push(ImageMapping {
+                original_path: img_path.to_string(),
+                served_path: placeholder.to_string(),
+            });
+            processed = processed.replace(&format!("]({})", img_path), &format!("]({})", placeholder));
         }
     }
 
@@ -556,6 +601,19 @@ async fn register_resource(req: web::Json<ResourceRegisterRequest>) -> HttpRespo
 // 只代理图片，且目标不能是回环 / 内网地址：Markdown 来自不可信内容，
 // `![](http://127.0.0.1:8080/...)` 不能借代理变成一次 SSRF。
 // 缓存落在 exe 同级 cache/remote-images/，按 URL 哈希命名。
+
+/// 无法解析的图片替换成这个内联占位图。
+///
+/// 用 data URI 而不是一个 `/placeholder.svg` 之类的路径：后者仍要发一次请求，
+/// 而这里要解决的正是"发了一次必然失败的请求"。
+/// 内容是一个带斜线方框的极简 SVG，视觉上表示"图缺"。
+const BROKEN_IMAGE_DATA_URI: &str = "data:image/svg+xml;base64,\
+PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIzMjAiIGhlaWdodD0i\
+MjAwIiB2aWV3Qm94PSIwIDAgMzIwIDIwMCI+PHJlY3Qgd2lkdGg9IjMyMCIgaGVpZ2h0PSIyMDAiIGZp\
+bGw9IiNmMmYyZjIiLz48cGF0aCBkPSJNMzAgMzBsMjYwIDE0ME0yOTAgMzBMMzAgMTcwIiBzdHJva2U9\
+IiNjY2MiIHN0cm9rZS13aWR0aD0iMiIvPjx0ZXh0IHg9IjE2MCIgeT0iMTA1IiBmb250LWZhbWlseT0i\
+c2Fucy1zZXJpZiIgZm9udC1zaXplPSIxNCIgZmlsbD0iIzk5OSIgdGV4dC1hbmNob3I9Im1pZGRsZSI+\
+aW1hZ2UgdW5hdmFpbGFibGU8L3RleHQ+PC9zdmc+";
 
 const REMOTE_IMAGE_MAX_BYTES: usize = 20 * 1024 * 1024;
 
@@ -802,6 +860,45 @@ pub fn config(cfg: &mut web::ServiceConfig) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unresolved_relative_image_becomes_placeholder() {
+        // 复现线上问题：没有 base_path 时，相对路径图片解析不出来，
+        // 原来是"保持原样"，浏览器就会去请求 WebView origin 下的不存在文件
+        // （net::ERR_CONNECTION_CLOSED）。现在必须换成内联占位图。
+        let (out, mappings) = process_image_paths("![](lark2pad-1793718531-2.jpg)", Path::new(""));
+        assert!(
+            out.contains("data:image/svg+xml;base64,"),
+            "unresolved relative image must become a data URI placeholder, got: {out}"
+        );
+        assert!(
+            !out.contains("lark2pad-1793718531-2.jpg"),
+            "the broken relative path must not survive in the output"
+        );
+        assert_eq!(mappings.len(), 1);
+        assert_eq!(mappings[0].original_path, "lark2pad-1793718531-2.jpg");
+    }
+
+    #[test]
+    fn unresolved_relative_html_img_becomes_placeholder() {
+        let mut mappings = Vec::new();
+        let out = proxy_html_images(
+            r#"<img src="lark2pad-1793718531-2.jpg" alt="x">"#,
+            &mut mappings,
+        );
+        assert!(out.contains("data:image/svg+xml;base64,"), "got: {out}");
+        assert!(!out.contains("lark2pad"), "broken path must not survive");
+    }
+
+    #[test]
+    fn inline_and_local_urls_are_left_alone() {
+        let mut mappings = Vec::new();
+        // data URI 与本地服务地址不该被当作相对路径处理
+        let html = r#"<img src="data:image/png;base64,AAA"><img src="http://localhost:8888/x.png">"#;
+        let out = proxy_html_images(html, &mut mappings);
+        assert_eq!(out, html);
+        assert!(mappings.is_empty());
+    }
 
     #[test]
     fn referer_uses_the_image_origin() {
