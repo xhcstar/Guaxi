@@ -1773,7 +1773,20 @@ pub async fn mail_get_message(
         .as_deref()
         .map(|html| html.to_ascii_lowercase().contains("cid:"))
         .unwrap_or(false);
-    if fetched && !cached_needs_inline && (!cached_text.is_empty() || cached_html.is_some()) {
+    // 表格排版的清洗规则变过：旧的缓存正文里 border / cellpadding / bgcolor
+    // 已经被剥掉，重新打开时要按原文重新解析一次才能恢复。只对含 <table> 的
+    // 旧缓存触发，避免所有邮件都重新下载一遍。
+    let render_version = store::body_render_version(&account_id, &folder, uid).unwrap_or(0);
+    let stale_table_render = render_version < store::RENDER_VERSION
+        && cached_html
+            .as_deref()
+            .map(|html| html.to_ascii_lowercase().contains("<table"))
+            .unwrap_or(false);
+    if fetched
+        && !cached_needs_inline
+        && !stale_table_render
+        && (!cached_text.is_empty() || cached_html.is_some())
+    {
         detail.html = cached_html.map(|html| {
             // 旧缓存里可能残留邮件自带的 <style>（深色 media query 会让正文变黑）。
             // 只对这类正文重洗一次，干净的缓存原样返回，避免每次打开都多解析一遍。
@@ -1793,7 +1806,26 @@ pub async fn mail_get_message(
             account_password(&account)?
         };
         let settings = store::load_settings();
-        let raw = fetch_raw_bytes(&account, &password, &folder, uid).await?;
+        let raw = match fetch_raw_bytes(&account, &password, &folder, uid).await {
+            Ok(raw) => raw,
+            Err(error) => {
+                // 离线 / 原邮件已被服务器删除时，旧缓存仍然是可读的：
+                // 宁可继续显示旧版渲染，也不要把「查看邮件」直接变成错误。
+                if fetched && (!cached_text.is_empty() || cached_html.is_some()) {
+                    detail.html = cached_html;
+                    detail.text = cached_text;
+                    detail.attachments =
+                        serde_json::from_str(&cached_attachments).unwrap_or_default();
+                    if !summary.seen && mark_seen_inner(&account_id, &folder, &[uid], true).await.is_ok()
+                    {
+                        detail.seen = true;
+                    }
+                    warn!(error = %error, "mail: 重新解析正文失败，回退旧缓存");
+                    return Ok(detail);
+                }
+                return Err(error);
+            }
+        };
         // 端到端加密 / 签名：在解析 MIME 之前先解开。
         //
         // 这里只做「能解就解、解不开就说清楚」：拿不到私钥时把原始提示

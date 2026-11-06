@@ -485,7 +485,7 @@ const hasRemoteImages = computed(() => {
   const html = isThread.value
     ? threadMessages.value.map((message) => message.html || '').join('')
     : props.detail?.html || ''
-  return /data-guaxi-remote-src=/.test(html)
+  return /data-guaxi-remote-(?:src|bg)=/.test(html)
 })
 
 const imagesBlocked = computed(() => hasRemoteImages.value && !imagesAllowed.value)
@@ -502,6 +502,7 @@ function restoreRemoteImages(html) {
     .replace(/data-guaxi-remote-src="([^"]*)"\s+src=""/g, 'src="$1"')
     .replace(/data-guaxi-remote-src="([^"]*)"\s+src="data:image\/gif;base64,[^"]*"/g, 'src="$1"')
     .replace(/data-guaxi-remote-src="([^"]*)"/g, 'src="$1"')
+    .replace(/data-guaxi-remote-bg="([^"]*)"/g, 'background="$1"')
     .replace(/\sclass="guaxi-noimg"/g, '')
 }
 

@@ -100,7 +100,7 @@ function sizeLabel(bytes) {
   return `${(n / 1024 / 1024).toFixed(1)} MB`
 }
 
-const hasRemoteImages = computed(() => /data-guaxi-remote-src=/.test(props.detail?.html || ''))
+const hasRemoteImages = computed(() => /data-guaxi-remote-(?:src|bg)=/.test(props.detail?.html || ''))
 
 /** 远端图片默认不加载（避免打开即回一个「已读+IP」信标），点一下再还原地址。 */
 const renderedHtml = computed(() => {
@@ -109,6 +109,7 @@ const renderedHtml = computed(() => {
     return html
       .replace(/data-guaxi-remote-src="([^"]*)"\s+src=""/g, 'src="$1"')
       .replace(/data-guaxi-remote-src="([^"]*)"/g, 'src="$1"')
+      .replace(/data-guaxi-remote-bg="([^"]*)"/g, 'background="$1"')
   }
   return html
 })

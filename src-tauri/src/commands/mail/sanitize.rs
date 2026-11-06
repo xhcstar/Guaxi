@@ -73,6 +73,14 @@ fn render_node(node: ego_tree::NodeRef<'_, scraper::Node>, out: &mut String, blo
                     out.push_str(" src=\"\"");
                     continue;
                 }
+                // 表格 / 单元格的 background 也是一张远端图片：不先挡住，
+                // 打开邮件就等于给发件人回了 IP；「显示图片」时再还原。
+                if name == "background" && block_remote && is_remote_url(&value) {
+                    out.push_str(" data-guaxi-remote-bg=\"");
+                    escape_attr_into(out, &value);
+                    out.push('"');
+                    continue;
+                }
                 out.push(' ');
                 out.push_str(&name);
                 out.push_str("=\"");
@@ -124,7 +132,7 @@ fn is_safe_image_src(value: &str) -> bool {
 }
 
 /// 属性白名单：未知属性一律丢弃；`on*` 永远丢弃。
-fn attr_allowed(tag: &str, name: &str, value: &str) -> bool {
+fn attr_allowed(_tag: &str, name: &str, value: &str) -> bool {
     if name.starts_with("on") {
         return false;
     }
@@ -142,16 +150,10 @@ fn attr_allowed(tag: &str, name: &str, value: &str) -> bool {
             || lower.contains("behavior:")
             || lower.contains("-moz-binding"));
     }
-    // 表格的「装饰属性」（边框 / 单元格内边距 / 底色）在邮件里几乎总是排版工具留下的，
-    // Outlook 那种多层 table 嵌套逐层描边，读起来像一堆套娃框（真实踩到过）。
-    // 这些一律剥掉，由阅读区的样式表统一表格外观；真正表达布局意图的
-    // width / align / colspan / rowspan 仍然保留。
-    if matches!(tag, "table" | "td" | "th" | "tr" | "tbody" | "thead" | "tfoot")
-        && matches!(name, "border" | "cellpadding" | "cellspacing" | "bgcolor" | "background")
-    {
-        return false;
-    }
-
+    // 表格的边框 / 单元格内边距 / 底色是邮件排版的一部分：Outlook 会原样渲染，
+    // 我们以前一律剥掉（再由阅读区 CSS 统一成「无框紧凑表」），结果就是发件人
+    // 精心排好的表格在我们这里丢了框线、间距和底色。这里保留原始属性，
+    // 只在暗色主题下由阅读区/配色层做必要的颜色映射。
     matches!(
         name,
         "href"

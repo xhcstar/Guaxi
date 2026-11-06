@@ -604,7 +604,11 @@ export function applyBodyThemeToElements(targets, mode = 'dark') {
     // 纯白 / 近白的底色没有设计含义（Outlook、工单系统常给每个段落套一层），
     // 暗色下不要铺成「比纸面亮一档的表面」——一层层叠起来就是用户看到的突兀色块。
     // 这类背景直接透出纸面，只在整封邮件**只有**这种底色时才保留一点点表面感。
-    const nextBg = isNeutralNearWhite(bgSource)
+    // 表格（以及单元格 / 行 / 表格本身）的白色底是排版层级的一部分：
+    // 暗色下映射成深色表面，不能像段落白底那样直接透掉，否则整张表的
+    // 区块、表头、隔行底色全消失，看起来就和 Outlook 完全不一样。
+    const inTable = el.matches?.('table, thead, tbody, tfoot, tr, td, th')
+    const nextBg = isNeutralNearWhite(bgSource) && !inTable
       ? 'transparent'
       : mapBackgroundColor(bgSource, mode)
     if (nextBg) {
@@ -613,7 +617,12 @@ export function applyBodyThemeToElements(targets, mode = 'dark') {
         el.style.backgroundColor = nextBg
       } else {
         el.setAttribute(ORIG.bgAttr, bgOriginal)
-        el.setAttribute('bgcolor', nextBg)
+        // bgcolor 属性只认 #hex / 颜色名，写 rgb() 会被浏览器当成无效值，
+        // 映射后的底色就丢了。原属性留着用于切回亮色，暗色结果写内联样式。
+        if (!el.hasAttribute(ORIG.bg)) {
+          el.setAttribute(ORIG.bg, el.style.backgroundColor || '')
+        }
+        el.style.backgroundColor = nextBg
       }
     }
     const imageOriginal = el.getAttribute(ORIG.image) || own.backgroundImage

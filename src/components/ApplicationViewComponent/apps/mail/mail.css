@@ -1187,23 +1187,12 @@
   font-family: var(--mail-font-reading);
 }
 
-/* 链接在浅色纸上必须换成深一点的主色：主题里的 accent 是为深色界面挑的，
-   直接铺在白底上对比度不够。 */
-.mail-body a {
-  color: #1a5fd0;
-}
-
-/* 邮件自带的浅色块（比如灰色小卡片）在白纸上才有对比；
-   在暗色主题下不要把它们的背景改成深色。 */
-.mail-body [bgcolor] {
-  /* bgcolor 已在清洗层剥除；这里只是兜底旧缓存。 */
-  background-color: transparent !important;
-}
+/* 邮件自带的 bgcolor 是排版的一部分：浅色主题原样保留；
+   暗色主题由 colors.js 映射成对应的深色表面，这里不再强行抹成透明。 */
 
 .mail-body img {
   max-width: 100%;
   height: auto;
-  border-radius: 4px;
 }
 
 /* ---------- 未加载的远端图片 ---------- *
@@ -1242,38 +1231,20 @@
 }
 
 
-/* 邮件正文的表格：出版级邮件几乎全靠 table 排版，而且层层嵌套。
-   清洗层已经剥掉了 border / cellpadding / bgcolor 这些装饰属性，
-   这里再兜一道底——包括已缓存的旧邮件（它们入库时还没剥）。
-   目标：默认**看不见框线**，只有内容需要时才用细线分隔，
-   最外层永远不描边。 */
+/* 邮件正文的表格：出版级邮件几乎全靠 table 排版，border / cellpadding /
+   cellspacing / bgcolor 以及 inline style 都是发件人排版的一部分，Outlook 会
+   原样渲染。这里只限制最大宽度，避免固定像素宽度的邮件把阅读区撑出横向滚动；
+   不再强制无边框 / 零内边距 / collapse，那些会把工单表格的框线和留白一起抹掉。 */
 .mail-body table {
   max-width: 100%;
-  border-collapse: collapse;
-  border: 0;
-  /* 不要强制 width:auto：营销邮件常用百分比宽度做两栏（本例是 49% 的嵌套表），
-     改成内容宽会把内层表格压扁，箭头 / 按钮就会偏离原邮件的位置。
-     width 属性继续生效，max-width 负责窄阅读区的兜底。 */
 }
 
-/* 邮件里的边框颜色是按「白纸」写的：一半是 #fff、一半是 #ccc，在深色纸面上
-   白色的那几段直接看不见，表格看起来就是「断线」。这里只统一颜色、不新增边框
-   ——原本没有边框的排版表仍然没有边框，不会被刷成一堆套娃框。 */
-.mail-body table td,
-.mail-body table th,
-.mail-body table tr {
+/* 暗色主题下只统一边框颜色，不改变「有没有边框」：邮件里的 #fff / #ccc
+   边框落在深色纸面上会消失，换成主题边框色。浅色主题保留发件人写的颜色。 */
+.mail-doc-dark .mail-body table td,
+.mail-doc-dark .mail-body table th,
+.mail-doc-dark .mail-body table tr {
   border-color: var(--mail-border);
-}
-
-.mail-body table table,
-.mail-body table table table {
-  /* 嵌套层级不额外加边框，避免「套娃框」。
-     只收上下外边距：以前写的是 margin: 0，把 align="center" 的自动左右外边距
-     也一起抹掉了——Outlook 生成的邮件正是靠外层表格 + align=center 把正文居中的，
-     结果同一封信在别的客户端居中、我们这边贴左（真实反馈）。 */
-  border: 0;
-  margin-top: 0;
-  margin-bottom: 0;
 }
 
 /* 老式邮件用 align 属性居中表格；把它显式映射成自动外边距，
@@ -1303,57 +1274,26 @@
   overflow: visible;
 }
 
-.mail-body th,
-.mail-body td {
-  border: 0;
-  padding: 0;
-  vertical-align: top;
-}
+/* 单元格不再强制 border:0 / padding:0：这两个声明会把邮件写在 td 上的
+   边框和内边距一起覆盖掉。没有自己写样式的单元格交给浏览器默认值，
+   写了 cellpadding / style 的则按发件人的排版来。 */
 
-/* 只有「数据表」才需要可见的格线：正文里显式带 thead 的表格按数据表呈现。 */
-.mail-body table:has(> thead) th,
-.mail-body table:has(> thead) td {
-  border-bottom: 1px solid var(--mail-border);
-  padding: 6px 10px;
-}
-.mail-body table:has(> thead) th {
-  font-weight: 600;
-  color: var(--mail-text-secondary);
-  text-align: left;
-}
+/* 表格的格线、内边距与表头对齐都交给邮件自己的属性 / inline style：
+   Outlook 正是按这些值渲染的，阅读区不再另加一套默认值把它们覆盖掉。 */
 
-/* 单元格里直接放图（邮件常见的「图片按钮」）不要圆角，否则会出现一圈内框。 */
-.mail-body table img {
-  border-radius: 0;
-  /* 不能设 display:block：邮件常把箭头图标 <img> 直接嵌在文字链接里
-     （`<a>进一步了解<img chevron></a>`）。块级化会把图标挤出 inline 行盒，
-     掉到单元格左侧单独一行，版式就和发件人看到的不一样了。 */
-}
+/* 单元格里直接放图（邮件常见的「图片按钮」）不做额外处理。
+   不能设 display:block：邮件常把箭头图标 <img> 直接嵌在文字链接里
+   （`<a>进一步了解<img chevron></a>`）。块级化会把图标挤出 inline 行盒，
+   掉到单元格左侧单独一行，版式就和发件人看到的不一样了。 */
 
-.mail-body a {
-  color: var(--mail-accent);
-  text-decoration: none;
-  border-bottom: 1px solid var(--mail-accent-soft);
-}
-.mail-body a:hover {
-  border-bottom-color: var(--mail-accent);
-}
+/* 链接颜色不做全局覆盖：没有写颜色的链接沿用浏览器默认（与 Outlook 一致），
+   邮件写死的颜色原样保留；暗色下看不清的链接由 colors.js 按对比度补救。 */
 
 .mail-body blockquote {
   margin: 14px 0;
   padding: 2px 0 2px 14px;
   border-left: 2px solid var(--mail-quote-bar);
   color: var(--mail-text-secondary);
-}
-
-/* 兼容旧版引用卡（10px 圆角的外框 + 灰底）：新卡片是 14px 圆角、无外框，
-   这里把老邮件里套娃式的灰框拆掉，对话历史看起来更像 Apple Mail 的分块。
-   选择器只命中旧版内联样式，不影响新生成的卡片。 */
-.mail-body div[style*='border-radius:10px'][style*='border:1px solid'],
-.mail-body div[style*='border-radius: 10px'][style*='border: 1px solid'] {
-  border: 0 !important;
-  background: transparent !important;
-  border-radius: 0 !important;
 }
 
 /* ---------- 历史消息卡片（阅读区，Apple Mail 式会话） ----------

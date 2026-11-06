@@ -105,7 +105,14 @@ fn open() -> Result<Connection, String> {
 /// 为什么必须做版本化迁移：老用户的 `mail.db` 已经存在，`CREATE TABLE IF NOT EXISTS`
 /// 只会补新表、不会补新列；一旦某天查询里用到新列，整个邮件页会直接报
 /// 「no such column」而不是「少一个功能」。
-pub const SCHEMA_VERSION: i32 = 9;
+pub const SCHEMA_VERSION: i32 = 10;
+
+/// 正文渲染 / 清洗规则版本。
+///
+/// 清洗规则变化后（例如恢复表格的 border / cellpadding / bgcolor），旧的缓存
+/// 正文仍然是旧结果；打开邮件时按版本号决定是否从原文重新解析。只对含表格的
+/// 旧缓存触发重拉，避免一刀切重下所有邮件。
+pub const RENDER_VERSION: i32 = 2;
 
 pub fn init(app: &AppHandle) -> Result<(), String> {
     let path = db_path(app)?;
@@ -197,6 +204,7 @@ pub fn init(app: &AppHandle) -> Result<(), String> {
             text TEXT NOT NULL DEFAULT '',
             attachments_json TEXT NOT NULL DEFAULT '[]',
             body_fetched INTEGER NOT NULL DEFAULT 0,
+            render_version INTEGER NOT NULL DEFAULT 0,
             PRIMARY KEY (account_id, folder, uid)
         );
 
@@ -434,6 +442,16 @@ fn migrate(conn: &mut Connection) -> Result<(), String> {
             "#,
         )
         .map_err(|e| format!("迁移到 v9 失败: {e}"))?;
+    }
+    if version < 10 {
+        // v10：正文渲染版本。清洗规则更新后，旧的缓存正文需要按原文重新解析；
+        // 0 表示「未知 / 旧版渲染」。
+        add_column(
+            &tx,
+            "message_bodies",
+            "render_version",
+            "INTEGER NOT NULL DEFAULT 0",
+        )?;
     }
     tx.pragma_update(None, "user_version", SCHEMA_VERSION)
         .map_err(|e| format!("写入 schema 版本失败: {e}"))?;
@@ -1849,12 +1867,21 @@ fn write_body(
 
     // 注意不要覆盖 raw：正文与原文是两次不同的写入（正文先到，原文在打开邮件时补）。
     tx.execute(
-        r#"INSERT INTO message_bodies (account_id, folder, uid, html, text, attachments_json, body_fetched)
-           VALUES (?1,?2,?3,?4,?5,?6,1)
+        r#"INSERT INTO message_bodies (account_id, folder, uid, html, text, attachments_json, body_fetched, render_version)
+           VALUES (?1,?2,?3,?4,?5,?6,1,?7)
            ON CONFLICT(account_id, folder, uid) DO UPDATE SET
                 html=excluded.html, text=excluded.text,
-                attachments_json=excluded.attachments_json, body_fetched=1"#,
-        params![account_id, folder, uid, sealed_html, sealed_text, sealed_attachments],
+                attachments_json=excluded.attachments_json, body_fetched=1,
+                render_version=excluded.render_version"#,
+        params![
+            account_id,
+            folder,
+            uid,
+            sealed_html,
+            sealed_text,
+            sealed_attachments,
+            RENDER_VERSION
+        ],
     )
     .map_err(|e| e.to_string())?;
     reindex_message(tx, account_id, folder, uid)?;
@@ -1982,6 +2009,19 @@ pub fn set_encryption_enabled(enabled: bool) -> Result<(), String> {
 }
 
 /// 缓存命中时返回 (html, text, 附件 JSON, 是否已经取过正文)。
+/// 缓存正文的渲染 / 清洗版本；0 表示旧版。
+pub fn body_render_version(account_id: &str, folder: &str, uid: u32) -> Result<i32, String> {
+    let conn = open()?;
+    conn.query_row(
+        "SELECT render_version FROM message_bodies WHERE account_id=?1 AND folder=?2 AND uid=?3",
+        params![account_id, folder, uid],
+        |row| row.get(0),
+    )
+    .optional()
+    .map(|value| value.unwrap_or(0))
+    .map_err(|e| e.to_string())
+}
+
 pub fn get_body(
     account_id: &str,
     folder: &str,
