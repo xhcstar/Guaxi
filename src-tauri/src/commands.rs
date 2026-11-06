@@ -128,6 +128,12 @@ pub mod flipboard_render;
 pub mod flipboard_llm;
 pub mod site_category_discovery;
 pub mod language_learning;
+/// 语言学习离线词典包：ECDICT / CC-CEDICT 目录下载、导入导出与本地查询。
+pub mod offline_dict;
+/// 语言学习多语种 ASR 模型：按语言路由、按需下载与卸载。
+pub mod asr_models;
+/// 网页 / URL 导入：公开页面正文、音频、字幕 -> 听力或阅读条目。
+pub mod web_import;
 pub mod tts_book;
 pub mod syntax_highlight;
 pub mod typst_compile;

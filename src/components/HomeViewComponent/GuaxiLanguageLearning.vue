@@ -252,6 +252,11 @@
               <strong>{{ currentReviewMasteryLabel }}</strong>
             </div>
             <div class="review-stat">
+              <span class="section-label">今日到期</span>
+              <strong>{{ dueReviewCount }}</strong>
+              <span class="muted">新词 {{ newReviewCount }} 条</span>
+            </div>
+            <div class="review-stat">
               <span class="section-label">掌握占比</span>
               <strong>{{ masteryPercent }}%</strong>
               <div class="rail-meter"><span :style="{ width: `${masteryPercent}%` }"></span></div>
@@ -266,21 +271,31 @@
           <section v-if="currentReviewItem" class="review-card2">
             <header class="review-card-head">
               <span class="type-chip">{{ rowTypeLabel(currentReviewItem.rowType) }}</span>
-              <n-radio-group v-model:value="reviewType" size="small">
-                <n-radio-button value="mixed">混合</n-radio-button>
-                <n-radio-button value="word">单词</n-radio-button>
-                <n-radio-button value="sentence">例句</n-radio-button>
-                <n-radio-button value="paragraph">段落</n-radio-button>
-                <n-radio-button value="listening">听力</n-radio-button>
-              </n-radio-group>
+              <div class="review-card-tools">
+                <button class="seg-btn" :class="{ active: reviewDictationMode }" @click="toggleReviewDictation">听写</button>
+                <n-radio-group v-model:value="reviewType" size="small">
+                  <n-radio-button value="mixed">混合</n-radio-button>
+                  <n-radio-button value="word">单词</n-radio-button>
+                  <n-radio-button value="sentence">例句</n-radio-button>
+                  <n-radio-button value="paragraph">段落</n-radio-button>
+                  <n-radio-button value="listening">听力</n-radio-button>
+                </n-radio-group>
+              </div>
             </header>
 
             <div class="review-front">
               <template v-if="currentReviewItem.rowType === 'word'">
-                <div class="review-word serif">{{ currentReviewItem.title }}</div>
-                <div class="review-phonetic">{{ currentReviewItem.phonetic || '暂无音标' }}</div>
-                <div class="mastery-dots large">{{ masteryDots(getMasteryLevel('record', currentReviewItem.rawId)) }}</div>
-                <div class="review-prompt">先回忆释义，再显示答案</div>
+                <template v-if="reviewDictationMode">
+                  <div class="review-phonetic">{{ currentReviewItem.phonetic || '听发音，写出单词' }}</div>
+                  <n-button size="small" @click="playWordPronunciation(currentReviewItem.title, 'us')">播放发音</n-button>
+                  <div class="review-prompt">听发音，写出单词</div>
+                </template>
+                <template v-else>
+                  <div class="review-word serif">{{ currentReviewItem.title }}</div>
+                  <div class="review-phonetic">{{ currentReviewItem.phonetic || '暂无音标' }}</div>
+                  <div class="mastery-dots large">{{ masteryDots(getMasteryLevel('record', currentReviewItem.rawId)) }}</div>
+                  <div class="review-prompt">先回忆释义，再显示答案</div>
+                </template>
               </template>
               <template v-else-if="currentReviewItem.rowType === 'listening'">
                 <div class="review-listening">
@@ -295,13 +310,29 @@
                     @play="handleListeningMediaPlay('review', $event)"
                     @error="handleListeningMediaError('review', $event)"
                   ></audio>
-                  <div class="review-prompt">先听，再显示原文与译文</div>
+                  <div class="review-prompt">{{ reviewDictationMode ? '听音频，写下你听到的句子' : '先听，再显示原文与译文' }}</div>
                 </div>
               </template>
               <template v-else>
-                <blockquote class="review-text">{{ currentReviewItem.sourceText }}</blockquote>
-                <div class="review-prompt">试着口头复述，再显示译文</div>
+                <blockquote v-if="!reviewDictationMode" class="review-text">{{ currentReviewItem.sourceText }}</blockquote>
+                <div class="review-prompt">{{ reviewDictationMode ? '先回忆原文，写出你记得的内容' : '试着口头复述，再显示译文' }}</div>
               </template>
+            </div>
+
+            <div v-if="reviewDictationMode" class="dictation-box">
+              <n-input
+                v-model:value="reviewDictationInput"
+                type="textarea"
+                :autosize="{ minRows: 2, maxRows: 4 }"
+                placeholder="写下你听到或记住的内容；Ctrl+Enter 对照原文"
+                @keydown.ctrl.enter.prevent="checkDictation"
+              />
+              <div class="dictation-actions">
+                <n-button size="small" @click="checkDictation">对照原文</n-button>
+                <span v-if="reviewDictationResult" class="dictation-result" :class="{ ok: reviewDictationResult.ok }">
+                  匹配 {{ reviewDictationResult.score }}% · {{ reviewDictationResult.ok ? '基本正确' : '有差异' }}
+                </span>
+              </div>
             </div>
 
             <transition name="reveal-answer">
@@ -377,6 +408,14 @@
 
           <aside class="review-filters">
             <div class="eyebrow">FILTER</div>
+            <div class="filter-switch">
+              <n-switch v-model:value="reviewFilter.dueOnly" size="small" />
+              <span>只复习到期</span>
+            </div>
+            <div class="filter-switch">
+              <n-switch v-model:value="reviewFilter.includeNew" size="small" :disabled="!reviewFilter.dueOnly" />
+              <span>包含新词</span>
+            </div>
             <label class="filter-field">
               <span>添加时间</span>
               <n-select v-model:value="reviewFilter.createdPeriod" :options="createdPeriodOptions" size="small" />
@@ -411,7 +450,7 @@
               <span>条学习记录</span>
             </div>
             <div class="rail-meter"><span :style="{ width: `${masteryPercent}%` }"></span></div>
-            <div class="rail-today-meta">掌握 {{ masteryPercent }}% · 听力 {{ listeningPendingCount }} 条待处理</div>
+            <div class="rail-today-meta">掌握 {{ masteryPercent }}% · 待复习 {{ dueReviewCount + newReviewCount }} · 听力 {{ listeningPendingCount }} 条待处理</div>
           </section>
 
           <section class="rail-group">
@@ -439,13 +478,17 @@
               <Icon :icon="settingsIcon" width="15" height="15" />
               <span>采集 / 导入听力</span>
             </button>
+            <button class="rail-action" @click="openDictionaryManager">
+              <Icon :icon="languagesIcon" width="15" height="15" />
+              <span>离线词典</span>
+            </button>
             <button class="rail-action" @click="openRandomCheckBoard">
               <Icon :icon="shuffleIcon" width="15" height="15" />
               <span>随机抽查</span>
             </button>
-            <button class="rail-action" @click="goToReview">
+            <button class="rail-action" @click="startDueReview">
               <Icon :icon="reviewIcon" width="15" height="15" />
-              <span>开始复习</span>
+              <span>开始今日复习</span>
             </button>
           </section>
 
@@ -807,6 +850,7 @@
               <div class="word-mastery">
                 <span class="mastery-dots">{{ masteryDots(getMasteryLevel('record', activeWordRecord.id)) }}</span>
                 <span class="muted">掌握度</span>
+                <span v-if="activeWordOfflinePack" class="offline-badge">离线 · {{ activeWordOfflinePack }}</span>
               </div>
             </div>
 
@@ -858,6 +902,7 @@
 
             <div class="inspector-actions">
               <n-button size="small" type="primary" @click="refreshWordMeta(activeWordRecord)">刷新拓展</n-button>
+              <n-button size="small" @click="openDictionaryManager">离线词典</n-button>
               <n-button size="small" @click="openEditDialog(activeRow)">编辑</n-button>
               <n-button size="small" @click="applyReviewResult('known')">标记掌握</n-button>
               <n-button size="small" quaternary @click="deleteSelectedRows">删除</n-button>
@@ -1087,6 +1132,257 @@
         </template>
       </n-modal>
 
+      <n-modal v-model:show="dictionaryManagerVisible" preset="card" style="width: 920px" title="离线词典">
+        <div class="dict-panel">
+          <div class="dict-pairline">
+            <span class="type-chip">{{ learningLangLabel }} → {{ nativeLangLabel }}</span>
+            <span class="muted">已安装 {{ dictPacks.length }} 个词典 · {{ dictTotalEntries }} 条词条</span>
+            <span class="dialog-spacer"></span>
+            <span v-if="dictRunning" class="sync-chip tone-running">
+              <span class="pulse-dot"></span>
+              后台安装中
+            </span>
+          </div>
+          <div class="source-hint">目录资源来自 GitHub / MDBG；大陆直连失败时，请先在设置里启用系统或自定义代理。</div>
+
+          <section class="dict-section">
+            <div class="section-label">在线目录</div>
+            <div class="dict-catalog">
+              <article v-for="item in dictCatalog" :key="item.id" class="dict-card" :class="{ installed: item.installed }">
+                <div class="dict-card-head">
+                  <span class="dict-name serif">{{ item.name }}</span>
+                  <span class="type-chip">{{ item.source_lang }} → {{ item.target_lang }}</span>
+                  <span v-if="item.installed" class="preview-flag good">已安装 {{ item.installed_entry_count }} 条</span>
+                </div>
+                <p class="dict-desc">{{ item.description }}</p>
+                <div class="dict-meta">{{ fmtBytes(item.size_bytes) }} · {{ item.license }} · v{{ item.version }}</div>
+                <div v-if="dictJobFor(item.id) && !['done', 'error'].includes(dictJobFor(item.id).stage)" class="dict-progress">
+                  <n-progress type="line" :percentage="Math.round(dictJobFor(item.id).progress || 0)" :show-indicator="false" :height="4" />
+                  <span>{{ dictJobFor(item.id).message || '处理中' }}</span>
+                </div>
+                <div v-else-if="dictJobFor(item.id)?.stage === 'error'" class="dict-error">{{ dictJobFor(item.id).error }}</div>
+                <div class="dict-actions">
+                  <n-button
+                    v-if="!item.installed"
+                    size="small"
+                    type="primary"
+                    :disabled="Boolean(dictJobFor(item.id) && !['done', 'error'].includes(dictJobFor(item.id).stage))"
+                    @click="installDict(item.id)"
+                  >下载并建立索引</n-button>
+                  <n-button v-else size="small" @click="installDict(item.id)">重新安装</n-button>
+                  <n-button v-if="item.installed" size="small" @click="exportDictById(item.id)">导出</n-button>
+                </div>
+              </article>
+            </div>
+          </section>
+
+          <section class="dict-section">
+            <div class="section-label">已安装</div>
+            <div v-if="!dictPacks.length" class="source-hint">
+              还没有安装离线词典。安装 ECDICT 后，常见英文词条在断网时也能直接出释义、音标和词性。
+            </div>
+            <div v-else class="dict-pack-list">
+              <div v-for="pack in dictPacks" :key="pack.id" class="dict-pack-row">
+                <div class="dict-pack-main">
+                  <div class="dict-pack-name">{{ pack.name }}</div>
+                  <div class="dict-meta">{{ pack.source_lang }} → {{ pack.target_lang }} · {{ pack.entry_count }} 条 · {{ pack.license }}</div>
+                </div>
+                <n-button size="tiny" @click="exportDictById(pack.id)">导出</n-button>
+                <button class="icon-ghost danger" title="删除词典" @click="removeDict(pack)">
+                  <Icon :icon="trashIcon" width="15" height="15" />
+                </button>
+              </div>
+            </div>
+          </section>
+
+          <section class="dict-section">
+            <div class="section-label">导入词典包</div>
+            <div class="dict-import-row">
+              <n-input v-model:value="dictImportName" size="small" placeholder="包名称（可选）" style="flex: 1" />
+              <n-select v-model:value="dictImportSource" size="small" :options="learningLangOptions" style="width: 112px" />
+              <n-select v-model:value="dictImportTarget" size="small" :options="nativeLangOptions" style="width: 112px" />
+              <n-button size="small" :loading="dictImporting" @click="importDictPackage">选择文件导入</n-button>
+            </div>
+            <div class="source-hint">支持本应用导出的 ZIP（manifest + entries.csv），也支持 term,phonetic,pos,meanings,examples,synonyms 表头的 CSV 或 JSON 数组。</div>
+          </section>
+
+          <section class="dict-section">
+            <div class="section-label">本地查词测试</div>
+            <div class="dict-lookup-row">
+              <n-input v-model:value="dictLookupWord" size="small" placeholder="输入单词或中文词，回车查询" @keydown.enter="lookupDictWord" />
+              <n-button size="small" type="primary" :loading="dictLookupLoading" @click="lookupDictWord">查询</n-button>
+            </div>
+            <div v-if="dictLookupRows.length" class="dict-lookup-list">
+              <div v-for="(entry, idx) in dictLookupRows" :key="`dict-${idx}-${entry.term}`" class="dict-entry">
+                <div class="dict-entry-head">
+                  <span class="dict-term serif">{{ entry.term }}</span>
+                  <span v-if="entry.phonetic" class="muted">{{ entry.phonetic }}</span>
+                  <span v-if="entry.pos" class="type-chip">{{ entry.pos }}</span>
+                  <span class="preview-flag">{{ entry.pack_name }}</span>
+                </div>
+                <div class="dict-entry-meanings">{{ entry.meanings.join('；') }}</div>
+              </div>
+            </div>
+            <div v-else class="muted dict-lookup-empty">查询结果会显示在这里；没有对应语言对的词典时为空。</div>
+          </section>
+        </div>
+        <template #action>
+          <div class="dialog-actions">
+            <span class="dialog-spacer"></span>
+            <n-button @click="dictionaryManagerVisible = false">完成</n-button>
+          </div>
+        </template>
+      </n-modal>
+
+      <n-modal v-model:show="asrManagerVisible" preset="card" style="width: 880px" title="语音识别模型">
+        <div class="dict-panel">
+          <div class="dict-pairline">
+            <span class="type-chip">学习语言：{{ learningLangLabel }}</span>
+            <span class="muted">当前模型：{{ currentAsrLabel }}</span>
+            <span class="dialog-spacer"></span>
+            <span v-if="asrRunning" class="sync-chip tone-running">
+              <span class="pulse-dot"></span>
+              后台安装中
+            </span>
+          </div>
+          <div class="source-hint">
+            英语优先使用随包内置的英文模型；中 / 日 / 韩优先 SenseVoice；其它语言使用 Whisper 多语种。安装后按学习语言自动路由。
+          </div>
+
+          <section class="dict-section">
+            <div class="section-label">可下载模型</div>
+            <div class="dict-catalog">
+              <article v-for="item in asrCatalog" :key="item.id" class="dict-card" :class="{ installed: item.installed }">
+                <div class="dict-card-head">
+                  <span class="dict-name serif">{{ item.name }}</span>
+                  <span class="type-chip">{{ item.languages }}</span>
+                  <span v-if="item.installed" class="preview-flag good">已安装</span>
+                </div>
+                <p class="dict-desc">{{ item.description }}</p>
+                <div class="dict-meta">{{ fmtBytes(item.size_bytes) }}</div>
+                <div v-if="asrJobFor(item.id) && !['done', 'error'].includes(asrJobFor(item.id).stage)" class="dict-progress">
+                  <n-progress type="line" :percentage="Math.round(asrJobFor(item.id).progress || 0)" :show-indicator="false" :height="4" />
+                  <span>{{ asrJobFor(item.id).message || '处理中' }}</span>
+                </div>
+                <div v-else-if="asrJobFor(item.id)?.stage === 'error'" class="dict-error">{{ asrJobFor(item.id).error }}</div>
+                <div class="dict-actions">
+                  <n-button
+                    size="small"
+                    :type="item.installed ? 'default' : 'primary'"
+                    :disabled="Boolean(asrJobFor(item.id) && !['done', 'error'].includes(asrJobFor(item.id).stage))"
+                    @click="installAsr(item.id)"
+                  >{{ item.installed ? '重新安装' : '下载模型' }}</n-button>
+                  <n-button v-if="item.installed" size="small" @click="removeAsr(asrModelById(item.id))">删除</n-button>
+                </div>
+              </article>
+            </div>
+          </section>
+
+          <section class="dict-section">
+            <div class="section-label">已安装模型</div>
+            <div class="dict-pack-list">
+              <div v-for="model in asrModels" :key="model.id" class="dict-pack-row">
+                <div class="dict-pack-main">
+                  <div class="dict-pack-name">{{ model.name }}</div>
+                  <div class="dict-meta">{{ model.languages }} · {{ fmtBytes(model.size_bytes) }}<span v-if="model.builtin"> · 随包内置</span></div>
+                </div>
+                <span v-if="model.builtin" class="preview-flag">内置</span>
+                <button v-else class="icon-ghost danger" title="删除模型" @click="removeAsr(model)">
+                  <Icon :icon="trashIcon" width="15" height="15" />
+                </button>
+              </div>
+            </div>
+          </section>
+        </div>
+        <template #action>
+          <div class="dialog-actions">
+            <span class="dialog-spacer"></span>
+            <n-button @click="asrManagerVisible = false">完成</n-button>
+          </div>
+        </template>
+      </n-modal>
+
+      <n-modal v-model:show="webImportVisible" preset="card" style="width: 860px" title="从网页导入">
+        <div class="dict-panel">
+          <div class="source-hint">
+            只抓取你当前能访问的公开页面，不代管账号、不绕过登录或付费墙。JS 渲染页面如果正文为空，可以直接把正文粘贴到下方。
+          </div>
+          <div class="dict-lookup-row">
+            <n-input v-model:value="webImportUrl" placeholder="https://…" @keydown.enter="previewWebImport" />
+            <n-button type="primary" :loading="webImportLoading" @click="previewWebImport">提取</n-button>
+          </div>
+
+          <template v-if="webImportPreview">
+            <div class="web-preview-head">
+              <div>
+                <div class="eyebrow">{{ webImportPreview.site }}</div>
+                <h3 class="serif">{{ webImportPreview.title || '未命名页面' }}</h3>
+              </div>
+              <span class="type-chip">{{ webImportPreview.word_count }} 词</span>
+            </div>
+            <n-form label-placement="left" label-width="72">
+              <n-form-item label="标题">
+                <n-input v-model:value="webImportTitle" />
+              </n-form-item>
+              <n-form-item label="音频">
+                <n-select
+                  v-model:value="webImportAudioUrl"
+                  clearable
+                  :options="webImportAudioOptions"
+                  placeholder="没有识别到音频；也可以粘贴直链"
+                />
+              </n-form-item>
+              <n-form-item label="正文">
+                <n-input
+                  v-model:value="webImportText"
+                  type="textarea"
+                  :autosize="{ minRows: 5, maxRows: 12 }"
+                  placeholder="正文为空时，直接粘贴网页正文"
+                />
+              </n-form-item>
+            </n-form>
+            <div class="web-options">
+              <n-checkbox v-model:checked="webImportOptions.listening" :disabled="!webImportAudioUrl">导入为听力</n-checkbox>
+              <n-checkbox v-model:checked="webImportOptions.reading" :disabled="!webImportHasText">导入为阅读段落</n-checkbox>
+              <n-checkbox v-model:checked="webImportOptions.translate">同时翻译成母语</n-checkbox>
+            </div>
+            <div v-if="webImportPreview.subtitle_text" class="source-hint">
+              识别到字幕，导入听力时会优先把字幕作为初始文稿。
+            </div>
+          </template>
+          <n-empty v-else description="输入网址后点「提取」；提取失败时也可以直接粘贴正文导入阅读" />
+          <n-form v-if="!webImportPreview" label-placement="left" label-width="72">
+            <n-form-item label="标题">
+              <n-input v-model:value="webImportTitle" placeholder="可选" />
+            </n-form-item>
+            <n-form-item label="正文">
+              <n-input
+                v-model:value="webImportText"
+                type="textarea"
+                :autosize="{ minRows: 6, maxRows: 14 }"
+                placeholder="直接粘贴网页正文；只导入你本来就能访问的内容"
+              />
+            </n-form-item>
+          </n-form>
+          <div v-if="!webImportPreview" class="web-options">
+            <n-checkbox v-model:checked="webImportOptions.reading" :disabled="!webImportHasText">导入为阅读段落</n-checkbox>
+            <n-checkbox v-model:checked="webImportOptions.translate">同时翻译成母语</n-checkbox>
+          </div>
+        </div>
+        <template #action>
+          <div class="dialog-actions">
+            <span class="dialog-spacer"></span>
+            <n-button @click="webImportVisible = false">取消</n-button>
+            <n-button
+              type="primary"
+              :loading="webImporting"
+              :disabled="!webImportPreview && !webImportHasText"
+              @click="importWebContent"
+            >导入</n-button>
+          </div>
+        </template>
+      </n-modal>
+
       <n-modal v-model:show="sourceManagerVisible" preset="card" style="width: 900px" title="听力源管理器">
         <div class="dialog-lede">RSS 地址可以用 <code>{topic}</code> 占位符；时长上限用于过滤过长的节目。</div>
         <div class="source-manager-head">
@@ -1270,6 +1566,34 @@ const collectPreviewLoading = ref(false)
 const collectImporting = ref(false)
 const libraryLoading = ref(false)
 const syncJobs = ref({})
+const dictionaryManagerVisible = ref(false)
+const dictPacks = ref([])
+const dictCatalog = ref([])
+const dictJobs = ref({})
+const dictLookupWord = ref('')
+const dictLookupRows = ref([])
+const dictLookupLoading = ref(false)
+const dictImportName = ref('')
+const dictImportSource = ref(learningLang.value)
+const dictImportTarget = ref(nativeLang.value)
+const dictImporting = ref(false)
+const activeWordOfflinePack = ref('')
+let dictPollTimer = 0
+const asrManagerVisible = ref(false)
+const asrModels = ref([])
+const asrCatalog = ref([])
+const asrJobs = ref({})
+let asrPollTimer = 0
+const webImportVisible = ref(false)
+const webImportUrl = ref('')
+const webImportPreview = ref(null)
+const webImportTitle = ref('')
+const webImportText = ref('')
+const webImportAudioUrl = ref('')
+const webImportSubtitleUrl = ref('')
+const webImportLoading = ref(false)
+const webImporting = ref(false)
+const webImportOptions = reactive({ listening: true, reading: true, translate: true })
 const exportingLearningData = ref(false)
 const importingLearningData = ref(false)
 const listeningImmersiveMode = ref(false)
@@ -1283,6 +1607,10 @@ const reviewType = ref('mixed')
 const reviewRows = ref([])
 const reviewIndex = ref(0)
 const reviewShowAnswer = ref(false)
+const reviewDictationMode = ref(false)
+const reviewDictationInput = ref('')
+const reviewDictationResult = ref(null)
+let reviewRecordsSnapshot = null
 const masteryStore = ref({ record: {}, audio: {} })
 const shelfCounts = reactive({ all: 0, my_vocab: 0, my_sentences: 0, my_paragraphs: 0, my_listening: 0 })
 const audioManagerVisible = ref(false)
@@ -1353,6 +1681,8 @@ const reviewFilter = reactive({
   lastReviewPeriod: 'all',
   masteryBand: 'all',
   orderBy: 'created_desc',
+  dueOnly: true,
+  includeNew: true,
 })
 
 const recordEditVisible = ref(false)
@@ -1698,7 +2028,18 @@ const getMasteryEntry = (sourceType, rawId) => {
   const key = String(rawId || '')
   const row = box[key]
   if (!row || typeof row !== 'object') {
-    return { level: 0, reviewed: 0, mastered: 0, lastResult: '', lastReviewedAt: '' }
+    return {
+      level: 0,
+      reviewed: 0,
+      mastered: 0,
+      lastResult: '',
+      lastReviewedAt: '',
+      dueAt: '',
+      intervalDays: 0,
+      ease: 2.5,
+      reps: 0,
+      lapses: 0,
+    }
   }
   return {
     level: toNum(row.level),
@@ -1706,6 +2047,11 @@ const getMasteryEntry = (sourceType, rawId) => {
     mastered: toNum(row.mastered),
     lastResult: String(row.lastResult || ''),
     lastReviewedAt: String(row.lastReviewedAt || ''),
+    dueAt: String(row.dueAt || ''),
+    intervalDays: toNum(row.intervalDays),
+    ease: toNum(row.ease) || 2.5,
+    reps: toNum(row.reps),
+    lapses: toNum(row.lapses),
   }
 }
 
@@ -1715,9 +2061,28 @@ const upsertMasteryEntry = (sourceType, rawId, result) => {
   const current = getMasteryEntry(sourceType, key)
   let level = current.level
   if (result === 'known') level += 1
-  if (result === 'fuzzy') level += 0
   if (result === 'unknown') level -= 1
   level = Math.min(5, Math.max(0, level))
+
+  // SM-2 lite：认识=5、模糊=3、不认识=1。
+  // 模糊和不认识都算这次没通过，但不认识会额外记一次 lapse；到期时间用小数天，
+  // 这样「10 分钟后再看」也能落到同一条复习队列里。
+  const quality = result === 'known' ? 5 : result === 'fuzzy' ? 3 : 1
+  let ease = Math.max(1.3, current.ease + (0.1 - (5 - quality) * (0.08 + (5 - quality) * 0.02)))
+  let reps = current.reps
+  let lapses = current.lapses
+  let interval = current.intervalDays
+  if (quality < 3) {
+    reps = 0
+    lapses += 1
+    interval = 10 / 1440
+  } else {
+    reps += 1
+    if (reps === 1) interval = 1
+    else if (reps === 2) interval = 3
+    else interval = Math.max(1, Math.round(Math.max(1, interval) * ease))
+  }
+  const dueAt = new Date(Date.now() + Math.max(0.0069, interval) * 86400000).toISOString()
 
   const next = {
     level,
@@ -1725,6 +2090,11 @@ const upsertMasteryEntry = (sourceType, rawId, result) => {
     mastered: current.mastered + (result === 'known' ? 1 : 0),
     lastResult: result,
     lastReviewedAt: new Date().toISOString(),
+    dueAt,
+    intervalDays: interval,
+    ease,
+    reps,
+    lapses,
   }
   masteryStore.value = {
     ...masteryStore.value,
@@ -2444,9 +2814,53 @@ const exitListeningImmersive = () => {
   listeningImmersiveMode.value = false
 }
 
-const goToReview = () => {
+const loadAllRecordsForReview = async () => {
+  if (reviewRecordsSnapshot) return
+  reviewRecordsSnapshot = records.value
+  try {
+    const kind = resolveQueryKind()
+    const all = []
+    let offset = 0
+    while (offset < 10000) {
+      const page = await invoke('language_learning_list_records', {
+        keyword: keyword.value,
+        kind,
+        learningLang: learningLang.value,
+        limit: 1000,
+        offset,
+      })
+      const rows = Array.isArray(page) ? page : []
+      all.push(...rows)
+      if (rows.length < 1000) break
+      offset += 1000
+    }
+    records.value = all
+    rebuildReviewRows()
+  } catch (err) {
+    console.warn('[LangLearning] review-load-all-failed', err)
+  }
+}
+
+const restoreManagerRecords = async () => {
+  if (!reviewRecordsSnapshot) return
+  records.value = reviewRecordsSnapshot
+  reviewRecordsSnapshot = null
+  await refreshRecords()
+  if (!filteredRows.value.some((row) => row.id === activeRow.value?.id)) {
+    activeRow.value = filteredRows.value[0] || null
+  }
+}
+
+const goToReview = async () => {
+  await loadAllRecordsForReview()
   activeTab.value = 'review'
   rebuildReviewRows()
+}
+
+const startDueReview = async () => {
+  reviewFilter.dueOnly = true
+  reviewFilter.includeNew = true
+  await goToReview()
 }
 
 const hasRunningSyncJobs = computed(() => {
@@ -2557,6 +2971,9 @@ const batchRetrySync = async () => {
 }
 
 const moreMenuOptions = [
+  { label: '离线词典', key: 'dictionary' },
+  { label: '语音模型', key: 'asr' },
+  { label: '从网页导入', key: 'webimport' },
   { label: '导入学习数据', key: 'import' },
   { label: '导出学习数据', key: 'export' },
   { label: '听力源管理器', key: 'sources' },
@@ -2564,10 +2981,400 @@ const moreMenuOptions = [
 ]
 
 const onMoreMenuSelect = (key) => {
-  if (key === 'import') importLearningData()
+  if (key === 'dictionary') openDictionaryManager()
+  else if (key === 'asr') openAsrManager()
+  else if (key === 'webimport') openWebImport()
+  else if (key === 'import') importLearningData()
   else if (key === 'export') exportLearningData()
   else if (key === 'sources') sourceManagerVisible.value = true
   else if (key === 'random') openRandomCheckBoard()
+}
+
+const fmtBytes = (raw) => {
+  const bytes = Number(raw || 0)
+  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B'
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+  return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`
+}
+
+const dictJobFor = (id) => dictJobs.value[String(id || '')] || null
+
+const dictRunning = computed(() => {
+  return Object.values(dictJobs.value).some((job) => job && job.stage && !['done', 'error'].includes(job.stage))
+})
+
+const dictTotalEntries = computed(() => {
+  return dictPacks.value.reduce((sum, pack) => sum + Number(pack?.entry_count || 0), 0)
+})
+
+const refreshDictData = async () => {
+  try {
+    const [packs, catalog] = await Promise.all([
+      invoke('language_learning_dict_list'),
+      invoke('language_learning_dict_catalog'),
+    ])
+    dictPacks.value = Array.isArray(packs) ? packs : []
+    dictCatalog.value = Array.isArray(catalog) ? catalog : []
+    await refreshActiveWordOffline()
+  } catch (err) {
+    console.warn('[LangLearning] dict-list-failed', err)
+  }
+}
+
+const refreshDictJobs = async () => {
+  try {
+    const jobs = await invoke('language_learning_dict_jobs')
+    const map = {}
+    ;(Array.isArray(jobs) ? jobs : []).forEach((job) => {
+      if (job?.id) map[job.id] = job
+    })
+    dictJobs.value = map
+    if (!Object.values(map).some((job) => job && job.stage && !['done', 'error'].includes(job.stage))) {
+      if (dictPollTimer) {
+        window.clearInterval(dictPollTimer)
+        dictPollTimer = 0
+      }
+      await refreshDictData()
+    }
+  } catch {}
+}
+
+const ensureDictPolling = () => {
+  if (dictPollTimer) return
+  dictPollTimer = window.setInterval(refreshDictJobs, 1000)
+}
+
+const openDictionaryManager = async () => {
+  dictionaryManagerVisible.value = true
+  if (!String(dictImportName.value || '').trim()) {
+    dictImportSource.value = learningLang.value
+    dictImportTarget.value = nativeLang.value
+  }
+  await refreshDictData()
+  await refreshDictJobs()
+  if (dictRunning.value) ensureDictPolling()
+}
+
+const installDict = async (id) => {
+  try {
+    await invoke('language_learning_dict_install', { id: String(id) })
+    message.info('已开始后台下载并建立索引')
+    ensureDictPolling()
+  } catch (err) {
+    message.error(`启动词典下载失败: ${String(err?.message || err || '')}`)
+  }
+}
+
+const removeDict = (pack) => {
+  if (!pack) return
+  askConfirm('删除离线词典', `将删除「${pack.name}」及其本地索引，之后查词会回退到在线词典。`, async () => {
+    try {
+      await invoke('language_learning_dict_remove', { id: pack.id })
+      message.success('离线词典已删除')
+      await refreshDictData()
+      activeWordOfflinePack.value = ''
+    } catch (err) {
+      message.error(`删除词典失败: ${String(err?.message || err || '')}`)
+    }
+  })
+}
+
+const exportDictById = async (id) => {
+  const pack = dictPacks.value.find((item) => item.id === id)
+  if (!pack) return
+  try {
+    const path = await save({
+      defaultPath: `${pack.id}-dict.zip`,
+      filters: [{ name: 'ZIP', extensions: ['zip'] }],
+    })
+    if (!path) return
+    await invoke('language_learning_dict_export', { id: pack.id, outputPath: String(path) })
+    message.success(`已导出 ${pack.name}`)
+  } catch (err) {
+    message.error(`导出词典失败: ${String(err?.message || err || '')}`)
+  }
+}
+
+const importDictPackage = async () => {
+  if (dictImporting.value) return
+  try {
+    const path = await open({
+      multiple: false,
+      filters: [{ name: '词典包', extensions: ['zip', 'csv', 'json'] }],
+    })
+    if (!path || Array.isArray(path)) return
+    dictImporting.value = true
+    const imported = await invoke('language_learning_dict_import', {
+      path: String(path),
+      name: String(dictImportName.value || '').trim(),
+      sourceLang: dictImportSource.value,
+      targetLang: dictImportTarget.value,
+    })
+    message.success(`已导入 ${imported?.name || '词典'}（${imported?.entry_count || 0} 条）`)
+    dictImportName.value = ''
+    await refreshDictData()
+    await lookupDictWord()
+  } catch (err) {
+    message.error(`导入词典失败: ${String(err?.message || err || '')}`)
+  } finally {
+    dictImporting.value = false
+  }
+}
+
+const lookupDictWord = async () => {
+  const word = String(dictLookupWord.value || '').trim()
+  if (!word) {
+    dictLookupRows.value = []
+    return
+  }
+  dictLookupLoading.value = true
+  try {
+    const isCjk = /[\u4e00-\u9fff]/.test(word)
+    const target = isCjk ? 'en' : nativeLang.value
+    const rows = await invoke('language_learning_dict_lookup', {
+      word,
+      sourceLang: 'auto',
+      targetLang: target,
+      limit: 6,
+    })
+    dictLookupRows.value = Array.isArray(rows) ? rows : []
+  } catch (err) {
+    message.error(`离线查词失败: ${String(err?.message || err || '')}`)
+  } finally {
+    dictLookupLoading.value = false
+  }
+}
+
+const refreshActiveWordOffline = async () => {
+  const word = String(activeWordRecord.value?.word || activeWordRecord.value?.source_text || '').trim()
+  if (!word) {
+    activeWordOfflinePack.value = ''
+    return
+  }
+  try {
+    const rows = await invoke('language_learning_dict_lookup', {
+      word,
+      sourceLang: 'auto',
+      targetLang: nativeLang.value,
+      limit: 1,
+    })
+    activeWordOfflinePack.value = String(rows?.[0]?.pack_name || '')
+  } catch {
+    activeWordOfflinePack.value = ''
+  }
+}
+
+watch(
+  () => activeWordRecord.value?.word || activeWordRecord.value?.source_text || '',
+  () => { refreshActiveWordOffline() },
+  { immediate: true }
+)
+
+const asrJobFor = (id) => asrJobs.value[String(id || '')] || null
+
+const asrRunning = computed(() => {
+  return Object.values(asrJobs.value).some((job) => job && job.stage && !['done', 'error'].includes(job.stage))
+})
+
+const webImportHasText = computed(() => String(webImportText.value || '').trim().length > 0)
+
+const asrModelById = (id) => asrModels.value.find((model) => model.id === id) || null
+
+const asrSupports = (model, lang) => {
+  const name = `${model?.name || ''} ${model?.id || ''}`.toLowerCase()
+  if (name.includes('sense')) return ['zh', 'en', 'ja', 'ko', 'yue'].includes(lang)
+  if (name.includes('.en')) return lang === 'en'
+  return true
+}
+
+const asrPreference = (model, lang) => {
+  const name = `${model?.name || ''} ${model?.id || ''}`.toLowerCase()
+  let score = 0
+  if (lang === 'en' && name.includes('.en')) score += 40
+  if (['zh', 'ja', 'ko'].includes(lang) && name.includes('sense')) score += 30
+  if (name.includes('base')) score += 10
+  if (name.includes('tiny')) score += 5
+  if (model?.builtin) score += 8
+  return score
+}
+
+const currentAsrModel = computed(() => {
+  const lang = String(learningLang.value || 'en')
+  return [...asrModels.value]
+    .filter((model) => asrSupports(model, lang))
+    .sort((a, b) => asrPreference(b, lang) - asrPreference(a, lang))[0] || null
+})
+
+const currentAsrLabel = computed(() => currentAsrModel.value?.name || '未安装多语种模型')
+
+const refreshAsrData = async () => {
+  try {
+    const [models, catalog] = await Promise.all([
+      invoke('language_learning_asr_models'),
+      invoke('language_learning_asr_catalog'),
+    ])
+    asrModels.value = Array.isArray(models) ? models : []
+    asrCatalog.value = Array.isArray(catalog) ? catalog : []
+  } catch (err) {
+    console.warn('[LangLearning] asr-list-failed', err)
+  }
+}
+
+const refreshAsrJobs = async () => {
+  try {
+    const jobs = await invoke('language_learning_asr_jobs')
+    const map = {}
+    ;(Array.isArray(jobs) ? jobs : []).forEach((job) => {
+      if (job?.id) map[job.id] = job
+    })
+    asrJobs.value = map
+    if (!Object.values(map).some((job) => job && job.stage && !['done', 'error'].includes(job.stage))) {
+      if (asrPollTimer) {
+        window.clearInterval(asrPollTimer)
+        asrPollTimer = 0
+      }
+      await refreshAsrData()
+    }
+  } catch {}
+}
+
+const ensureAsrPolling = () => {
+  if (asrPollTimer) return
+  asrPollTimer = window.setInterval(refreshAsrJobs, 1000)
+}
+
+const openAsrManager = async () => {
+  asrManagerVisible.value = true
+  await refreshAsrData()
+  await refreshAsrJobs()
+  if (Object.values(asrJobs.value).some((job) => job && job.stage && !['done', 'error'].includes(job.stage))) {
+    ensureAsrPolling()
+  }
+}
+
+const installAsr = async (id) => {
+  try {
+    await invoke('language_learning_asr_install', { id: String(id) })
+    message.info('已开始后台下载语音模型')
+    ensureAsrPolling()
+  } catch (err) {
+    message.error(`启动模型下载失败: ${String(err?.message || err || '')}`)
+  }
+}
+
+const removeAsr = (model) => {
+  if (!model || model.builtin) return
+  askConfirm('删除语音模型', `将删除「${model.name}」，之后该语言会回退到其他可用模型。`, async () => {
+    try {
+      await invoke('language_learning_asr_remove', { id: model.id })
+      message.success('语音模型已删除')
+      await refreshAsrData()
+    } catch (err) {
+      message.error(`删除模型失败: ${String(err?.message || err || '')}`)
+    }
+  })
+}
+
+const webImportAudioOptions = computed(() => {
+  return (webImportPreview.value?.audio_urls || []).map((url, idx) => ({
+    label: idx === 0 ? `音频 ${idx + 1}（默认）` : `音频 ${idx + 1}`,
+    value: url,
+  }))
+})
+
+const openWebImport = () => {
+  webImportVisible.value = true
+  webImportUrl.value = ''
+  webImportPreview.value = null
+  webImportTitle.value = ''
+  webImportText.value = ''
+  webImportAudioUrl.value = ''
+  webImportSubtitleUrl.value = ''
+  webImportOptions.listening = false
+  webImportOptions.reading = false
+  webImportOptions.translate = true
+}
+
+const previewWebImport = async () => {
+  const url = String(webImportUrl.value || '').trim()
+  if (!url) {
+    message.warning('请先输入网页地址')
+    return
+  }
+  webImportLoading.value = true
+  try {
+    const preview = await invoke('language_learning_preview_web_import', { url })
+    webImportPreview.value = preview
+    webImportTitle.value = preview?.title || ''
+    webImportText.value = preview?.text || preview?.subtitle_text || ''
+    webImportAudioUrl.value = preview?.audio_urls?.[0] || ''
+    webImportSubtitleUrl.value = preview?.subtitle_urls?.[0] || ''
+    webImportOptions.listening = Boolean(webImportAudioUrl.value)
+    webImportOptions.reading = Boolean(String(webImportText.value).trim())
+    if (!webImportAudioUrl.value && !String(webImportText.value).trim()) {
+      message.warning('没有识别到音频或正文；JS 渲染页面可以手动粘贴正文后再导入')
+    }
+  } catch (err) {
+    message.error(`网页提取失败: ${String(err?.message || err || '')}`)
+  } finally {
+    webImportLoading.value = false
+  }
+}
+
+const importWebContent = async () => {
+  if (webImporting.value) return
+  if (!webImportOptions.listening && !webImportOptions.reading) {
+    message.warning('请至少选择导入听力或阅读')
+    return
+  }
+  if (webImportOptions.listening && !webImportAudioUrl.value) {
+    message.warning('没有可导入的音频地址')
+    return
+  }
+  if (webImportOptions.reading && !String(webImportText.value || '').trim()) {
+    message.warning('正文为空，请先粘贴正文')
+    return
+  }
+  webImporting.value = true
+  try {
+    const result = await invoke('language_learning_import_web_content', {
+      input: {
+        url: String(webImportUrl.value || '').trim(),
+        title: String(webImportTitle.value || '').trim(),
+        text: String(webImportText.value || '').trim(),
+        subtitle_text: String(webImportPreview.value?.subtitle_text || '').trim(),
+        audio_url: String(webImportAudioUrl.value || '').trim(),
+        learning_lang: learningLang.value,
+        native_lang: nativeLang.value,
+        import_listening: Boolean(webImportOptions.listening),
+        import_reading: Boolean(webImportOptions.reading),
+        translate: Boolean(webImportOptions.translate),
+      },
+    })
+    const audio = result?.audio
+    const record = result?.record
+    const parts = []
+    if (audio) parts.push('听力')
+    if (record) parts.push('阅读段落')
+    message.success(`已从网页导入${parts.length ? `：${parts.join(' + ')}` : ''}`)
+    if (record && String(record.translated_text || '').includes('待翻译')) {
+      message.warning('阅读段落已导入，但译文未生成，可在条目里继续编辑')
+    }
+    webImportVisible.value = false
+    if (audio?.id) triggerSyncGenerationForAudioId(audio.id, false)
+    await refreshAll()
+    if (audio?.id) {
+      const hit = allRows.value.find((row) => row.id === `audio:${audio.id}`)
+      if (hit) activeRow.value = hit
+      selectedShelf.value = 'my_listening'
+    }
+  } catch (err) {
+    message.error(`网页导入失败: ${String(err?.message || err || '')}`)
+  } finally {
+    webImporting.value = false
+  }
 }
 
 const ledgerMenuOptions = computed(() => {
@@ -2763,6 +3570,15 @@ const reviewRowsByType = computed(() => {
     if (reviewFilter.masteryBand === 'low' && !(row.masteryLevel <= 1)) return false
     if (reviewFilter.masteryBand === 'mid' && !(row.masteryLevel >= 2 && row.masteryLevel <= 3)) return false
     if (reviewFilter.masteryBand === 'high' && !(row.masteryLevel >= 4)) return false
+    if (reviewFilter.dueOnly) {
+      const mastery = getMasteryEntry(row.sourceType, row.rawId)
+      if (!mastery.dueAt) {
+        if (!reviewFilter.includeNew) return false
+      } else {
+        const due = new Date(mastery.dueAt).getTime()
+        if (Number.isFinite(due) && due > now) return false
+      }
+    }
     return true
   })
   if (reviewType.value === 'mixed') return rows
@@ -2789,6 +3605,7 @@ const rebuildReviewRows = () => {
   reviewRows.value = rows
   reviewIndex.value = 0
   reviewShowAnswer.value = false
+  resetDictation()
 }
 
 const shuffleReviewRows = () => {
@@ -2804,28 +3621,101 @@ const shuffleReviewRows = () => {
   reviewShowAnswer.value = false
 }
 
+const resetDictation = () => {
+  reviewDictationInput.value = ''
+  reviewDictationResult.value = null
+}
+
 const gotoNextReview = () => {
   if (!reviewRows.value.length) return
   reviewIndex.value = (reviewIndex.value + 1) % reviewRows.value.length
   reviewShowAnswer.value = false
+  resetDictation()
 }
 
 const gotoPrevReview = () => {
   if (!reviewRows.value.length) return
   reviewIndex.value = (reviewIndex.value - 1 + reviewRows.value.length) % reviewRows.value.length
   reviewShowAnswer.value = false
+  resetDictation()
 }
 
 const gradeAndNext = (result) => {
   const cur = currentReviewItem.value
   if (!cur) return
   upsertMasteryEntry(cur.sourceType, cur.rawId, result)
-  gotoNextReview()
+  resetDictation()
+  if (reviewFilter.dueOnly) {
+    // 评分后到期时间已经推到未来，直接从队列里移除这一张。
+    rebuildReviewRows()
+  } else {
+    gotoNextReview()
+  }
 }
 
-const startReviewFromSelection = () => {
-  activeTab.value = 'review'
-  rebuildReviewRows()
+const startReviewFromSelection = async () => {
+  await goToReview()
+}
+
+const toggleReviewDictation = () => {
+  reviewDictationMode.value = !reviewDictationMode.value
+  resetDictation()
+  reviewShowAnswer.value = false
+}
+
+const normalizeDictationText = (raw) => {
+  return String(raw || '')
+    .toLowerCase()
+    .replace(/[\s\u3000]+/g, ' ')
+    .replace(/[.,!?;:'"“”‘’()[\]{}<>《》，。！？；：、]/g, '')
+    .trim()
+}
+
+const levenshteinDistance = (a, b) => {
+  const left = Array.from(a).slice(0, 800)
+  const right = Array.from(b).slice(0, 800)
+  if (!left.length) return right.length
+  if (!right.length) return left.length
+  let prev = new Array(right.length + 1).fill(0).map((_, i) => i)
+  for (let i = 1; i <= left.length; i += 1) {
+    const next = [i]
+    for (let j = 1; j <= right.length; j += 1) {
+      const cost = left[i - 1] === right[j - 1] ? 0 : 1
+      next[j] = Math.min(prev[j] + 1, next[j - 1] + 1, prev[j - 1] + cost)
+    }
+    prev = next
+  }
+  return prev[right.length]
+}
+
+const dictationExpectedText = computed(() => {
+  const row = currentReviewItem.value
+  if (!row) return ''
+  if (row.rowType === 'word') return row.title
+  if (row.rowType === 'listening') {
+    const timeline = currentReviewListeningTranscriptTimeline.value
+    const text = timeline.map((line) => String(line?.text || '').trim()).filter(Boolean).join(' ')
+    return text || row.sourceText
+  }
+  return row.sourceText
+})
+
+const checkDictation = () => {
+  const input = normalizeDictationText(reviewDictationInput.value)
+  if (!input) {
+    message.warning('先写下你听到或记住的内容')
+    return
+  }
+  const expected = normalizeDictationText(dictationExpectedText.value)
+  const distance = levenshteinDistance(input, expected)
+  const maxLen = Math.max(Array.from(input).length, Array.from(expected).length, 1)
+  const score = Math.max(0, Math.min(100, Math.round((1 - distance / maxLen) * 100)))
+  reviewDictationResult.value = {
+    score,
+    ok: score >= 90,
+    expected,
+  }
+  reviewShowAnswer.value = true
 }
 
 const totalLearningItemCount = computed(() => allRows.value.length)
@@ -2853,6 +3743,20 @@ const masteryPercent = computed(() => {
   const mastered = masteryAggregate.value.mastered
   if (total <= 0) return 0
   return Math.min(100, Math.max(0, Math.round((mastered / total) * 100)))
+})
+
+const dueReviewCount = computed(() => {
+  const now = Date.now()
+  return allRows.value.filter((row) => {
+    const mastery = getMasteryEntry(row.sourceType, row.rawId)
+    if (!mastery.dueAt) return false
+    const due = new Date(mastery.dueAt).getTime()
+    return Number.isFinite(due) && due <= now
+  }).length
+})
+
+const newReviewCount = computed(() => {
+  return allRows.value.filter((row) => !getMasteryEntry(row.sourceType, row.rawId).dueAt).length
 })
 
 const resolveQueryKind = () => {
@@ -3085,7 +3989,7 @@ const runSyncQueueWorker = async () => {
       } else {
         console.error('[LangLearning] 同步转写失败', { audioId: id, learningLang: taskLearningLang, error: err })
         const title = String(audioResources.value.find((x) => String(x?.id || '') === id)?.title || id)
-        message.error(`听力转写失败: ${title}，请检查 whisper/翻译配置后重试`)
+        message.error(`听力转写失败: ${title}：${errorText || '请检查语音模型与翻译配置'}`)
       }
     }
     syncQueueDone.value += 1
@@ -3251,7 +4155,13 @@ const refreshWordMeta = async (row) => {
         },
       },
     })
-    message.success('词汇拓展已更新')
+    const source = String(payload?.source || '')
+    if (source.startsWith('offline:')) {
+      activeWordOfflinePack.value = source.slice('offline:'.length)
+      message.success(`已从离线词典更新：${activeWordOfflinePack.value}`)
+    } else {
+      message.success('词汇拓展已更新')
+    }
     await refreshRecords()
     const hit = allRows.value.find((x) => x.sourceType === 'record' && x.rawId === row.id)
     if (hit) activeRow.value = hit
@@ -3577,6 +4487,8 @@ const resetReviewFilter = () => {
   reviewFilter.lastReviewPeriod = 'all'
   reviewFilter.masteryBand = 'all'
   reviewFilter.orderBy = 'created_desc'
+  reviewFilter.dueOnly = true
+  reviewFilter.includeNew = true
 }
 
 const selectedShelfLabel = computed(() => {
@@ -4756,7 +5668,7 @@ watch([isListeningImmersive, activeAudio], ([immersive, audio]) => {
   }
 })
 
-watch([reviewType, filteredRows, () => reviewFilter.createdPeriod, () => reviewFilter.lastReviewPeriod, () => reviewFilter.masteryBand, () => reviewFilter.orderBy], () => {
+watch([reviewType, filteredRows, () => reviewFilter.createdPeriod, () => reviewFilter.lastReviewPeriod, () => reviewFilter.masteryBand, () => reviewFilter.orderBy, () => reviewFilter.dueOnly, () => reviewFilter.includeNew], () => {
   rebuildReviewRows()
 })
 
@@ -4772,6 +5684,8 @@ watch(activeTab, (tab) => {
   }
   if (tab === 'review') {
     rebuildReviewRows()
+  } else {
+    restoreManagerRecords()
   }
 })
 
@@ -4791,6 +5705,7 @@ onMounted(async () => {
   await cleanupDuplicateListeningTopics()
   await refreshAll()
   await resumePendingSyncTasks()
+  await refreshDictData()
   await refreshSyncJobs()
   if (hasRunningSyncJobs.value) ensureSyncPolling()
   if (filteredRows.value.length) {
@@ -4819,6 +5734,14 @@ onBeforeUnmount(() => {
   if (syncPollTimer) {
     window.clearInterval(syncPollTimer)
     syncPollTimer = 0
+  }
+  if (dictPollTimer) {
+    window.clearInterval(dictPollTimer)
+    dictPollTimer = 0
+  }
+  if (asrPollTimer) {
+    window.clearInterval(asrPollTimer)
+    asrPollTimer = 0
   }
   if (syncCompleteRefreshTimer) {
     window.clearTimeout(syncCompleteRefreshTimer)
@@ -6549,6 +7472,45 @@ kbd {
   gap: 12px;
 }
 
+.review-card-tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.filter-switch {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 10.5px;
+  color: var(--ll-muted);
+  cursor: pointer;
+}
+
+.dictation-box {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 0 4px;
+  border-top: 1px solid var(--ll-border-soft);
+}
+
+.dictation-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.dictation-result {
+  font-size: 10.5px;
+  color: var(--ll-amber);
+}
+
+.dictation-result.ok {
+  color: var(--ll-green);
+}
+
 .type-chip {
   display: inline-flex;
   align-items: center;
@@ -7088,6 +8050,214 @@ kbd {
   gap: 6px;
   padding: 5px 4px;
   border-bottom: 1px solid var(--ll-border-soft);
+}
+
+/* ---------- offline dictionary ---------- */
+.offline-badge {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 8px;
+  border: 1px solid color-mix(in srgb, var(--ll-green) 34%, var(--ll-border));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--ll-green) 8%, transparent);
+  color: var(--ll-green);
+  font-size: 9.5px;
+  white-space: nowrap;
+}
+
+.dict-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  max-height: 70vh;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.dict-pairline {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.dict-section {
+  padding-top: 13px;
+  border-top: 1px solid var(--ll-border-soft);
+}
+
+.dict-section > .section-label {
+  margin-bottom: 9px;
+}
+
+.dict-catalog {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.dict-card {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 12px;
+  border: 1px solid var(--ll-border-soft);
+  border-radius: 9px;
+  background: var(--ll-panel);
+}
+
+.dict-card.installed {
+  border-color: color-mix(in srgb, var(--ll-green) 30%, var(--ll-border));
+}
+
+.dict-card-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+}
+
+.dict-name {
+  font-size: 16px;
+  line-height: 1.3;
+}
+
+.dict-desc {
+  margin: 0;
+  color: var(--ll-muted);
+  font-size: 10.5px;
+  line-height: 1.6;
+}
+
+.dict-meta {
+  color: var(--ll-muted);
+  font-size: 9.5px;
+}
+
+.dict-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--ll-accent);
+  font-size: 9.5px;
+}
+
+.dict-error {
+  color: var(--ll-red);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.dict-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: auto;
+  padding-top: 3px;
+}
+
+.dict-pack-list {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.dict-pack-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--ll-border-soft);
+}
+
+.dict-pack-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.dict-pack-name {
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+
+.dict-import-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.dict-lookup-row {
+  display: flex;
+  gap: 7px;
+}
+
+.dict-lookup-list {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  max-height: 220px;
+  overflow: auto;
+  margin-top: 10px;
+}
+
+.dict-entry {
+  padding: 8px 10px;
+  border: 1px solid var(--ll-border-soft);
+  border-radius: 8px;
+  background: var(--ll-panel);
+}
+
+.dict-entry-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.dict-term {
+  font-size: 18px;
+  line-height: 1.2;
+}
+
+.dict-entry-meanings {
+  margin-top: 4px;
+  font-size: 11.5px;
+  line-height: 1.6;
+}
+
+.dict-lookup-empty {
+  margin-top: 8px;
+}
+
+.web-preview-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 4px 0 10px;
+}
+
+.web-preview-head h3 {
+  margin: 4px 0 0;
+  font-size: 20px;
+  line-height: 1.3;
+}
+
+.web-options {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  flex-wrap: wrap;
+  padding: 4px 0 10px;
+  font-size: 11px;
+}
+
+@media (max-width: 1080px) {
+  .dict-catalog {
+    grid-template-columns: 1fr;
+  }
 }
 
 /* ---------- responsive ---------- */

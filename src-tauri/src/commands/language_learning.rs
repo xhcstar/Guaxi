@@ -1,6 +1,6 @@
 use crate::commands::translate_cache;
+use crate::commands::translate_local;
 use crate::commands::translator_free;
-use crate::guaxiservices::bundled_resources;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine as _;
 use futures_util::StreamExt;
@@ -206,6 +206,8 @@ pub struct WhisperSyncPayload {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct WordEnrichment {
     pub word: String,
+    #[serde(default)]
+    pub source: String,
     pub phonetic: String,
     pub phonetic_uk: String,
     pub phonetic_us: String,
@@ -2876,14 +2878,19 @@ pub async fn language_learning_backfill_sync_translation(
             }
         }
     }
-    language_learning_generate_whisper_sync_json(
+    let audio_id_for_job = audio_id.clone();
+    let result = language_learning_generate_whisper_sync_json(
         app,
         audio_id,
         Some(resolved_lang),
         native_lang,
         None,
     )
-    .await
+    .await;
+    if let Err(error) = &result {
+        set_sync_job(&audio_id_for_job, "error", 0.0, "转写失败", error);
+    }
+    result
 }
 
 #[tauri::command]
@@ -3612,70 +3619,6 @@ async fn prepare_entry_audio_file(row: &AudioResource, entry_dir: &Path) -> Resu
     Ok(audio_path)
 }
 
-fn resolve_whisper_models(source_lang: &str) -> Result<(PathBuf, PathBuf), String> {
-    let base = bundled_resources::ensure_relative_dir("utils/Models/whisper_onnx")?;
-    let candidates = fs::read_dir(&base)
-        .map_err(|e| format!("读取 whisper 模型目录失败（{}）：{}", base.display(), e))?
-        .flatten()
-        .map(|entry| entry.path())
-        .filter(|path| {
-            path.is_dir()
-                && fs::read_dir(path)
-                    .map(|entries| {
-                        entries
-                            .flatten()
-                            .any(|entry| entry.file_name().to_string_lossy().ends_with("-tokens.txt"))
-                    })
-                    .unwrap_or(false)
-        })
-        .collect::<Vec<PathBuf>>();
-    if candidates.is_empty() {
-        return Err(format!(
-            "未在 {} 下找到 whisper ONNX 模型目录，请运行 tools/fetch_sherpa_onnx_libs 下载",
-            base.display()
-        ));
-    }
-
-    let lang = source_lang.trim().to_lowercase();
-    let pick = if lang.is_empty() || lang == "en" {
-        candidates
-            .iter()
-            .find(|path| {
-                path.file_name()
-                    .map(|x| x.to_string_lossy().to_lowercase().contains(".en"))
-                    .unwrap_or(false)
-            })
-            .or_else(|| candidates.first())
-    } else {
-        candidates.iter().find(|path| {
-            path.file_name()
-                .map(|x| !x.to_string_lossy().to_lowercase().contains(".en"))
-                .unwrap_or(false)
-        })
-    }
-    .cloned();
-
-    let model_dir = pick.ok_or_else(|| {
-        let installed = candidates
-            .iter()
-            .filter_map(|p| p.file_name().map(|x| x.to_string_lossy().to_string()))
-            .collect::<Vec<_>>()
-            .join("、");
-        format!(
-            "学习语言「{}」需要多语种 Whisper 模型，当前只安装了英文模型（{}）。请下载多语种模型后重试",
-            lang, installed
-        )
-    })?;
-
-    let vad = bundled_resources::ensure_relative_dir("utils/Models/vad/silero_vad.onnx")?;
-    if !vad.is_file() {
-        return Err(format!(
-            "未找到 VAD 模型：{}，请运行 tools/fetch_sherpa_onnx_libs 下载",
-            vad.display()
-        ));
-    }
-    Ok((model_dir, vad))
-}
 
 async fn run_whisper_and_build_sync_json(
     audio_id: &str,
@@ -3687,22 +3630,19 @@ async fn run_whisper_and_build_sync_json(
     if !entry_dir.exists() {
         fs::create_dir_all(entry_dir).map_err(|e| format!("创建听力目录失败: {}", e))?;
     }
-    let (model_dir, vad_model) = resolve_whisper_models(source_lang)?;
+    let (config, model_path) =
+        crate::commands::asr_models::build_engine_config(source_lang, "auto")?;
+    let vad_model = crate::commands::asr_models::vad_model()?;
     set_sync_job(audio_id, "transcribe", 14.0, "转写中", "");
     // 有可用的 CUDA 就走 GPU，没有就在 resolve 阶段自己退回 CPU。
-    let config = crate::guaxiservices::speech::resolve_whisper_onnx_engine_config(
-        &model_dir,
-        "auto",
-        Some(source_lang),
-    )?;
     let using_gpu = config.provider != "cpu";
     info!(
         audio = %local_audio.display(),
-        model_dir = %model_dir.display(),
+        model_dir = model_path.as_str(),
         provider = config.provider.as_str(),
         source_lang = source_lang,
         target_lang = target_lang,
-        "language_learning whisper in-process"
+        "language_learning asr in-process"
     );
     let parsed = match crate::guaxiservices::speech::transcribe_segments_audio(
         config,
@@ -3716,11 +3656,8 @@ async fn run_whisper_and_build_sync_json(
         // 这种时候退回 CPU 重跑一次，别让加速器把整条听力同步拖垮。
         Err(err) if using_gpu => {
             warn!(error = err.as_str(), "GPU 转写失败，回退 CPU 重试");
-            let cpu_config = crate::guaxiservices::speech::resolve_whisper_onnx_engine_config(
-                &model_dir,
-                "cpu",
-                Some(source_lang),
-            )?;
+            let (cpu_config, _) =
+                crate::commands::asr_models::build_engine_config(source_lang, "cpu")?;
             crate::guaxiservices::speech::transcribe_segments_audio(
                 cpu_config,
                 vad_model,
@@ -3768,7 +3705,7 @@ async fn run_whisper_and_build_sync_json(
     let payload = WhisperSyncPayload {
         version: "1.0".to_string(),
         generated_at: now_iso(),
-        model_path: model_dir.to_string_lossy().to_string(),
+        model_path,
         audio_path: local_audio.to_string_lossy().to_string(),
         transcript: transcript_lines.join("\n"),
         segments,
@@ -4052,22 +3989,72 @@ async fn translate_aligned(texts: &[String], target_lang: &str) -> Vec<String> {
         return Vec::new();
     }
     let mut out = vec![String::new(); texts.len()];
+    let mut pending_indices = Vec::new();
+    let mut pending_texts = Vec::new();
+    for (idx, text) in texts.iter().enumerate() {
+        let trimmed = text.trim();
+        // 常见单词 / 短术语先查离线词典；整句仍然交给在线接口池。
+        let chars = trimmed.chars().count();
+        let short_enough = chars > 0 && chars <= 24 && (trimmed.split_whitespace().count() <= 4 || chars <= 12);
+        if short_enough {
+            if let Some(entry) = crate::commands::offline_dict::lookup_word(trimmed, "auto", target_lang) {
+                let joined = entry.meanings.join("；");
+                if !joined.trim().is_empty() {
+                    out[idx] = joined;
+                    continue;
+                }
+            }
+        }
+        pending_indices.push(idx);
+        pending_texts.push(text.clone());
+    }
+    if pending_texts.is_empty() {
+        return out;
+    }
     let resp = translator_free::translate_text_free(
-        texts.to_vec(),
+        pending_texts,
         Some("auto".into()),
         Some(target_lang.to_string()),
     )
     .await
     .ok();
     if let Some(res) = resp {
-        for (idx, t) in res.translated_texts.into_iter().enumerate() {
-            if idx >= out.len() {
+        for (local_idx, t) in res.translated_texts.into_iter().enumerate() {
+            let Some(global_idx) = pending_indices.get(local_idx).copied() else {
                 break;
-            }
+            };
             if t.trim().is_empty() || t.contains("[Translation Failed]") {
                 continue;
             }
-            out[idx] = t.trim().to_string();
+            out[global_idx] = t.trim().to_string();
+        }
+    }
+    // 在线接口全挂时，如果用户已经装好本地翻译小模型，就继续把剩下的补齐；
+    // 只检查模型文件是否已存在，绝不在翻译过程中自动下载几个 GB 的模型。
+    let missing: Vec<usize> = pending_indices
+        .iter()
+        .copied()
+        .filter(|idx| out.get(*idx).map(|v| v.trim().is_empty()).unwrap_or(false))
+        .collect();
+    if !missing.is_empty()
+        && translate_local::local_translate_enabled()
+        && translate_local::model_path(&translate_local::active_model())
+            .map(|path| path.is_file())
+            .unwrap_or(false)
+    {
+        let missing_texts: Vec<String> = missing
+            .iter()
+            .map(|idx| texts.get(*idx).cloned().unwrap_or_default())
+            .collect();
+        if let Ok(local) = translate_local::translate_texts_local(&missing_texts, "auto", target_lang).await {
+            for (local_idx, t) in local.into_iter().enumerate() {
+                let Some(global_idx) = missing.get(local_idx).copied() else {
+                    break;
+                };
+                if !t.trim().is_empty() && !t.contains("[Translation Failed]") {
+                    out[global_idx] = t.trim().to_string();
+                }
+            }
         }
     }
     out
@@ -4436,6 +4423,37 @@ fn store_cached_word_entry(word: &str, from: &str, to: &str, kind: &str, value: 
     }
 }
 
+fn offline_word_enrichment(entry: &crate::commands::offline_dict::DictEntry) -> WordEnrichment {
+    let raw_phonetic = entry.phonetic.trim();
+    let phonetic = if raw_phonetic.is_empty() {
+        String::new()
+    } else if raw_phonetic.starts_with('/') {
+        raw_phonetic.to_string()
+    } else {
+        format!("/{}/", raw_phonetic)
+    };
+    WordEnrichment {
+        word: entry.term.clone(),
+        source: format!("offline:{}", entry.pack_name),
+        phonetic: phonetic.clone(),
+        phonetic_uk: phonetic.clone(),
+        phonetic_us: phonetic,
+        part_of_speech: entry.pos.clone(),
+        meanings: entry.meanings.clone(),
+        translation: entry.meanings.join("；"),
+        synonyms: entry.synonyms.clone(),
+        antonyms: Vec::new(),
+        associates: Vec::new(),
+        synonyms_translations: Vec::new(),
+        antonyms_translations: Vec::new(),
+        associates_translations: Vec::new(),
+        phrases: Vec::new(),
+        phrase_translations: Vec::new(),
+        examples: entry.examples.clone(),
+        example_translations: Vec::new(),
+    }
+}
+
 #[tauri::command]
 pub async fn language_learning_enrich_word_basic(
     word: String,
@@ -4449,6 +4467,12 @@ pub async fn language_learning_enrich_word_basic(
     let from = source_lang.clone().unwrap_or_else(|| "auto".into());
     let to = target_lang.clone().unwrap_or_else(|| "zh".into());
 
+    // 离线词典优先：常见词在断网时也应该能出释义、音标和词性。
+    if let Some(entry) = crate::commands::offline_dict::lookup_word(&clean, &from, &to) {
+        let result = offline_word_enrichment(&entry);
+        store_cached_word_entry(&clean, &from, &to, "basic", &result);
+        return Ok(result);
+    }
     if let Some(hit) = load_cached_word_entry(&clean, &from, &to, "basic").await {
         return Ok(hit);
     }
@@ -4470,6 +4494,12 @@ pub async fn language_learning_enrich_word_details(
     let from = source_lang.clone().unwrap_or_else(|| "auto".into());
     let to = target_lang.clone().unwrap_or_else(|| "zh".into());
 
+    // 命中离线包就直接返回；即使包里没有例句/近义词，也不该为了补全再走在线请求。
+    if let Some(entry) = crate::commands::offline_dict::lookup_word(&clean, &from, &to) {
+        let result = offline_word_enrichment(&entry);
+        store_cached_word_entry(&clean, &from, &to, "details", &result);
+        return Ok(result);
+    }
     if let Some(hit) = load_cached_word_entry(&clean, &from, &to, "details").await {
         return Ok(hit);
     }
@@ -4501,6 +4531,7 @@ async fn enrich_word_basic_uncached(
             };
             return Ok(WordEnrichment {
                 word: clean,
+                source: "online:youdao".to_string(),
                 phonetic,
                 phonetic_uk: dict.phonetic_uk,
                 phonetic_us: dict.phonetic_us,
@@ -4590,6 +4621,7 @@ async fn enrich_word_basic_uncached(
 
     let enrichment = WordEnrichment {
         word: clean,
+        source: "online:dictionaryapi".to_string(),
         phonetic,
         phonetic_uk,
         phonetic_us,
@@ -4657,6 +4689,7 @@ async fn enrich_word_details_uncached(
             }
             return Ok(WordEnrichment {
                 word: clean,
+                source: "online:youdao".to_string(),
                 phonetic: String::new(),
                 phonetic_uk: String::new(),
                 phonetic_us: String::new(),
@@ -4775,6 +4808,7 @@ async fn enrich_word_details_uncached(
 
     Ok(WordEnrichment {
         word: clean,
+        source: "online:datamuse".to_string(),
         phonetic: String::new(),
         phonetic_uk: String::new(),
         phonetic_us: String::new(),
@@ -4801,17 +4835,20 @@ pub async fn language_learning_enrich_word(
     target_lang: Option<String>,
 ) -> Result<WordEnrichment, String> {
     let mut basic = language_learning_enrich_word_basic(word.clone(), source_lang.clone(), target_lang.clone()).await?;
-    if let Ok(details) = language_learning_enrich_word_details(word, source_lang, target_lang).await {
-        basic.synonyms = details.synonyms;
-        basic.antonyms = details.antonyms;
-        basic.associates = details.associates;
-        basic.synonyms_translations = details.synonyms_translations;
-        basic.antonyms_translations = details.antonyms_translations;
-        basic.associates_translations = details.associates_translations;
-        basic.phrases = details.phrases;
-        basic.phrase_translations = details.phrase_translations;
-        basic.examples = details.examples;
-        basic.example_translations = details.example_translations;
+    // 命中离线词典时不再补在线详情：断网环境下不该为了近义词再等 8 秒超时。
+    if !basic.source.starts_with("offline:") {
+        if let Ok(details) = language_learning_enrich_word_details(word, source_lang, target_lang).await {
+            basic.synonyms = details.synonyms;
+            basic.antonyms = details.antonyms;
+            basic.associates = details.associates;
+            basic.synonyms_translations = details.synonyms_translations;
+            basic.antonyms_translations = details.antonyms_translations;
+            basic.associates_translations = details.associates_translations;
+            basic.phrases = details.phrases;
+            basic.phrase_translations = details.phrase_translations;
+            basic.examples = details.examples;
+            basic.example_translations = details.example_translations;
+        }
     }
     Ok(basic)
 }

@@ -65,6 +65,8 @@ tauri = { version = "2.9.5", features = ["protocol-asset"] }
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1.0"
+# 离线词典导入：ECDICT 的 CSV 带引号、换行与逗号，必须用真正的 CSV 解析器。
+csv = "1.3"
 # EWS（本地 Exchange）的 SOAP 请求 / 响应解析；Graph 不需要 XML。
 quick-xml = "0.37"
 # 命令下发：直接吃参考工具那份 config.yaml（global/targets/tasks 结构）。
@@ -125,6 +127,8 @@ encoding_rs = "0.8.35"
 zip = "6.0.0"
 flate2 = "1.0.30"
 tar = "0.4.44"
+# sherpa-onnx 官方 ASR 模型以 .tar.bz2 发布。
+bzip2 = "0.4.4"
 zstd = { version = "0.13.2", features = ["zstdmt"] }
 comrak = "0.49.0"
 # 系统字体枚举（设置 → 编辑器 → 编辑器外观的字体下拉）。fontdb 本来就是 resvg/usvg 的传递依赖，
