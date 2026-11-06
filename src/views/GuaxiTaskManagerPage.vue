@@ -104,7 +104,14 @@
 
             <div v-if="focusItems.length" class="tm-block">
               <div class="tm-block-head"><span>今天的重点</span><span class="tm-block-sub">{{ focusItems.length }}</span></div>
-              <div v-for="(it, idx) in focusItems" :key="it.id" class="tm-row tm-row-focus" @click="openDetail(it)">
+              <div
+                v-for="(it, idx) in focusItems"
+                :key="it.id"
+                class="tm-row tm-row-focus"
+                :class="{ selected: selectedId === it.id }"
+                :data-task-id="it.id"
+                @click="openDetail(it)"
+              >
                 <span class="tm-focus-no">{{ idx + 1 }}</span>
                 <button class="tm-check" :class="{ on: it.done }" title="完成" @click.stop="toggleDone(it)">✓</button>
                 <div class="tm-row-main">
@@ -117,7 +124,14 @@
 
             <div v-if="overdueItems.length" class="tm-block">
               <div class="tm-block-head"><span class="danger">逾期</span><span class="tm-block-sub">{{ overdueItems.length }}</span></div>
-              <div v-for="it in overdueItems" :key="it.id" class="tm-row" :class="{ overdue: true }" @click="openDetail(it)">
+              <div
+                v-for="it in overdueItems"
+                :key="it.id"
+                class="tm-row"
+                :class="{ overdue: true, selected: selectedId === it.id }"
+                :data-task-id="it.id"
+                @click="openDetail(it)"
+              >
                 <button class="tm-check" :class="{ on: it.done }" title="完成" @click.stop="toggleDone(it)">✓</button>
                 <div class="tm-row-main">
                   <div class="tm-row-title">{{ it.title }}</div>
@@ -130,7 +144,14 @@
             <div class="tm-block">
               <div class="tm-block-head"><span>今天</span><span class="tm-block-sub">{{ todayDue.length }}</span></div>
               <div v-if="!todayDue.length" class="tm-hint">今天没有到期任务，按 N 记一件。</div>
-              <div v-for="it in todayDue" :key="it.id" class="tm-row" @click="openDetail(it)">
+              <div
+                v-for="it in todayDue"
+                :key="it.id"
+                class="tm-row"
+                :class="{ selected: selectedId === it.id }"
+                :data-task-id="it.id"
+                @click="openDetail(it)"
+              >
                 <button class="tm-check" :class="{ on: it.done }" title="完成" @click.stop="toggleDone(it)">✓</button>
                 <div class="tm-row-main">
                   <div class="tm-row-title">{{ it.title }}</div>
@@ -142,7 +163,14 @@
 
             <div v-if="todayDoing.length" class="tm-block">
               <div class="tm-block-head"><span>进行中</span><span class="tm-block-sub">{{ todayDoing.length }}</span></div>
-              <div v-for="it in todayDoing" :key="it.id" class="tm-row" @click="openDetail(it)">
+              <div
+                v-for="it in todayDoing"
+                :key="it.id"
+                class="tm-row"
+                :class="{ selected: selectedId === it.id }"
+                :data-task-id="it.id"
+                @click="openDetail(it)"
+              >
                 <button class="tm-check" :class="{ on: it.done }" title="完成" @click.stop="toggleDone(it)">✓</button>
                 <div class="tm-row-main">
                   <div class="tm-row-title">{{ it.title }}</div>
@@ -223,7 +251,7 @@
               :placeholder="planCapturePlaceholder"
               @keydown.enter.prevent="quickCapture"
             />
-            <span class="tm-plan-hint">{{ planMode === 'week' ? '按截止日期自动归入本周 / 下周 · 点击卡片编辑' : planMode === 'goals' ? '目标进度由子任务完成比自动汇总' : '拖动卡片改状态 · 点击卡片编辑 · 双击标题快速改名' }}</span>
+            <span class="tm-plan-hint">{{ planMode === 'week' ? '按截止日期自动归入本周 / 下周 · J/K 选择 · Enter 打开 · Space 完成' : planMode === 'goals' ? '目标进度由子任务完成比自动汇总' : '卡片内可直接改状态/截止 · J/K 选择 · Enter 打开 · Space 完成' }}</span>
           </div>
 
           <div v-if="planMode === 'week'" class="tm-week">
@@ -237,7 +265,8 @@
                   v-for="it in lane.items"
                   :key="it.id"
                   class="tm-card"
-                  :class="{ overdue: lane.key === 'overdue' }"
+                  :class="{ overdue: lane.key === 'overdue', selected: selectedId === it.id }"
+                  :data-task-id="it.id"
                   @click="openDetail(it)"
                 >
                   <div class="tm-card-top">
@@ -284,7 +313,8 @@
                 <template #item="{ element }">
                   <div
                     class="tm-card"
-                    :class="{ overdue: isOverdue(element) }"
+                    :class="{ overdue: isOverdue(element), selected: selectedId === element.id }"
+                    :data-task-id="element.id"
                     @click="openDetail(element)"
                   >
                     <div class="tm-card-top">
@@ -308,7 +338,28 @@
                       <span class="tm-cat" :class="'cat-' + element.category">{{ catLabel(element.category) }}</span>
                       <span v-if="element.kind !== 'task'" class="tm-kind">{{ kindLabel(element.kind) }}</span>
                       <span class="tm-type" :class="'tt-' + element.taskType">{{ typeLabel(element.taskType) }}</span>
-                      <span v-if="element.deadline" class="tm-date deadline"><n-icon :component="Flag16Regular" />{{ shortDate(element.deadlineIso) }}</span>
+                      <span class="tm-status-wrap" @click.stop>
+                        <span class="tm-status-chip" :class="'st-' + element.status">{{ statusZh(element.status) }}</span>
+                        <select
+                          class="tm-status-overlay"
+                          :value="element.status"
+                          title="快速改状态"
+                          @change="(e) => setStatus(element, e.target.value)"
+                        >
+                          <option v-for="s in statusKeys" :key="s" :value="s">{{ statusZh(s) }}</option>
+                        </select>
+                      </span>
+                      <span class="tm-date-wrap" :class="{ empty: !element.deadlineIso }" @click.stop="openDatePicker">
+                        <span class="tm-date-chip"><n-icon :component="Flag16Regular" />{{ element.deadlineIso ? shortDate(element.deadlineIso) : '＋截止' }}</span>
+                        <input
+                          type="date"
+                          class="tm-date-overlay"
+                          :value="element.deadlineIso || ''"
+                          title="设置截止日期"
+                          @change="(e) => setDeadline(element, e.target.value)"
+                        />
+                        <button v-if="element.deadlineIso" class="tm-date-clear" title="清除截止" @click.stop="clearDeadline(element)">×</button>
+                      </span>
                       <span v-if="element.spent" class="tm-did">{{ formatSpent(element.spent) }}</span>
                       <span v-if="element.displayId" class="tm-did">{{ element.displayId }}</span>
                       <button
@@ -713,6 +764,7 @@ const capturing = ref(false)
 
 const detailVisible = ref(false)
 const detailTask = ref(null)
+const selectedId = ref('')
 
 const renamingId = ref('')
 const renameDraft = ref('')
@@ -728,6 +780,7 @@ const KIND_LABELS = { task: '任务', habit: '习惯', goal: '目标', review: '
 const kindLabel = (k) => KIND_LABELS[k] || k || '任务'
 const STATUS_ZH = { TODO: '待办', NEXT: '下一步', DOING: '进行中', WAITING: '等待', PAUSED: '暂停', HOLD: '搁置', CANCELLED: '已取消', DONE: '已完成' }
 const statusZh = (s) => STATUS_ZH[s] || s || '待办'
+const statusKeys = ['TODO', 'NEXT', 'DOING', 'WAITING', 'PAUSED', 'HOLD', 'CANCELLED', 'DONE']
 const categoryOptions = [
   { label: '工作', value: 'work' }, { label: '生活', value: 'life' }, { label: '学习', value: 'study' },
 ]
@@ -763,6 +816,8 @@ const toggleDoneCollapse = () => {
   showAllDone.value = !showAllDone.value
   regroup()
 }
+
+const kanbanOrder = computed(() => columns.flatMap((c) => grouped[c.key]))
 
 const todayStr = () => {
   const d = new Date()
@@ -874,6 +929,7 @@ const onDragChange = async (colKey, evt) => {
 
 // ── 详情抽屉 + 快捷操作 ──
 const openDetail = (it) => {
+  selectedId.value = it?.id || ''
   detailTask.value = it?.raw || it || null
   detailVisible.value = true
 }
@@ -1028,6 +1084,47 @@ const weekLanes = computed(() => {
   ]
 })
 
+const uniqueById = (list) => {
+  const map = new Map()
+  for (const it of list) if (it?.id && !map.has(it.id)) map.set(it.id, it)
+  return [...map.values()]
+}
+// 键盘 J/K 只在当前视图真正可见的任务之间移动。
+const visibleTaskList = computed(() => {
+  if (view.value === 'today') {
+    return uniqueById([...focusItems.value, ...overdueItems.value, ...todayDue.value, ...todayDoing.value])
+  }
+  if (view.value === 'plan') {
+    if (planMode.value === 'kanban') return kanbanOrder.value
+    if (planMode.value === 'week') return uniqueById(weekLanes.value.flatMap((l) => l.items))
+  }
+  return []
+})
+const ensureSelectedVisible = async () => {
+  await nextTick()
+  if (!selectedId.value) return
+  const scope = view.value === 'today'
+    ? '.tm-today'
+    : planMode.value === 'kanban'
+      ? '.tm-kanban'
+      : planMode.value === 'week'
+        ? '.tm-week'
+        : ''
+  if (!scope) return
+  const el = document.querySelector(scope)?.querySelector(`[data-task-id="${selectedId.value}"]`)
+  el?.scrollIntoView({ block: 'nearest' })
+}
+const moveSelection = async (delta) => {
+  const list = visibleTaskList.value
+  if (!list.length) return
+  let idx = list.findIndex((it) => it.id === selectedId.value)
+  if (idx < 0) idx = delta > 0 ? 0 : list.length - 1
+  else idx = Math.min(list.length - 1, Math.max(0, idx + delta))
+  selectedId.value = list[idx].id
+  await ensureSelectedVisible()
+}
+const selectedVisibleItem = computed(() => visibleTaskList.value.find((it) => it.id === selectedId.value) || null)
+
 const categoryStats = computed(() => ['work', 'life', 'study'].map((key) => {
   const list = items.value.filter((i) => i.category === key)
   const done = list.filter((i) => i.done).length
@@ -1076,20 +1173,31 @@ const setStatus = async (it, next) => {
 }
 const toggleDone = (it) => setStatus(it, it.done ? 'TODO' : 'DONE')
 
-const snooze = async (it) => {
-  const next = addDaysIso(todayStr(), 1)
+const isoToCnDate = (iso) => {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso || ''))
+  return m ? `${m[1]}年${m[2]}月${m[3]}日` : ''
+}
+const openDatePicker = (ev) => {
+  const input = ev.currentTarget?.querySelector?.('input[type="date"]')
+  if (!input) return
+  try { input.showPicker?.() } catch { /* WebView 不支持时退回原生焦点 */ }
+}
+const updateDeadline = async (it, iso, okText) => {
   try {
     const updated = await invoke('task_update_item', {
-      input: { id: it.id, fields: { deadline: `${next.slice(0, 4)}年${next.slice(5, 7)}月${next.slice(8, 10)}日` } },
+      input: { id: it.id, fields: { deadline: iso ? isoToCnDate(iso) : '' } },
     })
     const fresh = Array.isArray(updated) ? updated.find((x) => x.internalId === it.id) : null
     if (fresh) patchLocal(it, fresh)
-    message.success('已顺延到明天')
+    message.success(okText)
   } catch (e) {
-    logger.error('顺延失败:', e)
-    message.error('顺延失败：' + (e?.message || e))
+    logger.error('更新截止失败:', e)
+    message.error('更新截止失败：' + (e?.message || e))
   }
 }
+const snooze = (it) => updateDeadline(it, addDaysIso(todayStr(), 1), '已顺延到明天')
+const setDeadline = (it, iso) => updateDeadline(it, iso, iso ? '已设置截止' : '已清除截止')
+const clearDeadline = (it) => setDeadline(it, '')
 
 const unfocus = async (it) => {
   try {
@@ -1719,6 +1827,7 @@ watch(planMode, async (m) => {
   }
 })
 watch(heatmapYear, () => { selectedDay.value = '' })
+watch([view, planMode], () => { selectedId.value = '' })
 
 // 任务数据变化时，把事件推给已挂载的日历。
 watch(calendarEvents, async (evs) => {
@@ -1742,8 +1851,27 @@ const onKeydown = (e) => {
     }
     return
   }
+  if (detailVisible.value) return
   if (isTypingTarget(e) || e.metaKey || e.ctrlKey || e.altKey) return
-  if (e.key === 'n' || e.key === 'N') {
+  const onButton = e.target?.closest?.('button, a, [role="button"]')
+  if (onButton && (e.key === 'Enter' || e.key === ' ' || e.code === 'Space')) return
+  if (e.key === 'j' || e.key === 'J') {
+    void moveSelection(1)
+    e.preventDefault()
+  } else if (e.key === 'k' || e.key === 'K') {
+    void moveSelection(-1)
+    e.preventDefault()
+  } else if (e.key === 'Enter') {
+    if (selectedVisibleItem.value) {
+      openDetail(selectedVisibleItem.value)
+      e.preventDefault()
+    }
+  } else if (e.key === ' ' || e.code === 'Space') {
+    if (selectedVisibleItem.value) {
+      void toggleDone(selectedVisibleItem.value)
+      e.preventDefault()
+    }
+  } else if (e.key === 'n' || e.key === 'N') {
     view.value = 'today'
     void focusCapture()
     e.preventDefault()
@@ -1865,6 +1993,7 @@ onUnmounted(() => {
   padding: 10px; cursor: pointer; transition: box-shadow .15s, transform .05s;
 }
 .tm-card:hover { box-shadow: 0 3px 10px rgba(0,0,0,.12); }
+.tm-card.selected { border-color: var(--tm-accent); box-shadow: 0 0 0 2px var(--tm-accent-soft); }
 .tm-card:active { transform: scale(.99); }
 .tm-card.overdue { border-color: #d03050; }
 .tm-card-top { display: flex; align-items: flex-start; gap: 6px; }
@@ -1874,6 +2003,38 @@ onUnmounted(() => {
 .tm-card-meta { display: flex; align-items: center; gap: 8px; margin-top: 9px; flex-wrap: wrap; font-size: 13px; color: var(--guaxi-text-secondary); }
 .tm-date { display: inline-flex; align-items: center; gap: 2px; }
 .tm-date.deadline { color: #d03050; }
+
+/* 卡片内联：状态芯片 + 截止日期，透明原生控件覆盖承接点击 */
+.tm-status-wrap { position: relative; display: inline-flex; }
+.tm-status-chip { font-size: 11px; padding: 1px 7px; border-radius: 8px; background: var(--guaxi-header-bg); color: var(--guaxi-text-secondary); white-space: nowrap; }
+.tm-status-chip.st-DONE { color: #18a058; background: rgba(24, 160, 88, 0.16); }
+.tm-status-chip.st-DOING,
+.tm-status-chip.st-NEXT { color: var(--tm-accent); background: var(--tm-accent-soft); }
+.tm-status-chip.st-PAUSED,
+.tm-status-chip.st-WAITING,
+.tm-status-chip.st-HOLD { color: #b07a12; background: rgba(240, 160, 32, 0.14); }
+.tm-status-chip.st-CANCELLED { color: #8a8f99; background: rgba(144, 147, 153, 0.16); }
+.tm-status-overlay {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  margin: 0; padding: 0; border: none; background: transparent;
+  opacity: 0; cursor: pointer; appearance: none; -webkit-appearance: none;
+}
+.tm-date-wrap { position: relative; display: inline-flex; align-items: center; gap: 2px; }
+.tm-date-chip { display: inline-flex; align-items: center; gap: 2px; font-size: 11px; color: #d03050; white-space: nowrap; }
+.tm-date-wrap.empty .tm-date-chip { color: var(--guaxi-text-secondary); opacity: 0.75; }
+.tm-date-overlay {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  margin: 0; padding: 0; border: none; background: transparent;
+  opacity: 0; cursor: pointer;
+}
+.tm-date-clear {
+  position: relative; z-index: 2; border: none; background: transparent;
+  color: var(--guaxi-text-secondary); cursor: pointer; font: inherit;
+  font-size: 12px; line-height: 1; padding: 0 2px;
+}
+.tm-date-clear:hover { color: #d03050; }
+:global([data-guaxi-theme="dark"]) .tm-date-overlay,
+:global([data-guaxi-theme="dark"]) .tm-status-overlay { color-scheme: dark; }
 .tm-type { font-size: 11px; padding: 0 6px; border-radius: 8px; color: #fff; }
 .tm-type.tt-bug { background: #d03050; } .tm-type.tt-task { background: #2080f0; } .tm-type.tt-other { background: #8a8f99; }
 .tm-did { font-size: 11px; color: var(--guaxi-text-secondary); opacity: 0.85; }
@@ -2073,6 +2234,7 @@ onUnmounted(() => {
 .tm-hint { padding: 12px 2px; font-size: 12px; color: var(--guaxi-text-secondary); }
 .tm-row { display: flex; align-items: center; gap: 10px; padding: 9px 6px; border-bottom: 1px dashed color-mix(in srgb, var(--guaxi-border) 55%, transparent); cursor: pointer; border-radius: 6px; }
 .tm-row:hover { background: color-mix(in srgb, var(--guaxi-panel-bg) 70%, transparent); }
+.tm-row.selected { background: var(--tm-accent-soft); box-shadow: inset 2px 0 0 var(--tm-accent); }
 .tm-row.overdue .tm-row-title { color: #d03050; }
 .tm-row-focus { padding-left: 2px; }
 .tm-focus-no { width: 18px; text-align: center; font-weight: 700; color: var(--tm-accent); font-size: 13px; }
