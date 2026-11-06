@@ -228,6 +228,33 @@
         <slot name="inline-composer" />
 
         <div class="mail-reader-content" @mouseover="onBodyAddressOver" @mouseout="onBodyAddressOut">
+          <!-- 附件放在正文上方：收到邮件第一眼就能看到，不用滚到底部。 -->
+          <div v-if="!isThread && detail.attachments?.length" class="mail-attachments">
+            <div
+              v-for="att in detail.attachments"
+              :key="att.part + att.filename"
+              class="mail-attachment-item"
+            >
+              <button
+                class="mail-attachment"
+                :title="`用系统默认程序打开 ${att.filename}`"
+                @click="$emit('open-attachment', { attachment: att, detail })"
+              >
+                <span aria-hidden="true">{{ iconFor(att.contentType) }}</span>
+                <span class="mail-attachment-name">{{ att.filename }}</span>
+                <span class="mail-attachment-size">{{ sizeLabel(att.size) }}</span>
+              </button>
+              <button
+                class="mail-attachment-save"
+                title="保存到本地"
+                aria-label="保存到本地"
+                @click="$emit('save-attachment', { attachment: att, detail })"
+              >
+                <MailIcon name="download" />
+              </button>
+            </div>
+          </div>
+
           <!-- 远端图片默认不加载：先问一句，避免打开即给发件人回一个「已读+IP」的信标 -->
           <div v-if="hasRemoteImages && imagesBlocked" class="mail-remote-banner">
             <span>这封邮件包含外部图片，默认没有加载。</span>
@@ -313,12 +340,7 @@
                 </div>
                 <span class="mail-thread-date">{{ threadDate(msg) }}</span>
               </header>
-              <div
-                class="mail-body mail-thread-body"
-                :style="readingStyle"
-                v-html="threadBody(msg)"
-                @click="onBodyClick"
-              ></div>
+              <!-- 附件在正文上方：打开会话卡片先看到附件，不用滚到正文末尾。 -->
               <div v-if="msg.attachments?.length" class="mail-attachments">
                 <div
                   v-for="att in msg.attachments"
@@ -344,6 +366,12 @@
                   </button>
                 </div>
               </div>
+              <div
+                class="mail-body mail-thread-body"
+                :style="readingStyle"
+                v-html="threadBody(msg)"
+                @click="onBodyClick"
+              ></div>
             </article>
           </div>
 
@@ -358,31 +386,6 @@
             ></div>
             <pre v-else class="mail-body mail-body--plain">{{ detail.text }}</pre>
 
-            <div v-if="detail.attachments?.length" class="mail-attachments">
-              <div
-                v-for="att in detail.attachments"
-                :key="att.part + att.filename"
-                class="mail-attachment-item"
-              >
-                <button
-                  class="mail-attachment"
-                  :title="`用系统默认程序打开 ${att.filename}`"
-                  @click="$emit('open-attachment', { attachment: att, detail })"
-                >
-                  <span aria-hidden="true">{{ iconFor(att.contentType) }}</span>
-                  <span class="mail-attachment-name">{{ att.filename }}</span>
-                  <span class="mail-attachment-size">{{ sizeLabel(att.size) }}</span>
-                </button>
-                <button
-                  class="mail-attachment-save"
-                  title="保存到本地"
-                  aria-label="保存到本地"
-                  @click="$emit('save-attachment', { attachment: att, detail })"
-                >
-                  <MailIcon name="download" />
-                </button>
-              </div>
-            </div>
           </template>
         </div>
       </div>

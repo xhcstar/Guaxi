@@ -648,6 +648,34 @@
         </div>
       </div>
 
+      <!-- 附件放在正文上方：收件人打开邮件第一眼就能看到附件，不用滚到底部。 -->
+      <div v-if="draft.attachments.length || (draft.inlineImages || []).length" class="mail-attach-list">
+        <button
+          v-for="att in draft.attachments"
+          :key="att.path"
+          class="mail-attachment"
+          :class="{ 'is-danger': isDangerous(att.name) }"
+          :title="warningFor(att.name) || `移除 ${att.path}`"
+          @click="removeAttachment(att.path)"
+        >
+          <span>{{ isDangerous(att.name) ? '⚠' : '📄' }}</span>
+          <span class="mail-attachment-name">{{ att.name }}</span>
+          <span v-if="sizeHint(att.path)" class="mail-attachment-size">{{ sizeHint(att.path) }}</span>
+          <span class="mail-attachment-size">×</span>
+        </button>
+        <button
+          v-for="img in draft.inlineImages || []"
+          :key="img.contentId"
+          class="mail-attachment is-inline"
+          :title="`移除图片 ${img.name || img.path}`"
+          @click="removeInlineImage(img.contentId)"
+        >
+          <span>🖼</span>
+          <span class="mail-attachment-name">{{ img.name || '插入的图片' }}</span>
+          <span class="mail-attachment-size">×</span>
+        </button>
+      </div>
+
       <div class="mail-compose-body">
         <textarea
           v-if="sourceMode"
@@ -1047,33 +1075,6 @@
       </template>
     </div>
 
-      </div>
-
-      <div v-if="draft.attachments.length || (draft.inlineImages || []).length" class="mail-attach-list">
-        <button
-          v-for="att in draft.attachments"
-          :key="att.path"
-          class="mail-attachment"
-          :class="{ 'is-danger': isDangerous(att.name) }"
-          :title="warningFor(att.name) || `移除 ${att.path}`"
-          @click="removeAttachment(att.path)"
-        >
-          <span>{{ isDangerous(att.name) ? '⚠' : '📄' }}</span>
-          <span class="mail-attachment-name">{{ att.name }}</span>
-          <span v-if="sizeHint(att.path)" class="mail-attachment-size">{{ sizeHint(att.path) }}</span>
-          <span class="mail-attachment-size">×</span>
-        </button>
-        <button
-          v-for="img in draft.inlineImages || []"
-          :key="img.contentId"
-          class="mail-attachment is-inline"
-          :title="`移除图片 ${img.name || img.path}`"
-          @click="removeInlineImage(img.contentId)"
-        >
-          <span>🖼</span>
-          <span class="mail-attachment-name">{{ img.name || '插入的图片' }}</span>
-          <span class="mail-attachment-size">×</span>
-        </button>
       </div>
     </div>
 

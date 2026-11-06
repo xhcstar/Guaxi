@@ -1229,20 +1229,6 @@ pub fn pop3_forget_uidl(account_id: &str, uidl: &str) -> Result<(), String> {
     .map_err(|e| e.to_string())
 }
 
-/// 本地移动换了 uid 之后，把 UIDL 映射跟着挪到新号上。
-///
-/// 不跟着挪，`pop3_uids` 还指着那条已经删掉的旧行，同步时「这封还在不在本地」
-/// 就查不到，于是当成用户删掉了 → 忘记 UIDL → 下一轮重新下载一份。
-pub fn pop3_remap_uid(account_id: &str, from: u32, to: u32) -> Result<(), String> {
-    let conn = open()?;
-    conn.execute(
-        "UPDATE pop3_uids SET uid=?3 WHERE account_id=?1 AND uid=?2",
-        params![account_id, from, to],
-    )
-    .map(|_| ())
-    .map_err(|e| e.to_string())
-}
-
 /// 这个 uid 在本账户的**任意**文件夹里还存在吗。
 ///
 /// POP3 的 uid 实际是账户内全局唯一的（`pop3_uid_for` 就按全局 MAX+1 分配），
@@ -1401,18 +1387,6 @@ pub fn set_sync_state(
     )
     .map(|_| ())
     .map_err(|e| e.to_string())
-}
-
-pub fn next_free_uid(account_id: &str) -> Result<u32, String> {    let conn = open()?;
-    let max_of = |table: &str| -> i64 {
-        conn.query_row(
-            &format!("SELECT COALESCE(MAX(uid), 0) FROM {table} WHERE account_id=?1"),
-            params![account_id],
-            |r| r.get(0),
-        )
-        .unwrap_or(0)
-    };
-    Ok(max_of("messages").max(max_of("pop3_uids")).saturating_add(1) as u32)
 }
 
 /// 文件夹里本地已知的最大 UID（增量同步的起点）。
@@ -2086,6 +2060,90 @@ pub fn get_summary(
     )
     .optional()
     .map_err(|e| e.to_string())
+}
+
+/// 本地文件夹之间整批搬行（POP3 / 纯本地文件夹）。
+///
+/// 只改 `folder` 列，不复制、不解密再加密正文与原文：以前逐封读出正文和原文、
+/// 解密后写一份新的、再删旧行，一封带几 MB 附件的邮件要来回加解密好几遍，
+/// 一批几十封就能卡十几秒。POP3 的 uid 在账户内全局唯一，目标文件夹里不可能
+/// 已经存在同一个 uid，所以直接 UPDATE 即可；FTS 按 messages.rowid 关联，
+/// rowid 不变，也不需要重建索引。
+pub fn move_messages_to_folder(
+    account_id: &str,
+    from: &str,
+    uids: &[u32],
+    to: &str,
+) -> Result<usize, String> {
+    if uids.is_empty() || from == to {
+        return Ok(0);
+    }
+    let mut conn = open()?;
+    let tx = conn.transaction().map_err(|e| e.to_string())?;
+    let mut moved = 0usize;
+    for uid in uids {
+        // 正常情况下 uid 在账户内全局唯一，只有历史数据才可能出现目标夹已有同号；
+        // 真撞上时给这封换一个空闲号，避免整批移动因为主键冲突失败。
+        let target_uid = if tx
+            .query_row(
+                "SELECT 1 FROM messages WHERE account_id=?1 AND folder=?2 AND uid=?3",
+                params![account_id, to, uid],
+                |_| Ok(()),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?
+            .is_some()
+        {
+            let from_messages: i64 = tx
+                .query_row(
+                    "SELECT COALESCE(MAX(uid), 0) + 1 FROM messages WHERE account_id=?1",
+                    params![account_id],
+                    |r| r.get(0),
+                )
+                .unwrap_or(1);
+            let from_uids: i64 = tx
+                .query_row(
+                    "SELECT COALESCE(MAX(uid), 0) + 1 FROM pop3_uids WHERE account_id=?1",
+                    params![account_id],
+                    |r| r.get(0),
+                )
+                .unwrap_or(1);
+            let free = from_messages.max(from_uids) as u32;
+            // 换了号，UIDL 映射也要跟着走，否则下一轮同步会当成新邮件重下。
+            tx.execute(
+                "UPDATE pop3_uids SET uid=?3 WHERE account_id=?1 AND uid=?2",
+                params![account_id, uid, free],
+            )
+            .ok();
+            free
+        } else {
+            *uid
+        };
+
+        let changed = tx
+            .execute(
+                "UPDATE messages SET folder=?4, uid=?5 WHERE account_id=?1 AND folder=?2 AND uid=?3",
+                params![account_id, from, uid, to, target_uid],
+            )
+            .map_err(|e| e.to_string())?;
+        if changed == 0 {
+            continue;
+        }
+        // 正文 / 原文 / 远端 id 都跟着走；缺失的行不影响移动本身。
+        tx.execute(
+            "UPDATE message_bodies SET folder=?4, uid=?5 WHERE account_id=?1 AND folder=?2 AND uid=?3",
+            params![account_id, from, uid, to, target_uid],
+        )
+        .ok();
+        tx.execute(
+            "UPDATE remote_ids SET folder=?4, uid=?5 WHERE account_id=?1 AND folder=?2 AND uid=?3",
+            params![account_id, from, uid, to, target_uid],
+        )
+        .ok();
+        moved += changed;
+    }
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(moved)
 }
 
 pub fn delete_message(account_id: &str, folder: &str, uid: u32) -> Result<(), String> {

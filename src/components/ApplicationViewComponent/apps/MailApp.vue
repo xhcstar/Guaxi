@@ -1509,6 +1509,7 @@ async function onOpenAttachment({ attachment, detail }) {
       uid: message.uid,
       part: attachment.part,
       filename: attachment.filename,
+      contentType: attachment.contentType || null,
     })
   } catch (error) {
     notify(String(error?.message || error), true)

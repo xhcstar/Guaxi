@@ -193,6 +193,9 @@ const themeOverrides = computed(() => {
      文字几乎看不清、悬停/进度槽发白。这里补齐别名，统一跟随主题。 */
   --guaxi-text-color: var(--guaxi-text-primary);
   --guaxi-hover-bg: rgba(15, 23, 42, 0.05);
+  /* 全局窄滚动条（8px）：滑块用半透明中性色，亮/暗主题各一档。 */
+  --guaxi-scrollbar-thumb: rgba(15, 23, 42, 0.24);
+  --guaxi-scrollbar-thumb-hover: rgba(15, 23, 42, 0.4);
   --guaxi-header-shadow: 0px 1px 2px rgba(0, 0, 0, 0.06);
   /* Markdown 渲染出来的代码块字号；与 styles/guaxiBase.css 的值保持一致。 */
   --guaxi-markdown-code-font-size: 17px;
@@ -278,6 +281,9 @@ const themeOverrides = computed(() => {
   --guaxi-border-color: var(--guaxi-border);
   /* 暗色下的弱分隔线要比亮色更亮一档，否则表格行边界完全看不见。 */
   --guaxi-border-weak: rgba(255, 255, 255, 0.11);
+  /* 暗色滚动条：浅色半透明滑块，不能继续用亮色主题的深灰。 */
+  --guaxi-scrollbar-thumb: rgba(255, 255, 255, 0.18);
+  --guaxi-scrollbar-thumb-hover: rgba(255, 255, 255, 0.32);
   /* 表格：底色跟面板走，不压成纯黑；表头比底色亮一档，斑马行只差一点点。 */
   --guaxi-table-bg: #21252b;
   --guaxi-table-border: #353c47;
@@ -379,6 +385,33 @@ body {
     'Microsoft YaHei',
     'Courier New'
   ) !important;
+}
+
+/* 全局窄滚动条：所有可滚动区域统一 8px，滑块颜色跟随明暗主题。
+   具体组件（代码块 / 阅读器）若有自己的滚动条规则，会以更高优先级覆盖这里。 */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--guaxi-scrollbar-thumb) transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--guaxi-scrollbar-thumb);
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background-clip: content-box;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--guaxi-scrollbar-thumb-hover);
+  background-clip: content-box;
+}
+*::-webkit-scrollbar-corner {
+  background: transparent;
 }
 
 pre,

@@ -59,7 +59,7 @@ use model::{
 use std::collections::HashMap;
 use std::sync::OnceLock;
 use tauri::{command, AppHandle, Emitter};
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 const KEYRING_SERVICE: &str = "guaxi-mail";
@@ -992,22 +992,9 @@ async fn sync_folder_guarded(
     };
     let batched = !graph::is_graph(account) && !ews::is_ews(account);
     let (batch_tx, mut batch_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<MessageSummary>>();
-    // 分块落库时通知前端刷新列表：首次同步几百封邮件时，用户不用盯着空白列表
-    // 等整批下载完。`partial` 让前端只刷新首屏，别把已经翻到很下面的列表拽回顶部。
-    let progress_app = app.clone();
-    let progress_account = account_id.clone();
-    let progress_folder = folder_name.clone();
+    // 每批落库后交给下面「边收边跑规则」的循环；进度事件也放到规则跑完之后
+    // 再发，否则列表会先显示这封邮件、过一会儿又被规则移走，看起来像卡住。
     let on_progress = move |batch: &[MessageSummary]| {
-        let _ = progress_app.emit(
-            MAIL_SYNC_EVENT,
-            serde_json::json!({
-                "accountId": progress_account,
-                "folder": progress_folder,
-                "added": batch.len(),
-                "partial": true,
-            }),
-        );
-        // 交给下面「边收边跑规则」的循环。无界通道，发送不会阻塞下载。
         let _ = batch_tx.send(batch.to_vec());
     };
 
@@ -1087,6 +1074,16 @@ async fn sync_folder_guarded(
             if !batch.is_empty() && !rules.is_empty() {
                 apply_rules_to_new(&rule_account, &batch, &rules).await;
             }
+            // 规则跑完再刷新列表：这一批里该移走的已经不在了，不会先闪一下再消失。
+            let _ = app.emit(
+                MAIL_SYNC_EVENT,
+                serde_json::json!({
+                    "accountId": account.id,
+                    "folder": folder,
+                    "added": batch.len(),
+                    "partial": true,
+                }),
+            );
         }
     }
 
@@ -1100,6 +1097,17 @@ async fn sync_folder_guarded(
     // Graph / EWS 没有分批回调：整批同步完再跑一次规则。
     if !batched && !rules.is_empty() && !items.is_empty() {
         apply_rules_to_new(account, &items, &rules).await;
+    }
+
+    // 兜底补分类：同步中断 / 某批移动失败时，收件箱里会留下命中规则的邮件。
+    // 放在同步收尾时做，此时数据库写入已经结束，不会再和下载批次抢写锁。
+    let inbox_synced = store::list_folders(&account.id)
+        .ok()
+        .and_then(|list| list.into_iter().find(|meta| meta.name == folder))
+        .map(|meta| meta.role == FolderRole::Inbox)
+        .unwrap_or(false);
+    if inbox_synced && settings.rules_enabled {
+        reclassify_inbox_moves(account).await;
     }
     Ok(items)
 }
@@ -1447,6 +1455,89 @@ async fn apply_rule_move_batch(account: &Account, folder: &str, uids: &[u32], ta
             "mail: 规则移动邮件失败"
         ),
         Err(e) => error!(error = %e, "mail: 规则移动任务失败"),
+    }
+}
+
+/// 收件箱补分类：只处理「命中移动规则却还留在收件箱」的邮件。
+///
+/// 正常路径上规则在每批邮件落库后立刻执行；但同步中途被关掉、网络断开、
+/// 或某一批移动撞上数据库锁时，这些邮件会留在收件箱里再也没有机会被处理。
+/// 这里在每次收件箱同步结束后扫一遍最近的邮件，只执行「移动 / 移入垃圾箱」，
+/// 不重复转发、不重复打标记——避免把用户手动放回收件箱的邮件反复折腾。
+async fn reclassify_inbox_moves(account: &Account) {
+    let Ok(folders) = store::list_folders(&account.id) else {
+        return;
+    };
+    let Some(inbox) = folders.iter().find(|folder| folder.role == FolderRole::Inbox) else {
+        return;
+    };
+    let rules: Vec<MailRule> = store::list_rules()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|rule| rule.enabled)
+        .collect();
+    if rules.is_empty() {
+        return;
+    }
+    let trash = folder_by_role(&account.id, FolderRole::Trash).map(|folder| folder.name);
+    let body_needed = rules::needs_body(&rules);
+    let rows = store::list_recent(&account.id, &inbox.name, 300, 0).unwrap_or_default();
+
+    let mut moves: HashMap<String, Vec<u32>> = HashMap::new();
+    for msg in rows.iter().filter(|msg| !msg.outgoing) {
+        let cheap_ctx = rules::RuleContext {
+            message: msg,
+            body_preview: "",
+            account,
+            folder_role: "inbox",
+        };
+        let body = if body_needed && rules::body_relevant(&rules, &cheap_ctx) {
+            store::get_body_text(&msg.account_id, &msg.folder, msg.uid).unwrap_or_default()
+        } else {
+            String::new()
+        };
+        let ctx = rules::RuleContext {
+            message: msg,
+            body_preview: &body,
+            account,
+            folder_role: "inbox",
+        };
+        let hits = rules::evaluate(&rules, &ctx);
+        if hits.is_empty() {
+            continue;
+        }
+        let actions: Vec<_> = hits.iter().map(|(_, action)| action.clone()).collect();
+        let merged = rules::merge_actions(&actions);
+        let target = merged
+            .move_to
+            .clone()
+            .or_else(|| merged.delete.then(|| trash.clone()).flatten());
+        if let Some(target) = target {
+            moves.entry(target).or_default().push(msg.uid);
+        }
+    }
+
+    let mut moved = 0usize;
+    for (target, uids) in moves {
+        if uids.is_empty() {
+            continue;
+        }
+        apply_rule_move_batch(account, &inbox.name, &uids, &target).await;
+        // 移动失败时会留在收件箱，下一轮同步再补；这里只统计真正消失的。
+        let alive: std::collections::HashSet<u32> =
+            store::list_recent(&account.id, &inbox.name, 300, 0)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|msg| msg.uid)
+                .collect();
+        moved += uids.iter().filter(|uid| !alive.contains(uid)).count();
+    }
+    if moved > 0 {
+        info!(
+            account = %account.email,
+            moved,
+            "mail: 收件箱补分类完成"
+        );
     }
 }
 
@@ -1804,6 +1895,38 @@ pub async fn mail_get_message(
         }
     }
 
+    // 带附件的邮件打开后，后台把原始报文缓存下来。
+    //
+    // POP3 只能整封 RETR、IMAP 也要整封 FETCH，点附件时再下载会等很久；
+    // 趁用户在读正文时先取回，真正点附件时只做本地解包。附件太大（>32MB，
+    // 与原文缓存上限一致）就不预取，避免为了点一个附件把整封几十 MB 都拉下来。
+    let attachment_bytes: u64 = detail.attachments.iter().map(|att| att.size as u64).sum();
+    let has_attachments = summary.has_attachments || !detail.attachments.is_empty();
+    if has_attachments
+        // 尺寸未知（解析器给 0）时也预取：至少上限交给原文缓存那一层判断。
+        && (attachment_bytes == 0 || attachment_bytes <= store::RAW_CACHE_LIMIT as u64)
+        && store::cached_raw_body(&account_id, &folder, uid).is_none()
+    {
+        let acc_id = account_id.clone();
+        let folder_name = folder.clone();
+        tauri::async_runtime::spawn(async move {
+            let Ok(account) = load_account(&acc_id) else {
+                return;
+            };
+            let password = if graph::is_graph(&account) {
+                String::new()
+            } else {
+                match account_password(&account) {
+                    Ok(value) => value,
+                    Err(_) => return,
+                }
+            };
+            if let Err(error) = fetch_raw_bytes(&account, &password, &folder_name, uid).await {
+                debug!(error = %error, "mail: 预取附件原文失败");
+            }
+        });
+    }
+
     // 打开即已读（与主流客户端一致）。失败不影响阅读。
     if !summary.seen && mark_seen_inner(&account_id, &folder, &[uid], true).await.is_ok() {
         detail.seen = true;
@@ -2061,41 +2184,15 @@ fn pop3_delete_to_trash(account: &Account, folder: &str, uids: &[u32]) -> Result
 /// 同一封邮件按同步轮次越攒越多（真实反馈：SSL 里 1400 行只有 200 封不同的邮件）。
 /// 只有目标文件夹确实已经占着这个 uid 时才换新号，并把映射一起挪过去。
 fn move_locally(account_id: &str, folder: &str, uids: &[u32], target: &str) -> Result<(), String> {
-    // 原地移动没有意义，而且下面的「先写目标行、再删来源行」在同文件夹里
-    // 会把刚写下的那一份删掉——直接返回。
+    // 原地移动没有意义（同一行改两次反而要多写一次索引）。
     if folder == target {
         return Ok(());
     }
-    for uid in uids {
-        let Some(mut summary) = store::get_summary(account_id, folder, *uid)? else {
-            continue;
-        };
-        let moved_uid = if store::get_summary(account_id, target, *uid)?.is_some() {
-            let free = store::next_free_uid(account_id)?;
-            let _ = store::pop3_remap_uid(account_id, *uid, free);
-            free
-        } else {
-            *uid
-        };
-        summary.folder = target.to_string();
-        summary.uid = moved_uid;
-        store::upsert_summaries(std::slice::from_ref(&summary))?;
-        if let Some((html, text, attachments, _)) = store::get_body(account_id, folder, *uid)? {
-            store::upsert_body(
-                account_id,
-                target,
-                moved_uid,
-                html.as_deref(),
-                &text,
-                &attachments,
-            )?;
-        }
-        // 原文缓存（打开过的邮件才有）也跟着搬：POP3 没有服务器副本，
-        // 不搬的话搬到规则文件夹之后就打不开附件、另存 .eml 也会失败。
-        if let Some(raw) = store::cached_raw_body(account_id, folder, *uid) {
-            let _ = store::cache_raw_body(account_id, target, moved_uid, &raw);
-        }
-        let _ = store::delete_message(account_id, folder, *uid);
+    // 整批在一个事务里只改 folder 列：正文 / 原文都是大字段，逐封复制会让
+    // 规则分类卡在加解密上（真实反馈：几百封要等几分钟）。
+    let moved = store::move_messages_to_folder(account_id, folder, uids, target)?;
+    if moved == 0 {
+        return Ok(());
     }
     // POP3 的邮件全在本机：两个文件夹的数量都能就地重算，侧栏角标才是准的
     // （只在内存里改的话，重启后又会读回旧数字）。
@@ -2238,9 +2335,13 @@ pub async fn mail_open_attachment(
     uid: u32,
     part: u32,
     filename: String,
+    content_type: Option<String>,
 ) -> Result<String, String> {
     ensure_init(&app)?;
-    let safe_name = sanitize_filename(&filename);
+    let safe_name = ensure_attachment_extension(
+        sanitize_filename(&filename),
+        content_type.as_deref(),
+    );
     let dir = store::data_root(&app)?
         .join("attachments")
         .join(sanitize_filename(&account_id))
@@ -2257,9 +2358,55 @@ pub async fn mail_open_attachment(
         let (bytes, _) = mime::extract_part(&raw, part).ok_or("找不到该附件")?;
         std::fs::write(&path, &bytes).map_err(|e| format!("写入附件失败: {e}"))?;
     }
+    // 只调用系统默认关联（不指定程序、不写注册表、不改默认应用）。
+    // 如果 Windows 弹出「选择应用」，是因为该扩展名在系统里没有默认程序；
+    // 文件名缺少扩展名时按 MIME 补一个（见 `ensure_attachment_extension`），
+    // 能避免这种对话框，也就不会把用户的选择记成新的默认程序。
     tauri_plugin_opener::open_path(&path, None::<&str>)
         .map_err(|e| format!("调用系统默认程序失败: {e}"))?;
     Ok(path.to_string_lossy().to_string())
+}
+
+/// 文件名没有扩展名时，按 MIME 类型补一个常见扩展名。
+///
+/// 没有扩展名的文件在 Windows 上会弹「选择应用」，用户选一次就可能改变该类型的
+/// 默认程序；补上扩展名后系统直接走已有默认关联。
+fn ensure_attachment_extension(name: String, content_type: Option<&str>) -> String {
+    if std::path::Path::new(&name).extension().is_some() {
+        return name;
+    }
+    let Some(ext) = content_type.and_then(mime_extension) else {
+        return name;
+    };
+    format!("{name}.{ext}")
+}
+
+fn mime_extension(content_type: &str) -> Option<&'static str> {
+    let base = content_type.split(';').next()?.trim().to_ascii_lowercase();
+    Some(match base.as_str() {
+        "application/pdf" => "pdf",
+        "image/png" => "png",
+        "image/jpeg" => "jpg",
+        "image/gif" => "gif",
+        "image/webp" => "webp",
+        "image/svg+xml" => "svg",
+        "text/plain" => "txt",
+        "text/html" => "html",
+        "text/csv" => "csv",
+        "application/json" => "json",
+        "application/xml" | "text/xml" => "xml",
+        "application/zip" => "zip",
+        "message/rfc822" => "eml",
+        "application/msword" => "doc",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document" => "docx",
+        "application/vnd.ms-excel" => "xls",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" => "xlsx",
+        "application/vnd.ms-powerpoint" => "ppt",
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation" => "pptx",
+        "audio/mpeg" => "mp3",
+        "video/mp4" => "mp4",
+        _ => return None,
+    })
 }
 
 fn unique_path(dir: &std::path::Path, filename: &str) -> std::path::PathBuf {

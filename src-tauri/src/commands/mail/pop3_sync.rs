@@ -77,7 +77,7 @@ pub fn ensure_folders(account: &Account) -> Result<Vec<MailFolder>, String> {
 ///
 /// 以前整箱收完才一次性入库：重新添加账户 / 换机器时，大邮箱要等几分钟才看到
 /// 第一封邮件。分批入库后，每几十封就能显示一批，进度是看得见的。
-const POP3_STORE_BATCH: usize = 20;
+const POP3_STORE_BATCH: usize = 5;
 
 /// 把已下载、还没入库的邮件写进库（一个事务）。
 fn store_pending(

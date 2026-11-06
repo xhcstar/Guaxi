@@ -283,6 +283,33 @@
         </section>
 
         <section v-show="activeTab === 'security'" class="mail-settings-panel">
+        <!-- 本地存储加密：直接决定每封新邮件写库时是否做 AES 加解密，
+             是用户能感知到的性能开关，所以放在安全页最前面、说明写清楚。 -->
+        <div class="mail-section-divider"></div>
+        <div class="mail-flabel" style="margin-bottom: 6px">本地存储加密（性能）</div>
+        <label class="mail-check">
+          <input
+            type="checkbox"
+            :checked="encryptionEnabled"
+            @change="toggleEncryption($event.target.checked)"
+          />
+          加密每一封新入库邮件的正文、附件清单与原文（当前：{{
+            encryptionEnabled ? '已开启' : '已关闭'
+          }}）
+        </label>
+        <p class="mail-hint" style="margin: 0 0 8px">
+          默认开启，密钥保存在系统凭据库。关闭后新邮件以明文写入本地库，同步和打开附件会更快；
+          已经加密的旧邮件仍可正常读取，不会自动转成明文。开启加密时<strong>正文搜索</strong>不可用
+          ——密文无法建立全文索引；主题、发件人、收件人、时间的搜索不受影响。
+        </p>
+        <p
+          v-if="encryptionError"
+          class="mail-hint"
+          style="margin: 0 0 8px; color: var(--mail-danger)"
+        >
+          {{ encryptionError }}
+        </p>
+
         <div class="mail-section-divider"></div>
         <div class="mail-flabel" style="margin-bottom: 6px">端到端加密与签名</div>
         <div class="mail-crypto-grid">
@@ -436,7 +463,8 @@
           </button>
         </div>
 
-        <div class="mail-field">
+        <!-- 和上面的按钮行留出间距：否则标签紧贴按钮下缘，看起来像被按钮压住。 -->
+        <div class="mail-field" style="margin-top: 16px">
           <label class="mail-flabel">本地邮件保留天数（0 = 永久；只清本地缓存，星标邮件不动）</label>
           <input
             class="mail-input"
@@ -473,19 +501,6 @@
         </label>
 
         <div class="mail-section-divider"></div>
-        <div class="mail-flabel" style="margin-bottom: 6px">本地加密</div>
-        <label class="mail-check">
-          <input
-            type="checkbox"
-            :checked="encryptionEnabled"
-            @change="toggleEncryption($event.target.checked)"
-          />
-          正文与附件在本地数据库中加密存储（密钥存系统凭据库）
-        </label>
-        <p class="mail-hint" style="margin: 0 0 8px">
-          关闭后新到的邮件正文明文落盘，已有密文仍可读。开启加密后，<strong>正文搜索</strong>不再可用
-          ——密文无法建立全文索引；主题、发件人、收件人、时间的搜索不受影响。
-        </p>
 
         <label class="mail-check">
           <input
@@ -583,7 +598,7 @@ const SETTINGS_TABS = [
     key: 'security',
     label: '安全与规则',
     icon: 'shield',
-    hint: 'S/MIME、OpenPGP 与服务器端规则（Sieve）',
+    hint: '本地存储加密、S/MIME、OpenPGP 与服务器端规则（Sieve）',
   },
   {
     key: 'templates',
@@ -595,7 +610,7 @@ const SETTINGS_TABS = [
     key: 'data',
     label: '数据与诊断',
     icon: 'note',
-    hint: '诊断报告、本地加密、存储位置与备份',
+    hint: '诊断报告、存储位置与备份',
   },
 ]
 
@@ -724,6 +739,8 @@ const densityOptions = [
 
 const fonts = ref([])
 const encryptionEnabled = ref(true)
+/** 切换加密开关失败时的就地提示（不用系统 alert）。 */
+const encryptionError = ref('')
 const storage = ref({ activeDir: '', customDir: '', dbPath: '', dbBytes: 0 })
 const storageError = ref('')
 const migrating = ref(false)
@@ -937,8 +954,9 @@ async function toggleEncryption(enabled) {
   try {
     await invoke('mail_set_encryption_enabled', { enabled })
     encryptionEnabled.value = enabled
+    encryptionError.value = ''
   } catch (error) {
-    window.alert(String(error?.message || error))
+    encryptionError.value = `未能保存加密设置：${String(error?.message || error)}`
     encryptionEnabled.value = !enabled
   }
 }
