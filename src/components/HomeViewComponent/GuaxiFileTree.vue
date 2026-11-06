@@ -721,6 +721,9 @@ const taskModeInitialized = ref(false)
 const taskCatTrees = reactive({ work: [], life: [], study: [] })
 const taskCatExpandedKeys = reactive({ work: [], life: [], study: [] })
 const taskCatSelectedKeys = reactive({ work: [], life: [], study: [] })
+// 某分类的树是否已从磁盘加载过。空数组既可能是「没加载」也可能是「目录本来就空」，
+// 只用 length 判断会让空目录在外部新建文件后一直不刷新。
+const taskCatLoaded = reactive({ work: false, life: false, study: false })
 const catPathOf = (key) => normalizePath(taskCategoryPaths.value[key] || '')
 const catZhOf = (key) => (TASK_CATEGORIES.find((c) => c.key === key)?.zh) || key
 const inactiveTaskCats = computed(() => TASK_CATEGORIES.filter((c) => c.key !== activeTaskCat.value))
@@ -1375,7 +1378,7 @@ const handleImportMarkdownFile = async (repoPath, action = 'copy', targetDirOver
       const uniqueName = makeUniqueFileName(existingNames, fileName);
       const dstPath = normalizePath(`${targetDir}/${uniqueName}`);
       await invoke('copy_path', { sourcePath: srcPath, destinationPath: dstPath });
-      await refreshDirectory(targetDir);
+      await refreshTreesForDir(targetDir, { expand: true });
       logger.info('[ImportFile] raw copy import success', { srcPath, dstPath });
       message.success('已原样导入');
       return;
@@ -1396,7 +1399,7 @@ const handleImportMarkdownFile = async (repoPath, action = 'copy', targetDirOver
       const content = await invoke('read_file_content', { path: srcPath });
       await invoke('write_file_content', { path: dstPath, content: String(content ?? '') });
 
-      await refreshDirectory(targetDir);
+      await refreshTreesForDir(targetDir, { expand: true });
 
       logger.info('[ImportFile] markdown import success', { dstPath, len: String(content ?? '').length });
       message.success('Markdown 文件已导入');
@@ -1427,7 +1430,7 @@ const handleImportMarkdownFile = async (repoPath, action = 'copy', targetDirOver
         loading?.destroy?.();
       }
 
-      await refreshDirectory(targetDir);
+      await refreshTreesForDir(targetDir, { expand: true });
 
       logger.info('[ImportFile] pandoc import success', { dstPath });
       message.success('已转换为 Markdown 并导入');
@@ -1435,7 +1438,7 @@ const handleImportMarkdownFile = async (repoPath, action = 'copy', targetDirOver
   } catch (error) {
     logger.error('[ImportFile] failed:', error);
     message.error(`导入失败: ${error.message || error}`);
-    await refreshDirectory(targetDir);
+    await refreshTreesForDir(targetDir, { expand: true });
   }
 };
 
@@ -1477,7 +1480,7 @@ const importAsConvertedMarkdown = async (srcPath, fileName, targetDir, existingN
       }
     }
 
-    await refreshDirectory(targetDir);
+    await refreshTreesForDir(targetDir, { expand: true });
     logger.info('[ImportFile] convert import success', {
       srcPath,
       dstPath,
@@ -1633,11 +1636,25 @@ const loadRepoTree = async (path) => {
   }
 }
 
+// 刷新按钮：三个模式里已经打开的目录都要重新读盘。
+// 只刷当前仓库会让其它模式里同一目录的树保留旧内容（同一目录可能被多个模式同时打开）。
 const refreshAll = async () => {
-  const activePath = fileTreeStore.activeRepoPath
-  if (!activePath) return
-  logger.info('[Refresh] 刷新仓库:', activePath)
-  await loadRepoTree(activePath)
+  const roots = []
+  if (fileTreeStore.activeRepoPath) roots.push(normalizePath(fileTreeStore.activeRepoPath))
+  if (externalDir.value) roots.push(normalizePath(externalDir.value))
+  for (const c of TASK_CATEGORIES) {
+    const p = catPathOf(c.key)
+    if (p) roots.push(p)
+  }
+  if (!roots.length) return
+  logger.info('[Refresh] 刷新所有已打开的目录:', roots)
+  for (const root of Array.from(new Set(roots))) {
+    try {
+      await refreshTreesForDir(root, { expand: false })
+    } catch (error) {
+      logger.warn('[Refresh] 刷新目录失败', { root, error: String(error?.message || error) })
+    }
+  }
 }
 
 const normalizeTreeIds = (tree) => {
@@ -1918,16 +1935,52 @@ const activateExternalDir = async (dirPath) => {
   }
 }
 
+// 进入某模式时补一次读盘。
+// 后端同一时刻只监控一个根目录：切换前落在别的目录里的改动不会产生事件，
+// 重新进入时对「已加载的树」做一次合并刷新，避免显示离开期间的旧内容。
+// 后台执行，不阻塞切换本身。
+const revalidateModeTrees = (mode) => {
+  const jobs = []
+  if (mode === 'plain') {
+    const root = normalizePath(externalDir.value)
+    if (root) {
+      jobs.push(() => refreshModeDir('plain', root, { expand: false }))
+    }
+  } else if (mode === 'task') {
+    for (const c of TASK_CATEGORIES) {
+      const catPath = catPathOf(c.key)
+      if (catPath && taskCatLoaded[c.key]) {
+        jobs.push(() => refreshModeDir('task', catPath, { expand: false }))
+      }
+    }
+  } else if (fileTreeStore.activeRepoPath) {
+    jobs.push(() => refreshKbDir(fileTreeStore.activeRepoPath))
+  }
+  if (!jobs.length) return
+  // 串行执行：并发读盘会同时触发多次任务重索引，收益不大。
+  void (async () => {
+    for (const job of jobs) {
+      try {
+        await job()
+      } catch (error) {
+        logger.warn('[ModeSwitch] 重新读盘失败', { mode, error: String(error?.message || error) })
+      }
+    }
+  })()
+}
+
 // 切换视图模式：kb → plain → task → kb（三态轮转）
 // 设计说明：三种模式各自维护独立的树/展开状态（module 级 ref），组件不会随切换卸载，
 // 因此切换时不应清空对方状态。之前每次进入 task 都重跑 activateTaskMode 全量重置、
 // 且离开 plain 时把 externalDir 置空，导致已展开的目录/文件树被打回默认态。
-// 现在：task 仅首次进入时初始化，plain 的激活目录跨模式保留；切换只重定向文件监控。
+// 现在：task 仅首次进入时初始化，plain 的激活目录跨模式保留；切换只重定向文件监控，
+// 并对进入的模式做一次后台读盘校验。
 const toggleViewMode = () => {
   if (viewMode.value === 'kb') {
     viewMode.value = 'plain'
     // 回到文件编辑模式时，把文件监控重新指向其激活的外部目录（若曾打开过）。
     if (externalDir.value) repointFileWatcher(externalDir.value)
+    revalidateModeTrees('plain')
   } else if (viewMode.value === 'plain') {
     viewMode.value = 'task'
     if (!taskModeInitialized.value) {
@@ -1936,10 +1989,12 @@ const toggleViewMode = () => {
       // 已初始化过：保留已加载/展开的任务树，仅重定向监控并触发一次后台重索引。
       if (taskRootPath.value) repointFileWatcher(taskRootPath.value)
       invoke('task_scan_and_index').catch((e) => logger.warn('任务扫描失败', e))
+      revalidateModeTrees('task')
     }
   } else {
     viewMode.value = 'kb'
     if (fileTreeStore.activeRepoPath) repointFileWatcher(fileTreeStore.activeRepoPath)
+    revalidateModeTrees('kb')
   }
 }
 
@@ -1986,6 +2041,7 @@ const activateTaskMode = async () => {
     taskCatTrees[c.key] = []
     taskCatExpandedKeys[c.key] = []
     taskCatSelectedKeys[c.key] = []
+    taskCatLoaded[c.key] = false
   }
   activeTaskCat.value = 'work'
   taskActiveExpanded.value = true
@@ -1999,6 +2055,7 @@ const loadTaskCat = async (key) => {
   if (!dir) return
   try {
     taskCatTrees[key] = await fetchDirChildren(dir, true)
+    taskCatLoaded[key] = true
   } catch (error) {
     logger.error('加载任务分类失败:', error)
   }
@@ -2008,8 +2065,11 @@ const loadTaskCat = async (key) => {
 const activateTaskCat = async (key) => {
   activeTaskCat.value = key
   taskActiveExpanded.value = true
-  if (!taskCatTrees[key] || !taskCatTrees[key].length) {
+  if (!taskCatLoaded[key]) {
     await loadTaskCat(key)
+  } else {
+    // 已加载过的分类：切回来时重新读盘，避免它被其它模式/外部改动留下旧节点。
+    await refreshModeDir('task', catPathOf(key), { expand: false })
   }
 }
 
@@ -2161,6 +2221,7 @@ const refreshModeDir = async (mode, dirPath, options = {}) => {
       if (target === catPath) {
         const fresh = await fetchDirChildren(catPath, true)
         taskCatTrees[catKey] = mergeDirChildren(taskCatTrees[catKey], fresh)
+        taskCatLoaded[catKey] = true
       } else {
         const node = findNodeById(taskCatTrees[catKey], target)
         if (node) {
@@ -2189,6 +2250,130 @@ const taskCatOfPath = (p) => {
     if (cp && (n === cp || n.startsWith(`${cp}/`))) return c.key
   }
   return null
+}
+
+// ───── 多模式树同步 ─────
+// 知识库 / 文件编辑 / 任务编辑各自持有一份独立的内存树，而同一目录可能同时出现在多个模式里
+// （任务分类目录 = 文件编辑模式打开的目录 = 知识库目录完全是常见配置）。
+// 因此文件变更必须按「路径落在哪个根目录内」去刷新，而不是只看 viewMode；
+// 只刷当前模式的树，另一个模式里同一目录的节点就会一直停在旧状态（删掉的文件依然可见）。
+
+const isPathInside = (rawPath, rawRoot) => {
+  const p = normalizePath(rawPath)
+  const r = normalizePath(rawRoot)
+  if (!p || !r) return false
+  return p === r || p.startsWith(`${r}/`)
+}
+
+// 该目录是否已经在这一模式的树里展示（根目录视为已展示）。
+// 未加载的目录展开时会重新读盘，无需提前刷新；强行刷新反而会把已展开的子树整棵替换。
+// 这里用不带日志的轻量查找：文件事件会频繁调用，走 findNodeById 会刷满日志。
+const isDirLoadedInTree = (tree, root, dir) => {
+  const r = normalizePath(root)
+  const target = normalizePath(dir)
+  if (!r || !target || !isPathInside(target, r)) return false
+  if (target === r) return true
+
+  const stack = Array.isArray(tree) ? [...tree] : []
+  while (stack.length) {
+    const node = stack.pop()
+    if (!node) continue
+    if (normalizePath(node.id) === target) return !!node.is_directory
+    if (Array.isArray(node.children) && node.children.length) stack.push(...node.children)
+  }
+  return false
+}
+
+// 知识库模式的目录刷新：根目录用合并式刷新，保住各已展开目录的懒加载子树
+// （refreshDirectory 在找不到节点时会退回全量 loadFileTree，会清空展开态）。
+const refreshKbDir = async (dir) => {
+  const root = normalizePath(fileTreeStore.activeRepoPath)
+  const target = normalizePath(dir)
+  if (!root || !target || !isPathInside(target, root)) return
+  if (!isDirLoadedInTree(fileTree.value, root, target)) return
+  if (target === root) {
+    const fresh = await fetchDirChildren(root)
+    fileTree.value = mergeDirChildren(fileTree.value, fresh)
+    refreshSidebarNavigationContext()
+    return
+  }
+  await refreshDirectory(target)
+}
+
+// 刷新所有「已打开该目录」的模式树（plain / task / kb 各自判断，互不影响）。
+const refreshTreesForDir = async (rawDir, options = {}) => {
+  const dir = normalizePath(rawDir)
+  if (!dir) return
+  // 行内新建/重命名进行中：树里有一个只存在于内存的临时节点，此时刷新会把它抹掉，
+  // 用户正在输入的名字会凭空消失。提交/取消编辑时各自会刷新，这里直接跳过。
+  if (editingNode.value) return
+  const { expand = false } = options
+
+  const plainRoot = normalizePath(externalDir.value)
+  if (plainRoot && isDirLoadedInTree(externalDirTree.value, plainRoot, dir)) {
+    await refreshModeDir('plain', dir, { expand })
+  }
+
+  const cat = taskCatOfPath(dir)
+  if (cat) {
+    const catRoot = catPathOf(cat)
+    if (catRoot && taskCatLoaded[cat] && isDirLoadedInTree(taskCatTrees[cat], catRoot, dir)) {
+      await refreshModeDir('task', dir, { expand })
+    }
+  }
+
+  await refreshKbDir(dir)
+}
+
+// 删除后清掉各模式里残留的选中态与展开键（含被删目录下的子树键）。
+const pruneModeKeys = (removedPath) => {
+  const target = normalizePath(removedPath)
+  if (!target) return
+
+  const prune = (keys) => (Array.isArray(keys) ? keys.filter((k) => !isPathInside(k, target)) : keys)
+  const hasUnder = (keys) => Array.isArray(keys) && keys.some((k) => isPathInside(k, target))
+
+  expandedKeys.value = prune(expandedKeys.value)
+  externalExpandedKeys.value = prune(externalExpandedKeys.value)
+  for (const c of TASK_CATEGORIES) {
+    if (Array.isArray(taskCatExpandedKeys[c.key])) taskCatExpandedKeys[c.key] = prune(taskCatExpandedKeys[c.key])
+  }
+
+  if (hasUnder(selectedKeys.value)) selectedKeys.value = []
+  if (hasUnder(externalSelectedKeys.value)) externalSelectedKeys.value = []
+  for (const c of TASK_CATEGORIES) {
+    if (hasUnder(taskCatSelectedKeys[c.key])) taskCatSelectedKeys[c.key] = []
+  }
+  if (lastSelectedKey.value && isPathInside(lastSelectedKey.value, target)) lastSelectedKey.value = null
+}
+
+// 重命名/移动后：选中态跟着换到新路径；展开键只清掉旧路径，不挪到新路径。
+// 改名后的目录需要重新懒加载子节点，若把展开键搬到新路径，虚拟树会出现「展开但空白」的行。
+const remapModeKeys = (oldPath, newPath) => {
+  const from = normalizePath(oldPath)
+  const to = normalizePath(newPath)
+  if (!from || !to || from === to) return
+
+  const remapKey = (key) => {
+    const k = normalizePath(key)
+    if (k === from) return to
+    if (k.startsWith(`${from}/`)) return to + k.slice(from.length)
+    return key
+  }
+  const remapSelection = (keys) => (Array.isArray(keys) ? keys.map(remapKey) : keys)
+  const pruneExpanded = (keys) => (Array.isArray(keys) ? keys.filter((k) => !isPathInside(k, from)) : keys)
+
+  expandedKeys.value = pruneExpanded(expandedKeys.value)
+  externalExpandedKeys.value = pruneExpanded(externalExpandedKeys.value)
+  for (const c of TASK_CATEGORIES) {
+    if (Array.isArray(taskCatExpandedKeys[c.key])) taskCatExpandedKeys[c.key] = pruneExpanded(taskCatExpandedKeys[c.key])
+  }
+  selectedKeys.value = remapSelection(selectedKeys.value)
+  externalSelectedKeys.value = remapSelection(externalSelectedKeys.value)
+  for (const c of TASK_CATEGORIES) {
+    if (Array.isArray(taskCatSelectedKeys[c.key])) taskCatSelectedKeys[c.key] = remapSelection(taskCatSelectedKeys[c.key])
+  }
+  if (lastSelectedKey.value) lastSelectedKey.value = remapKey(lastSelectedKey.value)
 }
 
 // === 行内新建（与知识库模式一致：在树中插入可编辑临时节点，而非弹窗）===
@@ -2323,7 +2508,7 @@ const handleInlineCommit = async () => {
     inlineCreateCtx.value = null
     editingNode.value = null
     editName.value = ''
-    await refreshModeDir(mode, parentDir)
+    await refreshTreesForDir(parentDir, { expand: true })
     // 刷新合并后行会重建：把选中态与视口落到真实节点上，光标即停在刚建出的文件/目录上。
     selectInMode(mode, path)
     await scrollModeToKey(mode, path)
@@ -2412,7 +2597,7 @@ const genImportFile = async (mode, dir, action = 'copy') => {
     } finally {
       loading?.destroy?.()
     }
-    await refreshModeDir(mode, dir)
+    await refreshTreesForDir(dir, { expand: true })
     if (failed) message.warning(`已转换导入 ${ok} 个文件，${failed} 个失败`)
     else message.success(`已转换导入 ${ok} 个文件`)
     return
@@ -2431,7 +2616,7 @@ const genImportFile = async (mode, dir, action = 'copy') => {
       logger.error('导入文件失败:', e)
     }
   }
-  await refreshModeDir(mode, dir)
+  await refreshTreesForDir(dir, { expand: true })
   message.success(`已导入 ${ok} 个文件`)
 }
 
@@ -2497,6 +2682,9 @@ const remapOpenTabsForPathChange = (oldPath, newPath, nextName = '') => {
 
   // 阅读器登记表也要跟着搬，否则重命名后标签仍指向旧路径、覆盖层就消失了。
   readerTabStore.remapPath(source, dest)
+
+  // 三种模式的选中态跟着换到新路径；旧展开键清掉（改名后的目录需要重新懒加载子节点）。
+  remapModeKeys(source, dest)
 }
 
 /** 删除后关闭其下所有标签，避免自动保存把已删除的文件重新写回磁盘。 */
@@ -2531,7 +2719,7 @@ const commitInlineRename = async () => {
     })
     editingNode.value = null
     editName.value = ''
-    await refreshModeDir(mode, parent)
+    await refreshTreesForDir(parent, { expand: true })
 
     // 重命名后自动更新全库指向它的链接（wiki 链接 + 相对路径链接）。
     // 整段包在 try/catch 里：链接更新出任何问题，都不能影响「重命名本身已经成功」这个事实。
@@ -2560,7 +2748,7 @@ const commitInlineRename = async () => {
     editName.value = ''
     logger.error('重命名失败:', e)
     message.error('重命名失败: ' + (e?.message || e))
-    await refreshModeDir(mode, parent)
+    await refreshTreesForDir(parent, { expand: true })
   }
 }
 
@@ -2573,7 +2761,8 @@ const genDelete = async (mode, node) => {
     // 删除后立刻关闭相关标签，避免自动保存把文件重新创建出来。
     dropTabsAfterDelete(deletedPath)
   })
-  await refreshModeDir(mode, parentDirOf(node.id))
+  // 三种模式的树都要立刻摘掉该节点，否则切到其它模式还能看到已删除的文件。
+  await handleFileRemoved(deletedPath)
   message.success('已删除')
   return true
 }
@@ -2600,14 +2789,14 @@ const genMove = async (mode, node) => {
       await invoke('move_path', { sourcePath, destinationPath })
       remapOpenTabsForPathChange(sourcePath, destinationPath, name)
     })
-    await refreshModeDir(mode, parentDirOf(sourcePath))
-    await refreshModeDir(mode, targetDir)
+    await refreshTreesForDir(parentDirOf(sourcePath), { expand: true })
+    await refreshTreesForDir(targetDir, { expand: true })
     message.success('已移动')
   } catch (error) {
     logger.error('移动失败:', error)
     message.error(`移动失败: ${error?.message || error}`)
-    await refreshModeDir(mode, parentDirOf(sourcePath))
-    await refreshModeDir(mode, targetDir)
+    await refreshTreesForDir(parentDirOf(sourcePath), { expand: true })
+    await refreshTreesForDir(targetDir, { expand: true })
   }
 }
 
@@ -2870,7 +3059,7 @@ const cancelEditing = async () => {
       if (!parentPath || parentPath === normalizePath(fileTreeStore.activeRepoPath)) {
         await loadFileTree()
       } else {
-        await refreshDirectory(parentPath)
+        await refreshTreesForDir(parentPath, { expand: true })
       }
     } else {
       parentNode.children = parentNode.children.filter(n => n.id !== node.id)
@@ -2878,7 +3067,7 @@ const cancelEditing = async () => {
       if (normalizePath(parentPath) === normalizePath(fileTreeStore.activeRepoPath)) {
         await loadFileTree()
       } else {
-        await refreshDirectory(parentPath)
+        await refreshTreesForDir(parentPath, { expand: true })
       }
     }
   }
@@ -2911,8 +3100,8 @@ const handleDropMove = async (sourceId, targetDirId) => {
     })
 
     if (!expandedKeys.value.includes(targetDir)) expandedKeys.value.push(targetDir)
-    await refreshDirectory(sourceParent)
-    await refreshDirectory(targetDir)
+    await refreshTreesForDir(sourceParent, { expand: true })
+    await refreshTreesForDir(targetDir, { expand: true })
 
     selectedKeys.value = [destinationPath]
     lastSelectedKey.value = destinationPath
@@ -2921,8 +3110,8 @@ const handleDropMove = async (sourceId, targetDirId) => {
   } catch (error) {
     logger.error('拖拽移动失败:', error)
     message.error(`移动失败: ${error.message || error}`)
-    await refreshDirectory(sourceParent)
-    await refreshDirectory(targetDir)
+    await refreshTreesForDir(sourceParent, { expand: true })
+    await refreshTreesForDir(targetDir, { expand: true })
   }
 }
 
@@ -3279,7 +3468,7 @@ const handleEditComplete = async (node, parentNode, isDirectory, isRoot, resolve
       : parentNode?.id
 
     if (parentDir) {
-      await refreshDirectory(parentDir)
+      await refreshTreesForDir(parentDir, { expand: true })
     }
 
     resolve(node);
@@ -3317,7 +3506,7 @@ const handleBlur = async () => {
         if (!parentPath || parentPath === normalizePath(fileTreeStore.activeRepoPath)) {
           await loadFileTree();
         } else {
-          await refreshDirectory(parentPath);
+          await refreshTreesForDir(parentPath, { expand: true });
         }
       } else {
         parentNode.children = parentNode.children.filter(n => n.id !== oldId);
@@ -3325,7 +3514,7 @@ const handleBlur = async () => {
         if (normalizePath(parentPath) === normalizePath(fileTreeStore.activeRepoPath)) {
           await loadFileTree();
         } else {
-          await refreshDirectory(parentPath);
+          await refreshTreesForDir(parentPath, { expand: true });
         }
       }
     }
@@ -3376,12 +3565,8 @@ const handleBlur = async () => {
   } finally {
     editingNode.value = null;
     editName.value = '';
-    // 根目录下刷新整个树，否则刷新父目录
-    if (normalizePath(parentPath) === normalizePath(fileTreeStore.activeRepoPath)) {
-      await loadFileTree({ force: true });
-    } else {
-      await refreshDirectory(parentPath);
-    }
+    // 根目录与子目录都用合并式刷新：根目录若是其它模式也在用的同一目录，一起同步。
+    await refreshTreesForDir(parentPath, { expand: true });
   }
 };
 
@@ -3407,7 +3592,7 @@ const deleteNode = async (nodeId) => {
   } catch (error) {
     message.error(`删除失败: ${error.message}`)
     const parentPath = normalizedId.split('/').slice(0, -1).join('/') || normalizePath(fileTreeStore.activeRepoPath)
-    await refreshDirectory(parentPath)
+    await refreshTreesForDir(parentPath, { expand: true })
   } finally {
     selectedKeys.value = []
     lastSelectedKey.value = null
@@ -3503,14 +3688,14 @@ const moveNode = async (node) => {
       lastSelectedKey.value = destinationPath;
     }
 
-    await refreshDirectory(sourceParentPath);
-    await refreshDirectory(targetDir);
+    await refreshTreesForDir(sourceParentPath, { expand: true });
+    await refreshTreesForDir(targetDir, { expand: true });
 
     logger.info('移动成功');
   } catch (error) {
     logger.error('移动失败:', error);
-    await refreshDirectory(sourceParentPath);
-    await refreshDirectory(targetDir);
+    await refreshTreesForDir(sourceParentPath, { expand: true });
+    await refreshTreesForDir(targetDir, { expand: true });
   }
 };
 
@@ -3804,7 +3989,7 @@ watch(
 // 处理文件创建事件
 const handleFileCreated = async (filePath) => {
   const normalizedPath = normalizePath(filePath);
-  const parentPath = normalizedPath.split('/').slice(0, -1).join('/');
+  const parentPath = parentDirOf(normalizedPath);
 
   // 检查是否是隐藏路径
   if (isHiddenPath(normalizedPath) || isHiddenPath(parentPath)) {
@@ -3812,7 +3997,8 @@ const handleFileCreated = async (filePath) => {
     return;
   }
 
-  await refreshDirectory(parentPath || fileTreeStore.activeRepoPath);
+  // 同一目录可能同时被多个模式打开，新文件要出现在所有已加载它的树里。
+  await refreshTreesForDir(parentPath || fileTreeStore.activeRepoPath, { expand: false });
 };
 
 // 处理文件重命名事件
@@ -3829,32 +4015,37 @@ const handleFileRenamed = async (oldPath, newPath) => {
       return;
     }
 
-    // 1. 更新树中的节点
+    const newName = normalizedNewPath.split('/').pop()
+
+    // 1. 三个模式的树都就地改名（保住展开态与已加载子树）
+    if (normalizedOldPath && normalizedOldPath !== normalizedNewPath) {
+      const applyRename = (nodes) => {
+        if (!Array.isArray(nodes)) return
+        for (const node of nodes) {
+          if (normalizePath(node.id) === normalizedOldPath) {
+            node.id = normalizedNewPath
+            node.name = newName
+          }
+          if (node.children) applyRename(node.children)
+        }
+      }
+      applyRename(fileTree.value)
+      applyRename(externalDirTree.value)
+      for (const c of TASK_CATEGORIES) applyRename(taskCatTrees[c.key])
+    }
+
+    // 2. 更新标签页 / 分屏路径 / 阅读器登记（同时重映射各模式的选中与展开键）
     if (normalizedOldPath) {
-      const nodeToUpdate = findNodeById(fileTree.value, normalizedOldPath);
-      if (nodeToUpdate) {
-        nodeToUpdate.id = normalizedNewPath;
-        nodeToUpdate.name = newPath.split(/[\\/]/).pop();
-      }
+      remapOpenTabsForPathChange(normalizedOldPath, normalizedNewPath, newName)
     }
 
-    // 2. 更新标签页
-    const tabIndex = fileTreeStore.openTabs.findIndex(tab => tab.path === normalizedOldPath);
-    if (tabIndex !== -1) {
-      fileTreeStore.openTabs[tabIndex].path = normalizedNewPath;
-      fileTreeStore.openTabs[tabIndex].fileName = newPath.split(/[\\/]/).pop();
+    // 3. 刷新新旧父目录（Rename 事件可能是跨目录移动），所有模式按路径同步
+    const oldParent = normalizedOldPath ? parentDirOf(normalizedOldPath) : ''
+    const newParent = parentDirOf(normalizedNewPath)
+    if (oldParent) await refreshTreesForDir(oldParent, { expand: false })
+    if (newParent && newParent !== oldParent) await refreshTreesForDir(newParent, { expand: false })
 
-      if (fileTreeStore.activeTab === normalizedOldPath) {
-        fileTreeStore.setActiveTab(normalizedNewPath);
-      }
-    }
-
-    // 3. 刷新父目录
-    const parentPath = normalizedOldPath
-      ? normalizedOldPath.split('/').slice(0, -1).join('/')
-      : normalizedNewPath.split('/').slice(0, -1).join('/');
-
-    await refreshDirectory(parentPath || fileTreeStore.activeRepoPath);
+    refreshSidebarNavigationContext()
   } catch (error) {
     logger.error('处理文件重命名时出错:', error);
   }
@@ -3922,28 +4113,22 @@ const setupFileWatcher = async () => {
         void handleExternalFileModified(changedPath)
       }
 
-      // 文件编辑模式 / 任务模式：刷新对应的树（不走 kb 逻辑）
-      // Rename 事件需同时刷新旧父目录，传 old_path 让刷新逻辑覆盖原父目录残留节点。
-      if (viewMode.value === 'plain' || viewMode.value === 'task') {
-        const oldForRefresh = payload?.kind === 'Rename' ? oldChangedPath : ''
-        scheduleNonKbTreeRefresh(changedPath, oldForRefresh)
-        return
-      }
-
+      // 三个模式各持有一份内存树，同一目录可能被多个模式同时打开，
+      // 因此这里不再按 viewMode 分流：任何变更都要同步到所有包含该路径的树。
       switch (payload.kind) {
         case 'Create':
-          // logger.info('文件创建事件:', payload.path)
-          handleFileCreated(payload.path)
+          void handleFileCreated(changedPath)
           break
         case 'Remove':
-          // logger.info('文件删除事件:', payload.path)
-          handleFileRemoved(payload.path)
+          void handleFileRemoved(changedPath)
           break
         case 'Rename':
           // 处理old_path可能为null的情况
-          const oldPath = payload.old_path || extractOldPathFromEvent(payload)
-          // logger.info('文件重命名事件:', oldPath, '->', payload.path)
-          handleFileRenamed(oldPath, payload.path)
+          void handleFileRenamed(payload.old_path || extractOldPathFromEvent(payload), payload.path)
+          break
+        case 'Modify':
+          // 只改内容不改结构：吸收到已打开的标签即可，顺带同步一次父目录（外部工具可能先写临时文件再替换）。
+          scheduleTreeRefreshForPaths(changedPath)
           break
       }
     })
@@ -3963,66 +4148,36 @@ const repointFileWatcher = async (path) => {
   catch (e) { logger.warn('重定向文件监控失败', e) }
 }
 
-// 文件编辑/任务模式下的树刷新（去抖）
+// 变化路径的父目录刷新（去抖）
 // 设计说明：
-// 1. 之前这里一律刷新到「模式根目录」（plain 的 externalDir / task 的分类根），
-//    经 refreshModeDir 整树替换后会把已懒加载的 children 清空，导致打开文件触发的
-//    file_change 把所有已展开目录一并收起（与 kb 模式 refreshDirectory 的局部刷新不一致）。
-// 2. 现在改为刷新「变化文件的真实父目录」：单个文件变化只影响其所在父目录，
-//    其它已展开目录既不会被整树替换、children 也不会被清空，展开态得以保留。
-// 3. Rename 事件需要同时刷新新旧父目录，否则旧父目录里会残留已移走的节点。
-// 4. 仅刷新在当前模式树范围内的目录；落在根以外或未加载分类的事件降级为刷新根。
-let nonKbRefreshTimer = null
-let nonKbRefreshPending = []
-const scheduleNonKbTreeRefresh = (changedPath, oldPath = '') => {
+// 1. 只刷新「变化文件的真实父目录」：其它已展开目录不会被重建，展开态得以保留。
+// 2. Rename 事件需要同时刷新新旧父目录，否则旧父目录里会残留已移走的节点。
+// 3. 不判断 viewMode：同一目录可能同时出现在知识库 / 文件编辑 / 任务编辑的树里，
+//    由 refreshTreesForDir 按路径决定刷新哪些树（未加载该目录的模式会跳过）。
+let treeRefreshTimer = null
+let treeRefreshPending = []
+const scheduleTreeRefreshForPaths = (changedPath, oldPath = '') => {
   const next = normalizePath(changedPath)
   const old = normalizePath(oldPath)
   // 合并本轮待刷新目录：去重后只在去抖结束后刷一次，避免同一目录被多次拉取
   const candidates = new Set()
   if (next) candidates.add(parentDirOf(next))
   if (old && old !== next) candidates.add(parentDirOf(old))
-  nonKbRefreshPending = Array.from(new Set([...nonKbRefreshPending, ...candidates]))
+  if (!candidates.size) return
+  treeRefreshPending = Array.from(new Set([...treeRefreshPending, ...candidates]))
 
-  if (nonKbRefreshTimer) clearTimeout(nonKbRefreshTimer)
-  nonKbRefreshTimer = setTimeout(async () => {
-    nonKbRefreshTimer = null
-    const targets = nonKbRefreshPending
-    nonKbRefreshPending = []
+  if (treeRefreshTimer) clearTimeout(treeRefreshTimer)
+  treeRefreshTimer = setTimeout(async () => {
+    treeRefreshTimer = null
+    const targets = treeRefreshPending
+    treeRefreshPending = []
     try {
-      if (viewMode.value === 'plain' && externalDir.value) {
-        const root = normalizePath(externalDir.value)
-        if (!targets.length) {
-          await refreshModeDir('plain', root)
-          return
-        }
-        for (const t of targets) {
-          // 仅刷新落在当前外部目录树范围内的目录，避免误触其它路径
-          // expand:false —— 保存 / 外部改动只刷新内容，不改变用户的展开状态
-          if (t === root || t.startsWith(`${root}/`)) {
-            await refreshModeDir('plain', t, { expand: false })
-          }
-        }
-      } else if (viewMode.value === 'task') {
-        const handledCats = new Set()
-        for (const t of targets) {
-          const cat = taskCatOfPath(t)
-          if (!cat) continue
-          handledCats.add(cat)
-          // 落在已加载分类范围内的目录：刷新该父目录（expand:false，不改变展开状态）
-          const catPath = catPathOf(cat)
-          if (t === catPath || t.startsWith(`${catPath}/`)) {
-            await refreshModeDir('task', t, { expand: false })
-          }
-        }
-        // 事件落在未加载分类时降级刷新已加载分类根（维持原兜底行为）
-        if (!handledCats.size) {
-          for (const c of TASK_CATEGORIES) {
-            if (taskCatTrees[c.key] && taskCatTrees[c.key].length) await loadTaskCat(c.key)
-          }
-        }
+      for (const t of targets) {
+        // expand:false —— 保存 / 外部改动只刷新内容，不改变用户的展开状态
+        await refreshTreesForDir(t, { expand: false })
       }
     } catch (e) {
-      logger.warn('非知识库树刷新失败', e)
+      logger.warn('文件树刷新失败', e)
     }
   }, 300)
 }
@@ -4033,20 +4188,17 @@ const extractOldPathFromEvent = (event) => {
   return null // 如果无法提取则返回null
 }
 
-// 优化处理文件删除事件的函数
+// 处理文件/目录删除事件：三种模式的树都要摘掉该节点。
+// 只用当前模式的一棵树时，在文件编辑模式删掉的文件切到任务模式仍然可见——
+// 因为两棵树各自缓存着自己的节点，谁也没去动另一棵树。
 const handleFileRemoved = async (filePath) => {
   const removedPath = normalizePath(filePath)
-  const parentPath = removedPath.split('/').slice(0, -1).join('/')
+  const parentPath = parentDirOf(removedPath)
 
-  if (isHiddenPath(removedPath) || isHiddenPath(parentPath)) {
+  if (!removedPath || isHiddenPath(removedPath) || isHiddenPath(parentPath)) {
     logger.info('跳过隐藏目录的文件删除事件:', removedPath)
     return
   }
-
-  const removedNode = findNodeById(fileTree.value, removedPath)
-  const isDir =
-    !!removedNode?.is_directory ||
-    fileTreeStore.openTabs.some((tab) => normalizePath(tab.path).startsWith(`${removedPath}/`))
 
   const removeFromTree = (nodes) => {
     if (!Array.isArray(nodes)) return []
@@ -4059,31 +4211,33 @@ const handleFileRemoved = async (filePath) => {
   }
 
   fileTree.value = removeFromTree(fileTree.value)
-
-  if (selectedKeys.value?.length && normalizePath(selectedKeys.value[0]) === removedPath) {
-    selectedKeys.value = []
-    lastSelectedKey.value = null
+  if (externalDirTree.value?.length) {
+    externalDirTree.value = removeFromTree(externalDirTree.value)
+  }
+  for (const c of TASK_CATEGORIES) {
+    if (taskCatTrees[c.key]?.length) {
+      taskCatTrees[c.key] = removeFromTree(taskCatTrees[c.key])
+    }
   }
 
-  if (expandedKeys.value?.length) {
-    expandedKeys.value = expandedKeys.value.filter((key) => {
-      const k = normalizePath(key)
-      if (k === removedPath) return false
-      if (isDir && k.startsWith(`${removedPath}/`)) return false
-      return true
-    })
-  }
+  // 选中态 / 展开键（含被删目录下的子树键）三个模式一起清
+  pruneModeKeys(removedPath)
 
+  // 标签与阅读器登记不受模式影响：删掉的就是删掉了，随手关闭避免自动保存把文件写回来。
   const tabPathsToClose = fileTreeStore.openTabs
     .map((tab) => tab.path)
-    .filter((p) => {
-      const np = normalizePath(p)
-      if (np === removedPath) return true
-      return isDir && np.startsWith(`${removedPath}/`)
-    })
+    .filter((p) => isPathInside(p, removedPath))
 
   for (const p of tabPathsToClose) {
     fileTreeStore.closeTab(p)
+  }
+  readerTabStore.closeUnderPath(removedPath)
+
+  refreshSidebarNavigationContext()
+
+  // 任务文件被删除 → 后台重索引，刷新看板/统计
+  if (taskCatOfPath(removedPath)) {
+    invoke('task_scan_and_index').catch((e) => logger.warn('任务重索引失败', e))
   }
 
   // 仅做就地移除,不再全量刷新父目录:避免重建子节点导致已展开目录被收起。
@@ -4246,6 +4400,10 @@ onUnmounted(() => {
   if (cellmetaAutoCommitIntervalId) {
     clearInterval(cellmetaAutoCommitIntervalId)
     cellmetaAutoCommitIntervalId = null
+  }
+  if (treeRefreshTimer) {
+    clearTimeout(treeRefreshTimer)
+    treeRefreshTimer = null
   }
   if (cellmetaFileClosedHandler) {
     window.removeEventListener(EVENT_CELLMETA_FILE_CLOSED, cellmetaFileClosedHandler)
