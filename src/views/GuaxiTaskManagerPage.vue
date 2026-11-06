@@ -5,7 +5,7 @@
       <div class="tm-toolbar-left">
         <n-icon size="22" class="tm-logo"><ClipboardTaskListLtr20Filled /></n-icon>
         <span class="tm-title">任务管理</span>
-        <n-tabs v-model:value="category" type="segment" size="small" class="tm-cat-tabs" @update:value="reload">
+        <n-tabs v-model:value="category" type="segment" size="small" class="tm-cat-tabs" @update:value="onCategoryChange">
           <n-tab name="all">全部</n-tab>
           <n-tab name="work">工作</n-tab>
           <n-tab name="life">生活</n-tab>
@@ -13,20 +13,49 @@
         </n-tabs>
       </div>
       <div class="tm-toolbar-right">
-        <n-input v-model:value="keyword" placeholder="搜索任务…" clearable size="small" class="tm-search" @update:value="onSearchInput">
+        <span class="tm-sync" :title="'最后同步 ' + (lastSync || '—')">已同步 {{ lastSync || '—' }}</span>
+        <n-input ref="searchInputRef" v-model:value="keyword" placeholder="搜索任务…" clearable size="small" class="tm-search" @update:value="onSearchInput">
           <template #prefix><n-icon :component="Search20Regular" /></template>
         </n-input>
         <n-button-group size="small" class="tm-view-switch">
-          <n-button :type="view === 'kanban' ? 'primary' : 'default'" title="看板" @click="view = 'kanban'">
+          <n-button :type="view === 'today' ? 'primary' : 'default'" @click="view = 'today'">
+            <template #icon><n-icon :component="ClipboardTaskListLtr20Filled" /></template>
+            今日
+          </n-button>
+          <n-button :type="view === 'plan' ? 'primary' : 'default'" @click="view = 'plan'">
             <template #icon><n-icon :component="Board20Regular" /></template>
+            计划
           </n-button>
-          <n-button :type="view === 'calendar' ? 'primary' : 'default'" title="日历" @click="view = 'calendar'">
-            <template #icon><n-icon :component="CalendarLtr20Regular" /></template>
-          </n-button>
-          <n-button :type="view === 'stats' ? 'primary' : 'default'" title="统计" @click="view = 'stats'">
+          <n-button :type="view === 'year' ? 'primary' : 'default'" @click="view = 'year'">
             <template #icon><n-icon :component="DataPie20Regular" /></template>
+            年轮
           </n-button>
         </n-button-group>
+        <n-popover trigger="click" placement="bottom-end" :show-arrow="false">
+          <template #trigger>
+            <n-button size="small" circle :type="reminderEnabled ? 'primary' : 'default'" title="每日摘要提醒">
+              <template #icon><n-icon :component="Alert20Regular" /></template>
+            </n-button>
+          </template>
+          <div class="tm-reminder-pop">
+            <div class="tm-reminder-row">
+              <span>每日摘要</span>
+              <n-switch v-model:value="reminderEnabled" size="small" @update:value="saveReminder" />
+            </div>
+            <div class="tm-reminder-row">
+              <span>发送时间</span>
+              <n-time-picker
+                v-model:formatted-value="reminderTime"
+                value-format="HH:mm"
+                format="HH:mm"
+                size="small"
+                :disabled="!reminderEnabled"
+                @update:formatted-value="saveReminder"
+              />
+            </div>
+            <div class="tm-reminder-hint">逾期与今天到期的任务会合成一条通知，每天只发一次。</div>
+          </div>
+        </n-popover>
         <n-button size="small" circle title="导入任务" @click="showImport = true">
           <template #icon><n-icon :component="ArrowImport20Regular" /></template>
         </n-button>
@@ -37,52 +66,296 @@
     </header>
 
     <main class="tm-body">
-        <!-- 看板 -->
-        <section v-show="view === 'kanban'" class="tm-kanban">
-          <div v-for="col in columns" :key="col.key" class="tm-column">
-            <div class="tm-column-head" :style="{ borderColor: col.color }">
-              <span class="tm-col-dot" :style="{ background: col.color }" />
-              <span class="tm-col-name">{{ col.label }}</span>
-              <n-tag size="tiny" round :bordered="false" class="tm-col-count">{{ grouped[col.key].length }}</n-tag>
+        <!-- 今日 -->
+        <section v-show="view === 'today'" class="tm-today">
+          <div class="tm-today-main">
+            <div class="tm-today-head">
+              <div class="tm-today-date">
+                <span class="tm-today-day">{{ todayParts.day }}</span>
+                <span class="tm-today-meta">
+                  <b>{{ todayParts.weekday }}</b>
+                  <span>{{ todayParts.yearMonth }}</span>
+                </span>
+              </div>
+              <div class="tm-today-counts">
+                <span><b>{{ todayDue.length }}</b> 今天</span>
+                <span v-if="overdueItems.length" class="danger"><b>{{ overdueItems.length }}</b> 逾期</span>
+                <span><b>{{ doneToday.length }}</b> 完成</span>
+              </div>
             </div>
-            <draggable
-              :list="grouped[col.key]"
-              group="tasks"
-              item-key="id"
-              class="tm-cards"
-              :animation="160"
-              @change="(e) => onDragChange(col.key, e)"
-            >
-              <template #item="{ element }">
-                <div class="tm-card" :class="{ overdue: isOverdue(element) }">
-                  <div class="tm-card-top">
-                    <span v-if="element.priority" class="tm-pri" :class="'pri-' + element.priority">{{ element.priority }}</span>
-                    <span class="tm-card-title">{{ element.title || '(无标题)' }}</span>
-                  </div>
-                  <div class="tm-card-meta">
-                    <n-tag size="tiny" :bordered="false" :color="catTagColor(element.category)">{{ catLabel(element.category) }}</n-tag>
-                    <span class="tm-type" :class="'tt-' + element.taskType">{{ typeLabel(element.taskType) }}</span>
-                    <span v-if="element.deadline" class="tm-date deadline"><n-icon :component="Flag16Regular" />{{ element.deadline }}</span>
-                    <span v-if="element.displayId" class="tm-did">{{ element.displayId }}</span>
-                    <button
-                      v-if="mailOriginOf(element)"
-                      class="tm-mail-origin"
-                      title="回到原邮件"
-                      @click.stop="openMailOrigin(element)"
-                    >
-                      ✉ 邮件
-                    </button>
-                  </div>
+
+            <form class="tm-capture" @submit.prevent="quickCapture">
+              <span class="tm-capture-plus">＋</span>
+              <input
+                v-model="captureText"
+                class="tm-capture-input"
+                placeholder="记一件…  支持 明天 / @生活 / !A / #习惯"
+              />
+              <select v-model="captureCategory" class="tm-capture-sel">
+                <option value="work">工作</option>
+                <option value="life">生活</option>
+                <option value="study">学习</option>
+              </select>
+              <button class="tm-capture-btn" :disabled="!captureText.trim() || capturing">
+                {{ capturing ? '…' : '记下' }}
+              </button>
+            </form>
+            <div v-if="captureHint" class="tm-capture-hint">{{ captureHint }}</div>
+
+            <div v-if="focusItems.length" class="tm-block">
+              <div class="tm-block-head"><span>今天的重点</span><span class="tm-block-sub">{{ focusItems.length }}</span></div>
+              <div v-for="(it, idx) in focusItems" :key="it.id" class="tm-row tm-row-focus" @click="openDetail(it)">
+                <span class="tm-focus-no">{{ idx + 1 }}</span>
+                <button class="tm-check" :class="{ on: it.done }" title="完成" @click.stop="toggleDone(it)">✓</button>
+                <div class="tm-row-main">
+                  <div class="tm-row-title">{{ it.title }}</div>
+                  <div class="tm-row-meta">{{ rowMeta(it) }}</div>
                 </div>
-              </template>
-            </draggable>
-            <div v-if="!grouped[col.key].length" class="tm-empty-col">暂无任务</div>
+                <button class="tm-row-act" title="移出今日" @click.stop="unfocus(it)">×</button>
+              </div>
+            </div>
+
+            <div v-if="overdueItems.length" class="tm-block">
+              <div class="tm-block-head"><span class="danger">逾期</span><span class="tm-block-sub">{{ overdueItems.length }}</span></div>
+              <div v-for="it in overdueItems" :key="it.id" class="tm-row" :class="{ overdue: true }" @click="openDetail(it)">
+                <button class="tm-check" :class="{ on: it.done }" title="完成" @click.stop="toggleDone(it)">✓</button>
+                <div class="tm-row-main">
+                  <div class="tm-row-title">{{ it.title }}</div>
+                  <div class="tm-row-meta">{{ rowMeta(it) }}</div>
+                </div>
+                <button class="tm-row-act" title="顺延到明天" @click.stop="snooze(it)">→</button>
+              </div>
+            </div>
+
+            <div class="tm-block">
+              <div class="tm-block-head"><span>今天</span><span class="tm-block-sub">{{ todayDue.length }}</span></div>
+              <div v-if="!todayDue.length" class="tm-hint">今天没有到期任务，按 N 记一件。</div>
+              <div v-for="it in todayDue" :key="it.id" class="tm-row" @click="openDetail(it)">
+                <button class="tm-check" :class="{ on: it.done }" title="完成" @click.stop="toggleDone(it)">✓</button>
+                <div class="tm-row-main">
+                  <div class="tm-row-title">{{ it.title }}</div>
+                  <div class="tm-row-meta">{{ rowMeta(it) }}</div>
+                </div>
+                <button class="tm-row-act" title="顺延到明天" @click.stop="snooze(it)">→</button>
+              </div>
+            </div>
+
+            <div v-if="todayDoing.length" class="tm-block">
+              <div class="tm-block-head"><span>进行中</span><span class="tm-block-sub">{{ todayDoing.length }}</span></div>
+              <div v-for="it in todayDoing" :key="it.id" class="tm-row" @click="openDetail(it)">
+                <button class="tm-check" :class="{ on: it.done }" title="完成" @click.stop="toggleDone(it)">✓</button>
+                <div class="tm-row-main">
+                  <div class="tm-row-title">{{ it.title }}</div>
+                  <div class="tm-row-meta">{{ rowMeta(it) }}</div>
+                </div>
+              </div>
+            </div>
+
+            <div v-if="todayHabits.length" class="tm-block">
+              <div class="tm-block-head"><span>今日习惯</span><span class="tm-block-sub">{{ habitDoneCount }}/{{ todayHabits.length }}</span></div>
+              <div class="tm-habits">
+                <button
+                  v-for="h in todayHabits"
+                  :key="h.id"
+                  class="tm-habit"
+                  :class="{ done: isCheckedToday(h) }"
+                  @click="toggleHabit(h)"
+                >
+                  <span class="tm-habit-mark">{{ isCheckedToday(h) ? '✓' : '○' }}</span>
+                  <span class="tm-habit-name">{{ h.title }}</span>
+                  <span class="tm-habit-streak">{{ habitStreak(h) }} 天</span>
+                </button>
+              </div>
+            </div>
+
+            <div class="tm-block">
+              <div class="tm-block-head"><span>今日复盘</span></div>
+              <div v-if="todayReview" class="tm-review" @click="openDetail(todayReview)">
+                <div class="tm-review-text">{{ reviewExcerpt(todayReview) }}</div>
+                <span class="tm-review-edit">继续写</span>
+              </div>
+              <button v-else class="tm-review-start" @click="startReview">写三行，今天就算收尾了</button>
+            </div>
           </div>
+
+          <aside class="tm-today-side">
+            <div class="tm-side-card">
+              <div class="tm-side-title">本周</div>
+              <div class="tm-side-stats">
+                <div><b>{{ weekStats.done }}</b><span>完成</span></div>
+                <div><b>{{ weekStats.checkins }}</b><span>打卡</span></div>
+                <div><b>{{ formatSpent(weekStats.spent) }}</b><span>投入</span></div>
+              </div>
+            </div>
+            <div class="tm-side-card">
+              <div class="tm-side-title">最近完成</div>
+              <div v-if="!recentDone.length" class="tm-hint">还没有完成记录。</div>
+              <div v-for="it in recentDone" :key="it.id" class="tm-recent" @click="openDetail(it)">
+                <span class="tm-recent-title">{{ it.title }}</span>
+                <span class="tm-recent-date">{{ shortDate(it.completedIso) }}</span>
+              </div>
+            </div>
+            <div class="tm-side-card">
+              <div class="tm-side-title">提醒</div>
+              <div class="tm-side-reminder">{{ reminderEnabled ? '每天 ' + reminderTime + ' 摘要' : '已关闭' }}</div>
+              <div class="tm-side-hint">逾期与今天到期合成一条，不逐条打扰。</div>
+            </div>
+          </aside>
         </section>
 
-        <!-- 日历 -->
-        <section v-if="view === 'calendar'" class="tm-calendar">
-          <FullCalendar ref="calRef" :options="calendarOptions" />
+        <!-- 计划 -->
+        <section v-show="view === 'plan'" class="tm-plan">
+          <div class="tm-plan-bar">
+            <n-button-group size="small">
+              <n-button :type="planMode === 'week' ? 'primary' : 'default'" @click="setPlanMode('week')">本周</n-button>
+              <n-button :type="planMode === 'kanban' ? 'primary' : 'default'" @click="setPlanMode('kanban')">看板</n-button>
+              <n-button :type="planMode === 'calendar' ? 'primary' : 'default'" @click="setPlanMode('calendar')">日历</n-button>
+              <n-button :type="planMode === 'goals' ? 'primary' : 'default'" @click="setPlanMode('goals')">目标</n-button>
+            </n-button-group>
+            <select v-model="captureCategory" class="tm-capture-sel" title="新建分类">
+              <option value="work">工作</option>
+              <option value="life">生活</option>
+              <option value="study">学习</option>
+            </select>
+            <input
+              v-model="captureText"
+              class="tm-plan-capture"
+              :placeholder="planCapturePlaceholder"
+              @keydown.enter.prevent="quickCapture"
+            />
+            <span class="tm-plan-hint">{{ planMode === 'week' ? '按截止日期自动归入本周 / 下周 · 点击卡片编辑' : planMode === 'goals' ? '目标进度由子任务完成比自动汇总' : '拖动卡片改状态 · 点击卡片编辑 · 双击标题快速改名' }}</span>
+          </div>
+
+          <div v-if="planMode === 'week'" class="tm-week">
+            <section v-for="lane in weekLanes" :key="lane.key" class="tm-week-lane">
+              <header class="tm-week-head" :class="lane.key">
+                <span>{{ lane.label }}</span>
+                <span class="tm-block-sub">{{ lane.items.length }}</span>
+              </header>
+              <div class="tm-week-body">
+                <div
+                  v-for="it in lane.items"
+                  :key="it.id"
+                  class="tm-card"
+                  :class="{ overdue: lane.key === 'overdue' }"
+                  @click="openDetail(it)"
+                >
+                  <div class="tm-card-top">
+                    <span v-if="it.priority" class="tm-pri" :class="'pri-' + it.priority">{{ it.priority }}</span>
+                    <span class="tm-card-title">{{ it.title }}</span>
+                    <span class="tm-card-acts">
+                      <button title="完成" @click.stop="toggleDone(it)">✓</button>
+                      <button title="明天" @click.stop="snooze(it)">→</button>
+                    </span>
+                  </div>
+                  <div class="tm-card-meta">
+                    <span class="tm-cat" :class="'cat-' + it.category">{{ catLabel(it.category) }}</span>
+                    <span v-if="it.kind !== 'task'" class="tm-kind">{{ kindLabel(it.kind) }}</span>
+                    <span v-if="it.deadlineIso" class="tm-date deadline">{{ shortDate(it.deadlineIso) }}</span>
+                    <span v-if="it.spent" class="tm-did">{{ formatSpent(it.spent) }}</span>
+                  </div>
+                </div>
+                <div v-if="!lane.items.length" class="tm-empty-col">{{ lane.empty }}</div>
+              </div>
+            </section>
+          </div>
+
+          <div v-show="planMode === 'kanban'" class="tm-kanban">
+            <div v-for="col in columns" :key="col.key" class="tm-column">
+              <div class="tm-column-head" :style="{ borderColor: col.color }">
+                <span class="tm-col-dot" :style="{ background: col.color }" />
+                <span class="tm-col-name">{{ col.label }}</span>
+                <n-tag size="tiny" round :bordered="false" class="tm-col-count">{{ grouped[col.key].length }}</n-tag>
+                <button
+                  v-if="col.key === 'done' && doneCount > 0"
+                  class="tm-col-more"
+                  @click.stop="toggleDoneCollapse"
+                >{{ showAllDone ? '收起' : `全部 ${doneCount}` }}</button>
+                <button class="tm-col-add" :title="'新建到' + col.label" @click="newTask(col.key)">＋</button>
+              </div>
+              <draggable
+                :list="grouped[col.key]"
+                group="tasks"
+                item-key="id"
+                class="tm-cards"
+                :animation="160"
+                @change="(e) => onDragChange(col.key, e)"
+              >
+                <template #item="{ element }">
+                  <div
+                    class="tm-card"
+                    :class="{ overdue: isOverdue(element) }"
+                    @click="openDetail(element)"
+                  >
+                    <div class="tm-card-top">
+                      <span v-if="element.priority" class="tm-pri" :class="'pri-' + element.priority">{{ element.priority }}</span>
+                      <input
+                        v-if="renamingId === element.id"
+                        v-model="renameDraft"
+                        class="tm-card-rename"
+                        @keydown.enter.prevent="commitRename(element)"
+                        @keydown.esc.prevent="renamingId = ''"
+                        @blur="commitRename(element)"
+                        @click.stop
+                      />
+                      <span v-else class="tm-card-title" @dblclick.stop="inlineRename(element)">{{ element.title || '(无标题)' }}</span>
+                      <span class="tm-card-acts">
+                        <button title="完成" @click.stop="toggleDone(element)">✓</button>
+                        <button title="明天" @click.stop="snooze(element)">→</button>
+                      </span>
+                    </div>
+                    <div class="tm-card-meta">
+                      <span class="tm-cat" :class="'cat-' + element.category">{{ catLabel(element.category) }}</span>
+                      <span v-if="element.kind !== 'task'" class="tm-kind">{{ kindLabel(element.kind) }}</span>
+                      <span class="tm-type" :class="'tt-' + element.taskType">{{ typeLabel(element.taskType) }}</span>
+                      <span v-if="element.deadline" class="tm-date deadline"><n-icon :component="Flag16Regular" />{{ shortDate(element.deadlineIso) }}</span>
+                      <span v-if="element.spent" class="tm-did">{{ formatSpent(element.spent) }}</span>
+                      <span v-if="element.displayId" class="tm-did">{{ element.displayId }}</span>
+                      <button
+                        v-if="mailOriginOf(element)"
+                        class="tm-mail-origin"
+                        title="回到原邮件"
+                        @click.stop="openMailOrigin(element)"
+                      >
+                        ✉ 邮件
+                      </button>
+                    </div>
+                  </div>
+                </template>
+              </draggable>
+              <div v-if="!grouped[col.key].length" class="tm-empty-col">暂无任务</div>
+            </div>
+          </div>
+
+          <div v-show="planMode === 'calendar'" class="tm-calendar">
+            <FullCalendar ref="calRef" :options="calendarOptions" />
+          </div>
+
+          <div v-if="planMode === 'goals'" class="tm-goals">
+            <div class="tm-goals-head">
+              <span>目标进度</span>
+              <span class="tm-spacer2" />
+              <n-button size="small" @click="newGoal">＋ 新建目标</n-button>
+            </div>
+            <div v-if="!goals.length" class="tm-hint">还没有目标。新建一个目标，再把任务填到它的「父任务」里，进度会自动汇总。</div>
+            <div v-for="g in goals" :key="g.id" class="tm-goal" @click="openDetail(g)">
+              <div class="tm-goal-head">
+                <span class="tm-goal-title">{{ g.title }}</span>
+                <span class="tm-goal-pct">{{ goalProgress(g).pct }}%</span>
+              </div>
+              <div class="tm-goal-bar"><span :style="{ width: goalProgress(g).pct + '%' }" /></div>
+              <div class="tm-goal-meta">{{ goalProgress(g).done }}/{{ goalProgress(g).total }} 个子任务 · {{ catLabel(g.category) }}</div>
+              <div v-if="goalProgress(g).total" class="tm-goal-children">
+                <span
+                  v-for="c in goalChildren(g)"
+                  :key="c.id"
+                  class="tm-goal-child"
+                  :class="{ done: c.done }"
+                  @click.stop="openDetail(c)"
+                >{{ c.title }}</span>
+              </div>
+            </div>
+          </div>
         </section>
 
         <!-- 日历悬浮详情卡片 -->
@@ -107,42 +380,107 @@
           </div>
         </Teleport>
 
-        <!-- 统计 -->
-        <section v-if="view === 'stats'" class="tm-stats">
-          <div class="tm-stats-bar">
-            <span class="tm-stats-title">统计概览</span>
+        <!-- 年轮 -->
+        <section v-show="view === 'year'" class="tm-year">
+          <div class="tm-year-head">
+            <span class="tm-stats-title">年轮</span>
+            <span class="tm-year-sub">
+              <button class="tm-year-nav" title="上一年" @click="heatmapYear -= 1">‹</button>
+              <b>{{ heatmapYear }}</b>
+              <button class="tm-year-nav" title="下一年" :disabled="heatmapYear >= currentYear" @click="heatmapYear += 1">›</button>
+              · 长期记录与成长
+            </span>
             <span class="tm-spacer2" />
             <n-button size="small" type="primary" ghost @click="openFieldExport">
               <template #icon><n-icon :component="ArrowExportLtr20Regular" /></template>
               按字段筛选导出
             </n-button>
+            <n-button size="small" @click="openExport">生成报表</n-button>
           </div>
-          <div class="tm-stat-cards">
-            <div class="tm-stat-card">
-              <div class="tm-stat-num">{{ items.length }}</div>
-              <div class="tm-stat-label">任务总数</div>
+
+          <div class="tm-year-grid">
+            <div class="tm-year-main">
+              <div class="tm-year-card">
+                <TaskYearHeatmap :items="items" :year="heatmapYear" @select="onSelectDay" />
+                <div v-if="selectedDay" class="tm-day-detail">
+                  <div class="tm-day-head">
+                    <span>{{ selectedDay }}</span>
+                    <span class="tm-muted">{{ dayDetail.done.length }} 完成 · {{ dayDetail.checkins.length }} 打卡</span>
+                  </div>
+                  <div v-for="it in dayDetail.done" :key="it.id" class="tm-day-row" @click="openDetail(it)">
+                    <span class="tm-day-dot" />{{ it.title }}
+                  </div>
+                  <div v-for="h in dayDetail.checkins" :key="'h-' + h.id" class="tm-day-row habit">
+                    <span class="tm-day-dot" />{{ h.title }} 打卡
+                  </div>
+                  <div v-if="!dayDetail.done.length && !dayDetail.checkins.length" class="tm-hint">这一天没有记录。</div>
+                </div>
+              </div>
+
+              <div class="tm-year-stats">
+                <div class="tm-stat-card">
+                  <div class="tm-stat-num">{{ items.length }}</div>
+                  <div class="tm-stat-label">任务总数</div>
+                </div>
+                <div class="tm-stat-card">
+                  <div class="tm-stat-num" style="color:#18a058">{{ yearDone }}</div>
+                  <div class="tm-stat-label">本年完成</div>
+                </div>
+                <div class="tm-stat-card">
+                  <div class="tm-stat-num" style="color:#3f6ea8">{{ doingCount }}</div>
+                  <div class="tm-stat-label">进行中</div>
+                </div>
+                <div class="tm-stat-card">
+                  <div class="tm-stat-num">{{ completionRate }}%</div>
+                  <div class="tm-stat-label">完成率</div>
+                </div>
+                <div v-if="showBugStat" class="tm-stat-card">
+                  <div class="tm-stat-num" style="color:#d03050">{{ bugCount }}</div>
+                  <div class="tm-stat-label">Bug 数</div>
+                </div>
+              </div>
+
+              <div class="tm-year-card">
+                <div class="tm-side-title">分类完成情况</div>
+                <div class="tm-cat-bars">
+                  <div v-for="c in categoryStats" :key="c.key" class="tm-cat-bar">
+                    <span class="tm-cat-bar-label">{{ c.label }}</span>
+                    <span class="tm-cat-bar-track"><i :style="{ width: c.pct + '%' }" /></span>
+                    <span class="tm-cat-bar-num">{{ c.done }}/{{ c.total }}</span>
+                  </div>
+                </div>
+              </div>
             </div>
-            <div class="tm-stat-card">
-              <div class="tm-stat-num" style="color:#18a058">{{ doneCount }}</div>
-              <div class="tm-stat-label">已完成</div>
-            </div>
-            <div class="tm-stat-card">
-              <div class="tm-stat-num" style="color:#2080f0">{{ doingCount }}</div>
-              <div class="tm-stat-label">进行中</div>
-            </div>
-            <div class="tm-stat-card">
-              <div class="tm-stat-num">{{ completionRate }}%</div>
-              <div class="tm-stat-label">完成率</div>
-            </div>
-            <div v-if="showBugStat" class="tm-stat-card">
-              <div class="tm-stat-num" style="color:#d03050">{{ bugCount }}</div>
-              <div class="tm-stat-label">Bug 数</div>
-            </div>
-          </div>
-          <div class="tm-charts">
-            <div class="tm-chart-box"><VChart :option="statusChart" autoresize /></div>
-            <div class="tm-chart-box"><VChart :option="categoryChart" autoresize /></div>
-            <div class="tm-chart-box tm-chart-wide"><VChart :option="trendChart" autoresize /></div>
+
+            <aside class="tm-year-side">
+              <div class="tm-side-card">
+                <div class="tm-side-title">习惯</div>
+                <div v-if="!habits.length" class="tm-hint">还没有习惯。新建一个「形态=习惯」的任务即可。</div>
+                <div v-for="h in habits" :key="h.id" class="tm-habit-row" @click="openDetail(h)">
+                  <span class="tm-habit-name">{{ h.title }}</span>
+                  <span class="tm-habit-streak">{{ habitStreak(h) }} 天</span>
+                </div>
+              </div>
+              <div class="tm-side-card">
+                <div class="tm-side-title">目标</div>
+                <div v-if="!goals.length" class="tm-hint">还没有目标。</div>
+                <div v-for="g in goals" :key="g.id" class="tm-goal-mini" @click="openDetail(g)">
+                  <div class="tm-goal-mini-head">
+                    <span>{{ g.title }}</span>
+                    <span>{{ goalProgress(g).pct }}%</span>
+                  </div>
+                  <div class="tm-goal-bar"><span :style="{ width: goalProgress(g).pct + '%' }" /></div>
+                </div>
+              </div>
+              <div class="tm-side-card">
+                <div class="tm-side-title">最近复盘</div>
+                <div v-if="!reviews.length" class="tm-hint">还没有复盘记录。</div>
+                <div v-for="r in reviews.slice(0, 6)" :key="r.id" class="tm-review-mini" @click="openDetail(r)">
+                  <span class="tm-review-date">{{ shortDate(r.completedIso) }}</span>
+                  <span class="tm-review-excerpt">{{ reviewExcerpt(r) }}</span>
+                </div>
+              </div>
+            </aside>
           </div>
         </section>
 
@@ -183,6 +521,9 @@
     <n-drawer v-model:show="showExport" :width="640" placement="right">
       <n-drawer-content title="导出报表" closable>
         <n-form label-placement="left" label-width="auto" size="small" class="tm-export-form">
+          <n-form-item label="报表范围">
+            <n-select v-model:value="exportForm.scope" :options="reportScopeOptions" style="width:160px" @update:value="genPreview" />
+          </n-form-item>
           <n-form-item label="报表类型">
             <n-select v-model:value="exportForm.kind" :options="reportKindOptions" style="width:160px" @update:value="genPreview" />
           </n-form-item>
@@ -300,6 +641,14 @@
         </template>
       </n-drawer-content>
     </n-drawer>
+
+    <TaskDetailDrawer
+      v-model:show="detailVisible"
+      :task="detailTask"
+      :goals="goals"
+      @saved="onDetailSaved"
+      @deleted="onDetailSaved"
+    />
   </div>
 </template>
 
@@ -309,11 +658,12 @@ import { ref, shallowRef, reactive, computed, onMounted, onUnmounted, watch, nex
 import { useRoute } from 'vue-router'
 import {
   NTabs, NTab, NInput, NButton, NButtonGroup, NIcon, NTag, NSpin, NDrawer, NDrawerContent,
-  NForm, NFormItem, NSelect, NDatePicker, NSpace, NText, NRadioGroup, NRadio, NCard, useMessage,
+  NForm, NFormItem, NSelect, NDatePicker, NSpace, NRadioGroup, NRadio, useMessage,
+  NPopover, NSwitch, NTimePicker,
 } from 'naive-ui'
 import {
-  ClipboardTaskListLtr20Filled, Search20Regular, Board20Regular, CalendarLtr20Regular,
-  DataPie20Regular, ArrowImport20Regular, ArrowExportLtr20Regular, ArrowSync20Regular,
+  ClipboardTaskListLtr20Filled, Search20Regular, Board20Regular,
+  DataPie20Regular, ArrowImport20Regular, ArrowExportLtr20Regular, Alert20Regular,
   Flag16Regular,
 } from '@vicons/fluent'
 import { invoke } from '@tauri-apps/api/core'
@@ -325,13 +675,8 @@ import dayGridPlugin from '@fullcalendar/daygrid'
 import timeGridPlugin from '@fullcalendar/timegrid'
 import listPlugin from '@fullcalendar/list'
 import interactionPlugin from '@fullcalendar/interaction'
-import { use } from 'echarts/core'
-import { CanvasRenderer } from 'echarts/renderers'
-import { PieChart, BarChart, LineChart } from 'echarts/charts'
-import { TitleComponent, TooltipComponent, LegendComponent, GridComponent } from 'echarts/components'
-import VChart from 'vue-echarts'
-
-use([CanvasRenderer, PieChart, BarChart, LineChart, TitleComponent, TooltipComponent, LegendComponent, GridComponent])
+import TaskDetailDrawer from '../components/TaskManagerComponent/TaskDetailDrawer.vue'
+import TaskYearHeatmap from '../components/TaskManagerComponent/TaskYearHeatmap.vue'
 
 const logger = createLogger('TaskManagerPage')
 const message = useMessage()
@@ -348,21 +693,41 @@ const applyTheme = () => {
 }
 
 // ── 状态 ──
-const view = ref('kanban')
+const view = ref('today')
+const planMode = ref('kanban')
 const category = ref('all')
 const keyword = ref('')
 const items = ref([])
 const loading = ref(false)
+const lastSync = ref('')
+const searchInputRef = ref(null)
+
+const reminderEnabled = ref(true)
+const reminderTime = ref('09:00')
+
+const captureText = ref('')
+const captureCategory = ref('work')
+const captureKind = ref('task')
+const pendingStatus = ref('TODO')
+const capturing = ref(false)
+
+const detailVisible = ref(false)
+const detailTask = ref(null)
+
+const renamingId = ref('')
+const renameDraft = ref('')
+
+const heatmapYear = ref(new Date().getFullYear())
+const currentYear = new Date().getFullYear()
+const selectedDay = ref('')
 
 const CAT_MAP = { work: '工作', life: '生活', study: '学习' }
 const catLabel = (c) => CAT_MAP[c] || c || '未分类'
 const typeLabel = (t) => ({ bug: 'Bug', task: '任务', other: '其他' }[t] || '任务')
+const KIND_LABELS = { task: '任务', habit: '习惯', goal: '目标', review: '复盘' }
+const kindLabel = (k) => KIND_LABELS[k] || k || '任务'
 const STATUS_ZH = { TODO: '待办', NEXT: '下一步', DOING: '进行中', WAITING: '等待', PAUSED: '暂停', HOLD: '搁置', CANCELLED: '已取消', DONE: '已完成' }
 const statusZh = (s) => STATUS_ZH[s] || s || '待办'
-const catTagColor = (c) => {
-  const m = { work: { color: 'rgba(124,58,237,0.14)', textColor: '#7c3aed' }, life: { color: 'rgba(5,150,105,0.14)', textColor: '#059669' }, study: { color: 'rgba(37,99,235,0.14)', textColor: '#2563eb' } }
-  return m[c] || undefined
-}
 const categoryOptions = [
   { label: '工作', value: 'work' }, { label: '生活', value: 'life' }, { label: '学习', value: 'study' },
 ]
@@ -381,21 +746,23 @@ const colOf = (status) => {
 }
 
 const grouped = reactive({ todo: [], doing: [], paused: [], done: [] })
+const showAllDone = ref(false)
 const regroup = () => {
   grouped.todo = []; grouped.doing = []; grouped.paused = []; grouped.done = []
-  for (const it of items.value) grouped[colOf(it.status)].push(it)
+  const doneCutoff = addDaysIso(todayStr(), -14)
+  for (const it of items.value) {
+    // 目标是容器而不是待办；它只出现在「目标」视图，避免看板里堆积不可执行的条目。
+    if (it.kind === 'goal') continue
+    // 已完成默认只留最近两周，旧记录仍在年轮里，不占看板滚动。
+    if (!showAllDone.value && it.done && it.completedIso && it.completedIso < doneCutoff) continue
+    grouped[colOf(it.status)].push(it)
+  }
 }
 
-const statusOptions = [
-  { label: 'TODO 待办', value: 'TODO' },
-  { label: 'NEXT 下一步', value: 'NEXT' },
-  { label: 'DOING 进行中', value: 'DOING' },
-  { label: 'WAITING 等待', value: 'WAITING' },
-  { label: 'PAUSED 暂停', value: 'PAUSED' },
-  { label: 'HOLD 搁置', value: 'HOLD' },
-  { label: 'DONE 已完成', value: 'DONE' },
-  { label: 'CANCELLED 已取消', value: 'CANCELLED' },
-]
+const toggleDoneCollapse = () => {
+  showAllDone.value = !showAllDone.value
+  regroup()
+}
 
 const todayStr = () => {
   const d = new Date()
@@ -411,9 +778,9 @@ const cnDateToIso = (s) => {
 }
 const isOverdue = (it) => it.deadlineIso && !it.done && it.deadlineIso < todayStr()
 
-// TaskBlock(原始) → 看板使用的归一化项
+// TaskBlock(原始) → 视图使用的归一化项；同时保留 raw 供详情抽屉直接使用。
 const normalizeBlock = (b) => ({
-  id: b.internalId || '',          // 主键（更新/拖拽用）
+  id: b.internalId || '',
   displayId: b.id || '',
   title: b.description || b.id || '(未命名)',
   status: (b.status || 'TODO').toUpperCase(),
@@ -421,13 +788,26 @@ const normalizeBlock = (b) => ({
   priority: b.priority || '',
   category: b.manageType || '',
   taskType: b.taskType || 'task',
+  kind: b.kind || 'task',
   severity: b.severity || '',
   deadline: b.deadline || '',
   deadlineIso: cnDateToIso(b.deadline),
+  focus: b.focus || '',
+  focusIso: cnDateToIso(b.focus),
+  repeat: b.repeat || '',
+  spent: Number(b.spent) || 0,
+  checkins: Array.isArray(b.checkins) ? b.checkins : [],
+  parentId: b.parentId || '',
   createTime: b.createTime || '',
   createTimeIso: cnDateToIso(b.createTime),
+  completedTime: b.completedTime || '',
+  completedIso: cnDateToIso(b.completedTime),
   content: b.content || '',
+  notes: b.notes || { kind: 'none', value: '' },
+  customFields: b.customFields || [],
+  filePath: b.filePath || '',
   line: b.blockStartLine || 0,
+  raw: b,
 })
 
 // ── 数据加载 ──
@@ -437,16 +817,28 @@ const onSearchInput = () => {
   searchTimer = setTimeout(reload, 300)
 }
 
-const reload = async () => {
+const onCategoryChange = async () => {
+  if (category.value !== 'all') captureCategory.value = category.value
+  // 生活/学习默认按时间排；工作默认按状态看板。用户手动选的日历/目标不被覆盖。
+  if (category.value === 'life' || category.value === 'study') {
+    if (planMode.value === 'kanban') planMode.value = 'week'
+  } else if (planMode.value === 'week') {
+    planMode.value = 'kanban'
+  }
+  await reload()
+}
+
+const reload = async (fresh = false) => {
   loading.value = true
   try {
     const query = {
       category: category.value === 'all' ? null : category.value,
       keyword: keyword.value || null,
     }
-    const res = await invoke('task_query', { query })
+    const res = await invoke(fresh ? 'task_query_fresh' : 'task_query', { query })
     items.value = (Array.isArray(res) ? res : []).map(normalizeBlock)
     regroup()
+    lastSync.value = timeNow()
   } catch (e) {
     logger.error('加载任务失败:', e)
     message.error('加载任务失败：' + (e?.message || e))
@@ -467,8 +859,11 @@ const onDragChange = async (colKey, evt) => {
   try {
     const updated = await invoke('task_update_item', { input: { id: el.id, status: newStatus } })
     const fresh = Array.isArray(updated) ? updated.find((x) => x.internalId === el.id) : null
-    el.status = fresh ? (fresh.status || newStatus) : newStatus
-    el.done = fresh ? !!fresh.done : (newStatus === 'DONE' || newStatus === 'CANCELLED')
+    if (fresh) patchLocal(el, fresh)
+    else {
+      el.status = newStatus
+      el.done = newStatus === 'DONE' || newStatus === 'CANCELLED'
+    }
     message.success('已更新任务状态')
   } catch (e) {
     logger.error('更新状态失败:', e)
@@ -477,11 +872,15 @@ const onDragChange = async (colKey, evt) => {
   }
 }
 
-// ── 编辑抽屉 ──
-const showEditor = ref(false)
-const editing = ref(null)
-const saving = ref(false)
-const editForm = reactive({ status: '', title: '', deadline: '', notes: '' })
+// ── 详情抽屉 + 快捷操作 ──
+const openDetail = (it) => {
+  detailTask.value = it?.raw || it || null
+  detailVisible.value = true
+}
+const onDetailSaved = async () => {
+  detailVisible.value = false
+  await reload()
+}
 /** 任务是从邮件转来的：取 :mailAccount/:mailFolder/:mailUid 自定义属性。 */
 function mailOriginOf(it) {
   const fields = it.customFields || []
@@ -509,34 +908,405 @@ async function openMailOrigin(it) {
   }
 }
 
-const openEditor = (it) => {
-  editing.value = it
-  editForm.status = it.status || 'TODO'
-  editForm.title = it.title || ''
-  editForm.deadline = it.deadline || ''
-  editForm.notes = it.content || ''
-  showEditor.value = true
+// ── 今日 / 年轮：派生数据 ──
+const pad = (n) => String(n).padStart(2, '0')
+const timeNow = () => {
+  const d = new Date()
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
-const saveEditor = async () => {
-  if (!editing.value) return
-  saving.value = true
-  try {
-    const input = {
-      id: editing.value.id,
-      status: editForm.status,
-      title: editForm.title,
-      deadline: editForm.deadline || '',
-      notes: editForm.notes ?? '',
+const addDaysIso = (iso, n) => {
+  const d = new Date(`${iso}T00:00:00`)
+  d.setDate(d.getDate() + n)
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+}
+const todayParts = computed(() => {
+  const d = new Date()
+  const weekdays = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
+  return {
+    day: pad(d.getDate()),
+    weekday: weekdays[d.getDay()],
+    yearMonth: `${d.getFullYear()} 年 ${d.getMonth() + 1} 月`,
+  }
+})
+const shortDate = (iso) => {
+  const s = cnDateToIso(iso)
+  if (!s) return ''
+  const today = todayStr()
+  if (s === today) return '今天'
+  if (s === addDaysIso(today, 1)) return '明天'
+  if (s === addDaysIso(today, -1)) return '昨天'
+  return s.slice(5).replace('-', '/')
+}
+const formatSpent = (m) => {
+  const n = Number(m) || 0
+  if (!n) return '0m'
+  return n >= 60 ? `${Math.floor(n / 60)}h${n % 60 ? ` ${n % 60}m` : ''}` : `${n}m`
+}
+const reviewExcerpt = (it) => String(it.content || it.notes?.value || '').replace(/\s+/g, ' ').slice(0, 72) || '（空白复盘）'
+const rowMeta = (it) => {
+  const bits = [catLabel(it.category)]
+  if (it.deadlineIso) bits.push(`截止 ${shortDate(it.deadlineIso)}`)
+  if (it.priority) bits.push(`#${it.priority}`)
+  if (it.kind !== 'task') bits.push(kindLabel(it.kind))
+  if (it.repeat) bits.push(it.repeat)
+  return bits.join(' · ')
+}
+
+const today = computed(() => todayStr())
+const overdueItems = computed(() => {
+  const t = today.value
+  return items.value.filter((i) => !i.done && i.deadlineIso && i.deadlineIso < t && i.focusIso !== t)
+    .sort((a, b) => a.deadlineIso.localeCompare(b.deadlineIso))
+})
+const todayDue = computed(() => items.value.filter((i) => !i.done && i.deadlineIso === today.value && i.focusIso !== today.value))
+const todayDoing = computed(() => items.value.filter((i) => !i.done && ['DOING', 'NEXT'].includes(i.status)
+  && i.deadlineIso !== today.value && !(i.deadlineIso && i.deadlineIso < today.value) && i.focusIso !== today.value))
+const doneToday = computed(() => items.value.filter((i) => i.done && i.completedIso === todayStr()))
+const focusItems = computed(() => items.value.filter((i) => !i.done && i.focusIso === todayStr()))
+const todayHabits = computed(() => items.value.filter((i) => i.kind === 'habit'))
+const habitDoneCount = computed(() => todayHabits.value.filter((h) => isCheckedToday(h)).length)
+const todayReview = computed(() => items.value.find((i) => i.kind === 'review'
+  && (i.completedIso === todayStr() || i.createTimeIso === todayStr())) || null)
+const recentDone = computed(() => items.value.filter((i) => i.done && i.completedIso)
+  .sort((a, b) => b.completedIso.localeCompare(a.completedIso)).slice(0, 5))
+const habits = computed(() => items.value.filter((i) => i.kind === 'habit'))
+const goals = computed(() => items.value.filter((i) => i.kind === 'goal'))
+const reviews = computed(() => items.value
+  .filter((i) => i.kind === 'review' && (i.completedIso || i.createTimeIso).startsWith(String(heatmapYear.value)))
+  .sort((a, b) => (b.completedIso || b.createTimeIso).localeCompare(a.completedIso || a.createTimeIso)))
+
+const isCheckedToday = (h) => (h.checkins || []).some((d) => cnDateToIso(d) === todayStr())
+const habitStreak = (h) => {
+  const days = new Set((h.checkins || []).map(cnDateToIso).filter(Boolean))
+  let cur = todayStr()
+  if (!days.has(cur)) cur = addDaysIso(cur, -1)
+  let n = 0
+  while (days.has(cur)) {
+    n += 1
+    cur = addDaysIso(cur, -1)
+  }
+  return n
+}
+
+const weekStart = computed(() => {
+  const d = new Date(`${todayStr()}T00:00:00`)
+  const offset = (d.getDay() + 6) % 7
+  return addDaysIso(todayStr(), -offset)
+})
+const weekStats = computed(() => {
+  const start = weekStart.value
+  const end = todayStr()
+  let done = 0
+  let checkins = 0
+  let spent = 0
+  for (const it of items.value) {
+    const completedIn = it.completedIso && it.completedIso >= start && it.completedIso <= end
+    const createdIn = it.createTimeIso && it.createTimeIso >= start && it.createTimeIso <= end
+    if (completedIn && it.done) done += 1
+    if ((completedIn || createdIn) && it.spent) spent += it.spent
+    for (const c of it.checkins || []) {
+      const iso = cnDateToIso(c)
+      if (iso && iso >= start && iso <= end) checkins += 1
     }
-    await invoke('task_update_item', { input })
-    message.success('已保存到 .org')
-    showEditor.value = false
-    await reload()
+  }
+  return { done, checkins, spent }
+})
+
+const weekLanes = computed(() => {
+  const t = today.value
+  const weekEnd = addDaysIso(weekStart.value, 6)
+  const nextWeekEnd = addDaysIso(weekEnd, 7)
+  const list = items.value.filter((i) => !i.done && !['goal', 'habit', 'review'].includes(i.kind))
+  const lane = (pred) => list
+    .filter(pred)
+    .sort((a, b) => (a.deadlineIso || '9999-12-31').localeCompare(b.deadlineIso || '9999-12-31'))
+  return [
+    { key: 'overdue', label: '逾期', empty: '没有逾期', items: lane((i) => i.deadlineIso && i.deadlineIso < t) },
+    { key: 'this', label: '本周', empty: '本周还空着', items: lane((i) => i.deadlineIso && i.deadlineIso >= t && i.deadlineIso <= weekEnd) },
+    { key: 'next', label: '下周', empty: '下周还没排', items: lane((i) => i.deadlineIso && i.deadlineIso > weekEnd && i.deadlineIso <= nextWeekEnd) },
+    { key: 'later', label: '以后 / 无日期', empty: '没有积压', items: lane((i) => !i.deadlineIso || i.deadlineIso > nextWeekEnd) },
+  ]
+})
+
+const categoryStats = computed(() => ['work', 'life', 'study'].map((key) => {
+  const list = items.value.filter((i) => i.category === key)
+  const done = list.filter((i) => i.done).length
+  return { key, label: catLabel(key), done, total: list.length, pct: list.length ? Math.round((done / list.length) * 100) : 0 }
+}))
+
+const goalChildren = (g) => items.value.filter((i) => i.parentId && (i.parentId === g.id || i.parentId === g.displayId))
+const goalProgress = (g) => {
+  const kids = goalChildren(g)
+  const done = kids.filter((k) => k.done).length
+  return { done, total: kids.length, pct: kids.length ? Math.round((done / kids.length) * 100) : 0 }
+}
+
+const dayDetail = computed(() => {
+  const day = selectedDay.value
+  if (!day) return { done: [], checkins: [] }
+  return {
+    done: items.value.filter((i) => i.done && i.completedIso === day),
+    checkins: items.value.filter((i) => i.kind === 'habit' && (i.checkins || []).some((d) => cnDateToIso(d) === day)),
+  }
+})
+const onSelectDay = (day) => { selectedDay.value = day }
+
+// ── 快捷操作（写好即回写 .org）──
+const patchLocal = (it, raw) => {
+  if (raw) Object.assign(it, normalizeBlock(raw))
+  regroup()
+  lastSync.value = timeNow()
+}
+
+const setStatus = async (it, next) => {
+  const prev = { status: it.status, done: it.done, completedIso: it.completedIso }
+  it.status = next
+  it.done = next === 'DONE' || next === 'CANCELLED'
+  try {
+    const updated = await invoke('task_update_item', { input: { id: it.id, status: next } })
+    const fresh = Array.isArray(updated) ? updated.find((x) => x.internalId === it.id) : null
+    if (fresh) patchLocal(it, fresh)
+    else regroup()
   } catch (e) {
-    logger.error('保存任务失败:', e)
-    message.error('保存失败：' + (e?.message || e))
+    Object.assign(it, prev)
+    regroup()
+    logger.error('更新状态失败:', e)
+    message.error('更新失败：' + (e?.message || e))
+  }
+}
+const toggleDone = (it) => setStatus(it, it.done ? 'TODO' : 'DONE')
+
+const snooze = async (it) => {
+  const next = addDaysIso(todayStr(), 1)
+  try {
+    const updated = await invoke('task_update_item', {
+      input: { id: it.id, fields: { deadline: `${next.slice(0, 4)}年${next.slice(5, 7)}月${next.slice(8, 10)}日` } },
+    })
+    const fresh = Array.isArray(updated) ? updated.find((x) => x.internalId === it.id) : null
+    if (fresh) patchLocal(it, fresh)
+    message.success('已顺延到明天')
+  } catch (e) {
+    logger.error('顺延失败:', e)
+    message.error('顺延失败：' + (e?.message || e))
+  }
+}
+
+const unfocus = async (it) => {
+  try {
+    const updated = await invoke('task_update_item', { input: { id: it.id, fields: { focus: '' } } })
+    const fresh = Array.isArray(updated) ? updated.find((x) => x.internalId === it.id) : null
+    if (fresh) patchLocal(it, fresh)
+  } catch (e) {
+    logger.error('移出今日失败:', e)
+    message.error('操作失败：' + (e?.message || e))
+  }
+}
+
+const toggleHabit = async (h) => {
+  const today = todayStr()
+  const next = isCheckedToday(h)
+    ? h.checkins.filter((d) => cnDateToIso(d) !== today)
+    : [...h.checkins, today]
+  try {
+    const updated = await invoke('task_update_item', { input: { id: h.id, fields: { checkins: next } } })
+    const fresh = Array.isArray(updated) ? updated.find((x) => x.internalId === h.id) : null
+    if (fresh) patchLocal(h, fresh)
+    else { h.checkins = next; lastSync.value = timeNow() }
+  } catch (e) {
+    logger.error('打卡失败:', e)
+    message.error('打卡失败：' + (e?.message || e))
+  }
+}
+
+// 快速捕获：解析 @分类 / !优先级 / #形态 / 今天·明天 / 重复
+const parseCapture = (text) => {
+  let s = String(text || '').trim()
+  const out = { title: s, category: captureCategory.value, kind: captureKind.value, priority: '', repeat: '', deadline: '' }
+  let m = s.match(/@(工作|生活|学习)/)
+  if (m) {
+    out.category = { 工作: 'work', 生活: 'life', 学习: 'study' }[m[1]]
+    s = s.replace(m[0], '')
+  }
+  m = s.match(/#(习惯|目标|复盘)/)
+  if (m) {
+    out.kind = { 习惯: 'habit', 目标: 'goal', 复盘: 'review' }[m[1]]
+    s = s.replace(m[0], '')
+  }
+  m = s.match(/!([ABC])/i)
+  if (m) {
+    out.priority = m[1].toUpperCase()
+    s = s.replace(m[0], '')
+  }
+  m = s.match(/(每天|工作日|每周|每月)/)
+  if (m) {
+    out.repeat = m[1]
+    s = s.replace(m[0], '')
+  }
+  if (/今天/.test(s)) { out.deadline = todayStr(); s = s.replace(/今天/g, '') }
+  else if (/明天/.test(s)) { out.deadline = addDaysIso(todayStr(), 1); s = s.replace(/明天/g, '') }
+  else if (/后天/.test(s)) { out.deadline = addDaysIso(todayStr(), 2); s = s.replace(/后天/g, '') }
+  else {
+    m = s.match(/(\d{4})-(\d{1,2})-(\d{1,2})/)
+    if (!m) m = s.match(/(\d{1,2})月(\d{1,2})日/)
+    if (m) {
+      const y = m.length === 4 ? m[1] : String(new Date().getFullYear())
+      const mo = m.length === 4 ? m[2] : m[1]
+      const d = m.length === 4 ? m[3] : m[2]
+      out.deadline = `${y}-${pad(mo)}-${pad(d)}`
+      s = s.replace(m[0], '')
+    }
+  }
+  out.title = s.replace(/\s+/g, ' ').trim()
+  return out
+}
+const captureHint = computed(() => {
+  const raw = captureText.value.trim()
+  if (!raw) return pendingStatus.value !== 'TODO' ? `新建到「${columns.find((c) => c.canonical === pendingStatus.value)?.label || '待办'}」` : ''
+  const p = parseCapture(raw)
+  const bits = [catLabel(p.category), kindLabel(p.kind)]
+  if (p.deadline) bits.push(`截止 ${shortDate(p.deadline)}`)
+  else if (view.value === 'today' && !['habit', 'goal', 'review'].includes(p.kind)) bits.push('置顶今日')
+  if (p.priority) bits.push(`#${p.priority}`)
+  if (p.repeat) bits.push(p.repeat)
+  return bits.join(' · ')
+})
+
+const planCapturePlaceholder = computed(() => {
+  if (captureKind.value === 'goal') return '＋ 新建目标，回车保存'
+  const label = columns.find((c) => c.canonical === pendingStatus.value)?.label || '待办'
+  return `＋ 新建到「${label}」，回车保存`
+})
+
+const focusCapture = async () => {
+  await nextTick()
+  const sel = view.value === 'plan' ? '.tm-plan-capture' : '.tm-capture-input'
+  document.querySelector(sel)?.focus()
+}
+
+const quickCapture = async () => {
+  const p = parseCapture(captureText.value)
+  if (!p.title) return
+  capturing.value = true
+  try {
+    const created = await invoke('task_create', {
+      input: {
+        category: p.category,
+        title: p.title,
+        kind: p.kind,
+        priority: p.priority,
+        repeat: p.repeat,
+        deadline: p.deadline ? `${p.deadline.slice(0, 4)}年${p.deadline.slice(5, 7)}月${p.deadline.slice(8, 10)}日` : '',
+        focus: view.value === 'today' && !p.deadline && !['habit', 'goal', 'review'].includes(p.kind) ? todayStr() : '',
+        status: p.kind === 'review' ? 'DONE' : pendingStatus.value,
+      },
+    })
+    items.value.unshift(normalizeBlock(created))
+    regroup()
+    lastSync.value = timeNow()
+    if (p.kind === 'goal') planMode.value = 'goals'
+    captureText.value = ''
+    pendingStatus.value = 'TODO'
+    captureKind.value = 'task'
+    message.success('已记下')
+  } catch (e) {
+    logger.error('快速记录失败:', e)
+    message.error('记录失败：' + (e?.message || e))
   } finally {
-    saving.value = false
+    capturing.value = false
+  }
+}
+
+// task_create 目前固定 TODO；列内新建需要列状态，这里建好后立刻改状态。
+const newTask = async (colKey) => {
+  const col = columns.find((c) => c.key === colKey)
+  pendingStatus.value = col?.canonical || 'TODO'
+  captureKind.value = 'task'
+  if (view.value !== 'plan') view.value = 'plan'
+  if (planMode.value !== 'kanban') planMode.value = 'kanban'
+  await focusCapture()
+}
+
+const newGoal = async () => {
+  captureKind.value = 'goal'
+  pendingStatus.value = 'TODO'
+  if (view.value !== 'plan') view.value = 'plan'
+  if (planMode.value !== 'kanban') planMode.value = 'kanban'
+  await focusCapture()
+}
+
+const startReview = async () => {
+  try {
+    const created = await invoke('task_create', {
+      input: {
+        category: captureCategory.value,
+        title: `复盘 · ${todayStr()}`,
+        kind: 'review',
+        content: '',
+        status: 'DONE',
+      },
+    })
+    await reload()
+    detailTask.value = created
+    detailVisible.value = true
+  } catch (e) {
+    logger.error('创建复盘失败:', e)
+    message.error('创建复盘失败：' + (e?.message || e))
+  }
+}
+
+const inlineRename = async (it) => {
+  renamingId.value = it.id
+  renameDraft.value = it.title
+  await nextTick()
+  document.querySelector('.tm-card-rename')?.focus()
+}
+const commitRename = async (it) => {
+  const value = renameDraft.value.trim()
+  renamingId.value = ''
+  if (!value || value === it.title) return
+  try {
+    const updated = await invoke('task_update_item', { input: { id: it.id, fields: { description: value } } })
+    const fresh = Array.isArray(updated) ? updated.find((x) => x.internalId === it.id) : null
+    it.title = value
+    if (fresh) patchLocal(it, fresh)
+    message.success('已改名')
+  } catch (e) {
+    logger.error('改名失败:', e)
+    message.error('改名失败：' + (e?.message || e))
+  }
+}
+
+const setPlanMode = async (m) => {
+  planMode.value = m
+  await nextTick()
+  if (m === 'calendar') {
+    try { calRef.value?.getApi()?.updateSize() } catch {}
+    try { window.dispatchEvent(new Event('resize')) } catch {}
+  }
+}
+
+// ── 提醒设置 ──
+const loadReminderConfig = async () => {
+  try {
+    const cfg = await invoke('task_get_config')
+    reminderEnabled.value = cfg?.reminder_enabled !== false
+    reminderTime.value = cfg?.reminder_time || '09:00'
+  } catch (e) {
+    logger.warn('读取提醒配置失败', e)
+  }
+}
+const saveReminder = async () => {
+  try {
+    const cfg = await invoke('task_set_reminder', {
+      enabled: reminderEnabled.value,
+      time: reminderTime.value || '09:00',
+    })
+    reminderEnabled.value = cfg?.reminder_enabled !== false
+    reminderTime.value = cfg?.reminder_time || '09:00'
+    message.success(reminderEnabled.value ? `已开启每日 ${reminderTime.value} 摘要` : '已关闭每日摘要')
+  } catch (e) {
+    logger.error('保存提醒设置失败:', e)
+    message.error('保存提醒设置失败：' + (e?.message || e))
   }
 }
 
@@ -582,7 +1352,7 @@ const doImport = async () => {
 const showExport = ref(false)
 const exporting = ref(false)
 const exportPreview = ref('')
-const exportForm = reactive({ kind: 'weekly', from: null, to: null })
+const exportForm = reactive({ kind: 'weekly', from: null, to: null, scope: 'work' })
 const reportKindOptions = [
   { label: '日报', value: 'daily' },
   { label: '周报', value: 'weekly' },
@@ -590,9 +1360,19 @@ const reportKindOptions = [
   { label: '半年报', value: 'halfyear' },
   { label: '年报', value: 'yearly' },
 ]
-const reportKindLabel = () => (reportKindOptions.find((o) => o.value === exportForm.kind)?.label || '报表')
+const reportScopeOptions = [
+  { label: '工作', value: 'work' },
+  { label: '生活', value: 'life' },
+  { label: '学习', value: 'study' },
+]
+const reportKindLabel = () => {
+  const kind = reportKindOptions.find((o) => o.value === exportForm.kind)?.label || '报表'
+  const scope = reportScopeOptions.find((o) => o.value === exportForm.scope)?.label || '工作'
+  return `${scope}${kind}`
+}
 // 打开导出抽屉并立即生成一次预览
 const openExport = () => {
+  if (category.value !== 'all') exportForm.scope = category.value
   showExport.value = true
   genPreviewNow()
 }
@@ -614,7 +1394,7 @@ const genPreviewNow = async () => {
     // 重扫已在 task_export_report 内部做完（增量，内容没变的文件直接跳过），
     // 不再单独发一次 task_scan_and_index —— 那会让每次改日期都多付一轮全量扫描。
     const text = await invoke('task_export_report', {
-      input: { kind: exportForm.kind, date: '', from: exportForm.from || null, to: exportForm.to || null, format: 'text' },
+      input: { kind: exportForm.kind, date: '', from: exportForm.from || null, to: exportForm.to || null, format: 'text', scope: exportForm.scope },
     })
     if (seq !== previewSeq) return
     exportPreview.value = text
@@ -683,7 +1463,12 @@ const FIELD_DEFS = [
   { key: 'id', label: 'ID', type: 'text' },
   { key: 'parentId', label: '父任务', type: 'text' },
   { key: 'taskType', label: '类型', type: 'enum', options: enumOptionsOf([['bug', 'Bug'], ['task', '任务'], ['other', '其他']]) },
+  { key: 'kind', label: '形态', type: 'enum', options: enumOptionsOf([['task', '任务'], ['habit', '习惯'], ['goal', '目标'], ['review', '复盘']]) },
   { key: 'deadline', label: '截止', type: 'date' },
+  { key: 'focus', label: '置顶', type: 'date' },
+  { key: 'repeat', label: '重复', type: 'text' },
+  { key: 'spent', label: '投入(分钟)', type: 'text' },
+  { key: 'checkins', label: '打卡', type: 'text' },
   { key: 'createTime', label: '创建时间', type: 'date' },
   { key: 'completedTime', label: '完成时间', type: 'date' },
   { key: 'origin', label: '来源', type: 'enum', options: enumOptionsOf([['customer', 'customer'], ['qa', 'qa'], ['dev', 'dev'], ['other', 'other']]) },
@@ -813,8 +1598,11 @@ const fxDoneCount = computed(() => fxMatched.value.filter((b) => String(b.status
 
 const fxFieldValue = (b, key) => {
   if (key === 'taskType') return typeLabel(b.taskType)
+  if (key === 'kind') return kindLabel(b.kind)
   if (key === 'status') return statusZh(String(b.status || '').toUpperCase())
   if (key === 'manageType') return catLabel(b.manageType)
+  if (key === 'checkins') return (Array.isArray(b.checkins) ? b.checkins : []).join(', ')
+  if (key === 'spent') return String(b.spent || 0)
   if (key === 'extraImpacts') return (Array.isArray(b.extraImpacts) ? b.extraImpacts : []).join('\n\n')
   if (key === 'notes') {
     const n = b.notes
@@ -873,60 +1661,12 @@ const fxCopy = async () => {
 
 // ── 统计 ──
 const doneCount = computed(() => items.value.filter((i) => i.done).length)
+const yearDone = computed(() => items.value.filter((i) => i.done && i.completedIso?.startsWith(String(heatmapYear.value))).length)
 const doingCount = computed(() => items.value.filter((i) => ['DOING', 'NEXT'].includes(String(i.status).toUpperCase())).length)
 const bugCount = computed(() => items.value.filter((i) => i.taskType === 'bug').length)
 // Bug 统计仅在工作/全部下显示（生活·学习无 bug 概念）
 const showBugStat = computed(() => category.value !== 'life' && category.value !== 'study')
 const completionRate = computed(() => items.value.length ? Math.round((doneCount.value / items.value.length) * 100) : 0)
-
-const axisColor = computed(() => (isDark.value ? '#9da5b4' : '#57606a'))
-const statusChart = computed(() => ({
-  backgroundColor: 'transparent',
-  title: { text: '状态分布', left: 'center', textStyle: { color: axisColor.value, fontSize: 14 } },
-  tooltip: { trigger: 'item' },
-  legend: { bottom: 0, textStyle: { color: axisColor.value } },
-  series: [{
-    type: 'pie', radius: ['40%', '66%'], center: ['50%', '48%'], avoidLabelOverlap: true,
-    label: { color: axisColor.value },
-    data: columns.map((c) => ({ name: c.label, value: grouped[c.key].length, itemStyle: { color: c.color } })),
-  }],
-}))
-const categoryChart = computed(() => {
-  const cats = ['work', 'life', 'study']
-  return {
-    backgroundColor: 'transparent',
-    title: { text: '分类完成情况', left: 'center', textStyle: { color: axisColor.value, fontSize: 14 } },
-    tooltip: { trigger: 'axis' },
-    legend: { bottom: 0, data: ['已完成', '未完成'], textStyle: { color: axisColor.value } },
-    grid: { left: 40, right: 16, top: 40, bottom: 40 },
-    xAxis: { type: 'category', data: cats.map(catLabel), axisLabel: { color: axisColor.value } },
-    yAxis: { type: 'value', axisLabel: { color: axisColor.value } },
-    series: [
-      { name: '已完成', type: 'bar', stack: 't', color: '#18a058', data: cats.map((c) => items.value.filter((i) => i.category === c && i.done).length) },
-      { name: '未完成', type: 'bar', stack: 't', color: '#f0a020', data: cats.map((c) => items.value.filter((i) => i.category === c && !i.done).length) },
-    ],
-  }
-})
-const trendChart = computed(() => {
-  // 类型/严重度分布
-  const types = ['bug', 'task', 'other']
-  const typeLabels = { bug: 'Bug', task: '任务', other: '其他' }
-  return {
-    backgroundColor: 'transparent',
-    title: { text: '类型分布', left: 'center', textStyle: { color: axisColor.value, fontSize: 14 } },
-    tooltip: { trigger: 'item' },
-    legend: { bottom: 0, textStyle: { color: axisColor.value } },
-    series: [{
-      type: 'pie', radius: ['40%', '66%'], center: ['50%', '48%'],
-      label: { color: axisColor.value },
-      data: types.map((t, idx) => ({
-        name: typeLabels[t],
-        value: items.value.filter((i) => i.taskType === t).length,
-        itemStyle: { color: ['#d03050', '#2080f0', '#8a8f99'][idx] },
-      })),
-    }],
-  }
-})
 
 // ── 日历（按截止日期 ISO） ──
 const calRef = ref(null)
@@ -963,18 +1703,24 @@ const calendarOptions = computed(() => ({
 // 日历悬浮详情卡片
 const hover = ref({ visible: false, x: 0, y: 0, item: null })
 
-// 看板/日历/统计都放在同一容器内用 v-show 切换：FullCalendar 与 ECharts 在隐藏(display:none)时
-// 无法测量尺寸，会塌缩成一条缝。切到对应视图后强制重新测量。
+// 视图切换：FullCalendar 在 display:none 下量不到尺寸，切回来要重新测量。
 watch(view, async (v) => {
   await nextTick()
-  if (v === 'calendar') {
+  if (v === 'plan' && planMode.value === 'calendar') {
     try { calRef.value?.getApi()?.updateSize() } catch (e) { logger.warn('日历重测量失败', e) }
   }
-  // 触发 ECharts(autoresize) 与 FullCalendar(windowResize) 重新计算尺寸
   try { window.dispatchEvent(new Event('resize')) } catch {}
 })
+watch(planMode, async (m) => {
+  await nextTick()
+  if (m === 'calendar') {
+    try { calRef.value?.getApi()?.updateSize() } catch (e) { logger.warn('日历重测量失败', e) }
+    try { window.dispatchEvent(new Event('resize')) } catch {}
+  }
+})
+watch(heatmapYear, () => { selectedDay.value = '' })
 
-// 任务数据变化时，把事件推给已挂载的日历（v-if 重挂载会自带初始事件，此处覆盖实时更新）
+// 任务数据变化时，把事件推给已挂载的日历。
 watch(calendarEvents, async (evs) => {
   await nextTick()
   const api = calRef.value?.getApi?.()
@@ -983,10 +1729,40 @@ watch(calendarEvents, async (evs) => {
   }
 })
 
+const isTypingTarget = (e) => {
+  const t = e?.target
+  if (!t) return false
+  return t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable
+}
+const onKeydown = (e) => {
+  if (e.key === 'Escape') {
+    if (detailVisible.value) {
+      detailVisible.value = false
+      e.preventDefault()
+    }
+    return
+  }
+  if (isTypingTarget(e) || e.metaKey || e.ctrlKey || e.altKey) return
+  if (e.key === 'n' || e.key === 'N') {
+    view.value = 'today'
+    void focusCapture()
+    e.preventDefault()
+  } else if (e.key === '/') {
+    searchInputRef.value?.focus?.()
+    e.preventDefault()
+  } else if (e.key === '1') view.value = 'today'
+  else if (e.key === '2') view.value = 'plan'
+  else if (e.key === '3') view.value = 'year'
+}
+const onWindowFocus = () => { void reload() }
+
 let unlisten = null
+let unlistenReminder = null
 onMounted(async () => {
   applyTheme()
-  await reload()
+  await loadReminderConfig()
+  // 首次打开先增量重扫：任务窗口关着时编辑器可能已经改过 .org，索引不一定是新的。
+  await reload(true)
   try {
     await invoke('task_start_watching')
   } catch (e) {
@@ -997,10 +1773,24 @@ onMounted(async () => {
   } catch (e) {
     logger.warn('监听任务文件变更失败', e)
   }
+  try {
+    unlistenReminder = await listen('guaxi:task-reminder', (ev) => {
+      const body = ev?.payload?.body || '有任务到期'
+      message.warning(body)
+      void reload()
+    })
+  } catch (e) {
+    logger.warn('监听任务提醒失败', e)
+  }
+  window.addEventListener('keydown', onKeydown)
+  window.addEventListener('focus', onWindowFocus)
 })
 
 onUnmounted(() => {
   try { unlisten?.() } catch {}
+  try { unlistenReminder?.() } catch {}
+  window.removeEventListener('keydown', onKeydown)
+  window.removeEventListener('focus', onWindowFocus)
   if (searchTimer) clearTimeout(searchTimer)
   if (previewTimer) clearTimeout(previewTimer)
   if (fxTimer) clearTimeout(fxTimer)
@@ -1235,4 +2025,203 @@ onUnmounted(() => {
 .tm-fx-chk { display: inline-flex; align-items: center; gap: 4px; font-size: 13px; margin: 3px 12px 3px 0; cursor: pointer; }
 .tm-fx-opts { font-size: 13px; }
 .tm-fx-preview-wrap { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 220px; }
+
+/* ── 三视图骨架 ── */
+.task-manager-page { --tm-accent: #3f6ea8; --tm-accent-soft: rgba(63, 110, 168, 0.14); }
+.tm-sync { font-size: 11px; color: var(--guaxi-text-secondary); white-space: nowrap; opacity: 0.8; }
+.tm-reminder-pop { width: 240px; display: flex; flex-direction: column; gap: 10px; padding: 4px 2px; }
+.tm-reminder-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 13px; }
+.tm-reminder-hint { font-size: 11px; line-height: 1.6; color: var(--guaxi-text-secondary); }
+
+/* ── 今日 ── */
+.tm-today {
+  flex: 1 1 auto; min-height: 0; overflow-y: auto;
+  display: grid; grid-template-columns: minmax(0, 820px) 300px;
+  justify-content: center; align-content: start; gap: 24px;
+  padding: 22px 24px 40px; box-sizing: border-box;
+}
+.tm-today-main { min-width: 0; }
+.tm-today-side { display: flex; flex-direction: column; gap: 14px; position: sticky; top: 0; align-self: start; }
+.tm-today-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; margin-bottom: 18px; }
+.tm-today-date { display: flex; align-items: baseline; gap: 12px; }
+.tm-today-day { font-size: 52px; line-height: 1; font-weight: 700; letter-spacing: -0.03em; color: var(--guaxi-text-primary); }
+.tm-today-meta { display: flex; flex-direction: column; gap: 2px; font-size: 12px; color: var(--guaxi-text-secondary); }
+.tm-today-meta b { font-size: 15px; color: var(--guaxi-text-primary); font-weight: 600; }
+.tm-today-counts { display: flex; align-items: center; gap: 14px; font-size: 12px; color: var(--guaxi-text-secondary); }
+.tm-today-counts b { font-size: 17px; color: var(--guaxi-text-primary); font-weight: 700; margin-right: 2px; }
+.tm-today-counts .danger b { color: #d03050; }
+
+.tm-capture {
+  display: flex; align-items: center; gap: 8px;
+  border: 1px solid var(--guaxi-border); border-radius: 12px;
+  background: var(--guaxi-panel-bg); padding: 7px 10px 7px 12px;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.tm-capture:focus-within { border-color: var(--tm-accent); box-shadow: 0 0 0 3px var(--tm-accent-soft); }
+.tm-capture-plus { color: var(--guaxi-text-secondary); font-size: 18px; line-height: 1; }
+.tm-capture-input { flex: 1; min-width: 0; border: none; outline: none; background: transparent; color: var(--guaxi-text-primary); font: inherit; font-size: 15px; padding: 4px 0; }
+.tm-capture-input::placeholder { color: var(--guaxi-text-secondary); opacity: 0.75; }
+.tm-capture-sel { border: 1px solid var(--guaxi-border); border-radius: 8px; background: transparent; color: var(--guaxi-text-secondary); font: inherit; font-size: 12px; padding: 3px 6px; }
+.tm-capture-btn { border: none; border-radius: 8px; background: var(--tm-accent); color: #fff; font: inherit; font-size: 13px; padding: 6px 14px; cursor: pointer; }
+.tm-capture-btn:disabled { opacity: 0.45; cursor: default; }
+.tm-capture-hint { margin: 6px 2px 0; font-size: 11px; color: var(--guaxi-text-secondary); }
+
+.tm-block { margin-top: 22px; }
+.tm-block-head { display: flex; align-items: baseline; gap: 8px; font-size: 13px; font-weight: 700; letter-spacing: 0.04em; color: var(--guaxi-text-secondary); padding-bottom: 7px; border-bottom: 1px solid var(--guaxi-border); }
+.tm-block-head .danger { color: #d03050; }
+.tm-block-sub { font-size: 11px; font-weight: 400; opacity: 0.75; }
+.tm-hint { padding: 12px 2px; font-size: 12px; color: var(--guaxi-text-secondary); }
+.tm-row { display: flex; align-items: center; gap: 10px; padding: 9px 6px; border-bottom: 1px dashed color-mix(in srgb, var(--guaxi-border) 55%, transparent); cursor: pointer; border-radius: 6px; }
+.tm-row:hover { background: color-mix(in srgb, var(--guaxi-panel-bg) 70%, transparent); }
+.tm-row.overdue .tm-row-title { color: #d03050; }
+.tm-row-focus { padding-left: 2px; }
+.tm-focus-no { width: 18px; text-align: center; font-weight: 700; color: var(--tm-accent); font-size: 13px; }
+.tm-check {
+  width: 20px; height: 20px; flex: 0 0 20px; border-radius: 50%;
+  border: 1.5px solid var(--guaxi-border); background: transparent; color: transparent;
+  cursor: pointer; font-size: 11px; line-height: 1; padding: 0;
+}
+.tm-check:hover { border-color: var(--tm-accent); color: var(--tm-accent); }
+.tm-check.on { background: var(--tm-accent); border-color: var(--tm-accent); color: #fff; }
+.tm-row-main { flex: 1; min-width: 0; }
+.tm-row-title { font-size: 14px; line-height: 1.55; word-break: break-word; }
+.tm-row-meta { margin-top: 3px; font-size: 11px; color: var(--guaxi-text-secondary); }
+.tm-row-act { border: none; background: transparent; color: var(--guaxi-text-secondary); cursor: pointer; font: inherit; font-size: 15px; padding: 2px 8px; border-radius: 6px; opacity: 0; }
+.tm-row:hover .tm-row-act { opacity: 1; }
+.tm-row-act:hover { background: var(--guaxi-header-bg); color: var(--tm-accent); }
+
+.tm-habits { display: flex; flex-wrap: wrap; gap: 8px; padding-top: 10px; }
+.tm-habit {
+  display: inline-flex; align-items: center; gap: 8px;
+  border: 1px solid var(--guaxi-border); border-radius: 10px;
+  background: var(--guaxi-panel-bg); color: var(--guaxi-text-primary);
+  font: inherit; font-size: 13px; padding: 7px 11px; cursor: pointer;
+}
+.tm-habit:hover { border-color: var(--tm-accent); }
+.tm-habit.done { border-color: color-mix(in srgb, var(--tm-accent) 55%, transparent); background: var(--tm-accent-soft); }
+.tm-habit-mark { color: var(--guaxi-text-secondary); }
+.tm-habit.done .tm-habit-mark { color: var(--tm-accent); }
+.tm-habit-streak { font-size: 11px; color: var(--guaxi-text-secondary); }
+
+.tm-review {
+  margin-top: 10px; padding: 14px 16px; border-left: 3px solid var(--tm-accent);
+  background: color-mix(in srgb, var(--guaxi-panel-bg) 75%, transparent);
+  border-radius: 0 10px 10px 0; cursor: pointer;
+}
+.tm-review-text {
+  font-family: Georgia, 'Songti SC', 'STSong', 'SimSun', serif;
+  font-size: 15px; line-height: 1.9; color: var(--guaxi-text-primary);
+  white-space: pre-wrap; word-break: break-word;
+}
+.tm-review-edit { display: inline-block; margin-top: 8px; font-size: 11px; color: var(--tm-accent); }
+.tm-review-start {
+  margin-top: 10px; width: 100%; text-align: left; cursor: pointer;
+  border: 1px dashed var(--guaxi-border); border-radius: 10px; background: transparent;
+  color: var(--guaxi-text-secondary); font: inherit; font-size: 13px; padding: 14px 16px;
+}
+.tm-review-start:hover { border-color: var(--tm-accent); color: var(--tm-accent); }
+
+.tm-side-card { border: 1px solid var(--guaxi-border); border-radius: 12px; background: var(--guaxi-panel-bg); padding: 14px; }
+.tm-side-title { font-size: 12px; font-weight: 700; letter-spacing: 0.05em; color: var(--guaxi-text-secondary); margin-bottom: 10px; }
+.tm-side-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.tm-side-stats div { display: flex; flex-direction: column; gap: 2px; }
+.tm-side-stats b { font-size: 20px; font-weight: 700; }
+.tm-side-stats span { font-size: 11px; color: var(--guaxi-text-secondary); }
+.tm-recent { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; padding: 6px 0; cursor: pointer; }
+.tm-recent-title { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tm-recent-date { font-size: 11px; color: var(--guaxi-text-secondary); flex: 0 0 auto; }
+.tm-side-reminder { font-size: 14px; margin-bottom: 4px; }
+.tm-side-hint { font-size: 11px; line-height: 1.6; color: var(--guaxi-text-secondary); }
+
+/* ── 计划 ── */
+.tm-plan { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+.tm-plan-bar { display: flex; align-items: center; gap: 10px; padding: 10px 14px 0; flex-wrap: wrap; }
+.tm-plan-capture {
+  flex: 0 1 340px; min-width: 180px;
+  border: 1px solid var(--guaxi-border); border-radius: 8px;
+  background: var(--guaxi-panel-bg); color: var(--guaxi-text-primary);
+  font: inherit; font-size: 12px; padding: 5px 10px; outline: none;
+}
+.tm-plan-capture:focus { border-color: var(--tm-accent); box-shadow: 0 0 0 2px var(--tm-accent-soft); }
+.tm-plan-capture::placeholder { color: var(--guaxi-text-secondary); }
+.tm-plan-hint { font-size: 11px; color: var(--guaxi-text-secondary); }
+.tm-col-add { border: none; background: transparent; color: var(--guaxi-text-secondary); cursor: pointer; font: inherit; font-size: 16px; line-height: 1; padding: 0 4px; border-radius: 6px; }
+.tm-col-add:hover { background: var(--guaxi-header-bg); color: var(--tm-accent); }
+.tm-col-more { border: 1px solid var(--guaxi-border); background: transparent; color: var(--guaxi-text-secondary); cursor: pointer; font: inherit; font-size: 10px; padding: 1px 6px; border-radius: 7px; }
+.tm-col-more:hover { border-color: var(--tm-accent); color: var(--tm-accent); }
+.tm-card-acts { display: inline-flex; gap: 2px; margin-left: auto; opacity: 0; }
+.tm-card:hover .tm-card-acts { opacity: 1; }
+.tm-card-acts button { border: none; background: transparent; color: var(--guaxi-text-secondary); cursor: pointer; font: inherit; font-size: 12px; padding: 1px 5px; border-radius: 5px; }
+.tm-card-acts button:hover { background: var(--guaxi-header-bg); color: var(--tm-accent); }
+.tm-card-rename { flex: 1; min-width: 0; font: inherit; font-size: 15px; line-height: 1.5; color: var(--guaxi-text-primary); background: var(--guaxi-panel-bg); border: 1px solid var(--tm-accent); border-radius: 6px; padding: 1px 6px; outline: none; }
+.tm-cat { font-size: 11px; padding: 0 6px; border-radius: 8px; border: 1px solid var(--guaxi-border); }
+.tm-cat.cat-work { color: #8b6bd0; border-color: rgba(139, 107, 208, 0.4); }
+.tm-cat.cat-life { color: #2f9e78; border-color: rgba(47, 158, 120, 0.4); }
+.tm-cat.cat-study { color: #3f6ea8; border-color: rgba(63, 110, 168, 0.4); }
+.tm-kind { font-size: 11px; padding: 0 6px; border-radius: 8px; background: var(--guaxi-header-bg); color: var(--guaxi-text-secondary); }
+
+.tm-week { flex: 1 1 auto; min-height: 0; display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; padding: 14px; box-sizing: border-box; overflow: hidden; }
+.tm-week-lane { display: flex; flex-direction: column; min-height: 0; border: 1px solid var(--guaxi-border); border-radius: 10px; background: var(--guaxi-panel-bg); overflow: hidden; }
+.tm-week-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; padding: 10px 12px; font-size: 14px; font-weight: 700; border-bottom: 2px solid var(--guaxi-border); flex: 0 0 auto; }
+.tm-week-head.overdue { color: #d03050; border-bottom-color: #d03050; }
+.tm-week-head.this { color: var(--tm-accent); border-bottom-color: var(--tm-accent); }
+.tm-week-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 8px; display: flex; flex-direction: column; gap: 8px; }
+
+.tm-goals { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 18px; }
+.tm-goals-head { display: flex; align-items: center; gap: 10px; font-size: 14px; font-weight: 700; margin-bottom: 14px; }
+.tm-goal { border: 1px solid var(--guaxi-border); border-radius: 12px; background: var(--guaxi-panel-bg); padding: 14px 16px; margin-bottom: 12px; cursor: pointer; }
+.tm-goal:hover { border-color: color-mix(in srgb, var(--tm-accent) 45%, var(--guaxi-border)); }
+.tm-goal-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.tm-goal-title { font-size: 15px; font-weight: 700; }
+.tm-goal-pct { font-size: 18px; font-weight: 700; color: var(--tm-accent); }
+.tm-goal-bar { height: 4px; border-radius: 4px; background: var(--guaxi-header-bg); margin: 10px 0 8px; overflow: hidden; }
+.tm-goal-bar span { display: block; height: 100%; background: var(--tm-accent); border-radius: 4px; transition: width 0.25s ease; }
+.tm-goal-meta { font-size: 11px; color: var(--guaxi-text-secondary); }
+.tm-goal-children { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.tm-goal-child { font-size: 11px; padding: 2px 8px; border-radius: 8px; background: var(--guaxi-header-bg); color: var(--guaxi-text-secondary); }
+.tm-goal-child.done { text-decoration: line-through; opacity: 0.6; }
+.tm-goal-mini { padding: 7px 0; cursor: pointer; }
+.tm-goal-mini-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; font-size: 12px; }
+
+/* ── 年轮 ── */
+.tm-year { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 16px 18px 32px; box-sizing: border-box; }
+.tm-year-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 14px; }
+.tm-year-sub { font-size: 12px; color: var(--guaxi-text-secondary); display: inline-flex; align-items: center; gap: 4px; }
+.tm-year-sub b { color: var(--guaxi-text-primary); font-size: 13px; }
+.tm-year-nav { border: 1px solid var(--guaxi-border); background: transparent; color: var(--guaxi-text-secondary); cursor: pointer; font: inherit; font-size: 13px; line-height: 1; padding: 1px 6px; border-radius: 6px; }
+.tm-year-nav:hover:not(:disabled) { border-color: var(--tm-accent); color: var(--tm-accent); }
+.tm-year-nav:disabled { opacity: 0.35; cursor: default; }
+.tm-year-grid { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 16px; align-items: start; }
+.tm-year-main { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.tm-year-side { display: flex; flex-direction: column; gap: 14px; }
+.tm-year-card { border: 1px solid var(--guaxi-border); border-radius: 12px; background: var(--guaxi-panel-bg); padding: 16px; }
+.tm-year-stats { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; }
+.tm-year-stats .tm-stat-card { padding: 12px; }
+.tm-year-stats .tm-stat-num { font-size: 22px; }
+.tm-day-detail { margin-top: 14px; border-top: 1px dashed var(--guaxi-border); padding-top: 12px; }
+.tm-day-head { display: flex; align-items: baseline; gap: 10px; font-size: 13px; font-weight: 700; margin-bottom: 6px; }
+.tm-muted { font-size: 11px; color: var(--guaxi-text-secondary); font-weight: 400; }
+.tm-day-row { display: flex; align-items: center; gap: 8px; font-size: 12px; padding: 5px 0; cursor: pointer; }
+.tm-day-row.habit { color: var(--guaxi-text-secondary); }
+.tm-day-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--tm-accent); flex: 0 0 5px; }
+.tm-cat-bars { display: flex; flex-direction: column; gap: 10px; margin-top: 6px; }
+.tm-cat-bar { display: grid; grid-template-columns: 46px 1fr 64px; align-items: center; gap: 10px; font-size: 12px; }
+.tm-cat-bar-label { color: var(--guaxi-text-secondary); }
+.tm-cat-bar-track { height: 6px; border-radius: 6px; background: var(--guaxi-header-bg); overflow: hidden; }
+.tm-cat-bar-track i { display: block; height: 100%; background: var(--tm-accent); border-radius: 6px; }
+.tm-cat-bar-num { text-align: right; color: var(--guaxi-text-secondary); font-size: 11px; }
+.tm-habit-row { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; padding: 6px 0; cursor: pointer; font-size: 12px; }
+.tm-habit-row .tm-habit-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tm-review-mini { display: flex; gap: 8px; padding: 6px 0; cursor: pointer; font-size: 12px; }
+.tm-review-date { flex: 0 0 auto; color: var(--guaxi-text-secondary); font-size: 11px; }
+.tm-review-excerpt { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+@media (max-width: 1100px) {
+  .tm-today { grid-template-columns: minmax(0, 1fr); padding: 18px; }
+  .tm-today-side { position: static; flex-direction: row; flex-wrap: wrap; }
+  .tm-today-side .tm-side-card { flex: 1 1 220px; }
+  .tm-year-grid { grid-template-columns: minmax(0, 1fr); }
+  .tm-year-stats { grid-template-columns: repeat(3, 1fr); }
+  .tm-week { grid-template-columns: repeat(2, 1fr); }
+}
 </style>

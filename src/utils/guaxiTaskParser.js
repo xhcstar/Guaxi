@@ -5,8 +5,9 @@ export const BLOCK_START = '##GUAXI_TASK_START'
 export const BLOCK_END = '##GUAXI_TASK_END'
 
 export const KNOWN_FIELDS = [
-  'MANAGE TASK TYPE', 'INTERNAL ID', 'ID', 'PARENT TASK', 'TYPE', 'DEADLINE',
-  'CREATE TIME', 'COMPLETED TIME', 'ORIGIN', 'SEVERITY', 'PRIORITY', 'STATUS', 'PROGRESS',
+  'MANAGE TASK TYPE', 'INTERNAL ID', 'ID', 'PARENT TASK', 'TYPE', 'KIND', 'DEADLINE', 'FOCUS',
+  'CREATE TIME', 'COMPLETED TIME', 'ORIGIN', 'SEVERITY', 'PRIORITY', 'STATUS', 'REPEAT', 'PROGRESS',
+  'SPENT', 'CHECKINS',
   'FIX STATUS', 'DESCRIPTION', 'ROOT CAUSE', 'CONDITION OF OCCURRENCE',
   'FIXED DETAILS', 'TESTING SUGGESTIONS', 'AFFECTED RELEASE', 'REVIEW LINK',
   'EXTRA IMPACT', 'CONTENT',
@@ -23,15 +24,24 @@ export const STATUS_LABELS = {
 
 function emptyBlock() {
   return {
-    internalId: '', id: '', parentId: '', manageType: '', taskType: '',
-    deadline: '', createTime: '', completedTime: '', origin: '', severity: '', priority: '',
-    status: '', done: false, progress: '', fixStatus: '', description: '',
+    internalId: '', id: '', parentId: '', manageType: '', taskType: '', kind: 'task',
+    deadline: '', focus: '', createTime: '', completedTime: '', origin: '', severity: '', priority: '',
+    status: '', done: false, progress: '', repeat: '', spent: 0, checkins: [], fixStatus: '', description: '',
     rootCause: '', conditionOfOccurrence: '', fixedDetails: '', testingSuggestions: '',
     affectedRelease: '', reviewLink: '', extraImpacts: [], content: '',
     notes: { kind: 'none', value: '' },
     customFields: [],
     blockStartLine: 0, blockEndLine: 0,
   }
+}
+
+const splitCheckins = (value) => {
+  const out = []
+  for (const part of String(value || '').split(/[,;，；\s]+/)) {
+    const s = part.trim()
+    if (s && !out.includes(s)) out.push(s)
+  }
+  return out
 }
 
 function parseFieldLine(line) {
@@ -115,7 +125,9 @@ function setField(b, name, rawVal) {
     case 'ID': b.id = trimmed; break
     case 'PARENT TASK': b.parentId = trimmed; break
     case 'TYPE': b.taskType = trimmed.toLowerCase(); break
+    case 'KIND': b.kind = trimmed ? trimmed.toLowerCase() : 'task'; break
     case 'DEADLINE': b.deadline = trimmed; break
+    case 'FOCUS': b.focus = trimmed; break
     case 'CREATE TIME': b.createTime = trimmed; break
     case 'COMPLETED TIME': b.completedTime = trimmed; break
     case 'ORIGIN': b.origin = trimmed; break
@@ -125,7 +137,10 @@ function setField(b, name, rawVal) {
       b.status = canonicalStatus(trimmed)
       b.done = DONE_STATUS.includes(b.status)
       break
+    case 'REPEAT': b.repeat = trimmed; break
     case 'PROGRESS': b.progress = trimmed; break
+    case 'SPENT': b.spent = parseInt(trimmed, 10) || 0; break
+    case 'CHECKINS': b.checkins = splitCheckins(val); break
     case 'FIX STATUS': b.fixStatus = trimmed; break
     case 'DESCRIPTION': b.description = trimmed; break
     case 'ROOT CAUSE': b.rootCause = trimmed; break
@@ -251,14 +266,19 @@ export function serializeBlock(b) {
   f('ID', b.id)
   f('PARENT TASK', b.parentId)
   f('TYPE', b.taskType)
+  if (b.kind && b.kind !== 'task') f('KIND', b.kind)
   f('DEADLINE', b.deadline)
+  if (b.focus) f('FOCUS', b.focus)
   f('CREATE TIME', b.createTime)
   f('COMPLETED TIME', b.completedTime)
   f('ORIGIN', b.origin)
   f('SEVERITY', b.severity)
   f('PRIORITY', b.priority ? `[#${b.priority}]` : '')
   f('STATUS', b.status)
+  if (b.repeat) f('REPEAT', b.repeat)
   f('PROGRESS', b.progress)
+  if (b.spent) f('SPENT', b.spent)
+  if (b.checkins && b.checkins.length) f('CHECKINS', b.checkins.join(', '))
   f('FIX STATUS', b.fixStatus)
   f('DESCRIPTION', b.description)
   f('ROOT CAUSE', b.rootCause)
@@ -317,9 +337,9 @@ export const DEFAULT_EXTRA_IMPACTS = [
 /** 构造一个新块对象（用于创建子任务/子bug）。 */
 export function buildNewBlock({ category = 'work', taskType = 'task', id = '', parentId = '', createTime = '' } = {}) {
   return {
-    internalId: '', id, parentId, manageType: category, taskType,
-    deadline: '', createTime, completedTime: '', origin: '', severity: 'normal', priority: '',
-    status: 'TODO', done: false, progress: taskType === 'bug' ? '' : '0%', fixStatus: '',
+    internalId: '', id, parentId, manageType: category, taskType, kind: 'task',
+    deadline: '', focus: '', createTime, completedTime: '', origin: '', severity: 'normal', priority: '',
+    status: 'TODO', done: false, progress: taskType === 'bug' ? '' : '0%', repeat: '', spent: 0, checkins: [], fixStatus: '',
     description: '', rootCause: '', conditionOfOccurrence: '', fixedDetails: '',
     testingSuggestions: '', affectedRelease: '', reviewLink: '',
     extraImpacts: DEFAULT_EXTRA_IMPACTS.slice(),
@@ -334,6 +354,7 @@ const SEVERITY_TOKENS = ['critical', 'major', 'normal', 'minor', 'trivial']
 const ORIGIN_TOKENS = ['customer', 'qa', 'dev', 'other']
 const FIX_STATUS_TOKENS = ['debug', 'test', 'review', 'approval', 'fixed', 'other']
 const TYPE_TOKENS = ['bug', 'task', 'other']
+const KIND_TOKENS = ['task', 'habit', 'goal', 'review']
 const MANAGE_TYPE_TOKENS = ['work', 'life', 'study']
 
 // 检测字段声明行 #NAME: 或 #NAME：（NAME 仅大写字母与空格）
@@ -412,6 +433,15 @@ export function validateTaskBlocks(content, category = '') {
     }
     if (g('STATUS') && g('STATUS').value.trim() && !canonicalStatus(g('STATUS').value)) {
       push(g('STATUS').line, 'error', 'STATUS 无法识别，应包含 TODO/NEXT/DOING/WAITING/PAUSED/HOLD/CANCELLED/DONE 之一')
+    }
+    if (g('KIND') && g('KIND').value.trim() && !KIND_TOKENS.includes(g('KIND').value.trim().toLowerCase())) {
+      push(g('KIND').line, 'warning', 'KIND 建议为 task / habit / goal / review')
+    }
+    if (g('SPENT') && g('SPENT').value.trim() && !/^\d+$/.test(g('SPENT').value.trim())) {
+      push(g('SPENT').line, 'warning', 'SPENT 请填写分钟数（纯数字）')
+    }
+    if (g('FOCUS') && !looksLikeDate(g('FOCUS').value)) {
+      push(g('FOCUS').line, 'warning', 'FOCUS 建议形如 2026-11-06')
     }
     if (g('PRIORITY') && g('PRIORITY').value.trim() && !canonicalPriority(g('PRIORITY').value)) {
       push(g('PRIORITY').line, 'error', 'PRIORITY 仅支持 [#A] / [#B] / [#C] 或留空')

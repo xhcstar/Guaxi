@@ -9,23 +9,25 @@ use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, UNIX_EPOCH};
 use std::{env, fs};
 
-use chrono::{Datelike, Local, NaiveDate};
+use chrono::{Datelike, Local, NaiveDate, Timelike};
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
+use tauri::Manager;
 use tauri::Emitter;
+use tauri_plugin_notification::NotificationExt;
 use tracing::{info, warn};
 
 use crate::commands::task_block::{self, TaskBlock};
 
 const TASK_DIR_NAME: &str = "guaxi_task";
 const TASK_DB_NAME: &str = "task.sqlite3";
-const SCHEMA_VERSION: i64 = 4;
+const SCHEMA_VERSION: i64 = 5;
 const CATEGORIES: &[&str] = &["work", "life", "study"];
 
 // ───────── 配置（task 根路径）─────────
 
-#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct TaskConfig {
     /// task 根目录绝对路径；为空表示用默认（exe 同级 task/）。
     #[serde(default)]
@@ -37,6 +39,33 @@ pub struct TaskConfig {
     pub git_username: String,
     #[serde(default)]
     pub git_email: String,
+    /// 每日摘要提醒开关。
+    #[serde(default = "default_reminder_enabled")]
+    pub reminder_enabled: bool,
+    /// 每日摘要时间（HH:MM）。
+    #[serde(default = "default_reminder_time")]
+    pub reminder_time: String,
+}
+
+fn default_reminder_enabled() -> bool {
+    true
+}
+
+fn default_reminder_time() -> String {
+    "09:00".to_string()
+}
+
+impl Default for TaskConfig {
+    fn default() -> Self {
+        Self {
+            root: String::new(),
+            remote_url: String::new(),
+            git_username: String::new(),
+            git_email: String::new(),
+            reminder_enabled: true,
+            reminder_time: default_reminder_time(),
+        }
+    }
 }
 
 fn exe_dir() -> Result<PathBuf, String> {
@@ -158,12 +187,14 @@ fn setup_schema(conn: &Connection) -> Result<(), String> {
             parent_id TEXT NOT NULL DEFAULT '',
             category TEXT NOT NULL DEFAULT '',
             task_type TEXT NOT NULL DEFAULT '',
+            kind TEXT NOT NULL DEFAULT '',
             status TEXT NOT NULL DEFAULT '',
             done INTEGER NOT NULL DEFAULT 0,
             priority TEXT NOT NULL DEFAULT '',
             severity TEXT NOT NULL DEFAULT '',
             origin TEXT NOT NULL DEFAULT '',
             deadline TEXT NOT NULL DEFAULT '',
+            focus TEXT NOT NULL DEFAULT '',
             create_time TEXT NOT NULL DEFAULT '',
             completed_time TEXT NOT NULL DEFAULT '',
             progress TEXT NOT NULL DEFAULT '',
@@ -193,6 +224,7 @@ fn setup_schema(conn: &Connection) -> Result<(), String> {
         ("idx_task_status", "status"),
         ("idx_task_category", "category"),
         ("idx_task_type", "task_type"),
+        ("idx_task_kind", "kind"),
         ("idx_task_deadline", "deadline"),
         ("idx_task_file", "file_path"),
         ("idx_task_completed", "completed_time"),
@@ -238,20 +270,24 @@ fn upsert_block(conn: &Connection, b: &TaskBlock) -> Result<(), String> {
     let json = serde_json::to_string(b).map_err(|e| e.to_string())?;
     conn.execute(
         "INSERT INTO task_items
-            (internal_id,id,parent_id,category,task_type,status,done,priority,severity,origin,
-             deadline,create_time,completed_time,progress,fix_status,description,file_path,block_start_line,block_end_line,block_json)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20)
+            (internal_id,id,parent_id,category,task_type,kind,status,done,priority,severity,origin,
+             deadline,focus,create_time,completed_time,progress,fix_status,description,file_path,block_start_line,block_end_line,block_json)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22)
          ON CONFLICT(internal_id) DO UPDATE SET
             id=excluded.id, parent_id=excluded.parent_id, category=excluded.category, task_type=excluded.task_type,
+            kind=excluded.kind,
             status=excluded.status, done=excluded.done, priority=excluded.priority, severity=excluded.severity,
-            origin=excluded.origin, deadline=excluded.deadline, create_time=excluded.create_time,
+            origin=excluded.origin, deadline=excluded.deadline, focus=excluded.focus,
+            create_time=excluded.create_time,
             completed_time=excluded.completed_time,
             progress=excluded.progress, fix_status=excluded.fix_status, description=excluded.description,
             file_path=excluded.file_path, block_start_line=excluded.block_start_line,
             block_end_line=excluded.block_end_line, block_json=excluded.block_json",
         params![
-            b.internal_id, b.id, b.parent_id, b.manage_type, b.task_type, b.status, b.done as i64,
-            b.priority, b.severity, b.origin, b.deadline, b.create_time, b.completed_time, b.progress, b.fix_status,
+            b.internal_id, b.id, b.parent_id, b.manage_type, b.task_type,
+            if b.kind.trim().is_empty() { "task" } else { b.kind.as_str() },
+            b.status, b.done as i64,
+            b.priority, b.severity, b.origin, b.deadline, b.focus, b.create_time, b.completed_time, b.progress, b.fix_status,
             b.description, b.file_path, b.block_start_line as i64, b.block_end_line as i64, json
         ],
     )
@@ -417,6 +453,16 @@ pub fn task_get_config() -> Result<TaskConfig, String> {
     if cfg.root.trim().is_empty() {
         cfg.root = default_task_root()?.to_string_lossy().to_string();
     }
+    Ok(cfg)
+}
+
+#[tauri::command]
+pub fn task_set_reminder(enabled: bool, time: String) -> Result<TaskConfig, String> {
+    let mut cfg = load_task_config();
+    cfg.reminder_enabled = enabled;
+    let t = time.trim();
+    cfg.reminder_time = if t.is_empty() { default_reminder_time() } else { t.to_string() };
+    save_task_config(&cfg)?;
     Ok(cfg)
 }
 
@@ -715,7 +761,43 @@ fn apply_block_fields(b: &mut TaskBlock, input: &TaskUpdateInput) {
                 "id" => b.id = s,
                 "parent_id" => b.parent_id = s,
                 "task_type" => b.task_type = s.to_lowercase(),
+                "kind" => {
+                    let k = s.trim().to_lowercase();
+                    b.kind = if k.is_empty() { "task".to_string() } else { k };
+                }
                 "deadline" => b.deadline = s,
+                "focus" => b.focus = s,
+                "repeat" => b.repeat = s,
+                "spent" => {
+                    b.spent = v
+                        .as_u64()
+                        .map(|n| n as u32)
+                        .or_else(|| s.trim().parse::<u32>().ok())
+                        .unwrap_or(0);
+                }
+                "checkins" => {
+                    if let Some(arr) = v.as_array() {
+                        let mut out: Vec<String> = Vec::new();
+                        for x in arr {
+                            let item = x.as_str().unwrap_or("").trim();
+                            if !item.is_empty() && !out.iter().any(|y| y == item) {
+                                out.push(item.to_string());
+                            }
+                        }
+                        b.checkins = out;
+                    } else {
+                        b.checkins = s
+                            .split(|c: char| c == ',' || c == ';' || c == '，' || c == '；' || c.is_whitespace())
+                            .map(|x| x.trim())
+                            .filter(|x| !x.is_empty())
+                            .fold(Vec::new(), |mut acc: Vec<String>, x| {
+                                if !acc.iter().any(|y| y == x) {
+                                    acc.push(x.to_string());
+                                }
+                                acc
+                            });
+                    }
+                }
                 "create_time" => b.create_time = s,
                 "origin" => b.origin = s,
                 "severity" => b.severity = s,
@@ -734,6 +816,13 @@ fn apply_block_fields(b: &mut TaskBlock, input: &TaskUpdateInput) {
                 "affected_release" => b.affected_release = s,
                 "review_link" => b.review_link = s,
                 "content" => b.content = s,
+                "notes" => {
+                    b.notes = if s.trim().is_empty() {
+                        task_block::TaskNotes::None
+                    } else {
+                        task_block::TaskNotes::Inline(s)
+                    };
+                }
                 "custom_fields" => {
                     if let Some(arr) = v.as_array() {
                         b.custom_fields = arr
@@ -773,6 +862,232 @@ fn apply_block_fields(b: &mut TaskBlock, input: &TaskUpdateInput) {
 }
 
 use task_block::now_cn_datetime;
+
+// ───────── 看板/今日：创建、删除、定位源文件 ─────────
+
+#[derive(Debug, Deserialize, Default)]
+pub struct TaskCreateInput {
+    pub category: Option<String>,
+    pub file_name: Option<String>,
+    pub title: String,
+    #[serde(default)]
+    pub task_type: Option<String>,
+    #[serde(default)]
+    pub kind: Option<String>,
+    #[serde(default)]
+    pub deadline: Option<String>,
+    #[serde(default)]
+    pub priority: Option<String>,
+    #[serde(default)]
+    pub repeat: Option<String>,
+    #[serde(default)]
+    pub focus: Option<String>,
+    #[serde(default)]
+    pub content: Option<String>,
+    #[serde(default)]
+    pub origin: Option<String>,
+    /// 初始状态（默认 TODO）。
+    #[serde(default)]
+    pub status: Option<String>,
+}
+
+fn safe_org_file_name(raw: Option<&str>) -> Result<String, String> {
+    let mut name = raw.unwrap_or("").trim().to_string();
+    if name.is_empty() {
+        name = "inbox.org".to_string();
+    }
+    if !name.to_lowercase().ends_with(".org") {
+        name.push_str(".org");
+    }
+    if name.contains('/') || name.contains('\\') || name.contains("..") {
+        return Err("文件名不合法".to_string());
+    }
+    Ok(name)
+}
+
+#[tauri::command]
+pub async fn task_create(input: TaskCreateInput) -> Result<TaskBlock, String> {
+    tauri::async_runtime::spawn_blocking(move || create_item(input))
+        .await
+        .map_err(|e| format!("创建任务失败: {e}"))?
+}
+
+fn create_item(input: TaskCreateInput) -> Result<TaskBlock, String> {
+    let title = input.title.trim();
+    if title.is_empty() {
+        return Err("任务标题不能为空".to_string());
+    }
+    let _scan_guard = SCAN_LOCK.lock().map_err(|e| e.to_string())?;
+    let root = resolve_task_root()?;
+    let cat = input
+        .category
+        .as_deref()
+        .filter(|c| CATEGORIES.contains(c))
+        .unwrap_or("work")
+        .to_string();
+    let file_name = safe_org_file_name(input.file_name.as_deref())?;
+    let dir = root.join(&cat);
+    fs::create_dir_all(&dir).map_err(|e| format!("创建任务目录失败: {e}"))?;
+    let target = dir.join(&file_name);
+
+    let mut task_type = input.task_type.unwrap_or_else(|| "task".into()).to_lowercase();
+    if !["bug", "task", "other"].contains(&task_type.as_str()) {
+        task_type = "task".into();
+    }
+    if (cat == "life" || cat == "study") && task_type == "bug" {
+        task_type = "task".into();
+    }
+    let mut kind = input.kind.unwrap_or_else(|| "task".into()).to_lowercase();
+    if !["task", "habit", "goal", "review"].contains(&kind.as_str()) {
+        kind = "task".into();
+    }
+    let mut status = input.status.unwrap_or_else(|| "TODO".into()).trim().to_uppercase();
+    if !["TODO", "NEXT", "DOING", "WAITING", "PAUSED", "HOLD", "CANCELLED", "DONE"]
+        .contains(&status.as_str())
+    {
+        status = "TODO".into();
+    }
+    let done = status == "DONE" || status == "CANCELLED";
+
+    let block = TaskBlock {
+        internal_id: task_block::gen_internal_id(),
+        manage_type: cat.clone(),
+        task_type,
+        kind,
+        description: title.to_string(),
+        deadline: input.deadline.unwrap_or_default().trim().to_string(),
+        priority: input
+            .priority
+            .unwrap_or_default()
+            .trim()
+            .trim_start_matches("[#")
+            .trim_end_matches(']')
+            .to_uppercase(),
+        repeat: input.repeat.unwrap_or_default().trim().to_string(),
+        focus: input.focus.unwrap_or_default().trim().to_string(),
+        content: input.content.unwrap_or_default(),
+        origin: input.origin.unwrap_or_else(|| "看板".into()),
+        status: status.clone(),
+        done,
+        completed_time: if done { now_cn_datetime() } else { String::new() },
+        create_time: now_cn_datetime(),
+        ..Default::default()
+    };
+    let text = task_block::serialize_block(&block);
+
+    let mut existing = fs::read_to_string(&target).unwrap_or_default();
+    if !existing.is_empty() && !existing.ends_with('\n') {
+        existing.push('\n');
+    }
+    if !existing.is_empty() {
+        existing.push('\n');
+    }
+    existing.push_str(&text);
+    fs::write(&target, &existing).map_err(|e| format!("写入任务失败: {e}"))?;
+
+    let conn = init()?;
+    scan_and_index_locked(&conn, &[target.to_string_lossy().to_string()])?;
+    let created = conn
+        .query_row(
+            "SELECT block_json FROM task_items WHERE internal_id=?1",
+            params![block.internal_id],
+            row_to_block,
+        )
+        .map_err(|e| format!("创建后读取任务失败: {e}"))?;
+    info!(id = %created.internal_id, path = %target.display(), "task created");
+    Ok(created)
+}
+
+#[tauri::command]
+pub async fn task_delete_item(id: String) -> Result<usize, String> {
+    tauri::async_runtime::spawn_blocking(move || delete_item(id))
+        .await
+        .map_err(|e| format!("删除任务失败: {e}"))?
+}
+
+fn delete_item(id: String) -> Result<usize, String> {
+    let _scan_guard = SCAN_LOCK.lock().map_err(|e| e.to_string())?;
+    let conn = init()?;
+    let (file_path, category): (String, String) = conn
+        .query_row(
+            "SELECT file_path, category FROM task_items WHERE internal_id=?1",
+            params![id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .map_err(|e| format!("找不到任务: {e}"))?;
+
+    let content = fs::read_to_string(&file_path).map_err(|e| format!("读取 .org 失败: {e}"))?;
+    let blocks = task_block::parse_blocks(&content, &file_path, &category);
+    let target = blocks
+        .iter()
+        .find(|b| b.internal_id == id)
+        .ok_or_else(|| "块不存在".to_string())?;
+
+    let lines: Vec<&str> = content.lines().collect();
+    let s = target.block_start_line.saturating_sub(1);
+    let e = target.block_end_line.saturating_sub(1).min(lines.len().saturating_sub(1));
+    let mut out: Vec<String> = Vec::new();
+    for (idx, line) in lines.iter().enumerate() {
+        if idx >= s && idx <= e {
+            continue;
+        }
+        out.push((*line).to_string());
+    }
+    // 局部收敛删除后留下的连续空行，避免文件越长越散。
+    if s > 0 && s < out.len() && out[s - 1].trim().is_empty() && out[s].trim().is_empty() {
+        out.remove(s);
+    }
+    let mut new_content = out.join("\n");
+    new_content.push('\n');
+    fs::write(&file_path, &new_content).map_err(|e| format!("写回 .org 失败: {e}"))?;
+
+    let fresh = task_block::parse_blocks(&new_content, &file_path, &category);
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    tx.execute("DELETE FROM task_items WHERE file_path=?1", params![file_path])
+        .map_err(|e| e.to_string())?;
+    for b in &fresh {
+        if !b.internal_id.trim().is_empty() {
+            upsert_block(&tx, b)?;
+        }
+    }
+    tx.commit().map_err(|e| e.to_string())?;
+    if let Some((mtime, size)) = file_stamp(Path::new(&file_path)) {
+        let _ = conn.execute(
+            "INSERT INTO task_files(file_path, mtime_nanos, size) VALUES(?1,?2,?3)
+             ON CONFLICT(file_path) DO UPDATE SET mtime_nanos=excluded.mtime_nanos, size=excluded.size",
+            params![file_path, mtime, size],
+        );
+    }
+    info!(id = %id, path = %file_path, "task deleted");
+    Ok(fresh.len())
+}
+
+/// 让主窗口打开该任务所在的 .org 并定位到块首行。
+#[tauri::command]
+pub fn task_open_source(app: tauri::AppHandle, id: String) -> Result<(), String> {
+    let conn = init()?;
+    let (file_path, line, display_id): (String, i64, String) = conn
+        .query_row(
+            "SELECT file_path, block_start_line, id FROM task_items WHERE internal_id=?1",
+            params![id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .map_err(|e| format!("找不到任务: {e}"))?;
+    let payload = serde_json::json!({
+        "path": file_path,
+        "line": line,
+        "id": id,
+        "displayId": display_id,
+    });
+    if let Some(win) = app.get_webview_window("main") {
+        let _ = win.unminimize();
+        let _ = win.show();
+        let _ = win.set_focus();
+    }
+    app.emit_to("main", "guaxi:open-task-source", payload)
+        .map_err(|e| format!("通知主窗口失败: {e}"))?;
+    Ok(())
+}
 
 /// 导入：把外部 .org/.json 数据规整后追加到指定 category 的目标 .org 文件，然后重扫描。
 #[derive(Debug, Deserialize)]
@@ -847,6 +1162,9 @@ pub struct ReportInput {
     pub from: Option<String>,
     pub to: Option<String>,
     pub format: String,      // "md" | "json"
+    /// 报表范围：work / life / study；缺省按工作模板。
+    #[serde(default)]
+    pub scope: Option<String>,
 }
 
 fn period_range(kind: &str, anchor: &str, from: &Option<String>, to: &Option<String>) -> Result<(String, String, String), String> {
@@ -901,6 +1219,10 @@ fn export_report(input: ReportInput) -> Result<String, String> {
     // 日报/周报/月报/半年报/年报 都用统一的报表模板（按 [start,end] 周期）
     const PERIOD_KINDS: &[&str] = &["daily", "weekly", "monthly", "halfyear", "yearly"];
     if PERIOD_KINDS.contains(&input.kind.as_str()) {
+        let scope = input.scope.as_deref().unwrap_or("work");
+        if scope == "life" || scope == "study" {
+            return build_personal_report(scope, &input.kind, &input.from, &input.to);
+        }
         return build_period_report(&input.kind, &input.from, &input.to);
     }
     let (from, to, label) = period_range(&input.kind, &input.date, &input.from, &input.to)?;
@@ -1269,4 +1591,331 @@ fn org_paths_of(res: &notify::Result<notify::Event>) -> Vec<String> {
             .collect(),
         Err(_) => Vec::new(),
     }
+}
+
+// ───────── 生活/学习报表 ─────────
+
+fn build_personal_report(
+    scope: &str,
+    kind: &str,
+    from: &Option<String>,
+    to: &Option<String>,
+) -> Result<String, String> {
+    let today = Local::now().date_naive();
+    let end = to
+        .as_deref()
+        .filter(|s| !s.trim().is_empty())
+        .and_then(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d").ok())
+        .unwrap_or(today);
+    let span_days = match kind {
+        "daily" => 1,
+        "weekly" => 7,
+        "monthly" => 30,
+        "halfyear" => 182,
+        "yearly" => 365,
+        _ => 7,
+    };
+    let start = from
+        .as_deref()
+        .filter(|s| !s.trim().is_empty())
+        .and_then(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d").ok())
+        .unwrap_or(end - chrono::Duration::days(span_days));
+
+    let in_window = |s: &str| -> bool {
+        parse_cn_date(s).map(|d| d >= start && d <= end).unwrap_or(false)
+    };
+    let blocks = query_blocks(&TaskQuery::default())?;
+    let scoped: Vec<&TaskBlock> = blocks.iter().filter(|b| b.manage_type == scope).collect();
+
+    let done: Vec<&TaskBlock> = scoped
+        .iter()
+        .copied()
+        .filter(|b| b.status == "DONE" && in_window(&b.completed_time))
+        .collect();
+    let doing: Vec<&TaskBlock> = scoped
+        .iter()
+        .copied()
+        .filter(|b| !b.done && (b.status == "DOING" || b.status == "NEXT"))
+        .collect();
+    let remaining: Vec<&TaskBlock> = scoped
+        .iter()
+        .copied()
+        .filter(|b| !b.done && b.kind != "habit" && b.kind != "review")
+        .collect();
+    let habits: Vec<&TaskBlock> = scoped.iter().copied().filter(|b| b.kind == "habit").collect();
+    let reviews: Vec<&TaskBlock> = scoped
+        .iter()
+        .copied()
+        .filter(|b| b.kind == "review" && (in_window(&b.completed_time) || in_window(&b.create_time)))
+        .collect();
+    let spent: u32 = scoped
+        .iter()
+        .filter(|b| in_window(&b.completed_time) || in_window(&b.create_time))
+        .map(|b| b.spent)
+        .sum();
+
+    let title = |b: &TaskBlock| {
+        if b.description.trim().is_empty() {
+            b.id.clone()
+        } else {
+            b.description.clone()
+        }
+    };
+
+    let mut out = String::new();
+    out.push_str(&format!(
+        "* {} · {}\n\n",
+        if scope == "study" { "学习" } else { "生活" },
+        format_cn_date(end)
+    ));
+    out.push_str(&format!("周期：{} ~ {}\n\n", start, end));
+
+    out.push_str("一、完成\n");
+    if done.is_empty() {
+        out.push_str("（本期没有完成项）\n");
+    } else {
+        for b in &done {
+            out.push_str(&format!("- {}\n", title(b)));
+        }
+    }
+    out.push('\n');
+
+    out.push_str("二、进行中\n");
+    if doing.is_empty() {
+        out.push_str("（无）\n");
+    } else {
+        for b in &doing {
+            out.push_str(&format!("- {}\n", title(b)));
+        }
+    }
+    out.push('\n');
+
+    out.push_str("三、习惯\n");
+    if habits.is_empty() {
+        out.push_str("（还没有习惯记录）\n");
+    } else {
+        for b in &habits {
+            let count = b
+                .checkins
+                .iter()
+                .filter(|d| in_window(d))
+                .count();
+            let streak = habit_streak(&b.checkins, end);
+            out.push_str(&format!(
+                "- {}：本期 {} 次，连续 {} 天{}\n",
+                title(b),
+                count,
+                streak,
+                if b.repeat.trim().is_empty() {
+                    String::new()
+                } else {
+                    format!("（{}）", b.repeat)
+                }
+            ));
+        }
+    }
+    out.push('\n');
+
+    out.push_str("四、投入时间\n");
+    if spent > 0 {
+        out.push_str(&format!("- 共 {} h {} m\n", spent / 60, spent % 60));
+    } else {
+        out.push_str("- 未记录投入时间\n");
+    }
+    out.push('\n');
+
+    out.push_str("五、复盘\n");
+    if reviews.is_empty() {
+        out.push_str("（本期没有复盘）\n");
+    } else {
+        for b in &reviews {
+            out.push_str(&format!("- {}\n", title(b)));
+            if !b.content.trim().is_empty() {
+                for line in b.content.lines().take(6) {
+                    out.push_str(&format!("  {}\n", line));
+                }
+            }
+        }
+    }
+    out.push('\n');
+
+    out.push_str("六、未完成\n");
+    if remaining.is_empty() {
+        out.push_str("（无）\n");
+    } else {
+        for b in &remaining {
+            out.push_str(&format!("- {}\n", title(b)));
+        }
+    }
+
+    Ok(out)
+}
+
+fn habit_streak(checkins: &[String], end: NaiveDate) -> u32 {
+    let days: HashSet<NaiveDate> = checkins.iter().filter_map(|s| parse_cn_date(s)).collect();
+    let mut n = 0u32;
+    let mut cur = end;
+    while days.contains(&cur) {
+        n += 1;
+        cur -= chrono::Duration::days(1);
+    }
+    n
+}
+
+// ───────── 每日摘要提醒 ─────────
+
+static REMINDER_STARTED: OnceLock<()> = OnceLock::new();
+
+fn reminder_state_path() -> Result<PathBuf, String> {
+    let dir = exe_dir()?.join("config");
+    if !dir.exists() {
+        fs::create_dir_all(&dir).map_err(|e| format!("创建 config 目录失败: {e}"))?;
+    }
+    Ok(dir.join("task_reminder_state.json"))
+}
+
+fn reminder_already_sent(today: &str) -> bool {
+    reminder_state_path()
+        .ok()
+        .and_then(|p| fs::read_to_string(p).ok())
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+        .and_then(|v| v.get("lastSent").and_then(|x| x.as_str()).map(|x| x == today))
+        .unwrap_or(false)
+}
+
+fn mark_reminder_sent(today: &str) {
+    if let Ok(p) = reminder_state_path() {
+        let _ = fs::write(
+            p,
+            serde_json::json!({ "lastSent": today }).to_string(),
+        );
+    }
+}
+
+/// 每分钟检查一次；到达配置时间且当天未发送，就发一条摘要（系统通知 + 应用内事件）。
+pub fn start_reminder_service(app: tauri::AppHandle) {
+    if REMINDER_STARTED.set(()).is_err() {
+        return;
+    }
+    std::thread::spawn(move || loop {
+        std::thread::sleep(Duration::from_secs(45));
+        if let Err(e) = reminder_tick(&app) {
+            warn!("[TaskManager] reminder tick failed: {e}");
+        }
+    });
+}
+
+fn reminder_tick(app: &tauri::AppHandle) -> Result<(), String> {
+    let cfg = load_task_config();
+    if !cfg.reminder_enabled {
+        return Ok(());
+    }
+    let now = Local::now();
+    let want = cfg.reminder_time.trim();
+    let Some((want_h, want_m)) = parse_hm(want) else {
+        return Ok(());
+    };
+    let now_minutes = now.hour() as i64 * 60 + now.minute() as i64;
+    let want_minutes = want_h as i64 * 60 + want_m as i64;
+    // 到点后补发，但只在 3 小时宽限内；深夜打开应用不该再收到早间摘要。
+    if now_minutes < want_minutes || now_minutes > want_minutes + 180 {
+        return Ok(());
+    }
+    let today_date = now.date_naive();
+    let today = today_date.to_string();
+    if reminder_already_sent(&today) {
+        return Ok(());
+    }
+
+    let conn = init()?;
+    let _ = scan_and_index(&conn);
+    drop(conn);
+    let blocks = query_blocks(&TaskQuery {
+        done: Some(false),
+        ..Default::default()
+    })?;
+    let mut overdue = 0usize;
+    let mut due_today = 0usize;
+    let mut habit_pending = 0usize;
+    let mut titles: Vec<String> = Vec::new();
+    for b in &blocks {
+        if b.kind == "habit" {
+            let checked = b
+                .checkins
+                .iter()
+                .any(|d| parse_cn_date(d).map(|x| x == today_date).unwrap_or(false));
+            if !checked {
+                habit_pending += 1;
+            }
+        }
+        let Some(d) = parse_cn_date(&b.deadline) else { continue };
+        if d > today_date {
+            continue;
+        }
+        if d < today_date {
+            overdue += 1;
+        } else {
+            due_today += 1;
+        }
+        if titles.len() < 5 {
+            titles.push(if b.description.trim().is_empty() {
+                b.id.clone()
+            } else {
+                b.description.clone()
+            });
+        }
+    }
+
+    mark_reminder_sent(&today);
+    if overdue + due_today + habit_pending == 0 {
+        return Ok(());
+    }
+
+    let mut parts = Vec::new();
+    if overdue > 0 {
+        parts.push(format!("逾期 {} 条", overdue));
+    }
+    if due_today > 0 {
+        parts.push(format!("今天到期 {} 条", due_today));
+    }
+    if habit_pending > 0 {
+        parts.push(format!("习惯未打卡 {}", habit_pending));
+    }
+    let body = format!(
+        "{}{}",
+        parts.join(" · "),
+        if titles.is_empty() {
+            String::new()
+        } else {
+            format!("：{}", titles.join("、"))
+        }
+    );
+    let _ = app
+        .notification()
+        .builder()
+        .title("今日任务")
+        .body(&body)
+        .show();
+    let _ = app.emit(
+        "guaxi:task-reminder",
+        serde_json::json!({
+            "overdue": overdue,
+            "dueToday": due_today,
+            "habitPending": habit_pending,
+            "titles": titles,
+            "body": body,
+        }),
+    );
+    info!(overdue, due_today, habit_pending, "task reminder sent");
+    Ok(())
+}
+
+fn parse_hm(s: &str) -> Option<(u32, u32)> {
+    let mut it = s.split(':');
+    let h = it.next()?.trim().parse::<u32>().ok()?;
+    let m = it.next()?.trim().parse::<u32>().ok()?;
+    if h > 23 || m > 59 {
+        return None;
+    }
+    Some((h, m))
 }

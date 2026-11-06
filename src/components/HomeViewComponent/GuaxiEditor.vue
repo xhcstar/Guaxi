@@ -5357,6 +5357,7 @@ let templateInsertListenerUnmounted = false
 let neovimExitedUnlisten = null
 /** 独立阅读器窗口发来的「交给编辑器」请求。 */
 let docReaderBridgeUnlisten = null
+let taskSourceUnlisten = null
 /** 独立阅读器窗口发来的「转换为 Markdown」请求。 */
 let docReaderConvertUnlisten = null
 const PENDING_TEMPLATE_INSERT_KEY = 'guaxi.pending_template_insert'
@@ -5444,6 +5445,30 @@ onMounted(async () => {
     })
   } catch (error) {
     logger.warn('[DocReaderBridge] listen open-in-editor failed', {
+      error: String(error?.message || error),
+    })
+  }
+
+  // 任务管理窗口 → 打开任务所在 .org 并定位到块首行。
+  try {
+    taskSourceUnlisten = await listen('guaxi:open-task-source', async (event) => {
+      const path = String(event?.payload?.path || '').trim()
+      const line = Number(event?.payload?.line) || 0
+      if (!path) return
+      logger.info('[TaskSourceBridge] open task source', { path, line })
+      await forceOpenInEditor(path)
+      if (line > 0) {
+        for (let attempt = 0; attempt < 20; attempt += 1) {
+          await new Promise((resolve) => setTimeout(resolve, 100))
+          if (normalizeVisualPath(selectedFile.value?.path || '') === normalizeVisualPath(path)) {
+            handleOrgGotoLine(line)
+            return
+          }
+        }
+      }
+    })
+  } catch (error) {
+    logger.warn('[TaskSourceBridge] listen open-task-source failed', {
       error: String(error?.message || error),
     })
   }
@@ -25644,6 +25669,10 @@ onUnmounted(() => {
   if (docReaderBridgeUnlisten) {
     try { Promise.resolve(docReaderBridgeUnlisten()).catch(() => {}) } catch {}
     docReaderBridgeUnlisten = null
+  }
+  if (taskSourceUnlisten) {
+    try { Promise.resolve(taskSourceUnlisten()).catch(() => {}) } catch {}
+    taskSourceUnlisten = null
   }
   if (docReaderConvertUnlisten) {
     try { Promise.resolve(docReaderConvertUnlisten()).catch(() => {}) } catch {}

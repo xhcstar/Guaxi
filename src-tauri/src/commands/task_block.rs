@@ -52,7 +52,13 @@ pub struct TaskBlock {
     pub manage_type: String,
     /// bug/task/other。
     pub task_type: String,
+    /// 任务形态：task/habit/goal/review（与 TYPE 正交，缺省视为 task）。
+    #[serde(default)]
+    pub kind: String,
     pub deadline: String,
+    /// 置顶到「今日」的日期（YYYY-MM-DD）。
+    #[serde(default)]
+    pub focus: String,
     pub create_time: String,
     /// 完成时间：STATUS 变为 DONE/CANCELLED 时由系统写入（持久化进 .org，存活于重扫描）。
     pub completed_time: String,
@@ -62,9 +68,18 @@ pub struct TaskBlock {
     pub priority: String,
     /// 英文规范状态：TODO/NEXT/DOING/WAITING/PAUSED/HOLD/CANCELLED/DONE。
     pub status: String,
+    /// 习惯重复规则：daily/weekdays/weekly/monthly 或自然语言。
+    #[serde(default)]
+    pub repeat: String,
     /// 是否完成型（DONE/CANCELLED）。
     pub done: bool,
     pub progress: String,
+    /// 累计投入分钟。
+    #[serde(default)]
+    pub spent: u32,
+    /// 习惯打卡日期（去重保序，ISO 或原文）。
+    #[serde(default)]
+    pub checkins: Vec<String>,
     pub fix_status: String,
     pub description: String,
     pub root_cause: String,
@@ -97,14 +112,19 @@ pub const KNOWN_FIELDS: &[&str] = &[
     "ID",
     "PARENT TASK",
     "TYPE",
+    "KIND",
     "DEADLINE",
+    "FOCUS",
     "CREATE TIME",
     "COMPLETED TIME",
     "ORIGIN",
     "SEVERITY",
     "PRIORITY",
     "STATUS",
+    "REPEAT",
     "PROGRESS",
+    "SPENT",
+    "CHECKINS",
     "FIX STATUS",
     "DESCRIPTION",
     "ROOT CAUSE",
@@ -211,6 +231,26 @@ fn canonical_status(value: &str) -> String {
     String::new()
 }
 
+/// SPENT 只取前导数字（分钟），无法解析视为 0。
+fn parse_spent(value: &str) -> u32 {
+    let digits: String = value.trim().chars().take_while(|c| c.is_ascii_digit()).collect();
+    digits.parse().unwrap_or(0)
+}
+
+/// CHECKINS 支持逗号/分号/空白分隔，去重保序。
+fn parse_checkins(value: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for part in value.split(|c: char| {
+        c == ',' || c == ';' || c == '，' || c == '；' || c.is_whitespace()
+    }) {
+        let s = part.trim();
+        if !s.is_empty() && !out.iter().any(|x| x == s) {
+            out.push(s.to_string());
+        }
+    }
+    out
+}
+
 /// 从 PRIORITY 值里抽取 A/B/C。
 fn canonical_priority(value: &str) -> String {
     let upper = value.to_uppercase();
@@ -270,6 +310,7 @@ fn parse_one_block(body: &[&str], file_path: &str, category: &str) -> TaskBlock 
     let mut b = TaskBlock {
         file_path: file_path.to_string(),
         manage_type: category.to_string(),
+        kind: "task".to_string(),
         notes: TaskNotes::None,
         ..Default::default()
     };
@@ -292,7 +333,15 @@ fn parse_one_block(body: &[&str], file_path: &str, category: &str) -> TaskBlock 
                 "ID" => b.id = trimmed,
                 "PARENT TASK" => b.parent_id = trimmed,
                 "TYPE" => b.task_type = trimmed.to_lowercase(),
+                "KIND" => {
+                    b.kind = if trimmed.is_empty() {
+                        "task".to_string()
+                    } else {
+                        trimmed.to_lowercase()
+                    }
+                }
                 "DEADLINE" => b.deadline = trimmed,
+                "FOCUS" => b.focus = trimmed,
                 "CREATE TIME" => b.create_time = trimmed,
                 "COMPLETED TIME" => b.completed_time = trimmed,
                 "ORIGIN" => b.origin = trimmed,
@@ -302,7 +351,10 @@ fn parse_one_block(body: &[&str], file_path: &str, category: &str) -> TaskBlock 
                     b.status = canonical_status(&trimmed);
                     b.done = DONE_STATUS.iter().any(|s| *s == b.status);
                 }
+                "REPEAT" => b.repeat = trimmed,
                 "PROGRESS" => b.progress = trimmed,
+                "SPENT" => b.spent = parse_spent(&trimmed),
+                "CHECKINS" => b.checkins = parse_checkins(&val),
                 "FIX STATUS" => b.fix_status = trimmed,
                 "DESCRIPTION" => b.description = trimmed,
                 "ROOT CAUSE" => b.root_cause = trimmed,
@@ -488,7 +540,13 @@ pub fn serialize_block(b: &TaskBlock) -> String {
     push_field(&mut out, "ID", &b.id);
     push_field(&mut out, "PARENT TASK", &b.parent_id);
     push_field(&mut out, "TYPE", &b.task_type);
+    if !b.kind.is_empty() && b.kind != "task" {
+        push_field(&mut out, "KIND", &b.kind);
+    }
     push_field(&mut out, "DEADLINE", &b.deadline);
+    if !b.focus.trim().is_empty() {
+        push_field(&mut out, "FOCUS", &b.focus);
+    }
     push_field(&mut out, "CREATE TIME", &b.create_time);
     push_field(&mut out, "COMPLETED TIME", &b.completed_time);
     push_field(&mut out, "ORIGIN", &b.origin);
@@ -503,7 +561,16 @@ pub fn serialize_block(b: &TaskBlock) -> String {
         }),
     );
     push_field(&mut out, "STATUS", &b.status);
+    if !b.repeat.trim().is_empty() {
+        push_field(&mut out, "REPEAT", &b.repeat);
+    }
     push_field(&mut out, "PROGRESS", &b.progress);
+    if b.spent > 0 {
+        push_field(&mut out, "SPENT", &b.spent.to_string());
+    }
+    if !b.checkins.is_empty() {
+        push_field(&mut out, "CHECKINS", &b.checkins.join(", "));
+    }
     push_field(&mut out, "FIX STATUS", &b.fix_status);
     push_field(&mut out, "DESCRIPTION", &b.description);
     push_field(&mut out, "ROOT CAUSE", &b.root_cause);
@@ -609,6 +676,7 @@ const SEVERITY_TOKENS: &[&str] = &["critical", "major", "normal", "minor", "triv
 const ORIGIN_TOKENS: &[&str] = &["customer", "qa", "dev", "other"];
 const FIX_STATUS_TOKENS: &[&str] = &["debug", "test", "review", "approval", "fixed", "other"];
 const TYPE_TOKENS: &[&str] = &["bug", "task", "other"];
+const KIND_TOKENS: &[&str] = &["task", "habit", "goal", "review"];
 const MANAGE_TYPE_TOKENS: &[&str] = &["work", "life", "study"];
 
 /// 检测「字段声明行」：`#NAME:` 或 `#NAME：`（NAME 为大写字母与空格）。
@@ -773,6 +841,23 @@ fn validate_block(lines: &[&str], start_idx: usize, end_idx: usize, category: &s
     if let Some((ln, v, _)) = fields.get("STATUS") {
         if !v.trim().is_empty() && canonical_status(v).is_empty() {
             diags.push(diag(*ln, "error", "STATUS 无法识别，应包含 TODO/NEXT/DOING/WAITING/PAUSED/HOLD/CANCELLED/DONE 之一"));
+        }
+    }
+    if let Some((ln, v, _)) = fields.get("KIND") {
+        let lv = v.trim().to_lowercase();
+        if !lv.is_empty() && !KIND_TOKENS.iter().any(|t| lv == *t) {
+            diags.push(diag(*ln, "warning", "KIND 建议为 task / habit / goal / review"));
+        }
+    }
+    if let Some((ln, v, _)) = fields.get("SPENT") {
+        let t = v.trim();
+        if !t.is_empty() && !t.chars().all(|c| c.is_ascii_digit()) {
+            diags.push(diag(*ln, "warning", "SPENT 请填写分钟数（纯数字）"));
+        }
+    }
+    if let Some((ln, v, _)) = fields.get("FOCUS") {
+        if !looks_like_date(v) {
+            diags.push(diag(*ln, "warning", "FOCUS 建议形如 2026-11-06"));
         }
     }
     if let Some((ln, v, _)) = fields.get("PRIORITY") {

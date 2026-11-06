@@ -34,7 +34,6 @@ import LanguageTranslatorApp from '../components/ApplicationViewComponent/apps/L
 import FileTransferAssistantApp from '../components/ApplicationViewComponent/apps/FileTransferAssistantApp.vue'
 import PythonPlaygroundApp from '../components/ApplicationViewComponent/apps/PythonPlaygroundApp.vue'
 import PlaceholderApp from '../components/ApplicationViewComponent/apps/PlaceholderApp.vue'
-import TODOApp from '../components/ApplicationViewComponent/apps/TODO.vue'
 import TTSBookApp from '../components/ApplicationViewComponent/apps/TTSBookApp.vue'
 import OcrApp from '../components/ApplicationViewComponent/apps/OcrApp.vue'
 import ResumeBuilderApp from '../components/ApplicationViewComponent/apps/ResumeBuilderApp.vue'
@@ -45,7 +44,6 @@ import MailApp from '../components/ApplicationViewComponent/apps/MailApp.vue'
 
 const APP_COMPONENT_MAP = {
   'life-album': LifeAlbumApp,
-  'life-habits': TODOApp,
   'music-player': MusicPlayerApp,
   'language-translator': LanguageTranslatorApp,
   'tools-file-transfer': FileTransferAssistantApp,

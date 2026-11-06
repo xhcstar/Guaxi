@@ -137,6 +137,7 @@
                 </select>
               </span>
               <span class="otp-actions">
+                <button v-if="b.kind === 'habit'" class="otp-mini" :class="{ ok: checkedToday(b) }" :title="checkedToday(b) ? '取消今日打卡' : '今日打卡'" @click.stop="toggleCheckin(b)">{{ checkedToday(b) ? '✓' : '○' }}</button>
                 <button class="otp-mini" title="大窗预览整条" @click.stop="openCardZoom(b)">⛶</button>
                 <button class="otp-mini" title="编辑" @click="startEdit(b)">✎</button>
                 <button class="otp-mini" :class="{ ok: flashed === 'copy:' + b.blockStartLine }" title="复制 Bug 信息" @click="copyCard(b)">{{ flashed === 'copy:' + b.blockStartLine ? '✓' : '⧉' }}</button>
@@ -148,6 +149,11 @@
             <div class="otp-props">
               <div v-if="b.id" class="otp-prop"><span class="k">ID</span><span class="v" v-html="hl(b.id)" /></div>
               <div v-if="b.parentId" class="otp-prop"><span class="k">父任务</span><span class="v" v-html="hl(b.parentId)" /></div>
+              <div v-if="b.kind && b.kind !== 'task'" class="otp-prop"><span class="k">形态</span><span class="v" v-html="hl(kindLabel(b.kind))" /></div>
+              <div v-if="b.repeat" class="otp-prop"><span class="k">重复</span><span class="v" v-html="hl(b.repeat)" /></div>
+              <div v-if="b.focus" class="otp-prop"><span class="k">置顶</span><span class="v" v-html="hl(b.focus)" /></div>
+              <div v-if="b.spent" class="otp-prop"><span class="k">投入</span><span class="v">{{ formatSpent(b.spent) }}</span></div>
+              <div v-if="b.checkins && b.checkins.length" class="otp-prop"><span class="k">打卡</span><span class="v">{{ b.checkins.length }} 次 · 最近 {{ b.checkins[b.checkins.length - 1] }}</span></div>
               <div v-if="b.severity" class="otp-prop"><span class="k">严重度</span><span class="v" v-html="hl(b.severity)" /></div>
               <div v-if="b.origin" class="otp-prop"><span class="k">来源</span><span class="v" v-html="hl(b.origin)" /></div>
               <div v-if="b.fixStatus" class="otp-prop"><span class="k">修复</span><span class="v" v-html="hl(b.fixStatus)" /></div>
@@ -220,6 +226,9 @@
             </div>
             <div class="otp-form">
               <label>类型<select v-model="draft.taskType"><option v-for="t in typeOptions" :key="t" :value="t">{{ typeLabel(t) }}</option></select></label>
+              <label>形态<select v-model="draft.kind"><option v-for="k in kindOptions" :key="k" :value="k">{{ kindLabel(k) }}</option></select></label>
+              <label>重复<input v-model="draft.repeat" placeholder="每天 / 每周 / 工作日" /></label>
+              <label>投入分钟<input v-model.number="draft.spent" type="number" min="0" step="5" placeholder="0" /></label>
               <label>状态<select v-model="draft.status"><option v-for="s in statusKeys" :key="s" :value="s">{{ statusLabel(s) }}</option></select></label>
               <label>优先级<select v-model="draft.priority"><option value="">未指定</option><option value="A">A</option><option value="B">B</option><option value="C">C</option></select></label>
               <label>严重度<select v-model="draft.severity"><option v-for="s in severityOptions" :key="s" :value="s">{{ s }}</option></select></label>
@@ -270,6 +279,20 @@
                 </div>
               </label>
               <label>影响版本<input v-model="draft.affectedRelease" /></label>
+              <label>置顶到今日
+                <div class="otp-date-field">
+                  <input v-model="draft.focus" placeholder="2026-11-06" />
+                  <span class="otp-date-icon" aria-hidden="true">📅</span>
+                  <input type="date" class="otp-date-overlay" title="选择置顶日期" :value="toDateInput(draft.focus)" @change="onPickFocus" />
+                </div>
+              </label>
+              <label v-if="draft.kind === 'habit'" class="full">
+                <span class="otp-field-head">
+                  打卡记录（{{ (draft.checkins || []).length }} 次）
+                  <button type="button" class="otp-mini xs otp-zoom" :class="{ ok: checkedToday(draft) }" @click="toggleDraftCheckin">今日打卡</button>
+                </span>
+                <input :value="(draft.checkins || []).join(', ')" readonly placeholder="尚无打卡" />
+              </label>
               <label class="full">描述<input :ref="setDescInput" v-model="draft.description" /></label>
               <label class="full">
                 <span class="otp-field-head">根本原因<button type="button" class="otp-mini xs otp-zoom" title="放大编辑" @click="openBigEdit('根本原因', draft.rootCause, (v) => (draft.rootCause = v))">⛶</button></span>
@@ -617,6 +640,31 @@ const typeOptions = computed(() => (props.category === 'life' || props.category 
 
 const typeLabel = (t) => ({ bug: 'Bug', task: '任务', other: '其他' }[t] || (t || '任务'))
 const statusLabel = (s) => STATUS_LABELS[s] || s || '待办'
+const kindOptions = ['task', 'habit', 'goal', 'review']
+const KIND_LABELS = { task: '任务', habit: '习惯', goal: '目标', review: '复盘' }
+const kindLabel = (k) => KIND_LABELS[k] || k || '任务'
+const formatSpent = (m) => {
+  const n = Number(m) || 0
+  return n >= 60 ? `${Math.floor(n / 60)}h${n % 60 ? ` ${n % 60}m` : ''}` : `${n}m`
+}
+// 打卡日期统一按 ISO 比较，兼容源码里的中文/斜杠日期。
+const toIsoDate = (s) => {
+  const m = /(\d{4})\s*[-/年]\s*(\d{1,2})\s*[-/月]\s*(\d{1,2})/.exec(String(s || ''))
+  return m ? `${m[1]}-${String(m[2]).padStart(2, '0')}-${String(m[3]).padStart(2, '0')}` : ''
+}
+const todayIso = () => {
+  const d = new Date()
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+const checkedToday = (b) => (b.checkins || []).some((d) => toIsoDate(d) === todayIso())
+const withTodayToggled = (b) => {
+  const today = todayIso()
+  const list = (b.checkins || []).filter((d) => toIsoDate(d) !== today)
+  if (!checkedToday(b)) list.push(today)
+  return list
+}
+const toggleCheckin = (b) => { quickApply(b, { checkins: withTodayToggled(b) }) }
+const toggleDraftCheckin = () => { draft.checkins = withTodayToggled(draft) }
 // 字段正文统一交给 GuaxiOrgMarkdown（编辑器同源渲染管线）；
 // 搜索命中由该组件在渲染完成后按文本节点高亮，不再在父组件里拼 HTML。
 
@@ -992,6 +1040,10 @@ const toDateTimeInput = (str) => {
 const onPickDeadline = (e) => {
   const m = String(e?.target?.value || '').match(/(\d{4})-(\d{2})-(\d{2})/)
   if (m) draft.deadline = `${m[1]}年${m[2]}月${m[3]}日`
+}
+const onPickFocus = (e) => {
+  const m = String(e?.target?.value || '').match(/(\d{4})-(\d{2})-(\d{2})/)
+  if (m) draft.focus = `${m[1]}-${m[2]}-${m[3]}`
 }
 const onPickCreateTime = (e) => {
   const m = String(e?.target?.value || '').match(/(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?/)

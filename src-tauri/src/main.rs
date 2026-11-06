@@ -614,6 +614,7 @@ async fn app_main() {
             commands::synctex::synctex_inverse,
             commands::taskmanager::task_get_config,
             commands::taskmanager::task_set_config,
+            commands::taskmanager::task_set_reminder,
             commands::taskmanager::task_get_git_config,
             commands::taskmanager::task_set_git_config,
             commands::taskmanager::task_ensure_dirs,
@@ -621,6 +622,9 @@ async fn app_main() {
             commands::taskmanager::task_query,
             commands::taskmanager::task_query_fresh,
             commands::taskmanager::task_update_item,
+            commands::taskmanager::task_create,
+            commands::taskmanager::task_delete_item,
+            commands::taskmanager::task_open_source,
             commands::taskmanager::task_import,
             commands::taskmanager::task_export_report,
             commands::taskmanager::task_read_file,
@@ -1434,6 +1438,8 @@ async fn app_main() {
             commands::kgraph::init_app_handle(app.handle().clone());
             // 认知层的后台循环同样要在非命令上下文里广播提醒与简报。
             cognition::init_app_handle(app.handle().clone());
+            // 任务每日摘要：不依赖任务窗口是否打开。
+            commands::taskmanager::start_reminder_service(app.handle().clone());
 
             // 启动持久化文档转换队列（含断点续跑）
             commands::convert::ConversionQueue::init(app.handle().clone());

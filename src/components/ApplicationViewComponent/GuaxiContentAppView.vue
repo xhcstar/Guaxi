@@ -42,7 +42,6 @@ import LanguageTranslatorApp from "./apps/LanguageTranslatorApp.vue"
 import FileTransferAssistantApp from "./apps/FileTransferAssistantApp.vue"
 // import PythonPlaygroundApp from "./apps/PythonPlaygroundApp.vue"
 // import PlaceholderApp from "./apps/PlaceholderApp.vue"
-import TODOApp from "./apps/TODO.vue"
 import TTSBookApp from "./apps/TTSBookApp.vue"
 import OcrApp from "./apps/OcrApp.vue"
 import ResumeBuilderApp from "./apps/ResumeBuilderApp.vue"
@@ -103,16 +102,6 @@ const apps = [
     icon: '🖼️',
     color: 'linear-gradient(135deg, #fbc2eb, #a6c1ee)',
     component: LifeAlbumApp
-  },
-  {
-    id: 'life-habits',
-    name: 'TO DO',
-    category: 'life',
-    categoryLabel: '生活类',
-    description: '像 Microsoft To Do 一样管理清单与任务',
-    icon: '✅',
-    color: 'linear-gradient(135deg, #4facfe, #00f2fe)',
-    component: TODOApp
   },
   {
     id: 'music-player',
