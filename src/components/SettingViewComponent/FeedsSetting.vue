@@ -23,7 +23,7 @@
             <div class="feeds-row-main">
               <div class="feeds-row-label">Markdown 双写</div>
               <div class="feeds-row-hint">
-                开启后正文会写成 Markdown 文件，作为知识库的一部分被索引与备份。
+                开启后正文会写成 Markdown 文件，保存到下方库目录，便于备份、迁移与外部工具消费。
                 关闭则只保留数据库缓存。
               </div>
             </div>
@@ -36,16 +36,26 @@
 
           <div class="feeds-row">
             <div class="feeds-row-main">
-              <div class="feeds-row-label">库目录名</div>
-              <div class="feeds-row-hint">知识库根下的目录名，默认 Feeds。</div>
+              <div class="feeds-row-label">库目录</div>
+              <div class="feeds-row-hint">
+                Markdown 文章与本地化图片的保存位置。留空则使用默认目录（软件同级 Feeds）。
+                更改目录不会自动搬迁已有文件。
+              </div>
             </div>
-            <n-input
-              size="small"
-              style="width: 160px"
-              :value="settings.dir_name"
-              @update:value="(v) => patchLocal('settings', 'dir_name', v)"
-              @blur="flushLocal"
-            />
+            <div class="feeds-path-actions">
+              <n-input
+                size="small"
+                style="width: 300px"
+                :value="settings.root_dir"
+                :placeholder="defaultRoot || '默认（软件同级 Feeds）'"
+                @update:value="(v) => patchLocal('settings', 'root_dir', v)"
+                @blur="flushLocal"
+              />
+              <n-button size="small" @click="pickRootDir">浏览…</n-button>
+              <n-button size="small" text :disabled="!settings.root_dir" @click="resetRootDir">
+                恢复默认
+              </n-button>
+            </div>
           </div>
 
           <div class="feeds-row">
@@ -223,6 +233,7 @@
 <script setup>
 import { ref, reactive, onMounted } from 'vue'
 import { NIcon, useMessage } from 'naive-ui'
+import { open } from '@tauri-apps/plugin-dialog'
 import {
   FolderOpen20Regular,
   Clock20Regular,
@@ -247,13 +258,15 @@ const restoring = ref('')
 
 const settings = reactive({
   markdown_enabled: true,
-  dir_name: 'Feeds',
+  root_dir: '',
   min_quality: 35,
   daily_admit_cap: 200,
   localize_images: true,
   max_image_bytes: 8 * 1024 * 1024,
   max_images_per_article: 30,
 })
+// 默认库目录由后端按安装位置算出（软件同级 Feeds），这里只用于占位与提示。
+const defaultRoot = ref('')
 
 const retention = reactive({ unread_days: 21, read_days: 180, undo_hours: 24 })
 const stats = ref([])
@@ -307,7 +320,27 @@ const flushLocal = async () => {
   if (!Object.keys(pendingSettings.value).length) return
   const payload = pendingSettings.value
   pendingSettings.value = {}
-  await persist({ ...settings, ...payload }, null)
+  const ok = await persist({ ...settings, ...payload }, null)
+  // 库目录变了，占用统计要跟着回读，否则还显示旧目录的数值。
+  if (ok) storage.value = await store.fetchFeedsStorage()
+}
+
+const pickRootDir = async () => {
+  try {
+    const selected = await open({ directory: true, multiple: false })
+    if (typeof selected !== 'string' || !selected) return
+    settings.root_dir = selected
+    pendingSettings.value = { ...pendingSettings.value, root_dir: selected }
+    await flushLocal()
+  } catch (e) {
+    message.error(`选择目录失败：${e?.message || e}`, { duration: 2500 })
+  }
+}
+
+const resetRootDir = async () => {
+  settings.root_dir = ''
+  pendingSettings.value = { ...pendingSettings.value, root_dir: '' }
+  await flushLocal()
 }
 
 const patch = async (group, key, value) => {
@@ -323,8 +356,10 @@ const persist = async (s, r) => {
   try {
     await store.saveFeedsSettings(s ? { ...s } : null, r ? { ...r } : null)
     message.success('已保存', { duration: 1200 })
+    return true
   } catch (e) {
     message.error(`保存失败：${e?.message || e}`, { duration: 2500 })
+    return false
   }
 }
 
@@ -332,6 +367,7 @@ const reload = async () => {
   loading.value = true
   try {
     const res = await store.fetchFeedsSettings()
+    defaultRoot.value = String(res?.default_root || '')
     Object.assign(settings, res?.settings || {})
     Object.assign(retention, res?.retention || {})
     stats.value = await store.fetchPipelineStats()
@@ -456,6 +492,14 @@ onMounted(reload)
   font-size: 11.5px;
   line-height: 1.55;
   color: var(--guaxi-text-secondary);
+}
+
+.feeds-path-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .feeds-stat-line {

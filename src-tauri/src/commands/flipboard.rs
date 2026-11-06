@@ -988,8 +988,7 @@ fn purge_expired_markdown(now: i64) -> Result<usize, String> {
         return Ok(0);
     }
 
-    let kb_root = std::path::PathBuf::from(crate::commands::settingview::get_knowledge_bases_root());
-    let root = feeds::feeds_root(&kb_root, &settings);
+    let root = feeds::feeds_root(&settings);
 
     let mut purged = 0usize;
     let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S").to_string();
@@ -5113,10 +5112,31 @@ fn load_feeds_settings() -> crate::commands::flipboard_feeds::FeedsSettings {
     let Ok(path) = feeds_settings_path() else {
         return FeedsSettings::default();
     };
-    match fs::read_to_string(&path) {
-        Ok(raw) => FeedsSettings::from_json(&raw),
-        Err(_) => FeedsSettings::default(),
+    let Ok(raw) = fs::read_to_string(&path) else {
+        return FeedsSettings::default();
+    };
+    let mut settings = FeedsSettings::from_json(&raw);
+
+    // 旧版本存的是「知识库根下的目录名」。升级后如果新字段为空，把旧配置落成绝对路径，
+    // 否则库根换了位置，已采集文章的文件路径全部对不上（文件还在，只是不认了）。
+    // 只在旧字段确实存在时迁移：新配置里没有 dir_name，用户点「恢复默认」后不会再被拉回去。
+    if settings.root_dir.trim().is_empty() {
+        let legacy_dir = serde_json::from_str::<serde_json::Value>(&raw)
+            .ok()
+            .and_then(|v| v.get("dir_name").and_then(|x| x.as_str()).map(|d| d.trim().to_string()))
+            .filter(|d| !d.is_empty());
+        if let Some(dir) = legacy_dir {
+            let legacy_root = std::path::PathBuf::from(
+                crate::commands::settingview::get_knowledge_bases_root(),
+            )
+            .join(dir);
+            if legacy_root.is_dir() {
+                settings.root_dir = legacy_root.to_string_lossy().to_string();
+                let _ = persist_feeds_settings(&settings);
+            }
+        }
     }
+    settings
 }
 
 fn persist_feeds_settings(s: &crate::commands::flipboard_feeds::FeedsSettings) -> Result<(), String> {
@@ -5245,8 +5265,7 @@ fn try_write_markdown(
         return Ok(None);
     }
 
-    let kb_root = std::path::PathBuf::from(crate::commands::settingview::get_knowledge_bases_root());
-    let root = feeds::feeds_root(&kb_root, &settings);
+    let root = feeds::feeds_root(&settings);
 
     // 图片本地化（可选）。失败不影响正文写盘。
     let localized = feeds::localize_images(
@@ -7365,8 +7384,7 @@ pub struct CorpusExportOptions {
 pub async fn export_corpus_jsonl(options: CorpusExportOptions) -> Result<serde_json::Value, String> {
     let settings = load_feeds_settings();
     let min_q = options.min_quality.unwrap_or(settings.min_quality) as i64;
-    let kb_root = std::path::PathBuf::from(crate::commands::settingview::get_knowledge_bases_root());
-    let feeds_root = crate::commands::flipboard_feeds::feeds_root(&kb_root, &settings);
+    let feeds_root = crate::commands::flipboard_feeds::feeds_root(&settings);
 
     let out_dir = match options.out_dir.as_ref().filter(|s| !s.trim().is_empty()) {
         Some(d) => std::path::PathBuf::from(d.trim()),
@@ -7789,8 +7807,7 @@ pub async fn get_pipeline_stats() -> Result<Vec<(String, i64)>, String> {
 #[command]
 pub async fn get_feeds_storage_stats() -> Result<serde_json::Value, String> {
     let settings = load_feeds_settings();
-    let kb_root = std::path::PathBuf::from(crate::commands::settingview::get_knowledge_bases_root());
-    let root = crate::commands::flipboard_feeds::feeds_root(&kb_root, &settings);
+    let root = crate::commands::flipboard_feeds::feeds_root(&settings);
 
     let mut docs = 0usize;
     let mut images = 0usize;
@@ -7854,8 +7871,7 @@ pub async fn restore_trashed_document(url_norm: String) -> Result<String, String
         return Err("url_norm 不能为空".to_string());
     }
     let settings = load_feeds_settings();
-    let kb_root = std::path::PathBuf::from(crate::commands::settingview::get_knowledge_bases_root());
-    let root = crate::commands::flipboard_feeds::feeds_root(&kb_root, &settings);
+    let root = crate::commands::flipboard_feeds::feeds_root(&settings);
 
     let conn = open_article_cache_db()?;
     let trash_path: Option<String> = conn
@@ -7917,6 +7933,8 @@ pub async fn get_feeds_settings() -> Result<serde_json::Value, String> {
     Ok(serde_json::json!({
         "settings": serde_json::to_value(&s).unwrap_or(serde_json::Value::Null),
         "retention": serde_json::to_value(&r).unwrap_or(serde_json::Value::Null),
+        // 前端拿它做输入框占位与“恢复默认”提示（实际默认值取决于安装位置）。
+        "default_root": crate::commands::flipboard_feeds::default_feeds_root().to_string_lossy().to_string(),
     }))
 }
 
@@ -7947,10 +7965,9 @@ pub async fn save_feeds_settings(
         if let Some(n) = v.get("max_images_per_article").and_then(|x| x.as_u64()) {
             cur.max_images_per_article = (n as usize).min(200);
         }
-        if let Some(d) = v.get("dir_name").and_then(|x| x.as_str()) {
-            if !d.trim().is_empty() {
-                cur.dir_name = d.trim().to_string();
-            }
+        if let Some(d) = v.get("root_dir").and_then(|x| x.as_str()) {
+            // 允许清空：空串代表回到默认位置（可执行文件同级 Feeds）。
+            cur.root_dir = d.trim().to_string();
         }
         persist_feeds_settings(&cur)?;
     }

@@ -10,15 +10,15 @@
 //! 4. **入盘受质量门约束**（设计文档 12.1 的闸一）：低于门限的不产生文件，
 //!    只在 SQLite 留一行带拒收原因——这是"不囤积"的第一道闸。
 //!
-//! 与知识库的关系：`Feeds/` 是知识库根下的一个**顶层目录**，因此天然被
-//! `kgraph::kb_name_from_path` 识别为独立知识库，无需注册。
+//! 与知识库的关系：库根目录由设置独立指定，默认是可执行文件同级的 `Feeds/`，
+//! 不再强制挂在知识库根之下；用户可以在设置页改成任意可写目录。
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// Feeds 库的默认目录名（知识库根下）。
+/// Feeds 库的默认目录名（可执行文件同级目录下）。
 pub const DEFAULT_FEEDS_DIR: &str = "Feeds";
 
 /// 把文章写盘所需的最小数据。
@@ -65,8 +65,8 @@ pub struct SavedDoc {
 pub struct FeedsSettings {
     /// 是否启用 Markdown 双写。关掉后只保留 SQLite。
     pub markdown_enabled: bool,
-    /// 库根目录名（知识库根之下）。默认 "Feeds"。
-    pub dir_name: String,
+    /// 库根目录（绝对路径）。空串表示使用默认位置（可执行文件同级的 Feeds）。
+    pub root_dir: String,
     /// 入盘质量门：低于此分不写文件（闸一）。
     pub min_quality: u8,
     /// 每个 Collection 每日入盘上限（闸二）。0 = 不限。
@@ -83,7 +83,7 @@ impl Default for FeedsSettings {
     fn default() -> Self {
         FeedsSettings {
             markdown_enabled: true,
-            dir_name: DEFAULT_FEEDS_DIR.to_string(),
+            root_dir: String::new(),
             // 35 分：实测被拒的促销/索引页在联动页面类型后都低于 25，
             // 正常短文一般 55+，留足余量。
             min_quality: 35,
@@ -106,14 +106,22 @@ impl FeedsSettings {
     }
 }
 
-/// 由知识库根 + 设置得出 Feeds 库根目录。
-///
-/// 刻意接受 `kb_root` 参数而不是自己读配置：便于单测，也避免此处依赖
-/// `settingview` 的全局状态。
-pub fn feeds_root(kb_root: &Path, settings: &FeedsSettings) -> PathBuf {
-    let dir = settings.dir_name.trim();
-    let dir = if dir.is_empty() { DEFAULT_FEEDS_DIR } else { dir };
-    kb_root.join(dir)
+/// 默认 Feeds 库根目录：可执行文件同级的 `Feeds/`。
+pub fn default_feeds_root() -> PathBuf {
+    std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(|dir| dir.join(DEFAULT_FEEDS_DIR)))
+        .unwrap_or_else(|| PathBuf::from(DEFAULT_FEEDS_DIR))
+}
+
+/// 由设置得出 Feeds 库根目录；未配置时回落到默认位置。
+pub fn feeds_root(settings: &FeedsSettings) -> PathBuf {
+    let configured = settings.root_dir.trim();
+    if configured.is_empty() {
+        default_feeds_root()
+    } else {
+        PathBuf::from(configured)
+    }
 }
 
 /// 生成 Markdown 文档的完整内容（frontmatter + 正文）。
