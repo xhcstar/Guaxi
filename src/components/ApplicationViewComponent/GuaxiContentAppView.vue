@@ -195,11 +195,11 @@ const apps = [
   //   component: PlaceholderApp
   // },
   {
-    id: 'work-timer',
-    name: '简历生成',
+    id: 'work-resume',
+    name: '简历工坊',
     category: 'work',
     categoryLabel: '工作类',
-    description: '根据模板快速生成与导出简历',
+    description: '多份简历管理：版本历史、模板库与 HTML / PDF 导出',
     icon: '📝',
     color: 'linear-gradient(135deg, #fddb92, #d1fdff)',
     component: ResumeBuilderApp

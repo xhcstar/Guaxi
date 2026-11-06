@@ -52,7 +52,7 @@ const APP_COMPONENT_MAP = {
   'tools-python-playground': PythonPlaygroundApp,
   'tools-tts-book': TTSBookApp,
   'tools-ocr': OcrApp,
-  'work-timer': ResumeBuilderApp,
+  'work-resume': ResumeBuilderApp,
   'creation-ai-film-studio': AIFilmStudioApp,
   'tools-remote-terminal': RemoteTerminalApp,
   'tools-resource-hunter': ResourceHunterApp,
@@ -66,7 +66,7 @@ const GuaxiAppWindow = {
     const appId = computed(() => String(route.params?.appId || ''))
     const Comp = computed(() => APP_COMPONENT_MAP[appId.value] || PlaceholderApp)
     // Workbench-style apps own their full window layout, so the route host should not add outer padding.
-    const fullBleedAppIds = new Set(['life-album', 'music-player', 'tools-tts-book', 'work-timer', 'creation-ai-film-studio', 'tools-remote-terminal', 'tools-resource-hunter', 'tools-mail'])
+    const fullBleedAppIds = new Set(['life-album', 'music-player', 'tools-tts-book', 'work-resume', 'creation-ai-film-studio', 'tools-remote-terminal', 'tools-resource-hunter', 'tools-mail'])
     const hostPadding = computed(() => (fullBleedAppIds.has(appId.value) ? '0px' : '16px'))
 
     return () =>

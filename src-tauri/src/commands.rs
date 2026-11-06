@@ -80,6 +80,8 @@ pub mod flipboard;
 pub mod markdown_manual;
 pub mod notebook;
 pub mod todo;
+/// 简历工坊：多份简历、版本快照与自定义模板的本地 SQLite 存储。
+pub mod resume;
 pub mod music;
 pub mod filetransfer;
 pub mod library_site;
