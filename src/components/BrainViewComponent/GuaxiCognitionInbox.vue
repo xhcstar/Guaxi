@@ -1,5 +1,5 @@
 <template>
-  <div class="cog-inbox">
+  <div class="cog-inbox" @click="onExternalLinkClick">
     <!-- 一键就绪引导：认知层关闭或语义服务未就绪时显示。
          替代"自己去图谱视图给知识库生成向量"的绕路。 -->
     <div v-if="!store.enabled || !store.embeddingReady" class="cog-setup">
@@ -438,8 +438,7 @@
               </span>
             </div>
 
-            <div class="cog-card-body cog-untrusted markdown-body"
-              v-html="perceptHtml[p.id] || escapeText(p.excerpt)"></div>
+            <div class="cog-card-body cog-untrusted">{{ perceptSummaries[p.id] }}</div>
 
             <div class="cog-card-actions">
               <GuaxiIconButton
@@ -456,7 +455,7 @@
                 quaternary
                 :icon="Open20Regular"
                 label="打开原文"
-                hint="在内置浏览窗口里打开来源链接。窗口里双击段落可以直接把它采集回收件箱。"
+                hint="用系统默认浏览器打开来源链接。"
                 @click="openUri(p.uri)"
               />
               <GuaxiIconButton
@@ -815,6 +814,7 @@ import { useSettingsStore } from '../../stores/settingsStore'
 import { channelIcon, nudgeIcon, sourceIcon } from '../../utils/cognitionIcons'
 import { onCognitionNudge, onCognitionBrief } from '../../utils/cognitionEvents'
 import { createLogger } from '../../utils/logger'
+import { openUrl } from '@tauri-apps/plugin-opener'
 import { useSelectionReadAloud } from '../../composables/useSelectionReadAloud'
 import { renderMarkdown } from '../GuaxiMarkdownRender/GuaxiMarker.js'
 
@@ -1375,17 +1375,28 @@ function openRef(r) {
 /**
  * 打开外部原文。
  *
- * 走内置浏览窗口（`open_article_in_browser`）而不是 opener 插件：
- * 一是 capabilities 里 `opener:allow-open-url` 的 scope 只放了 `vscode://file/*`，
- * 任意 http(s) 会被拒；二是内置窗口注入了双击采集脚本，读到有用的段落可以直接回流成感知。
+ * 统一走系统默认浏览器（opener 插件），不再使用内置浏览窗口：
+ * 大脑页里的链接只是资料入口，不应该把应用变成浏览器。
  */
 async function openUri(uri) {
   try {
-    await invoke('open_article_in_browser', { url: uri })
+    await openUrl(uri)
   } catch (e) {
     logger.warn('open uri failed', e)
     message.warning('无法打开该链接')
   }
+}
+
+/** 简报/感知正文里的外链：拦下默认导航，交给系统浏览器。 */
+async function onExternalLinkClick(event) {
+  const anchor = event.target?.closest?.('a[href]')
+  if (!anchor) return
+  const href = String(anchor.getAttribute('href') || '').trim()
+  if (!href || href.startsWith('#')) return
+  // 先挡住默认导航，保证大脑页不会被链接带走；只把真正的站外链接交给系统。
+  event.preventDefault()
+  if (!/^(https?:|mailto:)/i.test(href)) return
+  await openUri(href)
 }
 
 async function decide(n, accepted) {
@@ -1448,25 +1459,27 @@ watch(() => store.brief?.markdown, async (mdText) => {
   briefHtml.value = t ? await renderMarkdown(t, { buttons: false, mermaid: true, math: true }) : ''
 }, { immediate: true })
 
-// 收件箱卡片正文：逐条用 GuaxiMarker 渲染 excerpt，id→html 缓存；
-// 未渲染完成前显示转义纯文本，避免闪原始 markdown 或注入。
-const perceptHtml = ref({})
-const escapeText = (s) => String(s || '')
-  .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-watch(() => store.percepts, async (list) => {
-  const arr = Array.isArray(list) ? list : []
-  for (const p of arr) {
-    if (!p || perceptHtml.value[p.id] != null) continue
-    const raw = String(p.excerpt || '').trim()
-    if (!raw) { perceptHtml.value = { ...perceptHtml.value, [p.id]: '' }; continue }
-    try {
-      const html = await renderMarkdown(raw, { buttons: false, mermaid: false, math: false })
-      perceptHtml.value = { ...perceptHtml.value, [p.id]: html }
-    } catch {
-      perceptHtml.value = { ...perceptHtml.value, [p.id]: escapeText(raw) }
-    }
+// 收件箱卡片只放纯文本摘要：去掉 Markdown 记号与 HTML 片段，不在列表里二次排版；
+// 完整内容通过「打开原文」查看。
+const plainSummary = (text) => String(text || '')
+  .replace(/<[^>]+>/g, ' ')
+  .replace(/```[\s\S]*?```/g, ' ')
+  .replace(/!\[[^\]]*\]\([^)]*\)/g, ' ')
+  .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+  .replace(/^\s{0,3}#{1,6}\s*/gm, '')
+  .replace(/(^|\s)#{2,6}\s+/g, '$1')
+  .replace(/^\s{0,3}>\s?/gm, '')
+  .replace(/\*\*|__|`/g, '')
+  .replace(/\s+/g, ' ')
+  .trim()
+
+const perceptSummaries = computed(() => {
+  const map = {}
+  for (const p of store.percepts || []) {
+    if (p?.id) map[p.id] = plainSummary(p.excerpt)
   }
-}, { immediate: true, deep: false })
+  return map
+})
 
 async function deliberate() {
   busy.value.deliberate = true
@@ -2368,7 +2381,7 @@ onUnmounted(() => {
   font-size: 11.5px;
 }
 .cog-card-body {
-  font-size: 13px;
+  font-size: 14px;
   line-height: 1.8;
 }
 .cog-untrusted {

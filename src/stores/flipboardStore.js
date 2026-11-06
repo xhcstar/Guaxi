@@ -407,17 +407,6 @@ export const useFlipboardStore = () => {
     return fetchArticleDetail(articleRef, true)
   }
 
-  // 在内置浏览器窗口打开原网页
-  const openArticleInBrowser = async (url) => {
-    try {
-      await invoke('open_article_in_browser', { url })
-      return true
-    } catch (error) {
-      console.error('FlipboardStore: openArticleInBrowser failed:', error)
-      throw error
-    }
-  }
-
   // 重启 RSSHub 以读取最新登录态 cookie（用户登录知乎/小红书等之后调用）。
   // RSSHub 未构建时后端返回错误，这里吞掉不打断（聚合的其余源不受影响）。
   const refreshRsshubCookies = async () => {
@@ -1112,7 +1101,6 @@ export const useFlipboardStore = () => {
     fetchTopicKnowledge,
     fetchArticleDetail,
     reparseArticle,
-    openArticleInBrowser,
     refreshRsshubCookies,
     getRsshubBaseUrl,
     rsshubRadarDetect,

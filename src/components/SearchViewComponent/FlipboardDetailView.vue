@@ -39,7 +39,7 @@
               </n-icon>
             </n-button>
           </template>
-          在内置浏览器打开原网页
+          使用浏览器查看
         </n-tooltip>
 
         <n-tooltip placement="bottom" trigger="hover">
@@ -123,7 +123,7 @@
                   </n-icon>
                 </n-button>
               </template>
-              用浏览器打开原文
+              使用浏览器查看原文
             </n-tooltip>
           </h1>
 
@@ -170,6 +170,7 @@
             <div
               class="article-content"
               v-html="formattedContent"
+              @click="onContentLinkClick"
               @mouseup="onContentMouseUp"
               @dblclick="handleContentDblClick"
             ></div>
@@ -565,15 +566,26 @@ const openInBrowser = async () => {
   const url = String(props.currentArticle?.url || '').trim()
   if (!url) return
   try {
-    // 优先在内置浏览器窗口打开真实网页（人类友好浏览）。
-    await store.openArticleInBrowser(url)
+    // 统一交给系统默认浏览器，避免把阅读区变成内置浏览器。
+    await openUrl(url)
   } catch (error) {
-    // 退回系统浏览器。
-    try {
-      await openUrl(url)
-    } catch (e2) {
-      message.error(`打开链接失败：${e2?.message || e2}`, { duration: 2500 })
-    }
+    message.error(`打开链接失败：${error?.message || error}`, { duration: 2500 })
+  }
+}
+
+// 正文里的外链同样交给系统浏览器；带 # 的页内锚点保持原样。
+const onContentLinkClick = async (event) => {
+  const anchor = event.target?.closest?.('a[href]')
+  if (!anchor) return
+  const href = String(anchor.getAttribute('href') || '').trim()
+  if (!href || href.startsWith('#')) return
+  // 先挡住默认导航，避免把阅读区带走；只打开站外链接。
+  event.preventDefault()
+  if (!/^(https?:|mailto:)/i.test(href)) return
+  try {
+    await openUrl(href)
+  } catch (error) {
+    message.error(`打开链接失败：${error?.message || error}`, { duration: 2500 })
   }
 }
 

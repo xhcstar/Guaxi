@@ -61,7 +61,7 @@
         v-if="sourceUri"
         class="car-btn"
         type="button"
-        title="在内置浏览窗口里打开来源链接"
+        title="使用浏览器查看来源链接"
         @click="openSource"
       >
         <Icon :icon="externalIcon" width="15" height="15" />
@@ -126,6 +126,7 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
+import { openUrl } from '@tauri-apps/plugin-opener'
 import { Icon } from '@iconify/vue'
 import listTreeIcon from '@iconify-icons/lucide/list-tree'
 import languagesIcon from '@iconify-icons/lucide/languages'
@@ -339,32 +340,22 @@ const onScroll = () => {
 
 // ───────────────────────── 正文里的链接 ─────────────────────────
 // 外部资料里的链接不能在这个窗口里导航（那会把阅读器变成浏览器，还丢掉当前文章）。
-// http(s) 走内置浏览窗口（与收件箱「打开原文」同一个出口），mailto 交给系统。
+// 统一交给系统默认浏览器打开；mailto 同样由系统处理。
 const openSource = () => {
   if (!sourceUri.value) return
-  invoke('open_article_in_browser', { url: sourceUri.value }).catch((error) => {
+  openUrl(sourceUri.value).catch((error) => {
     logger.warn('open source failed', { error: String(error?.message || error) })
     setHint('无法打开来源链接', true)
   })
 }
 
 const openExternal = async (href) => {
-  if (/^https?:\/\//i.test(href)) {
-    try {
-      await invoke('open_article_in_browser', { url: href })
-    } catch (error) {
-      logger.warn('open article link failed', { error: String(error?.message || error) })
-      setHint('无法打开该链接', true)
-    }
-    return
-  }
-  if (/^mailto:/i.test(href)) {
-    try {
-      const { openUrl } = await import('@tauri-apps/plugin-opener')
-      await openUrl(href)
-    } catch (error) {
-      logger.warn('open mail link failed', { error: String(error?.message || error) })
-    }
+  if (!/^(https?:|mailto:)/i.test(href)) return
+  try {
+    await openUrl(href)
+  } catch (error) {
+    logger.warn('open article link failed', { error: String(error?.message || error) })
+    setHint('无法打开该链接', true)
   }
 }
 
