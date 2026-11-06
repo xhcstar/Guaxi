@@ -718,6 +718,12 @@ async fn app_main() {
             commands::resource_repo_window::create_slidev_manager_window,
             commands::cloudsync::resource_repo_test_connection,
             commands::cloudsync::resource_repo_sync_now,
+            commands::sync::sync_engine_get_config,
+            commands::sync::sync_engine_set_config,
+            commands::sync::sync_engine_statuses,
+            commands::sync::sync_engine_test_connection,
+            commands::sync::sync_engine_run_target,
+            commands::sync::sync_engine_run_all,
             commands::p2psync::p2p_sync_status,
             commands::p2psync::p2p_sync_test_connection,
             commands::p2psync::p2p_sync_create_ticket,
@@ -727,6 +733,7 @@ async fn app_main() {
             commands::p2psync::p2p_federation_status,
             commands::p2psync::p2p_sync_probe_peers,
             commands::p2psync::p2p_sync_remove_peer,
+            commands::p2psync::p2p_send_files,
             commands::p2psync::p2p_sync_resource_repo_now,
             commands::p2psync::p2p_sync_verify_resource_repo,
             commands::p2psync::p2p_sync_knowledge_base_now,
@@ -904,6 +911,8 @@ async fn app_main() {
             commands::settingview::start_remove_lsp_extension_task,
             commands::settingview::get_webrtc_signal_url,
             commands::settingview::set_webrtc_signal_url,
+            commands::settingview::get_webrtc_signal_token,
+            commands::settingview::set_webrtc_signal_token,
             commands::settingview::get_llm_config,
             commands::settingview::set_llm_config,
             commands::settingview::get_tts_config,
@@ -1263,7 +1272,11 @@ async fn app_main() {
             commands::filetransfer::filetransfer_stop_lan_discovery,
             commands::filetransfer::filetransfer_get_peers,
             commands::filetransfer::filetransfer_send_files,
+            commands::filetransfer::filetransfer_send_entries,
+            commands::filetransfer::filetransfer_collect_entries,
             commands::filetransfer::filetransfer_list_tasks,
+            commands::filetransfer::filetransfer_clear_finished,
+            commands::filetransfer::filetransfer_retry_task,
             commands::filetransfer::filetransfer_pause_task,
             commands::filetransfer::filetransfer_resume_task,
             commands::filetransfer::filetransfer_cancel_task,
@@ -1434,6 +1447,12 @@ async fn app_main() {
 
             tauri::async_runtime::spawn(async {
                 commands::p2psync::p2p_autostart_if_enabled().await;
+            });
+
+            // 新同步内核的后台调度：按目标间隔自动跑 WebDAV / S3 / SFTP。
+            let sync_app = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                commands::sync::spawn_scheduler(sync_app).await;
             });
 
             // 启动 Agent Server（Python 进程）。尊重「设置 → 服务器」里的停用偏好 ——

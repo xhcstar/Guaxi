@@ -576,7 +576,17 @@ async fn webdav_propfind_ok(
 }
 
 #[tauri::command]
-pub async fn resource_repo_test_connection() -> Result<String, String> {
+pub async fn resource_repo_test_connection(app: AppHandle) -> Result<String, String> {
+    // 新同步内核优先：资源库绑定到 WebDAV / S3 / SFTP 后不再走旧路径。
+    if let Some((target, connection)) = crate::commands::sync::resource_repo_binding() {
+        let backend = crate::commands::sync::build_backend(&app, &connection, "").await?;
+        info!(
+            "[ResourceRepoSync] test via sync engine target={} backend={}",
+            target.name, connection.kind
+        );
+        return backend.test().await;
+    }
+
     let cfg = get_resource_repo_sync_config();
     let provider = cfg.provider.trim().to_lowercase();
 
@@ -703,6 +713,27 @@ async fn webdav_get_bytes(
 
 #[tauri::command]
 pub async fn resource_repo_sync_now(app: AppHandle) -> Result<String, String> {
+    // 新同步内核优先：清单式增量同步，远端只列举一次。
+    if let Some((target, connection)) = crate::commands::sync::resource_repo_binding() {
+        let run_id = uuid::Uuid::new_v4().to_string();
+        info!(
+            "[ResourceRepoSync] sync via sync engine target={} backend={}",
+            target.name, connection.kind
+        );
+        let result = crate::commands::sync::run_target(&app, &target, &connection, &run_id).await;
+        match &result {
+            Ok(report) => crate::commands::sync::persist_target_result(
+                &target.id,
+                "success",
+                &report.message,
+            ),
+            Err(error) => {
+                crate::commands::sync::persist_target_result(&target.id, "error", error)
+            }
+        }
+        return result.map(|report| report.message);
+    }
+
     let cfg = get_resource_repo_sync_config();
     let provider = cfg.provider.trim().to_lowercase();
     let prefer_pull = cfg.prefer_pull;

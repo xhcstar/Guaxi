@@ -86,7 +86,21 @@
 
         <n-divider />
 
-        <div>
+        <SyncEngineSettings />
+
+        <n-divider />
+
+        <div class="section-header legacy-sync-head">
+          <h3>P2P / 旧版同步</h3>
+          <n-button text size="tiny" @click="showLegacySync = !showLegacySync">
+            {{ showLegacySync ? '收起' : '展开' }}
+          </n-button>
+        </div>
+        <p class="description">
+          P2P 设备同步与 Syncthing 仍在这里配置；WebDAV、S3、SFTP 请使用上方的「同步目标」。
+        </p>
+
+        <div v-if="showLegacySync">
           <div class="section-header">
             <h3>资源同步</h3>
           </div>
@@ -515,6 +529,7 @@
 
 <script setup>
 import { createLogger } from '../../utils/logger'
+import SyncEngineSettings from './SyncEngineSettings.vue'
 import { computed, ref, onMounted, onUnmounted, watch } from 'vue';
 import {
   NCard,
@@ -572,6 +587,7 @@ const templateRepoPath = ref('');
 const slidevRepoRoot = ref('');
 
 // 资源库同步配置
+const showLegacySync = ref(false);
 const syncProvider = ref('none');
 const preferPull = ref(false);
 

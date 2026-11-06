@@ -10,7 +10,7 @@ use hex;
 use iroh::{
     endpoint::{
         presets, Connection, ConnectOptions, IdleTimeout, QuicTransportConfig, RecvStream,
-        SendStream,
+        SendStream, VarInt,
     },
     Endpoint, EndpointAddr, RelayMode, RelayUrl, SecretKey,
 };
@@ -35,8 +35,9 @@ const P2P_STATE_FILE: &str = "state.json";
 const P2P_MANIFEST_FILE: &str = "manifest.json";
 const P2P_TMP_DIR: &str = "tmp";
 const P2P_BLOCK_SIZE: usize = 64 * 1024;
-const P2P_ALPN: &[u8] = b"guaxi/p2p-sync/2";
-const P2P_ONLINE_TIMEOUT_SECS: u64 = 12;
+// 3: PushFile 增加接收偏移握手（断点续传），与旧版协议不兼容。
+const P2P_ALPN: &[u8] = b"guaxi/p2p-sync/3";
+const P2P_ONLINE_TIMEOUT_SECS: u64 = 30;
 const P2P_FRAME_LIMIT: usize = 1024 * 1024;
 /// 数据库记录 bundle 可能远大于普通控制帧，用更大的读取上限（64MB）。
 const P2P_BUNDLE_FRAME_LIMIT: usize = 64 * 1024 * 1024;
@@ -45,9 +46,9 @@ const P2P_MANIFEST_FRAME_LIMIT: usize = 256 * 1024 * 1024;
 /// 块级 signature/delta 帧上限，单文件签名/差异不应超过此值。
 const P2P_DELTA_FRAME_LIMIT: usize = 256 * 1024 * 1024;
 /// 文件体按固定块流式收发，避免把整文件读进内存。
-const P2P_CHUNK_SIZE: usize = 256 * 1024;
+const P2P_CHUNK_SIZE: usize = 2 * 1024 * 1024;
 /// 单个文件传输失败后的最大重试次数（含重连）。
-const P2P_TRANSFER_MAX_RETRIES: u32 = 3;
+const P2P_TRANSFER_MAX_RETRIES: u32 = 8;
 /// 低于此大小的文件不做块级 delta，直接整文件续传（delta 开销不划算）。
 const P2P_DELTA_MIN_SIZE: u64 = 256 * 1024;
 const RESOURCE_REPO_SYNC_PROGRESS_EVENT: &str = "resource_repo_sync_progress";
@@ -375,6 +376,9 @@ struct P2PFileHeader {
     size: u64,
     blake3: String,
     mtime_ms: i64,
+    /// 服务端已接收的字节数；推送方据此断点续传。
+    #[serde(default)]
+    received: u64,
 }
 
 /// 块级增量响应头：携带目标文件的完整大小/哈希与序列化后的 delta。
@@ -682,17 +686,19 @@ fn warn_p2p_relay(url: &str, err: &str) {
 /// 构造统一的 QUIC 传输参数：拉长 idle 超时、保持 5s 心跳、在 Windows 上关闭
 /// UDP GSO 分段（规避 `sendmsg 10040` WSAEMSGSIZE）。连接两端需使用一致配置。
 fn build_transport_config() -> QuicTransportConfig {
-    let idle = StdDuration::from_secs(p2p_idle_timeout_secs());
+    // 大文件同步至少给 60 秒空闲窗口：10GB 传输期间即使短暂卡顿也不至于整条连接被回收。
+    let idle = StdDuration::from_secs(p2p_idle_timeout_secs().max(60));
     let mut builder = QuicTransportConfig::builder();
     if let Ok(idle_timeout) = IdleTimeout::try_from(idle) {
         builder = builder.max_idle_timeout(Some(idle_timeout));
         builder = builder.default_path_max_idle_timeout(idle);
     }
-    builder = builder.keep_alive_interval(StdDuration::from_secs(5));
-    #[cfg(windows)]
-    {
-        builder = builder.enable_segmentation_offload(false);
-    }
+    builder = builder
+        .keep_alive_interval(StdDuration::from_secs(3))
+        // 多文件并行 + 单文件分片都需要足够的双向流与接收窗口。
+        .max_concurrent_bidi_streams(VarInt::from_u32(512))
+        .stream_receive_window(VarInt::from_u32(16 * 1024 * 1024))
+        .receive_window(VarInt::from_u32(64 * 1024 * 1024));
     builder.build()
 }
 
@@ -1029,6 +1035,7 @@ async fn handle_incoming_stream(
                     size,
                     blake3,
                     mtime_ms,
+                    received: 0,
                 };
                 write_control(&mut send, &header, "P2P 文件头").await?;
                 send_file_body(&mut send, &path, size, start).await?;
@@ -1040,6 +1047,7 @@ async fn handle_incoming_stream(
                     size: 0,
                     blake3: String::new(),
                     mtime_ms: 0,
+                    received: 0,
                 };
                 write_control(&mut send, &header, "P2P 文件头").await?;
             }
@@ -1059,7 +1067,11 @@ async fn handle_incoming_stream(
             blake3,
             mtime_ms,
         } => {
-            let ack = match accept_push(&target, &rel, &mut recv, size, &blake3, mtime_ms).await {
+            let ack = match accept_push(
+                &target, &rel, &mut send, &mut recv, size, &blake3, mtime_ms,
+            )
+            .await
+            {
                 Ok(message) => P2PAck { ok: true, message },
                 Err(e) => P2PAck {
                     ok: false,
@@ -1643,6 +1655,15 @@ fn resolve_target_label_root(key: &str) -> Result<(String, String), String> {
             ),
             "template" => ("模板库".to_string(), get_template_repo_path()),
             "slidev" => ("Slidev".to_string(), get_slidev_repo_root()),
+            // 临时文件直传：与 HTTP 接收目录分开，避免 P2P 元数据混进普通收件箱。
+            "transfers" => (
+                "临时传输".to_string(),
+                PathBuf::from(get_libraries_root())
+                    .join("incoming_transfers")
+                    .join("p2p")
+                    .to_string_lossy()
+                    .to_string(),
+            ),
             other => return Err(format!("未知的同步目标: {other}")),
         }
     };
@@ -1782,6 +1803,7 @@ fn scan_manifest_with_progress(
         );
     }
 
+    let previous = read_manifest(target).ok().flatten();
     let mut files = BTreeMap::new();
     let mut scanned_files = 0_u64;
     let mut scanned_bytes = 0_u64;
@@ -1797,14 +1819,24 @@ fn scan_manifest_with_progress(
         }
         let meta =
             fs::metadata(path).map_err(|e| format!("读取文件元数据失败 {}: {e}", path.display()))?;
-        let hash = hash_file(path)?;
+        let mtime = file_mtime_ms(path)?;
+        // 大小 + 修改时间没变就复用上次清单里的哈希：10GB 级目录重复同步时不用再读一遍全盘。
+        let hash = match previous
+            .as_ref()
+            .and_then(|manifest| manifest.files.get(&rel))
+        {
+            Some(entry) if entry.size == meta.len() && entry.modified_unix_ms == mtime => {
+                entry.blake3.clone()
+            }
+            _ => hash_file(path)?,
+        };
         scanned_files += 1;
         scanned_bytes = scanned_bytes.saturating_add(meta.len());
         files.insert(
             rel.clone(),
             P2PFileEntry {
                 size: meta.len(),
-                modified_unix_ms: file_mtime_ms(path)?,
+                modified_unix_ms: mtime,
                 blake3: hash,
             },
         );
@@ -1907,17 +1939,20 @@ fn finalize_incoming_file(
     tmp: &Path,
     expected_hash: &str,
 ) -> Result<(), String> {
-    let actual = hash_file(tmp)?;
-    if actual != expected_hash {
-        let _ = fs::remove_file(tmp);
-        return Err(format!(
-            "P2P 文件校验失败：{} 期望 {} 实际 {}",
-            rel, expected_hash, actual
-        ));
+    // 临时传输不预先算哈希（大文件算一遍太慢），空哈希表示“只做大小/落盘校验”。
+    if !expected_hash.is_empty() {
+        let actual = hash_file(tmp)?;
+        if actual != expected_hash {
+            let _ = fs::remove_file(tmp);
+            return Err(format!(
+                "P2P 文件校验失败：{} 期望 {} 实际 {}",
+                rel, expected_hash, actual
+            ));
+        }
     }
 
     let dest = safe_join(&target.root, rel)?;
-    if dest.exists() {
+    if !expected_hash.is_empty() && dest.exists() {
         if let Ok(cur) = hash_file(&dest) {
             if cur != expected_hash {
                 let backup = conflict_path(&dest, &p2p_device_name());
@@ -2046,38 +2081,114 @@ async fn serve_pull_delta(target_key: &str, rel: &str, signature: &Signature) ->
 }
 
 /// 服务端：把对端推送的文件体收进临时文件并原子落盘。
+fn unique_transfer_rel(root: &Path, rel: &str) -> Result<String, String> {
+    let base = safe_join(root, rel)?;
+    if !base.exists() {
+        return Ok(rel.to_string());
+    }
+    let path = Path::new(rel);
+    let parent = path
+        .parent()
+        .map(|value| value.to_string_lossy().replace('\\', "/"))
+        .unwrap_or_default();
+    let stem = path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("file");
+    let ext = path.extension().and_then(|value| value.to_str()).unwrap_or("");
+    for index in 1..10_000 {
+        let name = if ext.is_empty() {
+            format!("{} ({})", stem, index)
+        } else {
+            format!("{} ({}).{}", stem, index, ext)
+        };
+        let candidate = if parent.is_empty() {
+            name
+        } else {
+            format!("{}/{}", parent, name)
+        };
+        if !root.join(&candidate).exists() {
+            return Ok(candidate);
+        }
+    }
+    Err(format!("无法为 {rel} 生成不冲突的文件名"))
+}
+
 async fn accept_push(
     target_key: &str,
     rel: &str,
+    send: &mut SendStream,
     recv: &mut RecvStream,
     size: u64,
     expected_hash: &str,
-    _mtime_ms: i64,
+    mtime_ms: i64,
 ) -> Result<String, String> {
+    use tokio::io::{AsyncSeekExt, AsyncWriteExt};
     let target = target_from_key(target_key)?;
     if should_skip(&target, rel) {
         return Err(format!("该文件不在同步范围内: {rel}"));
     }
+    let rel = if target.key == "transfers" {
+        unique_transfer_rel(&target.root, rel)?
+    } else {
+        rel.to_string()
+    };
     // 提前校验路径合法性。
-    let _ = safe_join(&target.root, rel)?;
+    let _ = safe_join(&target.root, &rel)?;
 
     let tmp_dir = target.root.join(P2P_META_DIR).join(P2P_TMP_DIR);
     fs::create_dir_all(&tmp_dir).map_err(|e| format!("创建 P2P 临时目录失败: {e}"))?;
-    let tmp = tmp_dir.join(format!("{}.tmp", Uuid::new_v4()));
+
+    // 同步目标使用稳定 part 文件，断线重连后从已接收字节继续；
+    // 临时传输不续传，避免同名文件在重试时被误当成同一个目标。
+    let (tmp, resume) = if target.key == "transfers" {
+        (tmp_dir.join(format!("{}.tmp", Uuid::new_v4())), 0u64)
+    } else {
+        let part = push_part_path(&target, &rel);
+        let mut resume = fs::metadata(&part).map(|meta| meta.len()).unwrap_or(0);
+        if resume > size {
+            let _ = fs::remove_file(&part);
+            resume = 0;
+        }
+        (part, resume)
+    };
+
+    // 先告诉发送端从哪个偏移继续，再接收剩余字节。
+    let header = P2PFileHeader {
+        ok: true,
+        message: "ok".to_string(),
+        size,
+        blake3: expected_hash.to_string(),
+        mtime_ms,
+        received: resume,
+    };
+    write_control(send, &header, "P2P 推送文件头").await?;
 
     {
-        let mut out = tokio::fs::File::create(&tmp)
+        let mut out = tokio::fs::OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .open(&tmp)
             .await
             .map_err(|e| format!("创建 P2P 临时文件失败 {}: {e}", tmp.display()))?;
-        recv_file_body(recv, &mut out, size).await?;
-        use tokio::io::AsyncWriteExt;
+        if resume == 0 {
+            out.set_len(0)
+                .await
+                .map_err(|e| format!("重置 P2P 临时文件失败: {e}"))?;
+        } else {
+            out.seek(SeekFrom::Start(resume))
+                .await
+                .map_err(|e| format!("定位 P2P 临时文件失败: {e}"))?;
+        }
+        recv_file_body(recv, &mut out, size.saturating_sub(resume)).await?;
         out.flush()
             .await
             .map_err(|e| format!("刷新 P2P 临时文件失败 {}: {e}", tmp.display()))?;
     }
 
-    finalize_incoming_file_async(&target, rel, &tmp, expected_hash).await?;
-    info!(target = %target.key, rel, size, "[P2PSync] accepted pushed file");
+    finalize_incoming_file_async(&target, &rel, &tmp, expected_hash).await?;
+    info!(target = %target.key, rel, size, resumed = resume, "[P2PSync] accepted pushed file");
     Ok(format!("已接收 {rel}"))
 }
 
@@ -2102,6 +2213,15 @@ async fn fetch_remote_manifest(
 
 /// 断点续传用的稳定临时文件路径：按 rel 的 blake3 命名，跨多次同步保持一致，
 /// 中断后重连能从已写字节继续。
+fn push_part_path(target: &P2PSyncTarget, rel: &str) -> PathBuf {
+    let key = blake3::hash(format!("push:{rel}").as_bytes()).to_hex().to_string();
+    target
+        .root
+        .join(P2P_META_DIR)
+        .join(P2P_TMP_DIR)
+        .join(format!("{key}.part"))
+}
+
 fn part_path(target: &P2PSyncTarget, rel: &str) -> PathBuf {
     let key = blake3::hash(rel.as_bytes()).to_hex().to_string();
     target
@@ -2312,7 +2432,12 @@ async fn push_file(
         "P2P 推送请求",
     )
     .await?;
-    send_file_body(&mut send, &path, size, 0).await?;
+    let header: P2PFileHeader = read_control(&mut recv, P2P_FRAME_LIMIT, "P2P 推送文件头").await?;
+    if !header.ok {
+        return Err(header.message);
+    }
+    let start = header.received.min(size);
+    send_file_body(&mut send, &path, size, start).await?;
     send.finish()
         .map_err(|e| format!("推送完成发送失败: {e}"))?;
 
@@ -2478,7 +2603,10 @@ where
             Ok(c) => c,
             Err(e) => {
                 last_err = e;
-                tokio::time::sleep(StdDuration::from_millis(300 * (attempt as u64 + 1))).await;
+                let backoff = 300u64
+                    .saturating_mul(1u64 << attempt.min(4))
+                    .min(5_000);
+                tokio::time::sleep(StdDuration::from_millis(backoff)).await;
                 continue;
             }
         };
@@ -2488,7 +2616,10 @@ where
                 last_err = e.clone();
                 if is_connection_error(&e) {
                     link.invalidate(&connection).await;
-                    tokio::time::sleep(StdDuration::from_millis(300 * (attempt as u64 + 1))).await;
+                    let backoff = 300u64
+                        .saturating_mul(1u64 << attempt.min(4))
+                        .min(5_000);
+                    tokio::time::sleep(StdDuration::from_millis(backoff)).await;
                 } else {
                     // 业务级错误重试也无益，直接返回。
                     return Err(e);
@@ -3233,6 +3364,192 @@ pub async fn p2p_sync_probe_peers() -> Result<Vec<P2PTrustedPeer>, String> {
     Ok(state.trusted_peers)
 }
 
+#[derive(Clone, Serialize)]
+pub struct P2PFileProgress {
+    pub peer_id: String,
+    pub device_name: String,
+    pub file: String,
+    pub index: u64,
+    pub total_files: u64,
+    pub bytes_current: u64,
+    pub bytes_total: u64,
+    pub status: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct P2PSendFile {
+    pub path: String,
+    #[serde(default)]
+    pub relative_path: String,
+}
+
+/// 通过已配对的 P2P 设备直传临时文件，落盘到对端的 incoming_transfers/p2p。
+/// 不计算整文件哈希：临时传输优先速度，服务端只校验大小与落盘。
+#[tauri::command]
+pub async fn p2p_send_files(
+    app: AppHandle,
+    peer_id: String,
+    files: Vec<P2PSendFile>,
+) -> Result<String, String> {
+    if files.is_empty() {
+        return Err("没有要发送的文件".to_string());
+    }
+    let endpoint = ensure_p2p_endpoint().await?;
+    let state = read_state_file()?;
+    let peer = state
+        .trusted_peers
+        .iter()
+        .find(|item| item.peer_id == peer_id)
+        .cloned()
+        .ok_or_else(|| "该设备还没有配对".to_string())?;
+    let connection = connect_peer(&endpoint, &peer).await?;
+    let total_files = files.len() as u64;
+    let mut sent = 0u64;
+
+    for (index, file) in files.iter().enumerate() {
+        let path = PathBuf::from(file.path.trim());
+        let meta = match tokio::fs::metadata(&path).await {
+            Ok(value) if value.is_file() => value,
+            _ => continue,
+        };
+        let relative = if file.relative_path.trim().is_empty() {
+            path.file_name()
+                .and_then(|value| value.to_str())
+                .unwrap_or("file")
+                .to_string()
+        } else {
+            file.relative_path.trim().replace('\\', "/")
+        };
+        push_transfer_file(
+            &app,
+            &connection,
+            &peer,
+            &path,
+            &relative,
+            meta.len(),
+            index as u64,
+            total_files,
+        )
+        .await?;
+        sent += 1;
+    }
+
+    let message = format!("已向 {} 发送 {} 个文件", peer.device_name, sent);
+    let _ = app.emit(
+        "p2p-file-progress",
+        P2PFileProgress {
+            peer_id: peer.peer_id.clone(),
+            device_name: peer.device_name.clone(),
+            file: String::new(),
+            index: total_files,
+            total_files,
+            bytes_current: 0,
+            bytes_total: 0,
+            status: "done".to_string(),
+            message: message.clone(),
+        },
+    );
+    Ok(message)
+}
+
+async fn push_transfer_file(
+    app: &AppHandle,
+    connection: &Connection,
+    peer: &P2PTrustedPeer,
+    source: &Path,
+    relative: &str,
+    size: u64,
+    index: u64,
+    total_files: u64,
+) -> Result<(), String> {
+    use tokio::io::AsyncReadExt;
+    let (mut send, mut recv) = timeout(
+        StdDuration::from_secs(P2P_ONLINE_TIMEOUT_SECS),
+        connection.open_bi(),
+    )
+    .await
+    .map_err(|_| "打开 P2P 传输通道超时".to_string())?
+    .map_err(|e| format!("打开 P2P 传输通道失败: {e}"))?;
+
+    let mtime_ms = std::fs::metadata(source)
+        .ok()
+        .and_then(|meta| meta.modified().ok())
+        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|value| value.as_millis() as i64)
+        .unwrap_or(0);
+
+    let request = P2PWireRequest::PushFile {
+        target: "transfers".to_string(),
+        rel: relative.to_string(),
+        size,
+        blake3: String::new(),
+        mtime_ms,
+    };
+    write_control(&mut send, &request, "P2P 文件推送请求").await?;
+    let header: P2PFileHeader = read_control(&mut recv, P2P_FRAME_LIMIT, "P2P 推送文件头").await?;
+    if !header.ok {
+        return Err(header.message);
+    }
+
+    let mut file = tokio::fs::File::open(source)
+        .await
+        .map_err(|e| format!("打开待发送文件失败: {e}"))?;
+    let start = header.received.min(size);
+    let mut sent = start;
+    if start > 0 {
+        use tokio::io::AsyncSeekExt;
+        file.seek(SeekFrom::Start(start))
+            .await
+            .map_err(|e| format!("定位待发送文件失败: {e}"))?;
+    }
+    let mut buffer = vec![0u8; P2P_CHUNK_SIZE];
+    let mut last_emit = start;
+    loop {
+        let read = file
+            .read(&mut buffer)
+            .await
+            .map_err(|e| format!("读取待发送文件失败: {e}"))?;
+        if read == 0 {
+            break;
+        }
+        send.write_all(&buffer[..read])
+            .await
+            .map_err(|e| format!("发送文件体失败: {e}"))?;
+        sent += read as u64;
+        if sent - last_emit >= 4 * 1024 * 1024 || sent == size {
+            last_emit = sent;
+            let _ = app.emit(
+                "p2p-file-progress",
+                P2PFileProgress {
+                    peer_id: peer.peer_id.clone(),
+                    device_name: peer.device_name.clone(),
+                    file: relative.to_string(),
+                    index,
+                    total_files,
+                    bytes_current: sent,
+                    bytes_total: size,
+                    status: "running".to_string(),
+                    message: String::new(),
+                },
+            );
+        }
+    }
+    send.finish()
+        .map_err(|e| format!("P2P 推送完成发送失败: {e}"))?;
+    let ack: P2PAck = read_control(&mut recv, P2P_FRAME_LIMIT, "P2P 推送响应").await?;
+    if !ack.ok {
+        return Err(ack.message);
+    }
+    info!(
+        peer = %peer.device_name,
+        relative,
+        size,
+        "[P2PSync] transfer file pushed"
+    );
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn p2p_sync_remove_peer(peer_id: String) -> Result<String, String> {
     let mut state = read_state_file()?;
@@ -3527,5 +3844,52 @@ mod tests {
         sync.patch(Cursor::new(basis.as_slice()), &delta, &mut patched)
             .expect("patch");
         assert_eq!(patched, source, "delta patch must reconstruct source");
+    }
+
+    #[test]
+    fn unique_transfer_rel_keeps_directory_and_avoids_overwrite() {
+        let root = env::temp_dir().join(format!("guaxi-transfer-test-{}", Uuid::new_v4()));
+        fs::create_dir_all(root.join("docs")).expect("create docs");
+        fs::write(root.join("docs/report.pdf"), b"old").expect("write old");
+
+        assert_eq!(
+            unique_transfer_rel(&root, "docs/new.pdf").expect("new rel"),
+            "docs/new.pdf"
+        );
+        assert_eq!(
+            unique_transfer_rel(&root, "docs/report.pdf").expect("unique rel"),
+            "docs/report (1).pdf"
+        );
+        assert!(unique_transfer_rel(&root, "../escape.pdf").is_err());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn push_and_pull_part_files_do_not_collide() {
+        let target = P2PSyncTarget {
+            key: "resource_repo".to_string(),
+            label: "资源库".to_string(),
+            root: PathBuf::from("root"),
+        };
+        let push = push_part_path(&target, "big.bin");
+        let pull = part_path(&target, "big.bin");
+        assert_ne!(push, pull, "push and pull temp files must be separate");
+        assert_eq!(push, push_part_path(&target, "big.bin"));
+    }
+
+    #[test]
+    fn transfer_chunk_is_large_enough_for_throughput() {
+        assert!(
+            P2P_CHUNK_SIZE >= 1024 * 1024,
+            "10GB 级传输需要至少 1MB 的块，当前 {}",
+            P2P_CHUNK_SIZE
+        );
+    }
+
+    #[test]
+    fn push_header_defaults_received_to_zero_for_old_peers() {
+        let raw = r#"{"ok":true,"message":"ok","size":10,"blake3":"","mtime_ms":0}"#;
+        let header: P2PFileHeader = serde_json::from_str(raw).expect("header");
+        assert_eq!(header.received, 0);
     }
 }

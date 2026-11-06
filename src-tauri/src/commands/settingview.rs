@@ -59,6 +59,9 @@ pub struct AppConfig {
     image_bed_root: String,
     #[serde(default)]
     resource_repo_sync: ResourceRepoSyncConfig,
+    /// 新版同步内核：连接与同步目标分离，资源库只是其中一个目标。
+    #[serde(default)]
+    pub sync_engine: crate::commands::sync::SyncEngineConfig,
     #[serde(default)]
     life_album_album_dir: String,
     // 相册地名反查用的高德 Web 服务 key。留空则回退 Nominatim(OSM)。
@@ -112,6 +115,9 @@ pub struct AppConfig {
     lsp_github_token: String,
     #[serde(default)]
     webrtc_signal_url: String,
+    /// 信令服务的可选配对码；自建信令时可防止陌生人加入房间。
+    #[serde(default)]
+    webrtc_signal_token: String,
     #[serde(default)]
     llm_config: LlmConfig,
     #[serde(default)]
@@ -427,7 +433,7 @@ fn default_p2p_sync_interval_minutes() -> u64 {
 }
 
 fn default_p2p_transfer_concurrency() -> u32 {
-    6
+    8
 }
 
 fn default_p2p_idle_timeout_secs() -> u64 {
@@ -956,6 +962,7 @@ impl Default for AppConfig {
             libraries_root: "".to_string(),
             image_bed_root: default_image_bed_root(),
             resource_repo_sync: ResourceRepoSyncConfig::default(),
+            sync_engine: crate::commands::sync::SyncEngineConfig::default(),
             life_album_album_dir: "".to_string(),
             life_album_amap_key: "".to_string(),
             template_repo_path: "".to_string(),
@@ -976,6 +983,7 @@ impl Default for AppConfig {
             python_codegen_assist_enabled: false,
             lsp_github_token: "".to_string(),
             webrtc_signal_url: "".to_string(),
+            webrtc_signal_token: "".to_string(),
             llm_config: LlmConfig::default(),
             tts_config: TtsConfig::default(),
             asr_config: AsrConfig::default(),
@@ -1777,6 +1785,19 @@ pub fn start_remove_lsp_extension_task(
         return Err("extension_id cannot be empty".to_string());
     }
     lsp_extensions::start_remove_lsp_extension_task(id)
+}
+
+#[tauri::command]
+pub fn get_webrtc_signal_token() -> String {
+    let config = load_config();
+    config.webrtc_signal_token
+}
+
+#[tauri::command]
+pub fn set_webrtc_signal_token(token: String) {
+    let mut config = load_config();
+    config.webrtc_signal_token = token.trim().to_string();
+    save_config(&config);
 }
 
 #[tauri::command]
@@ -3025,6 +3046,12 @@ pub fn set_image_bed_root(path: String) {
 pub fn get_resource_repo_sync_config() -> ResourceRepoSyncConfig {
     let config = load_config();
     config.resource_repo_sync
+}
+
+/// 同步内核迁移旧配置时用：一次性取出旧后端配置与资源库根目录。
+pub(crate) fn get_legacy_sync_snapshot() -> (ResourceRepoSyncConfig, String) {
+    let config = load_config();
+    (config.resource_repo_sync.clone(), config.image_bed_root.clone())
 }
 
 #[tauri::command]

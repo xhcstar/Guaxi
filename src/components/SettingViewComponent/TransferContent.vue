@@ -13,6 +13,13 @@
             :disabled="loading || webrtcSignalSaving"
           />
         </n-form-item>
+        <n-form-item label="信令配对码（可选）">
+          <n-input
+            v-model:value="webrtcSignalToken"
+            placeholder="自建信令时用于阻止陌生人加入房间"
+            :disabled="loading || webrtcSignalSaving"
+          />
+        </n-form-item>
         <n-form-item>
           <n-button
             type="primary"
@@ -39,15 +46,21 @@ const logger = createLogger('TransferContent')
 const loading = ref(false)
 const webrtcSignalSaving = ref(false)
 const webrtcSignalUrl = ref('')
+const webrtcSignalToken = ref('')
 
 onMounted(async () => {
   try {
     loading.value = true
-    const signalUrl = await invoke('get_webrtc_signal_url')
+    const [signalUrl, signalToken] = await Promise.all([
+      invoke('get_webrtc_signal_url'),
+      invoke('get_webrtc_signal_token'),
+    ])
     webrtcSignalUrl.value = typeof signalUrl === 'string' ? signalUrl : ''
+    webrtcSignalToken.value = typeof signalToken === 'string' ? signalToken : ''
   } catch (error) {
     logger.error('加载文件传输设置失败:', error)
     webrtcSignalUrl.value = ''
+    webrtcSignalToken.value = ''
   } finally {
     loading.value = false
   }
@@ -61,6 +74,7 @@ const handleWebrtcSignalUrlSave = async () => {
     logger.info('[Transfer] 保存 WebRTC 信令服务地址:', url)
 
     await invoke('set_webrtc_signal_url', { url })
+    await invoke('set_webrtc_signal_token', { token: String(webrtcSignalToken.value || '').trim() })
 
     try {
       const saved = await invoke('get_webrtc_signal_url')

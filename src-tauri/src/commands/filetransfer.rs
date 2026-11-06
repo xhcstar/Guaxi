@@ -1,4 +1,4 @@
-use crate::commands::settingview::get_libraries_root;
+use crate::commands::settingview::{get_config_path, get_libraries_root, get_webrtc_signal_token};
 use actix_web::{web, App, HttpRequest, HttpResponse, HttpServer, Responder};
 use chrono::Utc;
 use futures_util::Stream;
@@ -37,6 +37,7 @@ pub struct ReceiverStatus {
     pub port: u16,
     pub save_dir: String,
     pub base_url: String,
+    pub requires_token: bool,
 }
 
 #[derive(Clone, Serialize)]
@@ -47,6 +48,8 @@ pub struct HttpShareStatus {
     pub port: u16,
     pub root_dir: String,
     pub base_url: String,
+    pub read_only: bool,
+    pub requires_token: bool,
 }
 
 #[derive(Clone, Serialize)]
@@ -65,9 +68,10 @@ pub struct PeerInfo {
     pub addr: String,
     pub port: u16,
     pub last_seen_ms: i64,
+    pub requires_token: bool,
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TransferTask {
     pub id: String,
@@ -81,6 +85,9 @@ pub struct TransferTask {
     pub created_at_ms: i64,
     pub updated_at_ms: i64,
     pub error: Option<String>,
+    /// 发送时使用的配对码；重试时复用，不要求用户再填一次。
+    #[serde(default)]
+    pub access_token: Option<String>,
 }
 
 struct TaskControl {
@@ -108,6 +115,13 @@ static TASKS: once_cell::sync::Lazy<Mutex<HashMap<String, TransferTask>>> =
 static TASK_CONTROLS: once_cell::sync::Lazy<Mutex<HashMap<String, Arc<Mutex<TaskControl>>>>> =
     once_cell::sync::Lazy::new(|| Mutex::new(HashMap::new()));
 
+static TASKS_LOADED: once_cell::sync::Lazy<std::sync::atomic::AtomicBool> =
+    once_cell::sync::Lazy::new(|| std::sync::atomic::AtomicBool::new(false));
+static TASKS_LOAD_LOCK: once_cell::sync::Lazy<Mutex<()>> =
+    once_cell::sync::Lazy::new(|| Mutex::new(()));
+static LAST_PERSIST_MS: once_cell::sync::Lazy<std::sync::atomic::AtomicI64> =
+    once_cell::sync::Lazy::new(|| std::sync::atomic::AtomicI64::new(0));
+
 static PEERS: once_cell::sync::Lazy<Mutex<HashMap<String, PeerInfo>>> =
     once_cell::sync::Lazy::new(|| Mutex::new(HashMap::new()));
 
@@ -120,6 +134,80 @@ struct ReceiverRuntime {
 
 static RECEIVER: once_cell::sync::Lazy<Mutex<Option<ReceiverRuntime>>> =
     once_cell::sync::Lazy::new(|| Mutex::new(None));
+
+static RECEIVER_TOKEN: once_cell::sync::Lazy<ParkingMutex<String>> =
+    once_cell::sync::Lazy::new(|| ParkingMutex::new(String::new()));
+
+static SHARE_TOKEN: once_cell::sync::Lazy<ParkingMutex<String>> =
+    once_cell::sync::Lazy::new(|| ParkingMutex::new(String::new()));
+static SHARE_READ_ONLY: once_cell::sync::Lazy<std::sync::atomic::AtomicBool> =
+    once_cell::sync::Lazy::new(|| std::sync::atomic::AtomicBool::new(true));
+
+fn share_allowed(req: &HttpRequest) -> bool {
+    let expected = SHARE_TOKEN.lock().clone();
+    if expected.is_empty() {
+        return true;
+    }
+    let header = req
+        .headers()
+        .get("x-guaxi-token")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("");
+    if header == expected {
+        return true;
+    }
+    req.query_string()
+        .split('&')
+        .filter_map(|pair| pair.split_once('='))
+        .find(|(key, _)| *key == "token")
+        .map(|(_, value)| {
+            urlencoding::decode(value)
+                .map(|decoded| decoded == expected)
+                .unwrap_or(false)
+        })
+        .unwrap_or(false)
+}
+
+fn receiver_token() -> String {
+    RECEIVER_TOKEN.lock().clone()
+}
+
+fn token_allowed(req: &HttpRequest) -> bool {
+    let expected = receiver_token();
+    if expected.is_empty() {
+        return true;
+    }
+    req.headers()
+        .get("x-guaxi-token")
+        .and_then(|value| value.to_str().ok())
+        .map(|value| value == expected)
+        .unwrap_or(false)
+}
+
+fn unauthorized() -> HttpResponse {
+    HttpResponse::Unauthorized().json(serde_json::json!({"error":"配对码不正确"}))
+}
+
+fn query_param(req: &HttpRequest, key: &str) -> String {
+    req.query_string()
+        .split('&')
+        .filter_map(|pair| pair.split_once('='))
+        .find(|(name, _)| *name == key)
+        .map(|(_, value)| {
+            urlencoding::decode(value)
+                .map(|decoded| decoded.into_owned())
+                .unwrap_or_else(|_| value.to_string())
+        })
+        .unwrap_or_default()
+}
+
+fn signal_token_allowed(req: &HttpRequest) -> bool {
+    let expected = get_webrtc_signal_token();
+    if expected.trim().is_empty() {
+        return true;
+    }
+    query_param(req, "token") == expected
+}
 
 struct ShareRuntime {
     bind_addr: String,
@@ -213,6 +301,44 @@ fn sha256_short(s: &str) -> String {
     hex::encode(out)
 }
 
+/// 只接受普通路径段，拒绝 `..`、绝对路径和盘符，防止接收端写到保存目录之外。
+fn sanitize_relative_path(raw: &str) -> Result<String, String> {
+    let mut parts = Vec::new();
+    for component in Path::new(raw.trim()).components() {
+        match component {
+            Component::Normal(value) => {
+                let name = value.to_string_lossy().trim().to_string();
+                if !name.is_empty() {
+                    parts.push(name);
+                }
+            }
+            Component::CurDir => {}
+            _ => return Err("文件路径包含非法片段".to_string()),
+        }
+    }
+    if parts.is_empty() {
+        return Err("文件路径不能为空".to_string());
+    }
+    Ok(parts.join("/"))
+}
+
+/// 在目标目录内生成不冲突的相对路径；目录不存在时直接使用原路径。
+fn unique_relative_path(root: &Path, raw: &str) -> Result<String, String> {
+    let rel = sanitize_relative_path(raw)?;
+    if !root.join(&rel).exists() {
+        return Ok(rel);
+    }
+    let path = Path::new(&rel);
+    let parent = path.parent().map(|p| p.to_string_lossy().replace('\\', "/")).unwrap_or_default();
+    let name = path.file_name().and_then(|v| v.to_str()).unwrap_or("file");
+    let unique = unique_name_in_dir(&root.join(&parent), name);
+    if parent.is_empty() {
+        Ok(unique)
+    } else {
+        Ok(format!("{}/{}", parent.trim_matches('/'), unique))
+    }
+}
+
 fn unique_name_in_dir(dir: &Path, name: &str) -> String {
     let base = name.trim();
     if base.is_empty() {
@@ -255,6 +381,9 @@ struct UploadInitReq {
     file_name: String,
     file_size: u64,
     mtime_ms: i64,
+    /// 文件夹发送时携带相对路径（含文件名）；单文件为空。
+    #[serde(default)]
+    relative_path: String,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -293,7 +422,13 @@ struct UploadMeta {
     file_size: u64,
     mtime_ms: i64,
     final_name: String,
+    #[serde(default)]
+    task_id: String,
 }
+
+/// upload_id -> 接收任务 id，用于分片阶段更新进度。
+static UPLOAD_TASK_MAP: once_cell::sync::Lazy<Mutex<HashMap<String, String>>> =
+    once_cell::sync::Lazy::new(|| Mutex::new(HashMap::new()));
 
 async fn get_lock(store: &UploadStore, upload_id: &str) -> Arc<Mutex<()>> {
     let mut locks = store.locks.lock().await;
@@ -506,13 +641,21 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for SignalWsSession {
 }
 
 async fn ft_signal_ws(req: HttpRequest, stream: web::Payload) -> Result<HttpResponse, actix_web::Error> {
+    if !signal_token_allowed(&req) {
+        return Ok(HttpResponse::Unauthorized().body("信令配对码不正确"));
+    }
     ws::start(SignalWsSession::new(SIGNAL_STATE.clone()), &req, stream)
 }
 
 async fn ft_upload_init(
     store: web::Data<UploadStore>,
+    app: web::Data<AppHandle>,
+    http: HttpRequest,
     req: web::Json<UploadInitReq>,
 ) -> impl Responder {
+    if !token_allowed(&http) {
+        return unauthorized();
+    }
     let upload_id = req.upload_id.trim().to_string();
     if upload_id.is_empty() {
         return HttpResponse::BadRequest().json(serde_json::json!({"error":"upload_id 不能为空"}));
@@ -533,14 +676,26 @@ async fn ft_upload_init(
     let meta_path = upload_meta_path(&save_dir, &upload_id);
     let partial_path = upload_partial_path(&save_dir, &upload_id);
 
-    let mut final_name = unique_name_in_dir(&save_dir, &req.file_name);
+    let requested = if req.relative_path.trim().is_empty() {
+        req.file_name.clone()
+    } else {
+        req.relative_path.clone()
+    };
+    let mut final_name = match unique_relative_path(&save_dir, &requested) {
+        Ok(value) => value,
+        Err(error) => {
+            return HttpResponse::BadRequest().json(serde_json::json!({"error": error}));
+        }
+    };
     let mut received_bytes = 0u64;
+    let mut task_id = String::new();
 
     if meta_path.exists() {
         if let Ok(raw) = tokio::fs::read_to_string(&meta_path).await {
             if let Ok(meta) = serde_json::from_str::<UploadMeta>(&raw) {
                 if meta.file_size == req.file_size && meta.mtime_ms == req.mtime_ms {
                     final_name = meta.final_name;
+                    task_id = meta.task_id;
                     if let Ok(m) = tokio::fs::metadata(&partial_path).await {
                         received_bytes = m.len();
                     }
@@ -554,20 +709,54 @@ async fn ft_upload_init(
         }
     }
 
-    if !meta_path.exists() {
-        let meta = UploadMeta {
-            upload_id: upload_id.clone(),
-            file_name: req.file_name.clone(),
-            file_size: req.file_size,
-            mtime_ms: req.mtime_ms,
-            final_name: final_name.clone(),
-        };
-        if let Ok(s) = serde_json::to_string(&meta) {
-            if let Err(e) = tokio::fs::write(&meta_path, s).await {
-                error!("[FileTransfer] write meta failed: {}", e);
-            }
+    if task_id.is_empty() {
+        task_id = Uuid::new_v4().to_string();
+    }
+    let meta = UploadMeta {
+        upload_id: upload_id.clone(),
+        file_name: req.file_name.clone(),
+        file_size: req.file_size,
+        mtime_ms: req.mtime_ms,
+        final_name: final_name.clone(),
+        task_id: task_id.clone(),
+    };
+    if let Ok(s) = serde_json::to_string(&meta) {
+        if let Err(e) = tokio::fs::write(&meta_path, s).await {
+            error!("[FileTransfer] write meta failed: {}", e);
         }
     }
+
+    let peer = http
+        .connection_info()
+        .peer_addr()
+        .unwrap_or("")
+        .to_string();
+    let task = {
+        let tasks = TASKS.lock().await;
+        let mut task = tasks.get(&task_id).cloned().unwrap_or_else(|| TransferTask {
+            id: task_id.clone(),
+            direction: "recv".to_string(),
+            status: "running".to_string(),
+            file_name: final_name.clone(),
+            file_path: save_dir.to_string_lossy().to_string(),
+            peer: peer.clone(),
+            total_bytes: req.file_size,
+            transferred_bytes: 0,
+            created_at_ms: now_ms(),
+            updated_at_ms: now_ms(),
+            error: None,
+            access_token: None,
+        });
+        task.status = "running".to_string();
+        task.transferred_bytes = received_bytes;
+        task.updated_at_ms = now_ms();
+        task
+    };
+    update_task(app.get_ref(), task).await;
+    UPLOAD_TASK_MAP
+        .lock()
+        .await
+        .insert(upload_id.clone(), task_id);
 
     HttpResponse::Ok().json(UploadInitResp {
         upload_id,
@@ -577,9 +766,14 @@ async fn ft_upload_init(
 
 async fn ft_upload_chunk(
     store: web::Data<UploadStore>,
+    app: web::Data<AppHandle>,
     q: web::Query<UploadChunkQuery>,
+    http: HttpRequest,
     body: web::Bytes,
 ) -> impl Responder {
+    if !token_allowed(&http) {
+        return unauthorized();
+    }
     let upload_id = q.upload_id.trim().to_string();
     if upload_id.is_empty() {
         return HttpResponse::BadRequest().json(serde_json::json!({"error":"upload_id 不能为空"}));
@@ -616,13 +810,34 @@ async fn ft_upload_chunk(
         return HttpResponse::InternalServerError().json(serde_json::json!({"error":"写入失败"}));
     }
 
+    let task_id = UPLOAD_TASK_MAP
+        .lock()
+        .await
+        .get(&upload_id)
+        .cloned()
+        .unwrap_or_default();
+    if !task_id.is_empty() {
+        let current = TASKS.lock().await.get(&task_id).cloned();
+        if let Some(mut task) = current {
+            task.transferred_bytes = offset.saturating_add(body.len() as u64);
+            task.status = "running".to_string();
+            task.updated_at_ms = now_ms();
+            update_task(app.get_ref(), task).await;
+        }
+    }
+
     HttpResponse::Ok().json(serde_json::json!({"ok":true, "bytes": body.len()}))
 }
 
 async fn ft_upload_complete(
     store: web::Data<UploadStore>,
+    app: web::Data<AppHandle>,
+    http: HttpRequest,
     req: web::Json<UploadCompleteReq>,
 ) -> impl Responder {
+    if !token_allowed(&http) {
+        return unauthorized();
+    }
     let upload_id = req.upload_id.trim().to_string();
     if upload_id.is_empty() {
         return HttpResponse::BadRequest().json(serde_json::json!({"error":"upload_id 不能为空"}));
@@ -644,7 +859,19 @@ async fn ft_upload_complete(
         }
     };
 
-    let final_path = store.save_dir.join(&meta.final_name);
+    let final_path = match safe_join(&store.save_dir, &meta.final_name) {
+        Ok(value) => value,
+        Err(error) => {
+            return HttpResponse::BadRequest().json(serde_json::json!({"error": error}));
+        }
+    };
+    if let Some(parent) = final_path.parent() {
+        if let Err(e) = tokio::fs::create_dir_all(parent).await {
+            error!("[FileTransfer] create final dir failed: {}", e);
+            return HttpResponse::InternalServerError()
+                .json(serde_json::json!({"error":"创建目标目录失败"}));
+        }
+    }
     if let Err(e) = tokio::fs::rename(&partial_path, &final_path).await {
         error!("[FileTransfer] finalize rename failed: {}", e);
         return HttpResponse::InternalServerError()
@@ -652,6 +879,37 @@ async fn ft_upload_complete(
     }
 
     let _ = tokio::fs::remove_file(&meta_path).await;
+    let task_id = {
+        let mapped = UPLOAD_TASK_MAP.lock().await.remove(&upload_id);
+        mapped.filter(|value| !value.is_empty()).unwrap_or_else(|| meta.task_id.clone())
+    };
+    if !task_id.is_empty() {
+        let task = {
+            let tasks = TASKS.lock().await;
+            let mut task = tasks.get(&task_id).cloned().unwrap_or_else(|| TransferTask {
+                id: task_id.clone(),
+                direction: "recv".to_string(),
+                status: "done".to_string(),
+                file_name: meta.final_name.clone(),
+                file_path: final_path.to_string_lossy().to_string(),
+                peer: String::new(),
+                total_bytes: meta.file_size,
+                transferred_bytes: meta.file_size,
+                created_at_ms: now_ms(),
+                updated_at_ms: now_ms(),
+                error: None,
+                access_token: None,
+            });
+            task.status = "done".to_string();
+            task.transferred_bytes = meta.file_size;
+            task.file_name = meta.final_name.clone();
+            task.file_path = final_path.to_string_lossy().to_string();
+            task.error = None;
+            task.updated_at_ms = now_ms();
+            task
+        };
+        update_task(app.get_ref(), task).await;
+    }
     HttpResponse::Ok().json(serde_json::json!({"ok":true, "saved": final_path.to_string_lossy()}))
 }
 
@@ -663,6 +921,8 @@ fn guess_mime(path: &Path) -> String {
 }
 
 async fn share_get(req: HttpRequest, root: web::Data<PathBuf>) -> HttpResponse {
+    // 下载保持公开：分享本质是“只读目录”。配对码只保护上传，避免把浏览器里的
+    // 目录链接全部变成需要手动补 token 的地址。
     let tail = req.match_info().query("tail");
     let decoded = match urlencoding::decode(tail) {
         Ok(v) => v.to_string(),
@@ -1170,6 +1430,13 @@ fn file_stream(
 }
 
 async fn share_put(req: HttpRequest, root: web::Data<PathBuf>, body: web::Bytes) -> HttpResponse {
+    use std::sync::atomic::Ordering;
+    if !share_allowed(&req) {
+        return HttpResponse::Unauthorized().body("需要配对码：在地址后追加 ?token=...");
+    }
+    if SHARE_READ_ONLY.load(Ordering::Relaxed) {
+        return HttpResponse::Forbidden().body("当前分享为只读，请先允许上传");
+    }
     let tail = req.match_info().query("tail");
     let decoded = match urlencoding::decode(tail) {
         Ok(v) => v.to_string(),
@@ -1207,6 +1474,7 @@ pub async fn filetransfer_start_receiver(
     bind_addr: Option<String>,
     port: Option<u16>,
     save_dir: Option<String>,
+    access_token: Option<String>,
 ) -> Result<ReceiverStatus, String> {
     let mut guard = RECEIVER.lock().await;
     if guard.is_some() {
@@ -1227,14 +1495,18 @@ pub async fn filetransfer_start_receiver(
         dir.to_string_lossy()
     );
 
+    *RECEIVER_TOKEN.lock() = access_token.unwrap_or_default().trim().to_string();
+
     let store = UploadStore {
         save_dir: dir.clone(),
         locks: Arc::new(Mutex::new(HashMap::new())),
     };
+    let server_app = app.clone();
 
     let server = HttpServer::new(move || {
         App::new()
             .app_data(web::Data::new(store.clone()))
+            .app_data(web::Data::new(server_app.clone()))
             .route("/ft/ping", web::get().to(ft_ping))
             .route("/ft/signal", web::get().to(ft_signal_ws))
             .route("/ft/upload/init", web::post().to(ft_upload_init))
@@ -1266,6 +1538,7 @@ pub async fn filetransfer_start_receiver(
         port: p,
         save_dir: dir.to_string_lossy().to_string(),
         base_url,
+        requires_token: !receiver_token().is_empty(),
     };
 
     app.emit(
@@ -1283,6 +1556,7 @@ pub async fn filetransfer_stop_receiver() -> Result<(), String> {
         info!("[FileTransfer] stop receiver");
         rt.handle.stop(true).await;
     }
+    *RECEIVER_TOKEN.lock() = String::new();
     Ok(())
 }
 
@@ -1291,6 +1565,8 @@ pub async fn filetransfer_start_http_share(
     bind_addr: Option<String>,
     port: Option<u16>,
     root_dir: String,
+    access_token: Option<String>,
+    read_only: Option<bool>,
 ) -> Result<HttpShareStatus, String> {
     let mut guard = SHARE.lock().await;
     if guard.is_some() {
@@ -1313,6 +1589,10 @@ pub async fn filetransfer_start_http_share(
         p,
         root.to_string_lossy()
     );
+
+    *SHARE_TOKEN.lock() = access_token.unwrap_or_default().trim().to_string();
+    let share_read_only = read_only.unwrap_or(true);
+    SHARE_READ_ONLY.store(share_read_only, std::sync::atomic::Ordering::Relaxed);
 
     let root_data = web::Data::new(root.clone());
     let server = HttpServer::new(move || {
@@ -1346,6 +1626,8 @@ pub async fn filetransfer_start_http_share(
         port: p,
         root_dir: root.to_string_lossy().to_string(),
         base_url,
+        read_only: share_read_only,
+        requires_token: !SHARE_TOKEN.lock().is_empty(),
     })
 }
 
@@ -1356,6 +1638,8 @@ pub async fn filetransfer_stop_http_share() -> Result<(), String> {
         info!("[HttpShare] stop");
         rt.handle.stop(true).await;
     }
+    *SHARE_TOKEN.lock() = String::new();
+    SHARE_READ_ONLY.store(true, std::sync::atomic::Ordering::Relaxed);
     Ok(())
 }
 
@@ -1369,6 +1653,7 @@ pub async fn filetransfer_get_status() -> Result<FileTransferStatus, String> {
             port: rt.port,
             save_dir: rt.save_dir.to_string_lossy().to_string(),
             base_url: format!("http://{}:{}", rt.bind_addr, rt.port),
+            requires_token: !receiver_token().is_empty(),
         })
     };
 
@@ -1380,6 +1665,8 @@ pub async fn filetransfer_get_status() -> Result<FileTransferStatus, String> {
             port: rt.port,
             root_dir: rt.root_dir.to_string_lossy().to_string(),
             base_url: format!("http://{}:{}", rt.bind_addr, rt.port),
+            read_only: SHARE_READ_ONLY.load(std::sync::atomic::Ordering::Relaxed),
+            requires_token: !SHARE_TOKEN.lock().is_empty(),
         })
     };
 
@@ -1398,6 +1685,8 @@ struct DiscoveryAnnounce {
     name: String,
     port: u16,
     ts: i64,
+    #[serde(default)]
+    requires_token: bool,
 }
 
 fn machine_name_guess() -> String {
@@ -1444,7 +1733,13 @@ pub async fn filetransfer_start_lan_discovery(
             tokio::select! {
                 _ = interval.tick() => {
                     let port2 = RECEIVER.lock().await.as_ref().map(|x| x.port).unwrap_or(DEFAULT_RECEIVER_PORT);
-                    let msg = DiscoveryAnnounce { peer_id: PEER_ID.clone(), name: name.clone(), port: port2, ts: now_ms() };
+                    let msg = DiscoveryAnnounce {
+                        peer_id: PEER_ID.clone(),
+                        name: name.clone(),
+                        port: port2,
+                        ts: now_ms(),
+                        requires_token: !receiver_token().is_empty(),
+                    };
                     if let Ok(bytes) = serde_json::to_vec(&msg) {
                         let _ = sock.send_to(&bytes, ("255.255.255.255", port)).await;
                     }
@@ -1460,6 +1755,7 @@ pub async fn filetransfer_start_lan_discovery(
                                 addr: addr.ip().to_string(),
                                 port: msg.port,
                                 last_seen_ms: now_ms(),
+                                requires_token: msg.requires_token,
                             };
                             {
                                 let mut m = PEERS.lock().await;
@@ -1498,6 +1794,7 @@ pub async fn filetransfer_get_peers() -> Result<Vec<PeerInfo>, String> {
 
 #[tauri::command]
 pub async fn filetransfer_list_tasks() -> Result<Vec<TransferTask>, String> {
+    ensure_tasks_loaded().await;
     let m = TASKS.lock().await;
     let mut v: Vec<TransferTask> = m.values().cloned().collect();
     v.sort_by_key(|x| -(x.updated_at_ms));
@@ -1505,50 +1802,300 @@ pub async fn filetransfer_list_tasks() -> Result<Vec<TransferTask>, String> {
 }
 
 #[tauri::command]
-pub async fn filetransfer_pause_task(task_id: String) -> Result<(), String> {
+pub async fn filetransfer_clear_finished() -> Result<(), String> {
+    ensure_tasks_loaded().await;
+    {
+        let mut map = TASKS.lock().await;
+        map.retain(|_, task| task.status == "running" || task.status == "paused");
+    }
+    persist_tasks(true).await;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn filetransfer_pause_task(app: AppHandle, task_id: String) -> Result<(), String> {
     let id = task_id.trim().to_string();
-    let ctrls = TASK_CONTROLS.lock().await;
-    if let Some(c) = ctrls.get(&id) {
-        let mut g = c.lock().await;
-        g.paused = true;
+    {
+        let ctrls = TASK_CONTROLS.lock().await;
+        if let Some(c) = ctrls.get(&id) {
+            let mut g = c.lock().await;
+            g.paused = true;
+        }
+    }
+    let current = TASKS.lock().await.get(&id).cloned();
+    if let Some(mut task) = current {
+        task.status = "paused".to_string();
+        task.updated_at_ms = now_ms();
+        update_task(&app, task).await;
         info!("[FileTransfer] pause task {}", id);
     }
     Ok(())
 }
 
 #[tauri::command]
-pub async fn filetransfer_resume_task(task_id: String) -> Result<(), String> {
+pub async fn filetransfer_resume_task(app: AppHandle, task_id: String) -> Result<(), String> {
     let id = task_id.trim().to_string();
-    let ctrls = TASK_CONTROLS.lock().await;
-    if let Some(c) = ctrls.get(&id) {
-        let mut g = c.lock().await;
-        g.paused = false;
-        g.notify.notify_waiters();
+    {
+        let ctrls = TASK_CONTROLS.lock().await;
+        if let Some(c) = ctrls.get(&id) {
+            let mut g = c.lock().await;
+            g.paused = false;
+            g.notify.notify_waiters();
+        }
+    }
+    let current = TASKS.lock().await.get(&id).cloned();
+    if let Some(mut task) = current {
+        task.status = "running".to_string();
+        task.updated_at_ms = now_ms();
+        update_task(&app, task).await;
         info!("[FileTransfer] resume task {}", id);
     }
     Ok(())
 }
 
 #[tauri::command]
-pub async fn filetransfer_cancel_task(task_id: String) -> Result<(), String> {
+pub async fn filetransfer_retry_task(
+    app: AppHandle,
+    task_id: String,
+    access_token: Option<String>,
+) -> Result<(), String> {
     let id = task_id.trim().to_string();
-    let ctrls = TASK_CONTROLS.lock().await;
-    if let Some(c) = ctrls.get(&id) {
-        let mut g = c.lock().await;
-        g.canceled = true;
-        g.paused = false;
-        g.notify.notify_waiters();
+    ensure_tasks_loaded().await;
+    let mut task = TASKS
+        .lock()
+        .await
+        .get(&id)
+        .cloned()
+        .ok_or_else(|| "任务不存在".to_string())?;
+    if task.direction != "send" {
+        return Err("只有发送任务可以重试".to_string());
+    }
+    if !matches!(task.status.as_str(), "error" | "interrupted" | "canceled") {
+        return Err("当前任务不需要重试".to_string());
+    }
+    let file_path = task.file_path.clone();
+    let meta = tokio::fs::metadata(&file_path)
+        .await
+        .map_err(|error| format!("源文件不可用：{}", error))?;
+    if !meta.is_file() {
+        return Err("源文件不可用".to_string());
+    }
+    let total = meta.len();
+    let mtime_ms = meta
+        .modified()
+        .ok()
+        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|value| value.as_millis() as i64)
+        .unwrap_or(0);
+    let relative_path = task.file_name.clone();
+    let file_name = Path::new(&file_path)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("file")
+        .to_string();
+    let upload_id = sha256_short(&format!(
+        "{}:{}:{}:{}",
+        file_path, total, mtime_ms, relative_path
+    ));
+    let peer = task.peer.clone();
+    let token = access_token
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    let token = if token.is_empty() {
+        task.access_token.clone().unwrap_or_default()
+    } else {
+        token
+    };
+    if !token.is_empty() {
+        task.access_token = Some(token.clone());
+    }
+
+    let ctrl = Arc::new(Mutex::new(TaskControl::new()));
+    TASK_CONTROLS.lock().await.insert(id.clone(), ctrl.clone());
+
+    task.status = "running".to_string();
+    task.transferred_bytes = 0;
+    task.total_bytes = total;
+    task.error = None;
+    task.updated_at_ms = now_ms();
+    update_task(&app, task).await;
+
+    let app2 = app.clone();
+    let task_id = id.clone();
+    tauri::async_runtime::spawn(async move {
+        if let Err(error) = do_send_file(
+            &app2,
+            &peer,
+            &file_path,
+            &file_name,
+            &relative_path,
+            total,
+            mtime_ms,
+            &upload_id,
+            &task_id,
+            &token,
+            ctrl,
+        )
+        .await
+        {
+            error!("[FileTransfer] retry failed: {}", error);
+            let current = TASKS.lock().await.get(&task_id).cloned();
+        if let Some(mut task) = current {
+                task.status = "error".to_string();
+                task.error = Some(error);
+                task.updated_at_ms = now_ms();
+                update_task(&app2, task).await;
+            }
+        }
+    });
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn filetransfer_cancel_task(app: AppHandle, task_id: String) -> Result<(), String> {
+    let id = task_id.trim().to_string();
+    {
+        let ctrls = TASK_CONTROLS.lock().await;
+        if let Some(c) = ctrls.get(&id) {
+            let mut g = c.lock().await;
+            g.canceled = true;
+            g.paused = false;
+            g.notify.notify_waiters();
+        }
+    }
+    let current = TASKS.lock().await.get(&id).cloned();
+    if let Some(mut task) = current {
+        task.status = "canceled".to_string();
+        task.updated_at_ms = now_ms();
+        update_task(&app, task).await;
         info!("[FileTransfer] cancel task {}", id);
     }
     Ok(())
 }
 
+fn tasks_state_path() -> PathBuf {
+    get_config_path()
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join("filetransfer")
+        .join("tasks.json")
+}
+
+/// 首次访问任务列表时从磁盘恢复；上次没传完的任务标记为中断，保留历史。
+async fn ensure_tasks_loaded() {
+    use std::sync::atomic::Ordering;
+    if TASKS_LOADED.load(Ordering::Acquire) {
+        return;
+    }
+    let _guard = TASKS_LOAD_LOCK.lock().await;
+    if TASKS_LOADED.load(Ordering::Acquire) {
+        return;
+    }
+    if let Ok(raw) = tokio::fs::read_to_string(tasks_state_path()).await {
+        if let Ok(list) = serde_json::from_str::<Vec<TransferTask>>(&raw) {
+            let mut map = TASKS.lock().await;
+            for mut task in list {
+                if task.status == "running" || task.status == "paused" {
+                    task.status = "interrupted".to_string();
+                    task.error = Some("应用重启，传输已中断".to_string());
+                    task.updated_at_ms = now_ms();
+                }
+                map.insert(task.id.clone(), task);
+            }
+        }
+    }
+    TASKS_LOADED.store(true, Ordering::Release);
+}
+
+async fn persist_tasks(force: bool) {
+    use std::sync::atomic::Ordering;
+    if !force && now_ms() - LAST_PERSIST_MS.load(Ordering::Relaxed) < 1200 {
+        return;
+    }
+    LAST_PERSIST_MS.store(now_ms(), Ordering::Relaxed);
+    let mut list: Vec<TransferTask> = TASKS.lock().await.values().cloned().collect();
+    list.sort_by_key(|task| std::cmp::Reverse(task.created_at_ms));
+    list.truncate(300);
+    let path = tasks_state_path();
+    if let Some(parent) = path.parent() {
+        let _ = tokio::fs::create_dir_all(parent).await;
+    }
+    if let Ok(raw) = serde_json::to_vec_pretty(&list) {
+        if let Err(error) = tokio::fs::write(&path, raw).await {
+            warn!("[FileTransfer] persist tasks failed: {}", error);
+        }
+    }
+}
+
 async fn update_task(app: &AppHandle, t: TransferTask) {
+    ensure_tasks_loaded().await;
+    let force = t.status != "running";
     {
         let mut m = TASKS.lock().await;
         m.insert(t.id.clone(), t.clone());
     }
+    persist_tasks(force).await;
     let _ = app.emit(EVENT_TASK_UPDATE, t);
+}
+
+/// 把用户选中的文件/文件夹展开成待发送条目；文件夹保留顶层目录名。
+#[tauri::command]
+pub async fn filetransfer_collect_entries(paths: Vec<String>) -> Result<Vec<SendPathEntry>, String> {
+    let mut out = Vec::new();
+    for raw in paths {
+        let root = PathBuf::from(raw.trim());
+        if root.is_file() {
+            let name = root
+                .file_name()
+                .and_then(|v| v.to_str())
+                .unwrap_or("file")
+                .to_string();
+            out.push(SendPathEntry {
+                path: root.to_string_lossy().to_string(),
+                relative_path: name,
+            });
+            continue;
+        }
+        if !root.is_dir() {
+            continue;
+        }
+        let root_name = root
+            .file_name()
+            .and_then(|v| v.to_str())
+            .unwrap_or("folder")
+            .to_string();
+        for entry in walkdir::WalkDir::new(&root)
+            .follow_links(false)
+            .into_iter()
+            .filter_map(|item| item.ok())
+        {
+            if !entry.file_type().is_file() {
+                continue;
+            }
+            let rel = match entry.path().strip_prefix(&root) {
+                Ok(value) => value.to_string_lossy().replace('\\', "/"),
+                Err(_) => continue,
+            };
+            out.push(SendPathEntry {
+                path: entry.path().to_string_lossy().to_string(),
+                relative_path: format!("{}/{}", root_name, rel),
+            });
+            if out.len() > 50_000 {
+                return Err("一次最多发送 50000 个文件".to_string());
+            }
+        }
+    }
+    out.sort_by(|a, b| a.relative_path.cmp(&b.relative_path));
+    Ok(out)
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct SendPathEntry {
+    pub path: String,
+    /// 文件夹内文件的相对路径（含文件名）；单文件留空。
+    #[serde(default)]
+    pub relative_path: String,
 }
 
 #[tauri::command]
@@ -1557,22 +2104,47 @@ pub async fn filetransfer_send_files(
     peer_url: String,
     file_paths: Vec<String>,
 ) -> Result<(), String> {
+    let entries = file_paths
+        .into_iter()
+        .map(|path| SendPathEntry {
+            path,
+            relative_path: String::new(),
+        })
+        .collect();
+    filetransfer_send_entries(app, peer_url, entries, None).await
+}
+
+fn apply_token(request: reqwest::RequestBuilder, token: &str) -> reqwest::RequestBuilder {
+    if token.is_empty() {
+        request
+    } else {
+        request.header("x-guaxi-token", token)
+    }
+}
+
+#[tauri::command]
+pub async fn filetransfer_send_entries(
+    app: AppHandle,
+    peer_url: String,
+    entries: Vec<SendPathEntry>,
+    access_token: Option<String>,
+) -> Result<(), String> {
     let peer = normalize_base_url(&peer_url);
     if peer.is_empty() {
         return Err("peer_url 不能为空".to_string());
     }
+    let token = access_token.unwrap_or_default().trim().to_string();
 
-    let list: Vec<String> = file_paths
+    let list: Vec<SendPathEntry> = entries
         .into_iter()
-        .map(|x| x.trim().to_string())
-        .filter(|x| !x.is_empty())
+        .filter(|entry| !entry.path.trim().is_empty())
         .collect();
 
     if list.is_empty() {
-        return Err("file_paths 不能为空".to_string());
+        return Err("没有要发送的文件".to_string());
     }
 
-    for p in list {
+    for entry in list {
         let app2 = app.clone();
         let peer2 = peer.clone();
 
@@ -1583,16 +2155,24 @@ pub async fn filetransfer_send_files(
             .await
             .insert(task_id.clone(), ctrl.clone());
 
-        let file_path = p.clone();
+        let file_path = entry.path.trim().to_string();
         let file_name = Path::new(&file_path)
             .file_name()
             .and_then(|x| x.to_str())
             .unwrap_or("file")
             .to_string();
+        let relative_path = if entry.relative_path.trim().is_empty() {
+            file_name.clone()
+        } else {
+            entry.relative_path.trim().replace('\\', "/")
+        };
 
         let meta = tokio::fs::metadata(&file_path)
             .await
             .map_err(|e| e.to_string())?;
+        if !meta.is_file() {
+            continue;
+        }
         let total = meta.len();
         let mtime_ms = meta
             .modified()
@@ -1601,13 +2181,14 @@ pub async fn filetransfer_send_files(
             .map(|d| d.as_millis() as i64)
             .unwrap_or(0);
 
-        let upload_id = sha256_short(&format!("{}:{}:{}", file_path, total, mtime_ms));
+        let upload_id =
+            sha256_short(&format!("{}:{}:{}:{}", file_path, total, mtime_ms, relative_path));
 
         let t0 = TransferTask {
             id: task_id.clone(),
             direction: "send".to_string(),
             status: "running".to_string(),
-            file_name: file_name.clone(),
+            file_name: relative_path.clone(),
             file_path: file_path.clone(),
             peer: peer2.clone(),
             total_bytes: total,
@@ -1615,12 +2196,24 @@ pub async fn filetransfer_send_files(
             created_at_ms: now_ms(),
             updated_at_ms: now_ms(),
             error: None,
+            access_token: if token.is_empty() { None } else { Some(token.clone()) },
         };
         update_task(&app2, t0).await;
 
+        let task_token = token.clone();
         tauri::async_runtime::spawn(async move {
             if let Err(e) = do_send_file(
-                &app2, &peer2, &file_path, &file_name, total, mtime_ms, &upload_id, &task_id, ctrl,
+                &app2,
+                &peer2,
+                &file_path,
+                &file_name,
+                &relative_path,
+                total,
+                mtime_ms,
+                &upload_id,
+                &task_id,
+                &task_token,
+                ctrl,
             )
             .await
             {
@@ -1634,7 +2227,7 @@ pub async fn filetransfer_send_files(
                         id: task_id.clone(),
                         direction: "send".to_string(),
                         status: "error".to_string(),
-                        file_name: file_name.clone(),
+                        file_name: relative_path.clone(),
                         file_path: file_path.clone(),
                         peer: peer2.clone(),
                         total_bytes: total,
@@ -1642,6 +2235,7 @@ pub async fn filetransfer_send_files(
                         created_at_ms: now_ms(),
                         updated_at_ms: now_ms(),
                         error: Some(e.clone()),
+                        access_token: if task_token.is_empty() { None } else { Some(task_token.clone()) },
                     });
                 t.status = "error".to_string();
                 t.updated_at_ms = now_ms();
@@ -1659,10 +2253,12 @@ async fn do_send_file(
     peer: &str,
     file_path: &str,
     file_name: &str,
+    relative_path: &str,
     total: u64,
     mtime_ms: i64,
     upload_id: &str,
     task_id: &str,
+    token: &str,
     ctrl: Arc<Mutex<TaskControl>>,
 ) -> Result<(), String> {
     info!(
@@ -1678,11 +2274,10 @@ async fn do_send_file(
         file_name: file_name.to_string(),
         file_size: total,
         mtime_ms,
+        relative_path: relative_path.to_string(),
     };
 
-    let init_resp = client
-        .post(init_url)
-        .json(&init_req)
+    let init_resp = apply_token(client.post(init_url).json(&init_req), token)
         .send()
         .await
         .map_err(|e| format!("init 请求失败: {}", e))?;
@@ -1740,9 +2335,7 @@ async fn do_send_file(
             peer, upload_id, offset
         );
 
-        let resp = client
-            .post(chunk_url)
-            .body(chunk.to_vec())
+        let resp = apply_token(client.post(chunk_url).body(chunk.to_vec()), token)
             .send()
             .await
             .map_err(|e| format!("chunk 请求失败: {}", e))?;
@@ -1762,14 +2355,15 @@ async fn do_send_file(
     }
 
     let done_url = format!("{}/ft/upload/complete", peer);
-    let resp = client
-        .post(done_url)
-        .json(&UploadCompleteReq {
+    let resp = apply_token(
+        client.post(done_url).json(&UploadCompleteReq {
             upload_id: upload_id.to_string(),
-        })
-        .send()
-        .await
-        .map_err(|e| format!("complete 请求失败: {}", e))?;
+        }),
+        token,
+    )
+    .send()
+    .await
+    .map_err(|e| format!("complete 请求失败: {}", e))?;
 
     if !resp.status().is_success() {
         let text = resp.text().await.unwrap_or_default();
@@ -1939,7 +2533,7 @@ pub async fn filetransfer_webrtc_recv_init(
     let meta_path = upload_meta_path(&save_dir_path, &upload_id);
     let partial_path = upload_partial_path(&save_dir_path, &upload_id);
 
-    let mut final_name = unique_name_in_dir(&save_dir_path, &file_name);
+    let mut final_name = unique_relative_path(&save_dir_path, &file_name)?;
     let mut received_bytes = 0u64;
 
     if meta_path.exists() {
@@ -1967,6 +2561,7 @@ pub async fn filetransfer_webrtc_recv_init(
             file_size,
             mtime_ms,
             final_name: final_name.clone(),
+            task_id: String::new(),
         };
         if let Ok(s) = serde_json::to_string(&meta) {
             if let Err(e) = tokio::fs::write(&meta_path, s).await {
@@ -2013,6 +2608,7 @@ pub async fn filetransfer_webrtc_recv_init(
         created_at_ms: now_ms(),
         updated_at_ms: now_ms(),
         error: None,
+        access_token: None,
     };
     update_task(&app, t0).await;
 
@@ -2099,6 +2695,7 @@ pub async fn filetransfer_webrtc_recv_chunk_base64(
             created_at_ms: now_ms(),
             updated_at_ms: now_ms(),
             error: None,
+            access_token: None,
         });
 
     t.transferred_bytes = std::cmp::min(ctx.file_size, end);
@@ -2143,7 +2740,12 @@ pub async fn filetransfer_webrtc_recv_complete(
         .map(|m| m.final_name.clone())
         .unwrap_or_else(|| ctx.final_name.clone());
 
-    let final_path = ctx.save_dir.join(&final_name);
+    let final_path = safe_join(&ctx.save_dir, &final_name)?;
+    if let Some(parent) = final_path.parent() {
+        tokio::fs::create_dir_all(parent)
+            .await
+            .map_err(|e| format!("创建目标目录失败: {}", e))?;
+    }
 
     tokio::fs::rename(&partial_path, &final_path)
         .await
@@ -2168,6 +2770,7 @@ pub async fn filetransfer_webrtc_recv_complete(
             created_at_ms: now_ms(),
             updated_at_ms: now_ms(),
             error: None,
+            access_token: None,
         });
 
     t.transferred_bytes = ctx.file_size;
@@ -2183,4 +2786,65 @@ pub async fn filetransfer_webrtc_recv_complete(
     );
 
     Ok(final_path.to_string_lossy().to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sanitize_relative_path_rejects_escape_and_normalizes() {
+        assert_eq!(
+            sanitize_relative_path("docs/2026/report.pdf").expect("normal"),
+            "docs/2026/report.pdf"
+        );
+        assert_eq!(
+            sanitize_relative_path("./docs//report.pdf").expect("normalize"),
+            "docs/report.pdf"
+        );
+        assert!(sanitize_relative_path("../escape.pdf").is_err());
+        assert!(sanitize_relative_path("/abs/escape.pdf").is_err());
+        assert!(sanitize_relative_path("C:/escape.pdf").is_err());
+        assert!(sanitize_relative_path("   ").is_err());
+    }
+
+    #[test]
+    fn unique_relative_path_preserves_folder_and_avoids_overwrite() {
+        let root = std::env::temp_dir().join(format!("guaxi-ft-test-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(root.join("docs")).expect("create docs");
+        std::fs::write(root.join("docs/report.pdf"), b"old").expect("write old");
+
+        assert_eq!(
+            unique_relative_path(&root, "docs/new.pdf").expect("new"),
+            "docs/new.pdf"
+        );
+        assert_eq!(
+            unique_relative_path(&root, "docs/report.pdf").expect("unique"),
+            "docs/report (1).pdf"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn task_roundtrip_keeps_access_token_for_retry() {
+        let task = TransferTask {
+            id: "t1".to_string(),
+            direction: "send".to_string(),
+            status: "error".to_string(),
+            file_name: "docs/a.pdf".to_string(),
+            file_path: "D:/docs/a.pdf".to_string(),
+            peer: "http://127.0.0.1:39190".to_string(),
+            total_bytes: 10,
+            transferred_bytes: 5,
+            created_at_ms: 1,
+            updated_at_ms: 2,
+            error: Some("断开".to_string()),
+            access_token: Some("pair-code".to_string()),
+        };
+        let raw = serde_json::to_string(&task).expect("serialize");
+        let decoded: TransferTask = serde_json::from_str(&raw).expect("deserialize");
+        assert_eq!(decoded.access_token.as_deref(), Some("pair-code"));
+        assert_eq!(decoded.file_name, "docs/a.pdf");
+    }
+
 }

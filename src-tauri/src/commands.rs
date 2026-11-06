@@ -100,6 +100,7 @@ pub mod net_toolbox;
 pub mod net_conn;
 pub mod net_capture;
 pub mod sftp_fs;
+pub mod sync;
 pub mod crypto_lab;
 // 远程 Tongsuo/OpenSSL 的 SM2/PQC 证书工作流（不要求本机安装 Tongsuo）。
 pub mod crypto_remote;
