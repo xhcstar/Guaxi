@@ -372,6 +372,8 @@ fn summary_from_graph(
         to_json: serde_json::to_string(&to).unwrap_or_else(|_| "[]".into()),
         cc_json: serde_json::to_string(&cc).unwrap_or_else(|_| "[]".into()),
         date,
+        // Graph 的 receivedDateTime 就是服务端收件时间。
+        received_at: date,
         size: item.get("size").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
         snippet: trim_snippet(
             item.get("bodyPreview")

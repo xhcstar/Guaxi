@@ -664,8 +664,9 @@ function threadName(message) {
 }
 
 function threadDate(message) {
-  if (!message.date) return ''
-  return new Date(message.date * 1000).toLocaleString('zh-CN', {
+  const unix = message.receivedAt || message.date
+  if (!unix) return ''
+  return new Date(unix * 1000).toLocaleString('zh-CN', {
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
@@ -840,7 +841,7 @@ watch(
 
 /** 日期：列表里放短格式，悬停给出完整时间（含秒与时区偏移）。 */
 const dateLabel = computed(() => {
-  const unix = props.detail?.date
+  const unix = props.detail?.receivedAt || props.detail?.date
   if (!unix) return ''
   return new Date(unix * 1000).toLocaleString('zh-CN', {
     year: 'numeric',
@@ -853,7 +854,7 @@ const dateLabel = computed(() => {
 })
 
 const fullDateLabel = computed(() => {
-  const unix = props.detail?.date
+  const unix = props.detail?.receivedAt || props.detail?.date
   if (!unix) return ''
   return new Date(unix * 1000).toLocaleString('zh-CN', {
     year: 'numeric',

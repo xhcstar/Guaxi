@@ -870,13 +870,22 @@ fn fetch_and_store(
             }
         }
 
+        let internal_at = fetch.internal_date().map(|d| d.timestamp()).unwrap_or(0);
         let date = if parsed.date > 0 {
             parsed.date
+        } else if internal_at > 0 {
+            internal_at
         } else {
-            fetch
-                .internal_date()
-                .map(|d| d.timestamp())
-                .unwrap_or_else(|| chrono::Utc::now().timestamp())
+            chrono::Utc::now().timestamp()
+        };
+        // 收件时间取服务器的 INTERNALDATE（Outlook 的「收到」列同源）；
+        // 已发送 / 草稿这类自己发出的邮件按发送时间显示。
+        let received_at = if outgoing_folder {
+            date
+        } else if internal_at > 0 {
+            internal_at
+        } else {
+            date
         };
 
         summaries.push(MessageSummary {
@@ -890,6 +899,7 @@ fn fetch_and_store(
             to_json: serde_json::to_string(&parsed.to).unwrap_or_else(|_| "[]".into()),
             cc_json: serde_json::to_string(&parsed.cc).unwrap_or_else(|_| "[]".into()),
             date,
+            received_at,
             size: fetch.size.unwrap_or(raw.len() as u32),
             snippet: sanitize::truncate_chars(&parsed.snippet_source, snippet_len),
             seen,
@@ -1030,14 +1040,19 @@ pub fn sync_flags(
 
     let mut server: std::collections::HashMap<u32, (bool, bool, bool, bool)> =
         std::collections::HashMap::new();
+    // 顺手把 INTERNALDATE 也带回来：它才是服务器的实际收件时间。
+    let mut received_times: Vec<(u32, i64)> = Vec::new();
     // 分块 FETCH：一次几千个 UID 的命令行会被服务器拒绝（RFC 3501 规定命令长度上限）。
     for chunk in local_uids.chunks(500) {
         let set = compact_uid_set(chunk);
         let fetches = session
-            .uid_fetch(&set, "(UID FLAGS)")
+            .uid_fetch(&set, "(UID FLAGS INTERNALDATE)")
             .map_err(|e| format!("比对标记失败: {e}"))?;
         for fetch in fetches.iter() {
             let Some(uid) = fetch.uid else { continue };
+            if let Some(at) = fetch.internal_date() {
+                received_times.push((uid, at.timestamp()));
+            }
             let (mut seen, mut flagged, mut answered, mut deleted) = (false, false, false, false);
             for flag in fetch.flags() {
                 match flag {
@@ -1057,6 +1072,10 @@ pub fn sync_flags(
         .map(|(uid, (s, f, a, d))| (*uid, *s, *f, *a, *d))
         .collect();
     let updated = store::apply_server_flags(&account.id, folder, &changed)?;
+    // 历史邮件的收件时间也在这里纠正（新邮件在同步时已经写过）。
+    if let Err(error) = store::refresh_received_times(&account.id, folder, &received_times) {
+        warn!(error = %error, folder, "mail: 收件时间校正失败");
+    }
 
     let present: std::collections::HashSet<u32> = server.keys().copied().collect();
     let removed = store::drop_missing_uids(&account.id, folder, &present)?;

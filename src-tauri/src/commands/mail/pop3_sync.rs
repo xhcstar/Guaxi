@@ -312,6 +312,9 @@ fn fetch_one(
         to_json: serde_json::to_string(&parsed.to).unwrap_or_else(|_| "[]".into()),
         cc_json: serde_json::to_string(&parsed.cc).unwrap_or_else(|_| "[]".into()),
         date: parsed.date,
+        // POP3 协议没有服务器收件时间：记录本机真正把邮件下载完成的时刻。
+        // Outlook 对 POP3 的「收到」也只能落到下载时间，这样两边才一致。
+        received_at: chrono::Utc::now().timestamp(),
         size: raw.len() as u32,
         snippet: sanitize::truncate_chars(&parsed.snippet_source, snippet_len),
         seen: false,
@@ -393,6 +396,12 @@ pub fn save_copy_to(
         to_json: serde_json::to_string(&parsed.to).unwrap_or_else(|_| "[]".into()),
         cc_json: serde_json::to_string(&parsed.cc).unwrap_or_else(|_| "[]".into()),
         date: if parsed.date == 0 {
+            chrono::Utc::now().timestamp()
+        } else {
+            parsed.date
+        },
+        // 自己发出 / 保存的副本：显示发送时间，而不是保存进本地库的时间。
+        received_at: if parsed.date == 0 {
             chrono::Utc::now().timestamp()
         } else {
             parsed.date

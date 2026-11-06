@@ -93,7 +93,8 @@ const snippetSegments = computed(() =>
 )
 
 const dateLabel = computed(() => {
-  const unix = props.row.date
+  // 列表按「实际收件时间」显示；已发送 / 草稿的 receivedAt 等于发送时间。
+  const unix = props.row.receivedAt || props.row.date
   if (!unix) return ''
   const date = new Date(unix * 1000)
   const now = new Date()

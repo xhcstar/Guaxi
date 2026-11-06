@@ -324,8 +324,16 @@ pub struct MessageSummary {
     pub to_json: String,
     #[serde(default)]
     pub cc_json: String,
-    /// Unix 秒。优先取 Date 头，缺失时退回服务器 INTERNALDATE。
+    /// 邮件自己写的发送时间（Unix 秒，Date 头）。
     pub date: i64,
+    /// 实际收件时间（Unix 秒），列表与阅读区显示 / 排序都用它。
+    ///
+    /// - IMAP：服务器 INTERNALDATE（真正的收件时间，Outlook 的「收到」列同源）；
+    /// - POP3：协议没有收件时间，记录本机实际下载完成的时刻；
+    /// - Graph / EWS：服务端 receivedDateTime；
+    /// - 已发送 / 草稿：与 `date` 相同（显示发送时间）。
+    #[serde(default)]
+    pub received_at: i64,
     #[serde(default)]
     pub size: u32,
     #[serde(default)]
@@ -386,6 +394,9 @@ pub struct MessageDetail {
     pub bcc: Vec<MailAddress>,
     pub reply_to: Vec<MailAddress>,
     pub date: i64,
+    /// 实际收件时间；与摘要同源（见 `MessageSummary::received_at`）。
+    #[serde(default)]
+    pub received_at: i64,
     /// `Message-Id` 链，用于拼会话视图与回复头。
     #[serde(default)]
     pub in_reply_to: String,

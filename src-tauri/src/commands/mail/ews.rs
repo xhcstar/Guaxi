@@ -581,6 +581,8 @@ fn summary_from_item(
         to_json: serde_json::to_string(&to).unwrap_or_else(|_| "[]".into()),
         cc_json: serde_json::to_string(&cc).unwrap_or_else(|_| "[]".into()),
         date,
+        // EWS 的 DateTimeReceived 就是服务端收件时间。
+        received_at: date,
         size: node
             .child("Size")
             .and_then(|item| item.text_trim().parse::<u32>().ok())

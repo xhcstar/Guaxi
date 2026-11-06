@@ -2514,6 +2514,7 @@ pub async fn mail_read_eml(app: AppHandle, path: String) -> Result<MessageDetail
         bcc: parsed.bcc.clone(),
         reply_to: parsed.reply_to.clone(),
         date: parsed.date,
+        received_at: parsed.date,
         in_reply_to: parsed.in_reply_to.clone(),
         references: parsed.references.clone(),
         html: parsed.html.clone(),

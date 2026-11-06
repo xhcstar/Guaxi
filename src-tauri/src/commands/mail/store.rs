@@ -105,7 +105,7 @@ fn open() -> Result<Connection, String> {
 /// 为什么必须做版本化迁移：老用户的 `mail.db` 已经存在，`CREATE TABLE IF NOT EXISTS`
 /// 只会补新表、不会补新列；一旦某天查询里用到新列，整个邮件页会直接报
 /// 「no such column」而不是「少一个功能」。
-pub const SCHEMA_VERSION: i32 = 10;
+pub const SCHEMA_VERSION: i32 = 11;
 
 /// 正文渲染 / 清洗规则版本。
 ///
@@ -165,6 +165,7 @@ pub fn init(app: &AppHandle) -> Result<(), String> {
             to_json TEXT NOT NULL DEFAULT '[]',
             cc_json TEXT NOT NULL DEFAULT '[]',
             date INTEGER NOT NULL DEFAULT 0,
+            received_at INTEGER NOT NULL DEFAULT 0,
             size INTEGER NOT NULL DEFAULT 0,
             snippet TEXT NOT NULL DEFAULT '',
             seen INTEGER NOT NULL DEFAULT 0,
@@ -452,6 +453,22 @@ fn migrate(conn: &mut Connection) -> Result<(), String> {
             "render_version",
             "INTEGER NOT NULL DEFAULT 0",
         )?;
+    }
+    if version < 11 {
+        // v11：真正的收件时间。以前列表里的 `date` 是邮件自己写的 Date 头，
+        // IMAP 上会和服务器收件时间不一致（Outlook 显示的是 INTERNALDATE）。
+        // 老数据先回填成 date，等下次同步 / 打开时再刷新成真实值。
+        add_column(&tx, "messages", "received_at", "INTEGER NOT NULL DEFAULT 0")?;
+        tx.execute(
+            "UPDATE messages SET received_at = date WHERE received_at = 0",
+            [],
+        )
+        .ok();
+        tx.execute_batch(
+            "CREATE INDEX IF NOT EXISTS idx_messages_received \
+             ON messages (account_id, folder, received_at DESC);",
+        )
+        .map_err(|e| format!("迁移到 v11 失败: {e}"))?;
     }
     tx.pragma_update(None, "user_version", SCHEMA_VERSION)
         .map_err(|e| format!("写入 schema 版本失败: {e}"))?;
@@ -1552,7 +1569,7 @@ pub fn uids_in_folder(account_id: &str, folder: &str) -> Result<Vec<u32>, String
 
 const MSG_COLS: &str = "account_id, folder, uid, message_id, subject, from_name, from_addr, \
     to_json, cc_json, date, size, snippet, seen, flagged, answered, draft, deleted, \
-    has_attachments, thread_key, labels, outgoing, in_reply_to, msg_refs";
+    has_attachments, thread_key, labels, outgoing, in_reply_to, msg_refs, received_at";
 
 fn row_to_summary(row: &Row<'_>) -> rusqlite::Result<MessageSummary> {
     Ok(MessageSummary {
@@ -1579,6 +1596,7 @@ fn row_to_summary(row: &Row<'_>) -> rusqlite::Result<MessageSummary> {
         outgoing: row.get::<_, i32>(20)? != 0,
         in_reply_to: row.get(21)?,
         references: row.get(22)?,
+        received_at: row.get(23)?,
     })
 }
 
@@ -1609,12 +1627,13 @@ pub fn upsert_summaries_on(
         conn.execute(
             r#"INSERT INTO messages (account_id, folder, uid, message_id, subject, from_name, from_addr,
                     to_json, cc_json, date, size, snippet, seen, flagged, answered, draft, deleted,
-                    has_attachments, thread_key, labels, outgoing, in_reply_to, msg_refs)
-               VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23)
+                    has_attachments, thread_key, labels, outgoing, in_reply_to, msg_refs, received_at)
+               VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24)
                ON CONFLICT(account_id, folder, uid) DO UPDATE SET
                     message_id=excluded.message_id, subject=excluded.subject,
                     from_name=excluded.from_name, from_addr=excluded.from_addr,
                     to_json=excluded.to_json, cc_json=excluded.cc_json, date=excluded.date,
+                    received_at=excluded.received_at,
                     size=excluded.size, snippet=excluded.snippet, seen=excluded.seen,
                     flagged=excluded.flagged, answered=excluded.answered, draft=excluded.draft,
                     deleted=excluded.deleted, has_attachments=excluded.has_attachments,
@@ -1644,6 +1663,7 @@ pub fn upsert_summaries_on(
                 m.outgoing as i32,
                 m.in_reply_to,
                 m.references,
+                m.received_at,
             ],
         )
         .map_err(|e| format!("写入邮件失败: {e}"))?;
@@ -2010,6 +2030,36 @@ pub fn set_encryption_enabled(enabled: bool) -> Result<(), String> {
 
 /// 缓存命中时返回 (html, text, 附件 JSON, 是否已经取过正文)。
 /// 缓存正文的渲染 / 清洗版本；0 表示旧版。
+/// 用 IMAP 的 INTERNALDATE 刷新已有邮件的实际收件时间。
+///
+/// 增量同步只处理新 UID，历史邮件的收件时间不会因为升级而自动纠正；
+/// FLAGS 比对本来就遍历了本地全部 UID，顺手把 INTERNALDATE 带回来更新即可，
+/// 不需要重新下载正文。`outgoing = 0` 保证已发送 / 草稿仍显示发送时间。
+pub fn refresh_received_times(
+    account_id: &str,
+    folder: &str,
+    times: &[(u32, i64)],
+) -> Result<usize, String> {
+    if times.is_empty() {
+        return Ok(0);
+    }
+    let mut conn = open()?;
+    let tx = conn.transaction().map_err(|e| e.to_string())?;
+    let mut updated = 0usize;
+    for (uid, timestamp) in times {
+        updated += tx
+            .execute(
+                "UPDATE messages SET received_at=?4
+                 WHERE account_id=?1 AND folder=?2 AND uid=?3
+                   AND outgoing=0 AND received_at<>?4",
+                params![account_id, folder, uid, timestamp],
+            )
+            .map_err(|e| e.to_string())?;
+    }
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(updated)
+}
+
 pub fn body_render_version(account_id: &str, folder: &str, uid: u32) -> Result<i32, String> {
     let conn = open()?;
     conn.query_row(
@@ -2270,7 +2320,7 @@ pub fn list_recent(
     let mut stmt = conn
         .prepare(&format!(
             "SELECT {MSG_COLS} FROM messages WHERE account_id=?1 AND folder=?2 AND deleted=0
-             ORDER BY date DESC, uid DESC LIMIT ?3 OFFSET ?4"
+             ORDER BY received_at DESC, uid DESC LIMIT ?3 OFFSET ?4"
         ))
         .map_err(|e| e.to_string())?;
     let rows = stmt
@@ -2560,7 +2610,7 @@ pub fn search(query: &SearchQuery) -> Result<Vec<MessageSummary>, String> {
         "size" => "m.size",
         "sender" => "m.from_name",
         "subject" => "m.subject",
-        _ => "m.date",
+        _ => "m.received_at",
     };
     let dir = if query.descending.unwrap_or(true) {
         "DESC"
@@ -3169,6 +3219,7 @@ pub fn base_detail(summary: &MessageSummary) -> MessageDetail {
         bcc: Vec::new(),
         reply_to: Vec::new(),
         date: summary.date,
+        received_at: summary.received_at,
         // 引用头跟着摘要走：正文命中缓存时也要能拼出正确的回复链，
         // 否则从这里发出去的回复会丢 In-Reply-To，对方（和本机）就会把同一条
         // 会话拆成两段——「回复着回复着变成新会话」正是这么来的。
