@@ -433,7 +433,7 @@ fn default_p2p_sync_interval_minutes() -> u64 {
 }
 
 fn default_p2p_transfer_concurrency() -> u32 {
-    8
+    12
 }
 
 fn default_p2p_idle_timeout_secs() -> u64 {

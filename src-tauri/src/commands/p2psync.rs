@@ -47,10 +47,22 @@ const P2P_MANIFEST_FRAME_LIMIT: usize = 256 * 1024 * 1024;
 const P2P_DELTA_FRAME_LIMIT: usize = 256 * 1024 * 1024;
 /// 文件体按固定块流式收发，避免把整文件读进内存。
 const P2P_CHUNK_SIZE: usize = 2 * 1024 * 1024;
+/// 单次磁盘/流 I/O 的看门狗：120 秒没有任何进展就当作连接卡死，触发重连续传。
+const P2P_IO_TIMEOUT_SECS: u64 = 120;
 /// 单个文件传输失败后的最大重试次数（含重连）。
 const P2P_TRANSFER_MAX_RETRIES: u32 = 8;
 /// 低于此大小的文件不做块级 delta，直接整文件续传（delta 开销不划算）。
 const P2P_DELTA_MIN_SIZE: u64 = 256 * 1024;
+/// 超过 2GB 的文件不再做块级 delta：签名/差异构建的内存与 CPU 开销不划算，
+/// 直接走整文件断点续传更稳。
+const P2P_DELTA_MAX_SIZE: u64 = 2 * 1024 * 1024 * 1024;
+/// 超过 512MB 的下载拆成 4 条区间流并行拉取；每个区间完成后落一个 sidecar，
+/// 断线重试只补未完成的区间。
+const PARALLEL_PULL_THRESHOLD: u64 = 512 * 1024 * 1024;
+const PARALLEL_PULL_RANGES: usize = 4;
+/// 上传同样拆 4 个区间；每个区间独立落盘，完成后统一合并。
+const PARALLEL_PUSH_THRESHOLD: u64 = 512 * 1024 * 1024;
+const PARALLEL_PUSH_RANGES: usize = 4;
 const RESOURCE_REPO_SYNC_PROGRESS_EVENT: &str = "resource_repo_sync_progress";
 
 struct P2PEndpointRuntime {
@@ -229,6 +241,12 @@ enum P2PWireRequest {
         rel: String,
         #[serde(default)]
         offset: u64,
+        /// 只发送该长度（0 表示到文件末尾），用于大文件并行区间拉取。
+        #[serde(default)]
+        length: u64,
+        /// 客户端清单里已有的哈希；非空时服务端不再为每个请求重读整文件。
+        #[serde(default)]
+        known_hash: String,
     },
     /// 块级增量：请求对端基于客户端提供的 basis 签名，返回 delta（仅变化块）。
     PullDelta {
@@ -243,6 +261,28 @@ enum P2PWireRequest {
         size: u64,
         blake3: String,
         mtime_ms: i64,
+        #[serde(default)]
+        range_index: u32,
+        #[serde(default)]
+        range_start: u64,
+        #[serde(default)]
+        range_length: u64,
+        #[serde(default)]
+        range_count: u32,
+        /// 临时传输的稳定标识；同步目标为空。接收端用它把多个区间映射到同一个唯一目标名。
+        #[serde(default)]
+        transfer_id: String,
+    },
+    /// 所有推送区间完成后，通知对端合并并校验。
+    PushFileComplete {
+        target: String,
+        rel: String,
+        size: u64,
+        blake3: String,
+        mtime_ms: i64,
+        range_count: u32,
+        #[serde(default)]
+        transfer_id: String,
     },
     /// 请求对端导出某 knowledge_repo 的数据库记录 bundle（JSON）。
     RepoBundle {
@@ -459,6 +499,75 @@ fn emit_p2p_progress(
             at: Utc::now().to_rfc3339(),
         },
     );
+}
+
+/// 单个文件传输期间的字节级进度。多个并行区间共享同一个 bytes_done，
+/// 这样 UI 不会在几个区间的百分比之间来回跳。
+#[derive(Clone)]
+struct FileProgress {
+    app: Option<AppHandle>,
+    run_id: String,
+    target: P2PSyncTarget,
+    peer: String,
+    rel: String,
+    index: u64,
+    total_files: u64,
+    bytes_total: u64,
+    bytes_done: Arc<AtomicU64>,
+    last_emit: Arc<AtomicU64>,
+}
+
+impl FileProgress {
+    fn new(
+        app: Option<AppHandle>,
+        run_id: String,
+        target: P2PSyncTarget,
+        peer: String,
+        rel: String,
+        index: u64,
+        total_files: u64,
+        bytes_total: u64,
+    ) -> Self {
+        Self {
+            app,
+            run_id,
+            target,
+            peer,
+            rel,
+            index,
+            total_files,
+            bytes_total,
+            bytes_done: Arc::new(AtomicU64::new(0)),
+            last_emit: Arc::new(AtomicU64::new(0)),
+        }
+    }
+
+    /// 续传时把已完成的字节计入进度，避免进度条从 0 重新开始。
+    fn seed(&self, value: u64) {
+        self.bytes_done.fetch_max(value, Ordering::Relaxed);
+        self.last_emit.store(value, Ordering::Relaxed);
+    }
+
+    fn add(&self, delta: u64) {
+        let current = self.bytes_done.fetch_add(delta, Ordering::Relaxed) + delta;
+        let last = self.last_emit.load(Ordering::Relaxed);
+        if current.saturating_sub(last) >= 16 * 1024 * 1024 || current >= self.bytes_total {
+            self.last_emit.store(current, Ordering::Relaxed);
+            emit_p2p_progress(
+                self.app.as_ref(),
+                &self.run_id,
+                &self.target,
+                "transfer",
+                "running",
+                format!("与 {} 传输 {}", self.peer, self.rel),
+                self.index,
+                self.total_files,
+                current,
+                self.bytes_total,
+                self.rel.clone(),
+            );
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -687,7 +796,7 @@ fn warn_p2p_relay(url: &str, err: &str) {
 /// UDP GSO 分段（规避 `sendmsg 10040` WSAEMSGSIZE）。连接两端需使用一致配置。
 fn build_transport_config() -> QuicTransportConfig {
     // 大文件同步至少给 60 秒空闲窗口：10GB 传输期间即使短暂卡顿也不至于整条连接被回收。
-    let idle = StdDuration::from_secs(p2p_idle_timeout_secs().max(60));
+    let idle = StdDuration::from_secs(p2p_idle_timeout_secs().max(120));
     let mut builder = QuicTransportConfig::builder();
     if let Ok(idle_timeout) = IdleTimeout::try_from(idle) {
         builder = builder.max_idle_timeout(Some(idle_timeout));
@@ -847,6 +956,19 @@ async fn send_file_body(
     path: &Path,
     size: u64,
     offset: u64,
+    progress: Option<&FileProgress>,
+) -> Result<(), String> {
+    send_file_body_range(send, path, size, offset, 0, progress).await
+}
+
+/// `length=0` 表示从 offset 发到文件末尾；大于 0 时只发指定区间。
+async fn send_file_body_range(
+    send: &mut SendStream,
+    path: &Path,
+    size: u64,
+    offset: u64,
+    length: u64,
+    progress: Option<&FileProgress>,
 ) -> Result<(), String> {
     use tokio::io::{AsyncReadExt, AsyncSeekExt};
     let mut f = tokio::fs::File::open(path)
@@ -857,16 +979,37 @@ async fn send_file_body(
             .await
             .map_err(|e| format!("定位待发送文件失败 {}: {e}", path.display()))?;
     }
-    let mut remaining = size.saturating_sub(offset);
+    let available = size.saturating_sub(offset);
+    let mut remaining = if length == 0 {
+        available
+    } else {
+        length.min(available)
+    };
     let mut buf = vec![0_u8; P2P_CHUNK_SIZE];
     while remaining > 0 {
+        if let Some(progress) = progress {
+            if is_sync_cancelled(&progress.run_id) {
+                return Err("同步已取消".to_string());
+            }
+        }
         let want = remaining.min(buf.len() as u64) as usize;
-        f.read_exact(&mut buf[..want])
-            .await
-            .map_err(|e| format!("读取待发送文件失败 {}: {e}", path.display()))?;
-        send.write_all(&buf[..want])
-            .await
-            .map_err(|e| format!("发送文件体失败 {}: {e}", path.display()))?;
+        timeout(
+            StdDuration::from_secs(P2P_IO_TIMEOUT_SECS),
+            f.read_exact(&mut buf[..want]),
+        )
+        .await
+        .map_err(|_| format!("读取待发送文件超时 {}: {want} 字节", path.display()))?
+        .map_err(|e| format!("读取待发送文件失败 {}: {e}", path.display()))?;
+        timeout(
+            StdDuration::from_secs(P2P_IO_TIMEOUT_SECS),
+            send.write_all(&buf[..want]),
+        )
+        .await
+        .map_err(|_| "发送文件体超时".to_string())?
+        .map_err(|e| format!("发送文件体失败 {}: {e}", path.display()))?;
+        if let Some(progress) = progress {
+            progress.add(want as u64);
+        }
         remaining -= want as u64;
     }
     Ok(())
@@ -877,18 +1020,35 @@ async fn recv_file_body(
     recv: &mut RecvStream,
     out: &mut tokio::fs::File,
     size: u64,
+    progress: Option<&FileProgress>,
 ) -> Result<(), String> {
     use tokio::io::AsyncWriteExt;
     let mut remaining = size;
     let mut buf = vec![0_u8; P2P_CHUNK_SIZE];
     while remaining > 0 {
+        if let Some(progress) = progress {
+            if is_sync_cancelled(&progress.run_id) {
+                return Err("同步已取消".to_string());
+            }
+        }
         let want = remaining.min(buf.len() as u64) as usize;
-        recv.read_exact(&mut buf[..want])
-            .await
-            .map_err(|e| format!("接收文件体失败: {e}"))?;
-        out.write_all(&buf[..want])
-            .await
-            .map_err(|e| format!("写入临时文件失败: {e}"))?;
+        timeout(
+            StdDuration::from_secs(P2P_IO_TIMEOUT_SECS),
+            recv.read_exact(&mut buf[..want]),
+        )
+        .await
+        .map_err(|_| format!("接收文件体超时: {want} 字节"))?
+        .map_err(|e| format!("接收文件体失败: {e}"))?;
+        timeout(
+            StdDuration::from_secs(P2P_IO_TIMEOUT_SECS),
+            out.write_all(&buf[..want]),
+        )
+        .await
+        .map_err(|_| "写入临时文件超时".to_string())?
+        .map_err(|e| format!("写入临时文件失败: {e}"))?;
+        if let Some(progress) = progress {
+            progress.add(want as u64);
+        }
         remaining -= want as u64;
     }
     Ok(())
@@ -1025,7 +1185,9 @@ async fn handle_incoming_stream(
             target,
             rel,
             offset,
-        } => match serve_pull(&target, &rel).await {
+            length,
+            known_hash,
+        } => match serve_pull(&target, &rel, &known_hash).await {
             Ok((path, size, blake3, mtime_ms)) => {
                 // 续传偏移越界（对端文件已变）时退回从 0 发送整文件。
                 let start = if offset <= size { offset } else { 0 };
@@ -1038,7 +1200,7 @@ async fn handle_incoming_stream(
                     received: 0,
                 };
                 write_control(&mut send, &header, "P2P 文件头").await?;
-                send_file_body(&mut send, &path, size, start).await?;
+                send_file_body_range(&mut send, &path, size, start, length, None).await?;
             }
             Err(e) => {
                 let header = P2PFileHeader {
@@ -1066,9 +1228,25 @@ async fn handle_incoming_stream(
             size,
             blake3,
             mtime_ms,
+            range_index,
+            range_start,
+            range_length,
+            range_count,
+            transfer_id,
         } => {
             let ack = match accept_push(
-                &target, &rel, &mut send, &mut recv, size, &blake3, mtime_ms,
+                &target,
+                &rel,
+                &mut send,
+                &mut recv,
+                size,
+                &blake3,
+                mtime_ms,
+                range_index,
+                range_start,
+                range_length,
+                range_count,
+                &transfer_id,
             )
             .await
             {
@@ -1079,6 +1257,34 @@ async fn handle_incoming_stream(
                 },
             };
             write_control(&mut send, &ack, "P2P 推送响应").await?;
+        }
+        P2PWireRequest::PushFileComplete {
+            target,
+            rel,
+            size,
+            blake3,
+            mtime_ms,
+            range_count,
+            transfer_id,
+        } => {
+            let ack = match assemble_push_ranges(
+                &target,
+                &rel,
+                size,
+                &blake3,
+                mtime_ms,
+                range_count,
+                &transfer_id,
+            )
+            .await
+            {
+                Ok(message) => P2PAck { ok: true, message },
+                Err(e) => P2PAck {
+                    ok: false,
+                    message: e,
+                },
+            };
+            write_control(&mut send, &ack, "P2P 推送完成响应").await?;
         }
         P2PWireRequest::RepoBundle { knowledge_repo } => {
             let response = match collect_repo_bundle_json(&knowledge_repo) {
@@ -1230,20 +1436,49 @@ async fn current_p2p_address_hint(endpoint: &Endpoint) -> Result<String, String>
 }
 
 async fn connect_peer(endpoint: &Endpoint, peer: &P2PTrustedPeer) -> Result<Connection, String> {
-    let addr = decode_endpoint_addr(&peer.address_hint)?;
-    let options = ConnectOptions::new().with_transport_config(build_transport_config());
-    let connecting = timeout(
-        StdDuration::from_secs(P2P_ONLINE_TIMEOUT_SECS),
-        endpoint.connect_with_opts(addr, P2P_ALPN, options),
-    )
-    .await
-    .map_err(|_| format!("连接设备 {} 超时", peer.device_name))?
-    .map_err(|e| format!("连接设备 {} 失败: {e}", peer.device_name))?;
-    let connection = timeout(StdDuration::from_secs(P2P_ONLINE_TIMEOUT_SECS), connecting)
+    // 先按上次记录的地址拨号；失败后再只用 peer_id 走发现/中继。
+    // 设备换网、DHCP 续租后 address_hint 里的旧 IP 会失效，单靠它会导致长时间连不上。
+    let mut addresses = Vec::new();
+    if let Ok(addr) = decode_endpoint_addr(&peer.address_hint) {
+        addresses.push(addr);
+    }
+    if let Ok(id) = peer.peer_id.parse::<iroh::EndpointId>() {
+        addresses.push(EndpointAddr::from(id));
+    }
+    if addresses.is_empty() {
+        return Err(format!("设备 {} 没有可用地址", peer.device_name));
+    }
+
+    let mut last_error = String::new();
+    for addr in addresses {
+        let options = ConnectOptions::new().with_transport_config(build_transport_config());
+        let connecting = match timeout(
+            StdDuration::from_secs(P2P_ONLINE_TIMEOUT_SECS),
+            endpoint.connect_with_opts(addr, P2P_ALPN, options),
+        )
         .await
-        .map_err(|_| format!("等待设备 {} 握手超时", peer.device_name))?
-        .map_err(|e| format!("与设备 {} 握手失败: {e}", peer.device_name))?;
-    Ok(connection)
+        {
+            Ok(Ok(connecting)) => connecting,
+            Ok(Err(error)) => {
+                last_error = format!("连接设备 {} 失败: {error}", peer.device_name);
+                continue;
+            }
+            Err(_) => {
+                last_error = format!("连接设备 {} 超时", peer.device_name);
+                continue;
+            }
+        };
+        match timeout(StdDuration::from_secs(P2P_ONLINE_TIMEOUT_SECS), connecting).await {
+            Ok(Ok(connection)) => return Ok(connection),
+            Ok(Err(error)) => {
+                last_error = format!("与设备 {} 握手失败: {error}", peer.device_name);
+            }
+            Err(_) => {
+                last_error = format!("等待设备 {} 握手超时", peer.device_name);
+            }
+        }
+    }
+    Err(last_error)
 }
 
 /// 在一条连接上做一次"请求 -> 响应"的控制消息往返。
@@ -1408,7 +1643,13 @@ pub async fn federation_pull_file(peer_lib_id: &str, rel: &str) -> Result<Vec<u8
     .map_err(|e| format!("打开传输通道失败: {e}"))?;
     write_control(
         &mut send,
-        &P2PWireRequest::PullFile { target, rel: rel.to_string(), offset: 0 },
+        &P2PWireRequest::PullFile {
+            target,
+            rel: rel.to_string(),
+            offset: 0,
+            length: 0,
+            known_hash: String::new(),
+        },
         "P2P 拉取请求",
     )
     .await?;
@@ -1718,9 +1959,15 @@ fn should_skip(target: &P2PSyncTarget, rel: &str) -> bool {
 }
 
 fn hash_file(path: &Path) -> Result<String, String> {
+    // 10GB 级文件用 mmap + 多核 AVX 路径，比 64KB 循环读快一个量级；
+    // 网络盘/不支持 mmap 的环境回退到 1MB 缓冲。
+    let mut hasher = Hasher::new();
+    if hasher.update_mmap(path).is_ok() {
+        return Ok(hasher.finalize().to_hex().to_string());
+    }
     let mut f = fs::File::open(path).map_err(|e| format!("打开文件失败 {}: {e}", path.display()))?;
     let mut hasher = Hasher::new();
-    let mut buf = [0_u8; 64 * 1024];
+    let mut buf = vec![0_u8; 1024 * 1024];
     loop {
         let n = f
             .read(&mut buf)
@@ -2000,7 +2247,11 @@ async fn finalize_incoming_file_async(
 }
 
 /// 服务端：定位待拉取文件，返回 (路径, 大小, 哈希, mtime)。
-async fn serve_pull(target_key: &str, rel: &str) -> Result<(PathBuf, u64, String, i64), String> {
+async fn serve_pull(
+    target_key: &str,
+    rel: &str,
+    known_hash: &str,
+) -> Result<(PathBuf, u64, String, i64), String> {
     let target = target_from_key(target_key)?;
     if should_skip(&target, rel) {
         return Err(format!("该文件不在同步范围内: {rel}"));
@@ -2011,7 +2262,12 @@ async fn serve_pull(target_key: &str, rel: &str) -> Result<(PathBuf, u64, String
     }
     let meta =
         fs::metadata(&path).map_err(|e| format!("读取文件元数据失败 {}: {e}", path.display()))?;
-    let hash = hash_file_async(&path).await?;
+    // 清单已经带哈希时直接用；否则才读整文件计算（旧客户端/联邦拉取）。
+    let hash = if known_hash.trim().is_empty() {
+        hash_file_async(&path).await?
+    } else {
+        known_hash.to_string()
+    };
     let mtime = file_mtime_ms(&path)?;
     Ok((path, meta.len(), hash, mtime))
 }
@@ -2122,6 +2378,11 @@ async fn accept_push(
     size: u64,
     expected_hash: &str,
     mtime_ms: i64,
+    range_index: u32,
+    range_start: u64,
+    range_length: u64,
+    range_count: u32,
+    transfer_id: &str,
 ) -> Result<String, String> {
     use tokio::io::{AsyncSeekExt, AsyncWriteExt};
     let target = target_from_key(target_key)?;
@@ -2138,6 +2399,24 @@ async fn accept_push(
 
     let tmp_dir = target.root.join(P2P_META_DIR).join(P2P_TMP_DIR);
     fs::create_dir_all(&tmp_dir).map_err(|e| format!("创建 P2P 临时目录失败: {e}"))?;
+
+    if range_count > 0 {
+        return accept_push_range(
+            &target,
+            &rel,
+            send,
+            recv,
+            size,
+            expected_hash,
+            mtime_ms,
+            range_index,
+            range_start,
+            range_length,
+            range_count,
+            transfer_id,
+        )
+        .await;
+    }
 
     // 同步目标使用稳定 part 文件，断线重连后从已接收字节继续；
     // 临时传输不续传，避免同名文件在重试时被误当成同一个目标。
@@ -2181,7 +2460,7 @@ async fn accept_push(
                 .await
                 .map_err(|e| format!("定位 P2P 临时文件失败: {e}"))?;
         }
-        recv_file_body(recv, &mut out, size.saturating_sub(resume)).await?;
+        recv_file_body(recv, &mut out, size.saturating_sub(resume), None).await?;
         out.flush()
             .await
             .map_err(|e| format!("刷新 P2P 临时文件失败 {}: {e}", tmp.display()))?;
@@ -2190,6 +2469,307 @@ async fn accept_push(
     finalize_incoming_file_async(&target, &rel, &tmp, expected_hash).await?;
     info!(target = %target.key, rel, size, resumed = resume, "[P2PSync] accepted pushed file");
     Ok(format!("已接收 {rel}"))
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct PushRangeMeta {
+    size: u64,
+    blake3: String,
+    count: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct PushTransferMeta {
+    rel: String,
+    final_rel: String,
+    size: u64,
+    count: u32,
+}
+
+fn transfer_meta_path(target: &P2PSyncTarget, transfer_id: &str) -> PathBuf {
+    let key = blake3::hash(format!("transfer-meta:{transfer_id}").as_bytes())
+        .to_hex()
+        .to_string();
+    target
+        .root
+        .join(P2P_META_DIR)
+        .join(P2P_TMP_DIR)
+        .join(format!("{key}.json"))
+}
+
+fn transfer_part_path(target: &P2PSyncTarget, transfer_id: &str) -> PathBuf {
+    let key = blake3::hash(format!("transfer-part:{transfer_id}").as_bytes())
+        .to_hex()
+        .to_string();
+    target
+        .root
+        .join(P2P_META_DIR)
+        .join(P2P_TMP_DIR)
+        .join(format!("{key}.part"))
+}
+
+fn transfer_range_marker(target: &P2PSyncTarget, transfer_id: &str, index: u32) -> PathBuf {
+    let key = blake3::hash(format!("transfer-done:{transfer_id}:{index}").as_bytes())
+        .to_hex()
+        .to_string();
+    target
+        .root
+        .join(P2P_META_DIR)
+        .join(P2P_TMP_DIR)
+        .join(format!("{key}.done"))
+}
+
+fn push_range_marker(target: &P2PSyncTarget, rel: &str, index: u32) -> PathBuf {
+    let key = blake3::hash(format!("push-range-done:{rel}:{index}").as_bytes())
+        .to_hex()
+        .to_string();
+    target
+        .root
+        .join(P2P_META_DIR)
+        .join(P2P_TMP_DIR)
+        .join(format!("{key}.done"))
+}
+
+fn push_range_meta_path(target: &P2PSyncTarget, rel: &str) -> PathBuf {
+    let key = blake3::hash(format!("push-range-meta:{rel}").as_bytes())
+        .to_hex()
+        .to_string();
+    target
+        .root
+        .join(P2P_META_DIR)
+        .join(P2P_TMP_DIR)
+        .join(format!("{key}.json"))
+}
+
+fn push_range_bounds(size: u64, count: u32, index: u32) -> (u64, u64) {
+    let range_size = (size + count as u64 - 1) / count as u64;
+    let start = range_size * index as u64;
+    (start, range_size.min(size.saturating_sub(start)))
+}
+
+async fn accept_push_range(
+    target: &P2PSyncTarget,
+    rel: &str,
+    send: &mut SendStream,
+    recv: &mut RecvStream,
+    size: u64,
+    expected_hash: &str,
+    _mtime_ms: i64,
+    range_index: u32,
+    range_start: u64,
+    range_length: u64,
+    range_count: u32,
+    transfer_id: &str,
+) -> Result<String, String> {
+    use tokio::io::{AsyncSeekExt, AsyncWriteExt};
+    if target.key == "transfers" && transfer_id.trim().is_empty() {
+        return Err("临时传输并行区间缺少 transfer_id".to_string());
+    }
+    let (expected_start, expected_length) = push_range_bounds(size, range_count, range_index);
+    if range_start != expected_start || range_length != expected_length {
+        return Err(format!(
+            "推送区间参数不一致：start {} != {} 或 length {} != {}",
+            range_start, expected_start, range_length, expected_length
+        ));
+    }
+    let is_transfer = target.key == "transfers";
+    let meta_path;
+    let part;
+    let marker;
+    if is_transfer {
+        meta_path = transfer_meta_path(target, transfer_id);
+        part = transfer_part_path(target, transfer_id);
+        let same_file = fs::read_to_string(&meta_path)
+            .ok()
+            .and_then(|raw| serde_json::from_str::<PushTransferMeta>(&raw).ok())
+            .map(|old| old.rel == rel && old.size == size && old.count == range_count)
+            .unwrap_or(false);
+        if !same_file {
+            let _ = fs::remove_file(&part);
+            for index in 0..range_count {
+                let _ = fs::remove_file(transfer_range_marker(target, transfer_id, index));
+            }
+            let meta = PushTransferMeta {
+                rel: rel.to_string(),
+                final_rel: unique_transfer_rel(&target.root, rel)?,
+                size,
+                count: range_count,
+            };
+            fs::write(
+                &meta_path,
+                serde_json::to_vec(&meta).map_err(|e| e.to_string())?,
+            )
+            .map_err(|e| format!("写入临时传输元数据失败: {e}"))?;
+            let file = tokio::fs::OpenOptions::new()
+                .create(true)
+                .write(true)
+                .open(&part)
+                .await
+                .map_err(|e| format!("创建临时传输文件失败: {e}"))?;
+            file.set_len(size)
+                .await
+                .map_err(|e| format!("预分配临时传输文件失败: {e}"))?;
+        }
+        marker = transfer_range_marker(target, transfer_id, range_index);
+    } else {
+        meta_path = push_range_meta_path(target, rel);
+        let meta = PushRangeMeta {
+            size,
+            blake3: expected_hash.to_string(),
+            count: range_count,
+        };
+        let same_file = fs::read_to_string(&meta_path)
+            .ok()
+            .and_then(|raw| serde_json::from_str::<PushRangeMeta>(&raw).ok())
+            .map(|old| old == meta)
+            .unwrap_or(false);
+        part = push_part_path(target, rel);
+        if !same_file {
+            let _ = fs::remove_file(&part);
+            for index in 0..range_count {
+                let _ = fs::remove_file(push_range_marker(target, rel, index));
+            }
+            fs::write(
+                &meta_path,
+                serde_json::to_vec(&meta).map_err(|e| e.to_string())?,
+            )
+            .map_err(|e| format!("写入区间元数据失败: {e}"))?;
+            let file = tokio::fs::OpenOptions::new()
+                .create(true)
+                .write(true)
+                .open(&part)
+                .await
+                .map_err(|e| format!("创建并行上传临时文件失败: {e}"))?;
+            file.set_len(size)
+                .await
+                .map_err(|e| format!("预分配并行上传临时文件失败: {e}"))?;
+        }
+        marker = push_range_marker(target, rel, range_index);
+    }
+    let received = if marker.exists() { expected_length } else { 0 };
+    let header = P2PFileHeader {
+        ok: true,
+        message: "ok".to_string(),
+        size,
+        blake3: expected_hash.to_string(),
+        mtime_ms: _mtime_ms,
+        received,
+    };
+    write_control(send, &header, "P2P 区间文件头").await?;
+
+    if received < expected_length {
+        let mut out = tokio::fs::OpenOptions::new()
+            .write(true)
+            .open(&part)
+            .await
+            .map_err(|e| format!("打开并行上传临时文件失败: {e}"))?;
+        out.seek(SeekFrom::Start(range_start))
+            .await
+            .map_err(|e| format!("定位并行上传区间失败: {e}"))?;
+        recv_file_body(recv, &mut out, expected_length, None).await?;
+        out.flush()
+            .await
+            .map_err(|e| format!("刷新并行上传区间失败: {e}"))?;
+        fs::write(&marker, b"done").map_err(|e| format!("写入区间完成标记失败: {e}"))?;
+    }
+    Ok(format!(
+        "已接收区间 {}/{}（{}+{}）",
+        range_index + 1,
+        range_count,
+        range_start,
+        expected_length
+    ))
+}
+
+async fn assemble_push_ranges(
+    target_key: &str,
+    rel: &str,
+    size: u64,
+    expected_hash: &str,
+    _mtime_ms: i64,
+    range_count: u32,
+    transfer_id: &str,
+) -> Result<String, String> {
+    if range_count == 0 {
+        return Err("区间数量不能为空".to_string());
+    }
+    let target = target_from_key(target_key)?;
+    if should_skip(&target, rel) {
+        return Err(format!("该文件不在同步范围内: {rel}"));
+    }
+    let is_transfer = target.key == "transfers";
+    let (meta_path, part, final_rel) = if is_transfer {
+        if transfer_id.trim().is_empty() {
+            return Err("临时传输并行区间缺少 transfer_id".to_string());
+        }
+        let meta_path = transfer_meta_path(&target, transfer_id);
+        let meta: PushTransferMeta = fs::read_to_string(&meta_path)
+            .ok()
+            .and_then(|raw| serde_json::from_str(&raw).ok())
+            .ok_or_else(|| "临时传输元数据不存在，请重新发送".to_string())?;
+        if meta.rel != rel || meta.size != size || meta.count != range_count {
+            return Err("临时传输元数据与当前文件不一致，请重新发送".to_string());
+        }
+        (
+            meta_path,
+            transfer_part_path(&target, transfer_id),
+            meta.final_rel,
+        )
+    } else {
+        let _ = safe_join(&target.root, rel)?;
+        let meta_path = push_range_meta_path(&target, rel);
+        let meta = PushRangeMeta {
+            size,
+            blake3: expected_hash.to_string(),
+            count: range_count,
+        };
+        let same_file = fs::read_to_string(&meta_path)
+            .ok()
+            .and_then(|raw| serde_json::from_str::<PushRangeMeta>(&raw).ok())
+            .map(|old| old == meta)
+            .unwrap_or(false);
+        if !same_file {
+            return Err("区间元数据与当前文件不一致，请重新上传".to_string());
+        }
+        (meta_path, push_part_path(&target, rel), rel.to_string())
+    };
+
+    let marker_for = |index: u32| {
+        if is_transfer {
+            transfer_range_marker(&target, transfer_id, index)
+        } else {
+            push_range_marker(&target, rel, index)
+        }
+    };
+    for index in 0..range_count {
+        if !marker_for(index).exists() {
+            return Err(format!("区间 {} 未完成", index));
+        }
+    }
+    let size_ok = fs::metadata(&part)
+        .map(|meta| meta.len() == size)
+        .unwrap_or(false);
+    if !size_ok {
+        let _ = fs::remove_file(&part);
+        for index in 0..range_count {
+            let _ = fs::remove_file(marker_for(index));
+        }
+        return Err("并行上传临时文件大小不符".to_string());
+    }
+
+    if let Err(error) = finalize_incoming_file_async(&target, &final_rel, &part, expected_hash).await {
+        let _ = fs::remove_file(&part);
+        for index in 0..range_count {
+            let _ = fs::remove_file(marker_for(index));
+        }
+        return Err(error);
+    }
+    for index in 0..range_count {
+        let _ = fs::remove_file(marker_for(index));
+    }
+    let _ = fs::remove_file(&meta_path);
+    info!(target = %target.key, rel = %final_rel, size, range_count, "[P2PSync] assembled pushed ranges");
+    Ok(format!("已接收 {final_rel}"))
 }
 
 /// 客户端：请求对端清单。
@@ -2233,17 +2813,167 @@ fn part_path(target: &P2PSyncTarget, rel: &str) -> PathBuf {
 
 /// 客户端：从对端拉取单个文件并原子落盘，支持断点续传。`expected` 为远端清单
 /// 中记录的条目（大小/哈希），用于校验与续传判断。
+fn parallel_marker(part: &Path) -> PathBuf {
+    PathBuf::from(format!("{}.parallel", part.to_string_lossy()))
+}
+
+fn range_marker(part: &Path, index: usize) -> PathBuf {
+    PathBuf::from(format!("{}.r{}.done", part.to_string_lossy(), index))
+}
+
+async fn pull_file_parallel(
+    connection: &Connection,
+    target: &P2PSyncTarget,
+    rel: &str,
+    expected: &P2PFileEntry,
+    progress: &FileProgress,
+) -> Result<u64, String> {
+    use futures_util::stream::{self, StreamExt};
+    use tokio::io::{AsyncSeekExt, AsyncWriteExt};
+
+    let tmp_dir = target.root.join(P2P_META_DIR).join(P2P_TMP_DIR);
+    fs::create_dir_all(&tmp_dir).map_err(|e| format!("创建 P2P 临时目录失败: {e}"))?;
+    let part = part_path(target, rel);
+    let marker = parallel_marker(&part);
+    fs::write(&marker, b"parallel").map_err(|e| format!("创建并行拉取标记失败: {e}"))?;
+
+    let same_size = fs::metadata(&part)
+        .map(|meta| meta.len() == expected.size)
+        .unwrap_or(false);
+    if !same_size {
+        for index in 0..PARALLEL_PULL_RANGES {
+            let _ = fs::remove_file(range_marker(&part, index));
+        }
+        let file = tokio::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .open(&part)
+            .await
+            .map_err(|e| format!("创建 P2P 临时文件失败 {}: {e}", part.display()))?;
+        file.set_len(expected.size)
+            .await
+            .map_err(|e| format!("预分配 P2P 临时文件失败: {e}"))?;
+    }
+
+    let range_size = (expected.size + PARALLEL_PULL_RANGES as u64 - 1)
+        / PARALLEL_PULL_RANGES as u64;
+    let completed: u64 = (0..PARALLEL_PULL_RANGES)
+        .filter(|index| range_marker(&part, *index).exists())
+        .map(|index| {
+            let start = index as u64 * range_size;
+            range_size.min(expected.size.saturating_sub(start))
+        })
+        .sum();
+    progress.seed(completed);
+    let tasks = (0..PARALLEL_PULL_RANGES).map(|index| {
+        let connection = connection.clone();
+        let target = target.clone();
+        let rel = rel.to_string();
+        let expected = (*expected).clone();
+        let part = part.clone();
+        let progress = (*progress).clone();
+        async move {
+            let done = range_marker(&part, index);
+            if done.exists() {
+                return Ok::<(), String>(());
+            }
+            let start = index as u64 * range_size;
+            if start >= expected.size {
+                return Ok(());
+            }
+            let length = range_size.min(expected.size - start);
+            let (mut send, mut recv) = timeout(
+                StdDuration::from_secs(P2P_ONLINE_TIMEOUT_SECS),
+                connection.open_bi(),
+            )
+            .await
+            .map_err(|_| "打开并行拉取通道超时".to_string())?
+            .map_err(|e| format!("打开并行拉取通道失败: {e}"))?;
+            write_control(
+                &mut send,
+                &P2PWireRequest::PullFile {
+                    target: target.key.clone(),
+                    rel: rel.clone(),
+                    offset: start,
+                    length,
+                    known_hash: expected.blake3.clone(),
+                },
+                "P2P 区间拉取请求",
+            )
+            .await?;
+            send.finish()
+                .map_err(|e| format!("区间拉取请求完成发送失败: {e}"))?;
+            let header: P2PFileHeader =
+                read_control(&mut recv, P2P_FRAME_LIMIT, "P2P 区间文件头").await?;
+            if !header.ok {
+                return Err(header.message);
+            }
+            if header.size != expected.size {
+                return Err(format!("对端文件大小已变化：{} != {}", header.size, expected.size));
+            }
+            let mut out = tokio::fs::OpenOptions::new()
+                .write(true)
+                .open(&part)
+                .await
+                .map_err(|e| format!("打开 P2P 临时文件失败: {e}"))?;
+            out.seek(SeekFrom::Start(start))
+                .await
+                .map_err(|e| format!("定位并行拉取区间失败: {e}"))?;
+            recv_file_body(&mut recv, &mut out, length, Some(&progress)).await?;
+            out.flush()
+                .await
+                .map_err(|e| format!("刷新并行拉取区间失败: {e}"))?;
+            fs::write(&done, b"done").map_err(|e| format!("写入区间完成标记失败: {e}"))?;
+            Ok(())
+        }
+    });
+
+    let results = stream::iter(tasks)
+        .buffer_unordered(PARALLEL_PULL_RANGES)
+        .collect::<Vec<_>>()
+        .await;
+    if let Some(Err(error)) = results.into_iter().find(|result| result.is_err()) {
+        return Err(error);
+    }
+    for index in 0..PARALLEL_PULL_RANGES {
+        if expected.size > index as u64 * range_size && !range_marker(&part, index).exists() {
+            return Err(format!("并行拉取区间 {} 未完成", index));
+        }
+    }
+
+    finalize_incoming_file_async(target, rel, &part, &expected.blake3).await?;
+    for index in 0..PARALLEL_PULL_RANGES {
+        let _ = fs::remove_file(range_marker(&part, index));
+    }
+    let _ = fs::remove_file(&marker);
+    info!(
+        target = %target.key,
+        rel,
+        size = expected.size,
+        ranges = PARALLEL_PULL_RANGES,
+        "[P2PSync] pulled file with parallel ranges"
+    );
+    Ok(expected.size)
+}
+
 async fn pull_file_full(
     connection: &Connection,
     target: &P2PSyncTarget,
     rel: &str,
     expected: &P2PFileEntry,
+    progress: &FileProgress,
 ) -> Result<u64, String> {
     use tokio::io::AsyncWriteExt;
 
     let tmp_dir = target.root.join(P2P_META_DIR).join(P2P_TMP_DIR);
     fs::create_dir_all(&tmp_dir).map_err(|e| format!("创建 P2P 临时目录失败: {e}"))?;
     let part = part_path(target, rel);
+
+    if expected.size >= PARALLEL_PULL_THRESHOLD
+        && (parallel_marker(&part).exists() || !part.exists())
+    {
+        return pull_file_parallel(connection, target, rel, expected, progress).await;
+    }
 
     // 已有断点：取其当前长度作为续传偏移；若超过期望大小说明对端文件已变，丢弃重来。
     let mut offset = match fs::metadata(&part) {
@@ -2254,6 +2984,7 @@ async fn pull_file_full(
         let _ = fs::remove_file(&part);
         offset = 0;
     }
+    progress.seed(offset);
 
     let (mut send, mut recv) = timeout(
         StdDuration::from_secs(P2P_ONLINE_TIMEOUT_SECS),
@@ -2269,6 +3000,8 @@ async fn pull_file_full(
             target: target.key.to_string(),
             rel: rel.to_string(),
             offset,
+            length: 0,
+            known_hash: expected.blake3.clone(),
         },
         "P2P 拉取请求",
     )
@@ -2301,7 +3034,7 @@ async fn pull_file_full(
                 .await
                 .map_err(|e| format!("创建 P2P 临时文件失败 {}: {e}", part.display()))?
         };
-        recv_file_body(&mut recv, &mut out, body_len).await?;
+        recv_file_body(&mut recv, &mut out, body_len, Some(progress)).await?;
         out.flush()
             .await
             .map_err(|e| format!("刷新 P2P 临时文件失败 {}: {e}", part.display()))?;
@@ -2388,9 +3121,13 @@ async fn pull_file(
     target: &P2PSyncTarget,
     rel: &str,
     expected: &P2PFileEntry,
+    progress: &FileProgress,
 ) -> Result<u64, String> {
     let basis = safe_join(&target.root, rel)?;
-    let can_delta = p2p_block_delta_enabled() && basis.is_file() && expected.size >= P2P_DELTA_MIN_SIZE;
+    let can_delta = p2p_block_delta_enabled()
+        && basis.is_file()
+        && expected.size >= P2P_DELTA_MIN_SIZE
+        && expected.size <= P2P_DELTA_MAX_SIZE;
     if can_delta {
         match pull_file_delta(connection, target, rel).await {
             Ok(n) => return Ok(n),
@@ -2399,16 +3136,135 @@ async fn pull_file(
             }
         }
     }
-    pull_file_full(connection, target, rel, expected).await
+    pull_file_full(connection, target, rel, expected, progress).await
 }
 
 /// 客户端：把本地单个文件推送给对端。复用清单中已算好的哈希，避免重复 blake3。
+async fn push_file_parallel(
+    connection: &Connection,
+    target: &P2PSyncTarget,
+    rel: &str,
+    entry: &P2PFileEntry,
+    progress: &FileProgress,
+) -> Result<u64, String> {
+    use futures_util::stream::{self, StreamExt};
+    let size = entry.size;
+    let count = PARALLEL_PUSH_RANGES as u32;
+    let path = safe_join(&target.root, rel)?;
+
+    let tasks = (0..count).map(|index| {
+        let connection = connection.clone();
+        let target = target.clone();
+        let rel = rel.to_string();
+        let entry = entry.clone();
+        let progress = (*progress).clone();
+        let path = path.clone();
+        async move {
+            let (start, length) = push_range_bounds(size, count, index);
+            if length == 0 {
+                return Ok::<(), String>(());
+            }
+            let (mut send, mut recv) = timeout(
+                StdDuration::from_secs(P2P_ONLINE_TIMEOUT_SECS),
+                connection.open_bi(),
+            )
+            .await
+            .map_err(|_| "打开上传区间通道超时".to_string())?
+            .map_err(|e| format!("打开上传区间通道失败: {e}"))?;
+            write_control(
+                &mut send,
+                &P2PWireRequest::PushFile {
+                    target: target.key.clone(),
+                    rel: rel.clone(),
+                    size,
+                    blake3: entry.blake3.clone(),
+                    mtime_ms: entry.modified_unix_ms,
+                    range_index: index,
+                    range_start: start,
+                    range_length: length,
+                    range_count: count,
+                    transfer_id: String::new(),
+                },
+                "P2P 区间推送请求",
+            )
+            .await?;
+            let header: P2PFileHeader =
+                read_control(&mut recv, P2P_FRAME_LIMIT, "P2P 区间文件头").await?;
+            if !header.ok {
+                return Err(header.message);
+            }
+            let received = header.received.min(length);
+            if received < length {
+                send_file_body_range(
+                    &mut send,
+                    &path,
+                    size,
+                    start + received,
+                    length - received,
+                    Some(&progress),
+                )
+                .await?;
+            }
+            send.finish()
+                .map_err(|e| format!("区间推送完成发送失败: {e}"))?;
+            let ack: P2PAck =
+                read_control(&mut recv, P2P_FRAME_LIMIT, "P2P 区间推送响应").await?;
+            if !ack.ok {
+                return Err(ack.message);
+            }
+            Ok(())
+        }
+    });
+
+    let results = stream::iter(tasks)
+        .buffer_unordered(PARALLEL_PUSH_RANGES)
+        .collect::<Vec<_>>()
+        .await;
+    if let Some(Err(error)) = results.into_iter().find(|result| result.is_err()) {
+        return Err(error);
+    }
+
+    let (mut send, mut recv) = timeout(
+        StdDuration::from_secs(P2P_ONLINE_TIMEOUT_SECS),
+        connection.open_bi(),
+    )
+    .await
+    .map_err(|_| "打开上传完成通道超时".to_string())?
+    .map_err(|e| format!("打开上传完成通道失败: {e}"))?;
+    write_control(
+        &mut send,
+        &P2PWireRequest::PushFileComplete {
+            target: target.key.clone(),
+            rel: rel.to_string(),
+            size,
+            blake3: entry.blake3.clone(),
+            mtime_ms: entry.modified_unix_ms,
+            range_count: count,
+            transfer_id: String::new(),
+        },
+        "P2P 区间完成请求",
+    )
+    .await?;
+    send.finish()
+        .map_err(|e| format!("区间完成请求发送失败: {e}"))?;
+    let ack: P2PAck = read_control(&mut recv, P2P_FRAME_LIMIT, "P2P 区间完成响应").await?;
+    if !ack.ok {
+        return Err(ack.message);
+    }
+    info!(target = %target.key, rel, size, count, "[P2PSync] pushed file with parallel ranges");
+    Ok(size)
+}
+
 async fn push_file(
     connection: &Connection,
     target: &P2PSyncTarget,
     rel: &str,
     entry: &P2PFileEntry,
+    progress: &FileProgress,
 ) -> Result<u64, String> {
+    if entry.size >= PARALLEL_PUSH_THRESHOLD && target.key != "transfers" {
+        return push_file_parallel(connection, target, rel, entry, progress).await;
+    }
     let path = safe_join(&target.root, rel)?;
     let size = entry.size;
 
@@ -2428,6 +3284,11 @@ async fn push_file(
             size,
             blake3: entry.blake3.clone(),
             mtime_ms: entry.modified_unix_ms,
+            range_index: 0,
+            range_start: 0,
+            range_length: 0,
+            range_count: 0,
+            transfer_id: String::new(),
         },
         "P2P 推送请求",
     )
@@ -2437,7 +3298,8 @@ async fn push_file(
         return Err(header.message);
     }
     let start = header.received.min(size);
-    send_file_body(&mut send, &path, size, start).await?;
+    progress.seed(start);
+    send_file_body(&mut send, &path, size, start, Some(progress)).await?;
     send.finish()
         .map_err(|e| format!("推送完成发送失败: {e}"))?;
 
@@ -2606,7 +3468,9 @@ where
                 let backoff = 300u64
                     .saturating_mul(1u64 << attempt.min(4))
                     .min(5_000);
-                tokio::time::sleep(StdDuration::from_millis(backoff)).await;
+                // 并发文件的多个重试加抖动，避免同时重连把刚恢复的连接再次打满。
+                let jitter = rand::random::<u64>() % 400;
+                tokio::time::sleep(StdDuration::from_millis(backoff + jitter)).await;
                 continue;
             }
         };
@@ -2619,7 +3483,8 @@ where
                     let backoff = 300u64
                         .saturating_mul(1u64 << attempt.min(4))
                         .min(5_000);
-                    tokio::time::sleep(StdDuration::from_millis(backoff)).await;
+                    let jitter = rand::random::<u64>() % 400;
+                    tokio::time::sleep(StdDuration::from_millis(backoff + jitter)).await;
                 } else {
                     // 业务级错误重试也无益，直接返回。
                     return Err(e);
@@ -2852,11 +3717,23 @@ async fn run_p2p_sync(
                         0,
                         rel.clone(),
                     );
+                    let progress = FileProgress::new(
+                        app_owned.clone(),
+                        run_id.clone(),
+                        target.clone(),
+                        peer_name.clone(),
+                        rel.clone(),
+                        cur,
+                        plan_total,
+                        entry.size,
+                    );
+                    let progress_for_retry = progress.clone();
                     let res = transfer_with_retry(&link, |conn| {
                         let target = target.clone();
                         let rel = rel.clone();
                         let entry = entry.clone();
-                        async move { pull_file(&conn, &target, &rel, &entry).await }
+                        let progress = progress_for_retry.clone();
+                        async move { pull_file(&conn, &target, &rel, &entry, &progress).await }
                     })
                     .await;
                     match res {
@@ -2910,11 +3787,23 @@ async fn run_p2p_sync(
                         0,
                         rel.clone(),
                     );
+                    let progress = FileProgress::new(
+                        app_owned.clone(),
+                        run_id.clone(),
+                        target.clone(),
+                        peer_name.clone(),
+                        rel.clone(),
+                        cur,
+                        plan_total,
+                        entry.size,
+                    );
+                    let progress_for_retry = progress.clone();
                     let res = transfer_with_retry(&link, |conn| {
                         let target = target.clone();
                         let rel = rel.clone();
                         let entry = entry.clone();
-                        async move { push_file(&conn, &target, &rel, &entry).await }
+                        let progress = progress_for_retry.clone();
+                        async move { push_file(&conn, &target, &rel, &entry, &progress).await }
                     })
                     .await;
                     match res {
@@ -3403,9 +4292,10 @@ pub async fn p2p_send_files(
         .find(|item| item.peer_id == peer_id)
         .cloned()
         .ok_or_else(|| "该设备还没有配对".to_string())?;
-    let connection = connect_peer(&endpoint, &peer).await?;
+    let link = Arc::new(PeerLink::new(endpoint.clone(), peer.clone()));
     let total_files = files.len() as u64;
     let mut sent = 0u64;
+    let mut errors = Vec::new();
 
     for (index, file) in files.iter().enumerate() {
         let path = PathBuf::from(file.path.trim());
@@ -3421,21 +4311,50 @@ pub async fn p2p_send_files(
         } else {
             file.relative_path.trim().replace('\\', "/")
         };
-        push_transfer_file(
-            &app,
-            &connection,
-            &peer,
-            &path,
-            &relative,
-            meta.len(),
-            index as u64,
-            total_files,
-        )
-        .await?;
-        sent += 1;
+        // 传输 id 在整个文件的多区间/多次重试中保持不变，接收端据此续传与命名。
+        let transfer_id = Uuid::new_v4().to_string();
+        let result = transfer_with_retry(&link, |connection| {
+            let app = app.clone();
+            let peer = peer.clone();
+            let path = path.clone();
+            let relative = relative.clone();
+            let transfer_id = transfer_id.clone();
+            let size = meta.len();
+            async move {
+                push_transfer_file(
+                    &app,
+                    &connection,
+                    &peer,
+                    &path,
+                    &relative,
+                    size,
+                    index as u64,
+                    total_files,
+                    &transfer_id,
+                )
+                .await
+                .map(|_| size)
+            }
+        })
+        .await;
+        match result {
+            Ok(_) => sent += 1,
+            Err(error) => errors.push(format!("{}: {}", relative, error)),
+        }
     }
+    link.close().await;
 
-    let message = format!("已向 {} 发送 {} 个文件", peer.device_name, sent);
+    let message = if errors.is_empty() {
+        format!("已向 {} 发送 {} 个文件", peer.device_name, sent)
+    } else {
+        format!(
+            "已向 {} 发送 {} 个文件，失败 {} 个：{}",
+            peer.device_name,
+            sent,
+            errors.len(),
+            errors.first().cloned().unwrap_or_default()
+        )
+    };
     let _ = app.emit(
         "p2p-file-progress",
         P2PFileProgress {
@@ -3462,7 +4381,22 @@ async fn push_transfer_file(
     size: u64,
     index: u64,
     total_files: u64,
+    transfer_id: &str,
 ) -> Result<(), String> {
+    if size >= PARALLEL_PUSH_THRESHOLD {
+        return push_transfer_file_parallel(
+            app,
+            connection,
+            peer,
+            source,
+            relative,
+            size,
+            index,
+            total_files,
+            transfer_id,
+        )
+        .await;
+    }
     use tokio::io::AsyncReadExt;
     let (mut send, mut recv) = timeout(
         StdDuration::from_secs(P2P_ONLINE_TIMEOUT_SECS),
@@ -3485,6 +4419,11 @@ async fn push_transfer_file(
         size,
         blake3: String::new(),
         mtime_ms,
+        range_index: 0,
+        range_start: 0,
+        range_length: 0,
+        range_count: 0,
+        transfer_id: transfer_id.to_string(),
     };
     write_control(&mut send, &request, "P2P 文件推送请求").await?;
     let header: P2PFileHeader = read_control(&mut recv, P2P_FRAME_LIMIT, "P2P 推送文件头").await?;
@@ -3546,6 +4485,167 @@ async fn push_transfer_file(
         relative,
         size,
         "[P2PSync] transfer file pushed"
+    );
+    Ok(())
+}
+
+async fn push_transfer_file_parallel(
+    app: &AppHandle,
+    connection: &Connection,
+    peer: &P2PTrustedPeer,
+    source: &Path,
+    relative: &str,
+    size: u64,
+    index: u64,
+    total_files: u64,
+    transfer_id: &str,
+) -> Result<(), String> {
+    use futures_util::stream::{self, StreamExt};
+    let count = PARALLEL_PUSH_RANGES as u32;
+    let mtime_ms = std::fs::metadata(source)
+        .ok()
+        .and_then(|meta| meta.modified().ok())
+        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|value| value.as_millis() as i64)
+        .unwrap_or(0);
+    let bytes_done = Arc::new(AtomicU64::new(0));
+    let _ = app.emit(
+        "p2p-file-progress",
+        P2PFileProgress {
+            peer_id: peer.peer_id.clone(),
+            device_name: peer.device_name.clone(),
+            file: relative.to_string(),
+            index,
+            total_files,
+            bytes_current: 0,
+            bytes_total: size,
+            status: "running".to_string(),
+            message: String::new(),
+        },
+    );
+
+    let tasks = (0..count).map(|range_index| {
+        let connection = connection.clone();
+        let app = app.clone();
+        let peer = peer.clone();
+        let source = source.to_path_buf();
+        let relative = relative.to_string();
+        let transfer_id = transfer_id.to_string();
+        let bytes_done = bytes_done.clone();
+        async move {
+            let (start, length) = push_range_bounds(size, count, range_index);
+            if length == 0 {
+                return Ok::<(), String>(());
+            }
+            let (mut send, mut recv) = timeout(
+                StdDuration::from_secs(P2P_ONLINE_TIMEOUT_SECS),
+                connection.open_bi(),
+            )
+            .await
+            .map_err(|_| "打开临时传输区间通道超时".to_string())?
+            .map_err(|e| format!("打开临时传输区间通道失败: {e}"))?;
+            write_control(
+                &mut send,
+                &P2PWireRequest::PushFile {
+                    target: "transfers".to_string(),
+                    rel: relative.clone(),
+                    size,
+                    blake3: String::new(),
+                    mtime_ms,
+                    range_index,
+                    range_start: start,
+                    range_length: length,
+                    range_count: count,
+                    transfer_id: transfer_id.clone(),
+                },
+                "P2P 临时传输区间请求",
+            )
+            .await?;
+            let header: P2PFileHeader =
+                read_control(&mut recv, P2P_FRAME_LIMIT, "P2P 临时传输区间文件头").await?;
+            if !header.ok {
+                return Err(header.message);
+            }
+            let received = header.received.min(length);
+            if received < length {
+                send_file_body_range(
+                    &mut send,
+                    &source,
+                    size,
+                    start + received,
+                    length - received,
+                    None,
+                )
+                .await?;
+            }
+            send.finish()
+                .map_err(|e| format!("临时传输区间完成发送失败: {e}"))?;
+            let ack: P2PAck =
+                read_control(&mut recv, P2P_FRAME_LIMIT, "P2P 临时传输区间响应").await?;
+            if !ack.ok {
+                return Err(ack.message);
+            }
+            let current = bytes_done.fetch_add(length, Ordering::Relaxed) + length;
+            let _ = app.emit(
+                "p2p-file-progress",
+                P2PFileProgress {
+                    peer_id: peer.peer_id.clone(),
+                    device_name: peer.device_name.clone(),
+                    file: relative,
+                    index,
+                    total_files,
+                    bytes_current: current.min(size),
+                    bytes_total: size,
+                    status: "running".to_string(),
+                    message: String::new(),
+                },
+            );
+            Ok(())
+        }
+    });
+
+    let results = stream::iter(tasks)
+        .buffer_unordered(PARALLEL_PUSH_RANGES)
+        .collect::<Vec<_>>()
+        .await;
+    if let Some(Err(error)) = results.into_iter().find(|result| result.is_err()) {
+        return Err(error);
+    }
+
+    let (mut send, mut recv) = timeout(
+        StdDuration::from_secs(P2P_ONLINE_TIMEOUT_SECS),
+        connection.open_bi(),
+    )
+    .await
+    .map_err(|_| "打开临时传输完成通道超时".to_string())?
+    .map_err(|e| format!("打开临时传输完成通道失败: {e}"))?;
+    write_control(
+        &mut send,
+        &P2PWireRequest::PushFileComplete {
+            target: "transfers".to_string(),
+            rel: relative.to_string(),
+            size,
+            blake3: String::new(),
+            mtime_ms,
+            range_count: count,
+            transfer_id: transfer_id.to_string(),
+        },
+        "P2P 临时传输完成请求",
+    )
+    .await?;
+    send.finish()
+        .map_err(|e| format!("临时传输完成请求发送失败: {e}"))?;
+    let ack: P2PAck =
+        read_control(&mut recv, P2P_FRAME_LIMIT, "P2P 临时传输完成响应").await?;
+    if !ack.ok {
+        return Err(ack.message);
+    }
+    info!(
+        peer = %peer.device_name,
+        relative,
+        size,
+        count,
+        "[P2PSync] transfer file pushed with parallel ranges"
     );
     Ok(())
 }
@@ -3891,5 +4991,124 @@ mod tests {
         let raw = r#"{"ok":true,"message":"ok","size":10,"blake3":"","mtime_ms":0}"#;
         let header: P2PFileHeader = serde_json::from_str(raw).expect("header");
         assert_eq!(header.received, 0);
+    }
+
+    #[test]
+    fn parallel_pull_markers_are_distinct_and_stable() {
+        let part = PathBuf::from("root/.guaxi-p2p/tmp/a.part");
+        assert_ne!(parallel_marker(&part), part);
+        assert_eq!(parallel_marker(&part), parallel_marker(&part));
+        assert_ne!(range_marker(&part, 0), range_marker(&part, 1));
+        assert!(range_marker(&part, 3)
+            .to_string_lossy()
+            .ends_with(".r3.done"));
+    }
+
+    #[test]
+    fn delta_only_applies_to_bounded_file_sizes() {
+        assert!(P2P_DELTA_MAX_SIZE > P2P_DELTA_MIN_SIZE);
+        assert_eq!(PARALLEL_PULL_RANGES, 4);
+        assert!(PARALLEL_PULL_THRESHOLD >= 256 * 1024 * 1024);
+    }
+
+    #[test]
+    fn push_ranges_cover_the_whole_file_without_gaps() {
+        for size in [0u64, 1, 511, 512 * 1024 * 1024, 10 * 1024 * 1024 * 1024] {
+            let count = PARALLEL_PUSH_RANGES as u32;
+            let mut covered = 0u64;
+            for index in 0..count {
+                let (start, length) = push_range_bounds(size, count, index);
+                assert_eq!(start, covered);
+                covered += length;
+            }
+            assert_eq!(covered, size);
+        }
+        assert!(PARALLEL_PUSH_THRESHOLD >= PARALLEL_PULL_THRESHOLD);
+    }
+
+    #[test]
+    fn push_range_markers_are_per_range() {
+        let target = P2PSyncTarget {
+            key: "resource_repo".to_string(),
+            label: "资源库".to_string(),
+            root: PathBuf::from("root"),
+        };
+        assert_ne!(
+            push_range_marker(&target, "big.bin", 0),
+            push_range_marker(&target, "big.bin", 1)
+        );
+        assert_ne!(
+            push_range_marker(&target, "big.bin", 0),
+            push_range_meta_path(&target, "big.bin")
+        );
+    }
+
+    #[test]
+    fn push_request_deserializes_without_range_fields() {
+        let raw = r#"{"PushFile":{"target":"resource_repo","rel":"a.bin","size":10,"blake3":"h","mtime_ms":0}}"#;
+        let request: P2PWireRequest = serde_json::from_str(raw).expect("request");
+        match request {
+            P2PWireRequest::PushFile {
+                range_count,
+                range_length,
+                transfer_id,
+                ..
+            } => {
+                assert_eq!(range_count, 0);
+                assert_eq!(range_length, 0);
+                assert!(transfer_id.is_empty());
+            }
+            _ => panic!("expected PushFile"),
+        }
+    }
+
+    #[test]
+    fn transfer_id_paths_are_stable_and_isolated() {
+        let target = P2PSyncTarget {
+            key: "transfers".to_string(),
+            label: "临时传输".to_string(),
+            root: PathBuf::from("root"),
+        };
+        let id = "transfer-123";
+        assert_eq!(transfer_meta_path(&target, id), transfer_meta_path(&target, id));
+        assert_ne!(transfer_meta_path(&target, id), transfer_part_path(&target, id));
+        assert_ne!(
+            transfer_range_marker(&target, id, 0),
+            transfer_range_marker(&target, id, 1)
+        );
+        assert_ne!(
+            transfer_part_path(&target, id),
+            transfer_part_path(&target, "other")
+        );
+    }
+
+    #[test]
+    fn transfer_meta_keeps_final_name_for_all_ranges() {
+        let meta = PushTransferMeta {
+            rel: "docs/report.pdf".to_string(),
+            final_rel: "docs/report (1).pdf".to_string(),
+            size: 10,
+            count: 4,
+        };
+        let raw = serde_json::to_string(&meta).expect("serialize");
+        let decoded: PushTransferMeta = serde_json::from_str(&raw).expect("deserialize");
+        assert_eq!(decoded, meta);
+    }
+
+    #[test]
+    fn pull_request_deserializes_without_new_optional_fields() {
+        let raw = r#"{"PullFile":{"target":"resource_repo","rel":"a.bin","offset":0}}"#;
+        let request: P2PWireRequest = serde_json::from_str(raw).expect("request");
+        match request {
+            P2PWireRequest::PullFile {
+                length,
+                known_hash,
+                ..
+            } => {
+                assert_eq!(length, 0);
+                assert!(known_hash.is_empty());
+            }
+            _ => panic!("expected PullFile"),
+        }
     }
 }
