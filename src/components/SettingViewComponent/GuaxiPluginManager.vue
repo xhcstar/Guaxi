@@ -68,6 +68,14 @@
             :options="(spec.options || []).map((o) => ({ label: o, value: o }))"
             class="gpm-arg-select"
           />
+          <div v-else-if="spec.type === 'file' || spec.type === 'folder'" class="gpm-arg-path">
+            <n-input
+              v-model:value="argDraft[spec.key]"
+              size="small"
+              :placeholder="spec.placeholder || (spec.type === 'folder' ? '目录路径' : '文件路径')"
+            />
+            <n-button size="small" @click="pickArgPath(spec)">选择</n-button>
+          </div>
           <n-input
             v-else
             v-model:value="argDraft[spec.key]"
@@ -157,6 +165,21 @@ const editArgs = (p) => {
   }
   argDraft.value = draft
   argVisible.value = true
+}
+
+const pickArgPath = async (spec) => {
+  try {
+    const exts = Array.isArray(spec.accept) ? spec.accept : []
+    const picked = await openFileDialog({
+      multiple: false,
+      directory: spec.type === 'folder',
+      ...(exts.length ? { filters: [{ name: '文件', extensions: exts }] } : {}),
+    })
+    const path = Array.isArray(picked) ? picked[0] : picked
+    if (path) argDraft.value[spec.key] = String(path)
+  } catch (e) {
+    message.error('选择失败:' + String(e?.message || e))
+  }
 }
 
 const saveArgs = async () => {
@@ -332,6 +355,13 @@ onMounted(refresh)
 }
 .gpm-arg-select {
   width: 200px;
+}
+.gpm-arg-path {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 auto;
+  min-width: 0;
 }
 .gpm-arg-footer {
   display: flex;

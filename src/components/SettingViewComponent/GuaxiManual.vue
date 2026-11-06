@@ -24,6 +24,7 @@
             <li><button type="button" class="toc-link" @click="scrollToSection('task')">任务管理</button></li>
             <li><button type="button" class="toc-link" @click="scrollToSection('apps')">应用中心</button></li>
             <li><button type="button" class="toc-link" @click="scrollToSection('setting')">设置</button></li>
+            <li><button type="button" class="toc-link" @click="scrollToSection('plugins')">插件</button></li>
             <li><button type="button" class="toc-link" @click="scrollToSection('faq')">常见问题</button></li>
           </ul>
         </div>
@@ -1067,6 +1068,120 @@ data: |
 
         <n-divider />
 
+        <section id="plugins">
+          <h2 class="h2">插件</h2>
+          <p class="p">
+            插件是运行在软件内置 Python 引擎里的扩展脚本，用来补上“每次都手工做”的小事：把 Excel 选区转成 Markdown 表格、抓网页正文、把选中内容存入知识库、按笔记字段生成预填表单、调用模型润色/翻译等。
+            插件可以读剪贴板、读写本地文件、访问网络，也能调用软件提供的模型接口和 MCP 数据工具。
+          </p>
+
+          <h3 class="h3">1）怎么用</h3>
+          <ol class="ol">
+            <li>进入 <n-tag size="small">设置</n-tag> → <n-tag size="small">插件</n-tag>，用开关启用；带参数的插件点「参数」可以先设置默认值。</li>
+            <li>回到编辑器，选中文本（或把光标放在要插入的位置）→ 右键 →「运行插件…」。</li>
+            <li>带参数的插件会先弹出运行面板：可以直接改值；<b>文件/目录</b>字段点「选择」会打开系统文件选择器；勾选「记住这些值」下次沿用。有文件、目录、下拉或必填参数的插件每次都会询问，其余参数直接用设置页里保存的默认值。</li>
+            <li>插件处理完会替换选区或插入光标处；出错会在应用内提示，不会写坏文档。</li>
+            <li>插件读取剪贴板走系统原生接口，不会再弹浏览器的剪贴板授权框。</li>
+          </ol>
+
+          <h3 class="h3">2）内置插件</h3>
+          <ul class="manual-ul">
+            <li><b>剪贴板表格 → Markdown</b>：在 Excel/网页表格里复制一块区域，运行后在光标处生成 Markdown 表格，纯数值列自动右对齐。</li>
+            <li><b>导入表格文件</b>：运行面板里直接选 CSV/TSV/XLSX/JSON，转成 Markdown 表格；Excel 可指定工作表。</li>
+            <li><b>链接抓正文</b>：选中一个网址，抓取正文并转成 Markdown。</li>
+            <li><b>存入知识库并双链</b>：把选中内容写成当前知识库的笔记，按标签/标题重叠补「相关」双链。</li>
+            <li><b>模型润色 / 翻译</b>：润色、精简、扩写、翻译、摘要、纠错，走设置里的模型。</li>
+            <li><b>生成示例数据</b>：按「列名:类型」生成 Markdown/CSV/JSON 假数据。</li>
+            <li><b>表单填充助手</b>：从笔记 frontmatter、键值、两列表格或任务查询里提取字段，生成预填好的表单链接（默认只预览，可手动打开）。</li>
+            <li>另外还有表格合计、代码块整理、参考文献整理、数据摘要、frontmatter 体检等基础插件。</li>
+          </ul>
+
+          <h3 class="h3">3）编写插件</h3>
+          <p class="p">每个插件是 <code>utils/guaxi_editor_plugins/&lt;id&gt;/</code> 下的一个目录，至少包含 <code>manifest.json</code> 和入口脚本（默认 <code>main.py</code>）。入口实现 <code>run(ctx)</code> 并返回字典。</p>
+          <pre class="manual-code">{
+  "id": "my-plugin",
+  "name": "我的插件",
+  "description": "一句话说明",
+  "entry": "main.py",
+  "capabilities": ["transform"],
+  "surfaces": ["editor"],
+  "scope": "selection",
+  "args": [
+    { "key": "mode", "label": "方式", "type": "select",
+      "options": ["润色", "翻译"], "default": "润色" },
+    { "key": "file", "label": "数据文件", "type": "file",
+      "accept": ["csv", "xlsx"] }
+  ],
+  "clipboard": false,
+  "allow_empty_selection": false,
+  "needs_kb": false
+}</pre>
+          <p class="p">参数类型：<code>text</code> / <code>number</code> / <code>bool</code> / <code>select</code> / <code>textarea</code> / <code>file</code> / <code>folder</code>。<code>file</code> 与 <code>folder</code> 在运行面板里带「选择」按钮，<code>accept</code> 用来限制扩展名。</p>
+          <p class="p">三种作用面：</p>
+          <ul class="manual-ul">
+            <li><code>editor</code>：右键运行，<code>ctx</code> 有 <code>selection</code>、<code>document</code>、<code>args</code>、<code>file_path</code>、<code>kb_location</code>、<code>kb_name</code>、<code>clipboard</code>；返回 <code>{"text": "..."}</code> 替换选区或插入光标。</li>
+            <li><code>knowledge-base</code>：知识库标题栏运行，<code>ctx</code> 有 <code>kb_name</code>、<code>kb_location</code>；返回 <code>{"report": "Markdown"}</code>。</li>
+            <li><code>repo</code>：文件库工具栏运行，<code>ctx</code> 有 <code>resources</code> 等；同样返回 <code>report</code>。</li>
+          </ul>
+
+          <h3 class="h3">4）让插件自己弹界面</h3>
+          <p class="p">插件不用把交互写死在参数里：返回 <code>{"ui": {...}}</code>，宿主会渲染同一个运行面板，用户提交后带着 <code>ctx.ui.values</code> 重新调用插件。最多 5 轮，足够做向导式交互。</p>
+          <pre class="manual-code">def run(ctx):
+    if not ctx.get("ui"):
+        return {"ui": {
+            "title": "选择数据源",
+            "description": "先选文件,再决定是否把首行当表头",
+            "fields": [
+                {"key": "path", "label": "CSV 文件", "type": "file",
+                 "accept": ["csv"], "required": True},
+                {"key": "header", "label": "首行是表头", "type": "bool",
+                 "default": True}
+            ],
+            "submit": "生成表格"
+        }}
+    path = ctx["ui"]["values"]["path"]
+    # ... 读取 path,生成 Markdown ...
+    return {"text": markdown_table}</pre>
+
+          <h3 class="h3">5）软件提供给插件的接口</h3>
+          <table class="api-table">
+            <thead>
+              <tr><th>接口</th><th>用途</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><code>ctx.*</code></td><td>选区、全文、参数、剪贴板、当前文件、知识库路径、<code>ctx.ui</code> 交互结果。</td></tr>
+              <tr><td><code>POST 127.0.0.1:8888/api/plugin/llm</code></td><td>用设置里的模型做补全；密钥留在 Rust 侧。请求 <code>{system, prompt, model_id?, temperature?, max_tokens?}</code>，返回 <code>{success, text, message?}</code>。</td></tr>
+              <tr><td><code>GET 127.0.0.1:8888/api/plugin/host/context</code></td><td>版本、插件目录、知识库根、资源库根、任务根，以及能力声明。</td></tr>
+              <tr><td><code>POST 127.0.0.1:8888/mcp</code></td><td>JSON-RPC 2.0 数据工具：<code>guaxi_recall</code>、<code>guaxi_kb_semantic_search</code>、<code>guaxi_kb_stats</code>、<code>guaxi_kb_tags</code>、<code>guaxi_task_query</code>、<code>guaxi_search_text</code>、<code>web_search</code>、<code>web_fetch</code>、<code>brief_generate</code> 等。</td></tr>
+              <tr><td>Python 运行时</td><td>标准库 + <code>httpx</code>、<code>trafilatura</code>、<code>bs4</code>、<code>pandas</code>、<code>polars</code>、<code>openpyxl</code>、<code>duckdb</code> 等；可直接读写本地文件。</td></tr>
+            </tbody>
+          </table>
+          <p class="p">MCP 调用示例：</p>
+          <pre class="manual-code">import json, urllib.request
+
+body = json.dumps({
+    "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+    "params": {"name": "guaxi_task_query", "arguments": {"keyword": "周报"}}
+}).encode("utf-8")
+req = urllib.request.Request(
+    "http://127.0.0.1:8888/mcp", data=body,
+    headers={"Content-Type": "application/json"})
+with urllib.request.urlopen(req, timeout=30) as resp:
+    result = json.loads(resp.read().decode("utf-8"))</pre>
+
+          <h3 class="h3">6）安全边界</h3>
+          <p class="p">插件就是本地 Python 代码，<b>没有沙箱</b>：能读任意文件、访问网络。只启用你信任的插件。模型的 API Key 由软件自己保存并调用，不会传给插件；插件只拿到补全结果。</p>
+
+          <h3 class="h3">7）后续扩展</h3>
+          <ul class="manual-ul">
+            <li>邮件、阅读器、知识源（RSS）的只读数据接口。</li>
+            <li>保存文件、应用启动、定时任务等事件钩子。</li>
+            <li>插件之间互相调用与共享设置。</li>
+          </ul>
+        </section>
+
+        <n-divider />
+
         <section id="faq">
           <h2 class="h2">常见问题</h2>
           <div class="qa">
@@ -1360,6 +1475,26 @@ onMounted(() => {
 .manual-ul li,
 .ol li {
   margin: 2px 0;
+}
+
+/* 插件章节的接口表：两列，行高紧凑，只用底边分隔。 */
+.api-table {
+  width: 100%;
+  margin-top: 8px;
+  border-collapse: collapse;
+  font-size: 13px;
+  line-height: 1.7;
+}
+.api-table th,
+.api-table td {
+  padding: 6px 8px;
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid var(--guaxi-border-color, #e0e0e6);
+}
+.api-table th {
+  font-weight: 600;
+  opacity: 0.8;
 }
 
 /* 正文里引用顶栏图标时的小尺寸内联图形。 */

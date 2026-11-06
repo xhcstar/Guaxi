@@ -1458,6 +1458,18 @@
       <GuaxiKbContextPanel v-model:visible="kbContextVisible" :anchor="kbContextAnchor"
         :query="kbContextQuery" @jump="handleKbContextJump" />
 
+      <PluginRunDialog
+        v-model:show="pluginRunVisible"
+        :title="pluginRunTitle"
+        :description="pluginRunDescription"
+        :fields="pluginRunFields"
+        :initial="pluginRunInitial"
+        :submit-label="pluginRunSubmitLabel"
+        :can-remember="pluginRunCanRemember"
+        @submit="handlePluginRunSubmit"
+        @cancel="handlePluginRunCancel"
+      />
+
       <!-- 链接悬停预览：只读，在鼠标旁显示目标笔记开头。
            pointer-events:none 很关键——否则这个浮层会截走鼠标，导致自己在悬停时抖动/闪烁。 -->
       <div v-if="linkHoverPreview.visible" class="link-hover-preview"
@@ -1491,6 +1503,7 @@ import { useReaderTabStore } from '../../stores/readerTabStore'
 import GuaxiEditorStatusBar from './GuaxiEditorStatusBar.vue'
 import GuaxiSelectionTranslatePanel from './GuaxiSelectionTranslatePanel.vue'
 import GuaxiKbContextPanel from './GuaxiKbContextPanel.vue'
+import PluginRunDialog from './PluginRunDialog.vue'
 import GuaxiNotebookView from './GuaxiNotebookView.vue'
 import GuaxiFindWidget from './GuaxiFindWidget.vue'
 import {
@@ -2704,17 +2717,19 @@ const writeClipboardText = async (text) => {
 };
 
 const readClipboardText = async () => {
+  // Tauri 原生读取优先：WebView2 的 navigator.clipboard.readText() 会弹浏览器授权框，
+  // 在应用内看起来像“陌生弹窗”。原生 API 直接读系统剪贴板，不需要授权。
   try {
-    return await navigator.clipboard.readText();
+    const mod = await import('@tauri-apps/plugin-clipboard-manager');
+    return String(await mod.readText() || '');
   } catch (error) {
-    logger.debug('[Clipboard] navigator read failed, trying Tauri clipboard manager', {
+    logger.debug('[Clipboard] Tauri read failed, trying navigator', {
       error: String(error?.message || error || ''),
     });
   }
 
   try {
-    const mod = await import('@tauri-apps/plugin-clipboard-manager');
-    return String(await mod.readText() || '');
+    return await navigator.clipboard.readText();
   } catch (error) {
     logger.warn('[Clipboard] read failed', {
       error: String(error?.message || error || ''),
@@ -13893,6 +13908,73 @@ const handleEditorPluginMenuSelect = (id) => {
 
 // PLACEHOLDER_RUN_TRANSFORM_PLUGIN
 
+const pluginRunVisible = ref(false);
+const pluginRunTitle = ref('插件参数');
+const pluginRunDescription = ref('');
+const pluginRunFields = ref([]);
+const pluginRunInitial = ref({});
+const pluginRunSubmitLabel = ref('运行');
+const pluginRunCanRemember = ref(false);
+let pluginRunResolve = null;
+
+const requestPluginForm = (options = {}) => {
+  pluginRunTitle.value = String(options.title || '插件参数');
+  pluginRunDescription.value = String(options.description || '');
+  pluginRunFields.value = Array.isArray(options.fields) ? options.fields : [];
+  pluginRunInitial.value = options.initial && typeof options.initial === 'object' ? options.initial : {};
+  pluginRunSubmitLabel.value = String(options.submitLabel || '运行');
+  pluginRunCanRemember.value = !!options.canRemember;
+  pluginRunVisible.value = true;
+  return new Promise((resolve) => {
+    pluginRunResolve = resolve;
+  });
+};
+
+const settlePluginForm = (result) => {
+  pluginRunVisible.value = false;
+  const resolve = pluginRunResolve;
+  pluginRunResolve = null;
+  if (resolve) resolve(result);
+};
+
+const handlePluginRunSubmit = ({ values, remember } = {}) => {
+  settlePluginForm({
+    values: values && typeof values === 'object' ? values : {},
+    remember: !!remember,
+  });
+};
+
+const handlePluginRunCancel = () => {
+  settlePluginForm(null);
+};
+
+const executeEditorPlugin = async (plugin, pluginCtx) => {
+  // 脚手架:加载用户插件入口模块并调用 run(ctx),结果放进 _result → result_json 回传。
+  const scaffold = [
+    'import importlib.util as _ilu',
+    '_spec = _ilu.spec_from_file_location("guaxi_user_plugin", _plugin_entry_path)',
+    '_mod = _ilu.module_from_spec(_spec)',
+    '_spec.loader.exec_module(_mod)',
+    '_result = _mod.run(_plugin_ctx)',
+  ].join('\n');
+  const res = await invoke('python_exec', {
+    request: {
+      code: scaffold,
+      persist: false,
+      expect_json: true,
+      include_session_vars: false,
+      vars: {
+        _plugin_entry_path: String(plugin?.entry_path || ''),
+        _plugin_ctx: pluginCtx,
+      },
+    },
+  });
+  if (!res?.ok) {
+    throw new Error(String(res?.stderr || '插件运行失败').slice(0, 600));
+  }
+  return res?.result_json || {};
+};
+
 const runEditorTransformPlugin = async (plugin) => {
   const targetEditor = getActiveEditor();
   const model = targetEditor?.getModel?.();
@@ -13906,6 +13988,34 @@ const runEditorTransformPlugin = async (plugin) => {
     message.info('请先选中要处理的文本');
     return;
   }
+
+  // 1) manifest 参数:需要每次填写的(文件/目录/下拉/必填)或显式要求时,先给一次可修改的表单。
+  const argsNeedForm = !!plugin?.prompt_on_run
+    || (Array.isArray(plugin?.args) && plugin.args.some((spec) =>
+      spec?.required || spec?.type === 'file' || spec?.type === 'folder' || spec?.type === 'select'
+    ));
+  let args = { ...(plugin?.arg_values || {}) };
+  if (argsNeedForm && Array.isArray(plugin?.args) && plugin.args.length) {
+    const answer = await requestPluginForm({
+      title: `运行插件 · ${plugin?.name || ''}`,
+      description: plugin?.description || '',
+      fields: plugin.args,
+      initial: args,
+      submitLabel: '运行',
+      canRemember: true,
+    });
+    if (!answer) return;
+    args = { ...args, ...answer.values };
+    if (answer.remember && plugin?.id) {
+      try {
+        await invoke('set_plugin_args', { id: plugin.id, args });
+        plugin.arg_values = { ...args };
+      } catch (e) {
+        logger.warn('保存插件参数失败', e);
+      }
+    }
+  }
+
   const selectedText = selection.isEmpty() ? '' : model.getValueInRange(selection);
   const documentText = model.getValue();
   const clipboardText = plugin?.clipboard ? String((await readClipboardText()) || '') : '';
@@ -13922,58 +14032,73 @@ const runEditorTransformPlugin = async (plugin) => {
   const pluginCtx = {
     selection: selectedText,
     document: documentText,
-    args: plugin?.arg_values || {},
+    args,
     file_path: boundPath,
     kb_location: kb?.location || '',
     kb_name: kb?.knowledge_base_name || '',
     clipboard: clipboardText,
   };
-  // 脚手架:加载用户插件入口模块并调用 run(ctx),结果放进 _result → result_json 回传。
-  const scaffold = [
-    'import importlib.util as _ilu',
-    '_spec = _ilu.spec_from_file_location("guaxi_user_plugin", _plugin_entry_path)',
-    '_mod = _ilu.module_from_spec(_spec)',
-    '_spec.loader.exec_module(_mod)',
-    '_result = _mod.run(_plugin_ctx)',
-  ].join('\n');
-  const loadingMessage = message.loading('正在运行插件…', { duration: 0 });
+
+  // 2) 运行;插件可返回 {"ui": {...}} 要求宿主再收集一轮输入,最多 5 轮。
+  const uiHistory = [];
   try {
     suppressEditLocationRecording = true;
-    const res = await invoke('python_exec', {
-      request: {
-        code: scaffold,
-        persist: false,
-        expect_json: true,
-        include_session_vars: false,
-        vars: {
-          _plugin_entry_path: String(plugin?.entry_path || ''),
-          _plugin_ctx: pluginCtx,
-        },
-      },
-    });
-    if (!res?.ok) {
-      message.error('插件运行失败:' + String(res?.stderr || '未知错误').slice(0, 400));
+    for (let round = 0; round < 5; round += 1) {
+      const loadingMessage = message.loading('正在运行插件…', { duration: 0 });
+      let rj;
+      try {
+        rj = await executeEditorPlugin(plugin, pluginCtx);
+      } finally {
+        loadingMessage.destroy();
+      }
+
+      if (typeof rj.error === 'string' && rj.error.trim()) {
+        message.error(rj.error);
+        return;
+      }
+
+      if (rj.ui && typeof rj.ui === 'object') {
+        if (round >= 4) {
+          message.error('插件交互轮次过多,已停止(最多 5 轮)');
+          return;
+        }
+        const answer = await requestPluginForm({
+          title: String(rj.ui.title || plugin?.name || '插件'),
+          description: String(rj.ui.description || ''),
+          fields: Array.isArray(rj.ui.fields) ? rj.ui.fields : [],
+          initial: {},
+          submitLabel: String(rj.ui.submit || '继续'),
+          canRemember: false,
+        });
+        if (!answer) {
+          message.info('已取消插件');
+          return;
+        }
+        uiHistory.push(answer.values);
+        pluginCtx.ui = {
+          values: answer.values,
+          round: round + 1,
+          history: [...uiHistory],
+        };
+        continue;
+      }
+
+      const newText = typeof rj.text === 'string' ? rj.text : null;
+      if (newText === null) {
+        message.error('插件需返回 {"text": "..."} 或 {"ui": {...}},请检查 run() 的返回值');
+        return;
+      }
+      targetEditor.executeEdits('guaxi-plugin-transform', [
+        { range: selection, text: newText, forceMoveMarkers: true },
+      ]);
+      targetEditor.focus();
+      message.success(`已应用插件:${plugin?.name || ''}`);
       return;
     }
-    const rj = res?.result_json || {};
-    if (typeof rj.error === 'string' && rj.error.trim()) {
-      message.error(rj.error);
-      return;
-    }
-    const newText = typeof rj.text === 'string' ? rj.text : null;
-    if (newText === null) {
-      message.error('插件需返回 {"text": "..."} 才能写回,请检查 run() 的返回值');
-      return;
-    }
-    targetEditor.executeEdits('guaxi-plugin-transform', [
-      { range: selection, text: newText, forceMoveMarkers: true },
-    ]);
-    targetEditor.focus();
-    message.success(`已应用插件:${plugin?.name || ''}`);
+    message.error('插件交互轮次过多,已停止(最多 5 轮)');
   } catch (e) {
     message.error('插件运行失败:' + String(e?.message || e));
   } finally {
-    loadingMessage.destroy();
     suppressEditLocationRecording = false;
   }
 };

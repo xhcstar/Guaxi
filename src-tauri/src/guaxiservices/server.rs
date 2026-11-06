@@ -129,6 +129,33 @@ async fn plugin_llm_complete(req: web::Json<PluginLlmRequest>) -> HttpResponse {
     }
 }
 
+/// 插件宿主上下文：让插件拿到稳定路径与能力声明，不用自己猜目录。
+async fn plugin_host_context() -> HttpResponse {
+    let plugins = crate::commands::editor_plugin::get_editor_plugins_dir().unwrap_or_default();
+    let knowledge_bases_root = crate::commands::settingview::get_knowledge_bases_root();
+    let libraries_root = crate::commands::settingview::get_libraries_root();
+    let task_root = crate::commands::taskmanager::task_get_config()
+        .map(|config| config.root)
+        .unwrap_or_default();
+
+    HttpResponse::Ok().json(json!({
+        "success": true,
+        "app": { "name": "Guaxi", "version": env!("CARGO_PKG_VERSION") },
+        "paths": {
+            "plugins": plugins,
+            "knowledgeBasesRoot": knowledge_bases_root,
+            "librariesRoot": libraries_root,
+            "taskRoot": task_root
+        },
+        "capabilities": {
+            "llm": true,
+            "mcp": true,
+            "pluginUi": "declarative",
+            "filePicker": true
+        }
+    }))
+}
+
 async fn notebook_data_lab_health() -> HttpResponse {
     HttpResponse::Ok().json(notebook_data_lab_health_response())
 }
@@ -219,6 +246,7 @@ pub async fn run_local_backend(state: SharedState) -> Result<(), String> {
             .configure(crate::commands::music::stream::config)
             .route("/api/web-model-chat", web::post().to(web_model_chat_push))
             .route("/api/plugin/llm", web::post().to(plugin_llm_complete))
+            .route("/api/plugin/host/context", web::get().to(plugin_host_context))
             .route("/api/notebook/data-lab/health", web::get().to(notebook_data_lab_health))
             .route("/api/notebook/data-lab/action", web::post().to(notebook_data_lab_rpc_http))
             .route("/lsp/{language}", web::get().to(lsp::lsp_ws_route))

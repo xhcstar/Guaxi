@@ -30,7 +30,8 @@
 
   "clipboard": false,
   "allow_empty_selection": false,
-  "needs_kb": false
+  "needs_kb": false,
+  "prompt_on_run": false
 }
 ```
 
@@ -46,6 +47,7 @@
 | `clipboard` | `true` 时运行前读取系统剪贴板，注入 `ctx.clipboard`。 |
 | `allow_empty_selection` | `true` 时没有选区也能运行，结果插入光标处。 |
 | `needs_kb` | `true` 时编辑器会先确保知识库列表已加载，再注入 `ctx.kb_location`。 |
+| `prompt_on_run` | 强制每次运行都弹出参数面板；缺省时前端在「有 file/folder/select 或 required 参数」时自动弹。 |
 
 ### 参数（args）
 
@@ -53,14 +55,21 @@
 
 支持的 `type`：
 
-| type | 设置页控件 | ctx.args 里的值 |
+| type | 运行面板控件 | ctx.args 里的值 |
 | --- | --- | --- |
 | `text` | 单行输入 | `string` |
 | `number` | 数字输入 | `number` |
 | `bool` | 开关 | `boolean` |
 | `select` | 下拉 | `string`（取自 `options`） |
+| `textarea` | 多行输入 | `string` |
+| `file` | 路径输入 + 系统文件选择器 | `string` |
+| `folder` | 路径输入 + 系统目录选择器 | `string` |
 
-参数是**持久默认值**，不是每次运行都弹窗。需要每次不同的值（文件路径、表单模板等）时，优先让插件从 `ctx.selection`、`ctx.clipboard` 或 `ctx.file_path` 里取。
+`file` / `folder` 可额外声明 `accept: ["csv", "xlsx"]` 限制文件选择器的扩展名。
+
+带参数的插件在编辑器里右键运行时会先弹出**运行面板**：字段预填上次保存值，可直接修改；勾选「记住这些值」会写回 `_state.json`。设置页的「参数」按钮用于不改代码直接调默认值。
+
+默认只在「有 `file` / `folder` / `select` 或 `required` 参数」时弹面板，避免纯文本参数每次都打断；想强制每次询问就设 `prompt_on_run: true`。
 
 ## 2. 作用面与契约
 
@@ -85,7 +94,45 @@
 ```python
 return {"text": "新文本"}          # 替换选区；空选区时插入光标处
 return {"error": "给用户看的错误"}  # 不写回文档，直接提示
+return {"ui": {...}}               # 请求宿主再收集一轮输入，见下节
 ```
+
+### 交互式 UI（ui 协议）
+
+插件不需要把交互写死在 manifest 里。返回一个 `ui` 描述，宿主会渲染运行面板；用户提交后，带着 `ctx.ui.values` **重新调用** `run(ctx)`。最多 5 轮。
+
+```python
+def run(ctx):
+    if not ctx.get("ui"):
+        return {"ui": {
+            "title": "选择数据源",
+            "description": "先选文件,再决定是否把首行当表头",
+            "fields": [
+                {"key": "path", "label": "CSV 文件", "type": "file",
+                 "accept": ["csv"], "required": True},
+                {"key": "header", "label": "首行是表头", "type": "bool",
+                 "default": True},
+                {"key": "mode", "label": "对齐", "type": "select",
+                 "options": ["左对齐", "右对齐"], "default": "右对齐"}
+            ],
+            "submit": "生成表格"
+        }}
+    path = ctx["ui"]["values"]["path"]
+    header = ctx["ui"]["values"]["header"]
+    # ... 读取 path、生成 Markdown ...
+    return {"text": markdown_table}
+```
+
+`ui` 字段：
+
+| 字段 | 说明 |
+| --- | --- |
+| `title` | 面板标题，缺省用插件名。 |
+| `description` | 面板说明，纯文本，可换行。 |
+| `fields` | 字段数组，类型与 `args` 相同（text/number/bool/select/textarea/file/folder），另支持 `hint`。 |
+| `submit` | 提交按钮文案，缺省「继续」。 |
+
+`ctx.ui` 的结构：`{values, round, history}`，`history` 是之前各轮提交值的数组。用户取消则整次插件运行结束。
 
 ### knowledge-base（知识库）
 
@@ -140,7 +187,32 @@ return {"report": "..."}  # 抽屉里渲染 Markdown
 - API Key 由 Rust 侧从设置读取并解密，**不会进入 Python 进程**。
 - 失败也返回 HTTP 200，请检查 `success` 字段。
 
-### 3.2 MCP 工具
+### 3.2 宿主上下文
+
+`GET http://127.0.0.1:8888/api/plugin/host/context`
+
+```json
+{
+  "success": true,
+  "app": { "name": "Guaxi", "version": "0.1.0" },
+  "paths": {
+    "plugins": "…/utils/guaxi_editor_plugins",
+    "knowledgeBasesRoot": "…",
+    "librariesRoot": "…",
+    "taskRoot": "…"
+  },
+  "capabilities": {
+    "llm": true,
+    "mcp": true,
+    "pluginUi": "declarative",
+    "filePicker": true
+  }
+}
+```
+
+插件不该自己猜目录；启动时读一次这个接口即可。路径为空表示用户还没配置。
+
+### 3.3 MCP 工具
 
 `POST http://127.0.0.1:8888/mcp`（JSON-RPC 2.0，loopback，无鉴权）
 
@@ -158,7 +230,7 @@ return {"report": "..."}  # 抽屉里渲染 Markdown
 
 常用工具：`guaxi_recall`、`guaxi_kb_semantic_search`、`guaxi_kb_stats`、`guaxi_kb_tags`、`guaxi_task_query`、`guaxi_search_text`、`web_search`、`web_fetch`、`brief_generate`。完整清单见 `src-tauri/src/cognition/tools.rs`。
 
-### 3.3 采集入库
+### 3.4 采集入库
 
 `POST http://0.0.0.0:14219/extension/capture/import`，见 `docs/capture-import-api.md`。
 
@@ -173,7 +245,7 @@ return {"report": "..."}  # 抽屉里渲染 Markdown
 | `url-to-md` | editor | 选中网址 → 抓正文转 Markdown |
 | `selection-to-kb` | editor | 选中内容 → 当前知识库笔记 + `[[双链]]` |
 | `gen-data` | editor | 按列规格生成示例数据（Markdown/CSV/JSON） |
-| `import-table` | editor | CSV/TSV/XLSX/JSON → Markdown 表格 |
+| `import-table` | editor | 运行面板直接选 CSV/TSV/XLSX/JSON → Markdown 表格 |
 | `form-fill` | editor | 笔记/任务字段 → 预填表单链接（默认只预览） |
 | `md-table-total` | editor | Markdown 表格对齐 + 合计行 |
 | `code-tidy` | editor | 代码块去空白、Tab 转空格、JSON 美化 |
@@ -237,4 +309,4 @@ def run(ctx):
 }
 ```
 
-`_builtins.json` 记录已补写过的内置插件 id，不要手动删，否则内置插件会被重新生成。
+`_builtins.json` 记录已补写过的内置插件 id 和清单版本 `rev`。升级时应用会把已存在内置插件的声明式字段（args/clipboard/allow_empty_selection/needs_kb 等）刷新到新版本，但不会覆盖 `main.py`，也不会改用户自己改过的 `name` / `description` / `entry`。不要手动删这个文件，否则内置插件会被重新生成。

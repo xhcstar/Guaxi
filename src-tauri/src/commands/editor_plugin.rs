@@ -20,6 +20,8 @@ pub struct PluginArgSpec {
     pub options: Vec<String>,
     pub placeholder: String,
     pub required: bool,
+    /// `file` / `folder` 类型用:允许的扩展名,宿主据此过滤文件选择器。
+    pub accept: Vec<String>,
 }
 
 #[derive(Serialize, Debug, Clone)]
@@ -43,6 +45,8 @@ pub struct EditorPluginInfo {
     pub allow_empty_selection: bool,
     /// 运行前需要当前知识库路径（编辑器会按需加载知识库列表）。
     pub needs_kb: bool,
+    /// 强制每次运行都弹出参数面板；未设置时由前端按参数类型判断。
+    pub prompt_on_run: bool,
 }
 
 #[derive(Serialize)]
@@ -1161,7 +1165,7 @@ const BUILTIN_PLUGINS: &[BuiltinPlugin] = &[
         capability: "transform",
         scope: "insert",
         main: BUILTIN_IMPORT_TABLE,
-        args: r#"[{"key":"path","label":"文件路径","type":"text","default":"","placeholder":"CSV/TSV/XLSX/JSON 的绝对路径;留空则读剪贴板路径"},{"key":"sheet","label":"工作表(Excel)","type":"text","default":""},{"key":"max_rows","label":"最大行数","type":"number","default":200}]"#,
+        args: r#"[{"key":"path","label":"文件路径","type":"file","accept":["csv","tsv","xlsx","xlsm","xls","json"],"default":"","placeholder":"选择 CSV/TSV/XLSX/JSON 文件;留空则读剪贴板路径"},{"key":"sheet","label":"工作表(Excel)","type":"text","default":""},{"key":"max_rows","label":"最大行数","type":"number","default":200}]"#,
         clipboard: true,
         allow_empty_selection: true,
         needs_kb: false,
@@ -1181,50 +1185,100 @@ const BUILTIN_PLUGINS: &[BuiltinPlugin] = &[
     },
 ];
 
+/// 内置插件清单版本。递增后会刷新已存在内置插件的「声明式字段」，
+/// 但不会覆盖 main.py，也不会改动用户自己改过的 name/description/entry。
+const BUILTIN_REV: u64 = 2;
+
+fn builtin_args(b: &BuiltinPlugin) -> serde_json::Value {
+    serde_json::from_str::<serde_json::Value>(b.args)
+        .unwrap_or_else(|_| serde_json::json!([]))
+}
+
 /// 把内置插件写入插件目录。用 `_builtins.json` 记录"已供给过"的 id,保证每个内置插件
 /// 一生只写入一次:用户此后可自由编辑或删除,不会被重新生成;将来新增的内置插件会补写。
 fn provision_builtin_plugins(dir: &Path) {
     let marker = dir.join("_builtins.json");
-    let mut done: Vec<String> = fs::read_to_string(&marker)
+    let state: serde_json::Value = fs::read_to_string(&marker)
         .ok()
-        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
-        .map(|v| str_array(&v, "provisioned"))
-        .unwrap_or_default();
-    let mut changed = false;
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or(serde_json::Value::Null);
+    let mut done: Vec<String> = str_array(&state, "provisioned");
+    let rev = state.get("rev").and_then(|v| v.as_u64()).unwrap_or(0);
+    let mut changed = rev < BUILTIN_REV;
+
     for b in BUILTIN_PLUGINS {
-        if done.iter().any(|d| d == b.id) {
+        let pdir = dir.join(b.id);
+        let known = done.iter().any(|d| d == b.id);
+
+        if !known {
+            if !pdir.exists() && fs::create_dir_all(&pdir).is_ok() {
+                let manifest = serde_json::json!({
+                    "id": b.id,
+                    "name": b.name,
+                    "description": b.description,
+                    "entry": "main.py",
+                    "capabilities": [b.capability],
+                    "surfaces": [b.surface],
+                    "scope": b.scope,
+                    "args": builtin_args(b),
+                    "clipboard": b.clipboard,
+                    "allow_empty_selection": b.allow_empty_selection,
+                    "needs_kb": b.needs_kb,
+                });
+                let _ = fs::write(
+                    pdir.join("manifest.json"),
+                    serde_json::to_string_pretty(&manifest).unwrap_or_default(),
+                );
+                let _ = fs::write(pdir.join("main.py"), b.main);
+            }
+            done.push(b.id.to_string());
+            changed = true;
             continue;
         }
-        let pdir = dir.join(b.id);
-        if !pdir.exists() && fs::create_dir_all(&pdir).is_ok() {
-            let manifest = serde_json::json!({
-                "id": b.id,
-                "name": b.name,
-                "description": b.description,
-                "entry": "main.py",
-                "capabilities": [b.capability],
-                "surfaces": [b.surface],
-                "scope": b.scope,
-                "args": serde_json::from_str::<serde_json::Value>(b.args)
-                    .unwrap_or_else(|_| serde_json::json!([])),
-                "clipboard": b.clipboard,
-                "allow_empty_selection": b.allow_empty_selection,
-                "needs_kb": b.needs_kb,
-            });
-            let _ = fs::write(
-                pdir.join("manifest.json"),
+
+        // 已供给过:版本升级时只刷新参数/作用面等声明式字段,保留用户内容。
+        if rev < BUILTIN_REV && pdir.is_dir() {
+            let mpath = pdir.join("manifest.json");
+            let manifest_text = match fs::read_to_string(&mpath) {
+                Ok(text) => text,
+                Err(_) => continue,
+            };
+            let mut manifest: serde_json::Value = match serde_json::from_str(&manifest_text) {
+                Ok(value) => value,
+                // manifest 本身损坏时不要用半份数据覆盖它,留给用户修。
+                Err(_) => continue,
+            };
+            if let Some(obj) = manifest.as_object_mut() {
+                obj.insert("args".to_string(), builtin_args(b));
+                obj.insert("capabilities".to_string(), serde_json::json!([b.capability]));
+                obj.insert("surfaces".to_string(), serde_json::json!([b.surface]));
+                obj.insert("scope".to_string(), serde_json::json!(b.scope));
+                obj.insert("clipboard".to_string(), serde_json::json!(b.clipboard));
+                obj.insert(
+                    "allow_empty_selection".to_string(),
+                    serde_json::json!(b.allow_empty_selection),
+                );
+                obj.insert("needs_kb".to_string(), serde_json::json!(b.needs_kb));
+            }
+            if fs::write(
+                &mpath,
                 serde_json::to_string_pretty(&manifest).unwrap_or_default(),
-            );
-            let _ = fs::write(pdir.join("main.py"), b.main);
+            )
+            .is_ok()
+            {
+                changed = true;
+            }
         }
-        done.push(b.id.to_string());
-        changed = true;
     }
+
     if changed {
         let _ = fs::write(
             &marker,
-            serde_json::to_string_pretty(&serde_json::json!({ "provisioned": done }))
-                .unwrap_or_else(|_| "{}".to_string()),
+            serde_json::to_string_pretty(&serde_json::json!({
+                "provisioned": done,
+                "rev": BUILTIN_REV,
+            }))
+            .unwrap_or_else(|_| "{}".to_string()),
         );
     }
 }
@@ -1331,6 +1385,7 @@ fn parse_arg_specs(manifest: &serde_json::Value) -> Vec<PluginArgSpec> {
                             .unwrap_or("")
                             .to_string(),
                         required: a.get("required").and_then(|v| v.as_bool()).unwrap_or(false),
+                        accept: str_array(a, "accept"),
                     })
                 })
                 .collect()
@@ -1434,6 +1489,7 @@ fn read_plugin_info(plugin_dir: &Path, state: &PluginState) -> Option<EditorPlug
             .and_then(|v| v.as_bool())
             .unwrap_or(false),
         needs_kb: manifest.get("needs_kb").and_then(|v| v.as_bool()).unwrap_or(false),
+        prompt_on_run: manifest.get("prompt_on_run").and_then(|v| v.as_bool()).unwrap_or(false),
     })
 }
 
