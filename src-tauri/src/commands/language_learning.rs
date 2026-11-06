@@ -3,6 +3,7 @@ use crate::commands::translator_free;
 use crate::guaxiservices::bundled_resources;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine as _;
+use futures_util::StreamExt;
 use once_cell::sync::Lazy;
 use regex::Regex;
 use reqwest::Client;
@@ -30,6 +31,47 @@ static LISTENING_SYNC_LOCK: Lazy<tokio::sync::Mutex<()>> =
     Lazy::new(|| tokio::sync::Mutex::new(()));
 static LISTENING_SYNC_PENDING_IDS: Lazy<std::sync::Mutex<HashSet<String>>> =
     Lazy::new(|| std::sync::Mutex::new(HashSet::new()));
+static LISTENING_SYNC_JOBS: Lazy<std::sync::Mutex<HashMap<String, ListeningSyncJob>>> =
+    Lazy::new(|| std::sync::Mutex::new(HashMap::new()));
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct ListeningSyncJob {
+    pub audio_id: String,
+    pub stage: String,
+    pub progress: f64,
+    pub message: String,
+    pub error: String,
+    pub started_at: String,
+    pub updated_at: String,
+}
+
+fn set_sync_job(audio_id: &str, stage: &str, progress: f64, message: &str, error: &str) {
+    let id = audio_id.trim().to_string();
+    if id.is_empty() {
+        return;
+    }
+    let now = now_iso();
+    if let Ok(mut jobs) = LISTENING_SYNC_JOBS.lock() {
+        let entry = jobs.entry(id.clone()).or_insert_with(|| ListeningSyncJob {
+            audio_id: id,
+            started_at: now.clone(),
+            ..Default::default()
+        });
+        entry.stage = stage.to_string();
+        entry.progress = progress.clamp(0.0, 100.0);
+        entry.message = message.to_string();
+        entry.error = error.to_string();
+        entry.updated_at = now;
+    }
+}
+
+#[tauri::command]
+pub fn language_learning_get_sync_jobs() -> Vec<ListeningSyncJob> {
+    LISTENING_SYNC_JOBS
+        .lock()
+        .map(|jobs| jobs.values().cloned().collect())
+        .unwrap_or_default()
+}
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct WordMetaPayload {
@@ -124,6 +166,8 @@ pub struct AudioResource {
     pub title: String,
     pub source_kind: String,
     pub source_uri: String,
+    #[serde(default)]
+    pub origin_uri: String,
     #[serde(default)]
     pub provider: String,
     #[serde(default)]
@@ -231,6 +275,8 @@ pub struct ListeningTopicCollectInput {
     pub topic: String,
     pub learning_lang: Option<String>,
     pub limit: Option<i64>,
+    pub min_duration_sec: Option<i64>,
+    pub max_duration_sec: Option<i64>,
     pub sources: Option<Vec<ListeningSourceInput>>,
 }
 
@@ -241,6 +287,29 @@ pub struct ListeningSourceInput {
     pub feed_url: String,
     pub language_tag: Option<String>,
     pub max_duration_sec: Option<i64>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ListeningCandidate {
+    pub candidate_id: String,
+    pub title: String,
+    pub source_uri: String,
+    pub provider: String,
+    pub topic: String,
+    pub language_tag: String,
+    pub duration_sec: f64,
+    pub notes: String,
+    pub page_url: String,
+    pub relevance: f64,
+    pub has_transcript: bool,
+    pub already_collected: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ListeningCandidateImportInput {
+    pub learning_lang: Option<String>,
+    pub topic: String,
+    pub candidates: Vec<ListeningCandidate>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -328,6 +397,7 @@ fn setup_schema(conn: &Connection) -> Result<(), String> {
             title TEXT NOT NULL,
             source_kind TEXT NOT NULL DEFAULT 'remote',
             source_uri TEXT NOT NULL,
+            origin_uri TEXT NOT NULL DEFAULT '',
             provider TEXT NOT NULL DEFAULT '',
             topic TEXT NOT NULL DEFAULT '',
             language_tag TEXT NOT NULL DEFAULT '',
@@ -362,6 +432,7 @@ fn setup_schema(conn: &Connection) -> Result<(), String> {
         "CREATE INDEX IF NOT EXISTS idx_translation_records_record_source ON translation_records(record_type, source_text)",
         "CREATE INDEX IF NOT EXISTS idx_translation_records_source_text ON translation_records(source_text)",
         "ALTER TABLE audio_resources ADD COLUMN provider TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE audio_resources ADD COLUMN origin_uri TEXT NOT NULL DEFAULT ''",
         "ALTER TABLE audio_resources ADD COLUMN topic TEXT NOT NULL DEFAULT ''",
         "ALTER TABLE audio_resources ADD COLUMN language_tag TEXT NOT NULL DEFAULT ''",
         "ALTER TABLE audio_resources ADD COLUMN sync_json_uri TEXT NOT NULL DEFAULT ''",
@@ -536,8 +607,9 @@ fn sanitize_asset_fragment(raw: &str) -> String {
     }
 }
 
-fn resolve_listening_translate_target_lang() -> String {
-    "zh".to_string()
+fn resolve_translate_target_lang(native_lang: Option<String>) -> String {
+    // 母语默认中文：界面上是「学习语言 → 母语」，翻译目标永远是母语而不是写死 zh。
+    normalize_learning_lang(native_lang)
 }
 
 fn infer_learning_lang(source_lang: &str, source_text: &str) -> String {
@@ -689,6 +761,7 @@ fn ensure_lang_tables(conn: &Connection, lang: &str) -> Result<(), String> {
             title TEXT NOT NULL,
             source_kind TEXT NOT NULL DEFAULT 'remote',
             source_uri TEXT NOT NULL,
+            origin_uri TEXT NOT NULL DEFAULT '',
             provider TEXT NOT NULL DEFAULT '',
             topic TEXT NOT NULL DEFAULT '',
             language_tag TEXT NOT NULL DEFAULT '',
@@ -1687,7 +1760,7 @@ pub fn language_learning_list_audio_resources(
         let like = format!("%{}%", q);
         let list_sql = format!(
             r#"
-                SELECT id, title, source_kind, source_uri, provider, topic, language_tag, transcript, sync_json_uri, notes, duration_sec, created_at, updated_at
+                SELECT id, title, source_kind, source_uri, origin_uri, provider, topic, language_tag, transcript, sync_json_uri, notes, duration_sec, created_at, updated_at
                 FROM {table}
                 WHERE (?1 = '' OR title LIKE ?2 OR transcript LIKE ?2 OR notes LIKE ?2 OR provider LIKE ?2 OR topic LIKE ?2)
                 ORDER BY datetime(created_at) DESC
@@ -1706,15 +1779,16 @@ pub fn language_learning_list_audio_resources(
                     title: r.get(1)?,
                     source_kind: r.get(2)?,
                     source_uri: r.get(3)?,
-                    provider: r.get(4)?,
-                    topic: r.get(5)?,
-                    language_tag: r.get(6)?,
-                    transcript: r.get(7)?,
-                    sync_json_uri: r.get(8)?,
-                    notes: r.get(9)?,
-                    duration_sec: r.get::<_, f64>(10)?,
-                    created_at: r.get(11)?,
-                    updated_at: r.get(12)?,
+                    origin_uri: r.get(4)?,
+                    provider: r.get(5)?,
+                    topic: r.get(6)?,
+                    language_tag: r.get(7)?,
+                    transcript: r.get(8)?,
+                    sync_json_uri: r.get(9)?,
+                    notes: r.get(10)?,
+                    duration_sec: r.get::<_, f64>(11)?,
+                    created_at: r.get(12)?,
+                    updated_at: r.get(13)?,
                 })
             })
             .map_err(|e| format!("执行音频查询失败: {}", e))?;
@@ -1786,7 +1860,10 @@ pub fn language_learning_upsert_audio_resource(
             return Err("标题和资源地址不能为空".into());
         }
         let id = if input.id.as_ref().map(|x| x.trim().is_empty()).unwrap_or(true) {
-            let check_sql = format!("SELECT id FROM {} WHERE source_uri = ?1 LIMIT 1", audio_table);
+            let check_sql = format!(
+                "SELECT id FROM {} WHERE source_uri = ?1 OR origin_uri = ?1 LIMIT 1",
+                audio_table
+            );
             conn.query_row(&check_sql, params![source_uri.clone()], |r| r.get::<_, String>(0))
                 .optional()
                 .map_err(|e| format!("检查重复音频失败: {}", e))?
@@ -1794,6 +1871,20 @@ pub fn language_learning_upsert_audio_resource(
         } else {
             input.id.unwrap_or_else(|| Uuid::new_v4().to_string())
         };
+        // 转写后 source_uri 会改成本地缓存路径，原始在线地址必须单独留一份，
+        // 否则再次采集同一来源时查重会失效，同一集音频会被重复导入。
+        let existing_origin: Option<String> = conn
+            .query_row(
+                &format!("SELECT origin_uri FROM {} WHERE id = ?1 LIMIT 1", audio_table),
+                params![id],
+                |r| r.get::<_, String>(0),
+            )
+            .optional()
+            .unwrap_or(None);
+        let origin_uri = existing_origin
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| source_uri.clone());
         let provider = input.provider.unwrap_or_default().trim().to_string();
         let topic = input.topic.unwrap_or_default().trim().to_string();
         let language_tag = normalize_learning_lang(input.language_tag);
@@ -1804,12 +1895,13 @@ pub fn language_learning_upsert_audio_resource(
 
         let upsert_sql = format!(
             r#"
-            INSERT INTO {table}(id, title, source_kind, source_uri, provider, topic, language_tag, transcript, sync_json_uri, notes, duration_sec, created_at, updated_at)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+            INSERT INTO {table}(id, title, source_kind, source_uri, origin_uri, provider, topic, language_tag, transcript, sync_json_uri, notes, duration_sec, created_at, updated_at)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
             ON CONFLICT(id) DO UPDATE SET
               title=excluded.title,
               source_kind=excluded.source_kind,
               source_uri=excluded.source_uri,
+              origin_uri=excluded.origin_uri,
               provider=excluded.provider,
               topic=excluded.topic,
               language_tag=excluded.language_tag,
@@ -1828,6 +1920,7 @@ pub fn language_learning_upsert_audio_resource(
                 title,
                 source_kind,
                 source_uri,
+                origin_uri,
                 provider,
                 topic,
                 language_tag,
@@ -1846,6 +1939,7 @@ pub fn language_learning_upsert_audio_resource(
             title,
             source_kind,
             source_uri,
+            origin_uri,
             provider,
             topic,
             language_tag,
@@ -1886,16 +1980,38 @@ pub async fn language_learning_collect_audio_by_topic(
     app: tauri::AppHandle,
     input: ListeningTopicCollectInput,
 ) -> Result<Vec<AudioResource>, String> {
+    let learning_lang = input.learning_lang.clone();
+    let topic = input.topic.clone();
+    let candidates =
+        language_learning_preview_audio_by_topic(app.clone(), input).await?;
+    language_learning_import_audio_candidates(
+        app,
+        ListeningCandidateImportInput {
+            learning_lang,
+            topic,
+            candidates,
+        },
+    )
+}
+
+#[tauri::command]
+pub async fn language_learning_preview_audio_by_topic(
+    app: tauri::AppHandle,
+    input: ListeningTopicCollectInput,
+) -> Result<Vec<ListeningCandidate>, String> {
     let topic = input.topic.trim().to_string();
     if topic.is_empty() {
         return Err("主题不能为空".to_string());
     }
     let learning_lang = normalize_learning_lang(input.learning_lang);
     let limit = input.limit.unwrap_or(24).clamp(1, 80) as usize;
-    // 采集源（archive.org / wikimedia / 用户自带的 RSS）基本都在境外，直连会连接超时。
+    let min_duration = input.min_duration_sec.unwrap_or(0).max(0) as f64;
+    let max_duration = input.max_duration_sec.unwrap_or(1800).clamp(60, 7200) as f64;
+    if max_duration < min_duration {
+        return Err("时长区间不合法：最小时长不能大于最大时长".to_string());
+    }
+    // 采集源大多在境外，直连会连接超时。
     let client = proxied_client_any()?;
-    let mut out = Vec::new();
-    let mut seen = HashSet::new();
     let mut selected_sources = input.sources.unwrap_or_default();
     if selected_sources.is_empty() {
         selected_sources = vec![
@@ -1904,106 +2020,238 @@ pub async fn language_learning_collect_audio_by_topic(
                 name: Some("Archive".to_string()),
                 feed_url: String::new(),
                 language_tag: Some(learning_lang.clone()),
-                max_duration_sec: Some(1800),
+                max_duration_sec: Some(max_duration as i64),
             },
             ListeningSourceInput {
                 provider: "wikimedia".to_string(),
                 name: Some("Wikimedia".to_string()),
                 feed_url: String::new(),
                 language_tag: Some(learning_lang.clone()),
-                max_duration_sec: Some(1800),
+                max_duration_sec: Some(max_duration as i64),
             },
         ];
     }
-    selected_sources = selected_sources
-        .into_iter()
-        .filter(|src| source_matches_language(src.language_tag.as_deref(), &learning_lang))
-        .collect::<Vec<_>>();
+    selected_sources.retain(|src| {
+        source_matches_language(src.language_tag.as_deref(), &learning_lang)
+    });
     if selected_sources.is_empty() {
         return Err("未找到与当前学习语言匹配的听力源".to_string());
     }
-    let mut empty_rounds = 0usize;
-    while out.len() < limit && empty_rounds < 2 {
-        let before_round = out.len();
-        for src in selected_sources.clone() {
-            if out.len() >= limit {
-                break;
+
+    let existing = match with_db(&app, |conn| {
+        ensure_lang_tables(conn, &learning_lang)?;
+        let table = audio_table_for(&learning_lang);
+        let sql = format!("SELECT source_uri, origin_uri FROM {}", table);
+        let mut stmt = conn
+            .prepare(&sql)
+            .map_err(|e| format!("读取已采集资源失败: {}", e))?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+            })
+            .map_err(|e| format!("读取已采集资源失败: {}", e))?;
+        let mut out = HashSet::new();
+        for row in rows.flatten() {
+            for raw in [row.0, row.1] {
+                let uri = normalize_media_uri(&raw);
+                if !uri.is_empty() {
+                    out.insert(uri);
+                }
             }
-            let source_limit = (limit - out.len()).min(2).max(1);
-            let provider = src.provider.trim().to_lowercase();
+        }
+        Ok(out)
+    }) {
+        Ok(v) => v,
+        Err(_) => HashSet::new(),
+    };
+
+    let per_source_limit = (limit.saturating_mul(3)).clamp(8, 60);
+    let mut tasks = Vec::new();
+    for src in selected_sources {
+        let provider = src.provider.trim().to_lowercase();
+        let source_max = src
+            .max_duration_sec
+            .map(|v| (v as f64).clamp(60.0, 7200.0))
+            .unwrap_or(max_duration)
+            .min(max_duration);
+        let client = client.clone();
+        let topic = topic.clone();
+        let learning_lang = learning_lang.clone();
+        let feed_url = src.feed_url.trim().to_string();
+        tasks.push(async move {
             if provider == "archive" {
-                collect_from_archive_org(
-                    &client,
-                    &app,
-                    &topic,
-                    &learning_lang,
-                    source_limit,
-                    &mut seen,
-                    &mut out,
+                preview_from_archive_org(
+                    client,
+                    topic,
+                    learning_lang,
+                    min_duration,
+                    source_max,
+                    per_source_limit,
                 )
-                .await;
-                continue;
-            }
-            if provider == "wikimedia" {
-                collect_from_wikimedia_commons(
-                    &client,
-                    &app,
-                    &topic,
-                    &learning_lang,
-                    source_limit,
-                    &mut seen,
-                    &mut out,
+                .await
+            } else if provider == "wikimedia" {
+                preview_from_wikimedia_commons(
+                    client,
+                    topic,
+                    learning_lang,
+                    min_duration,
+                    source_max,
+                    per_source_limit,
                 )
-                .await;
-                continue;
+                .await
+            } else if feed_url.is_empty() {
+                Vec::new()
+            } else {
+                preview_from_rss_feed(
+                    client,
+                    topic,
+                    learning_lang,
+                    provider,
+                    feed_url,
+                    min_duration,
+                    source_max,
+                    per_source_limit,
+                )
+                .await
             }
-            let max_duration_sec = src.max_duration_sec.unwrap_or(1800).clamp(60, 1800) as f64;
-            let mut feed_url = src.feed_url.trim().to_string();
-            if feed_url.is_empty() {
-                continue;
-            }
-            if feed_url.contains("{topic}") {
-                feed_url = feed_url.replace("{topic}", &encode(&topic));
-            }
-            collect_from_rss_feed(
-                &client,
-                &app,
-                &topic,
-                &learning_lang,
-                &provider,
-                &feed_url,
-                max_duration_sec,
-                source_limit,
-                &mut seen,
-                &mut out,
-            )
-            .await;
+        });
+    }
+
+    let batches = futures_util::stream::iter(tasks)
+        .buffer_unordered(6)
+        .collect::<Vec<Vec<ListeningCandidate>>>()
+        .await;
+
+    let mut seen = HashSet::new();
+    let mut out = Vec::new();
+    for candidate in batches.into_iter().flatten() {
+        let uri = normalize_media_uri(&candidate.source_uri);
+        if uri.is_empty() || !seen.insert(uri.clone()) {
+            continue;
         }
-        if out.len() == before_round {
-            empty_rounds += 1;
+        let mut candidate = candidate;
+        candidate.already_collected = existing.contains(&uri);
+        candidate.candidate_id = candidate_id_for(&uri);
+        out.push(candidate);
+    }
+    out.sort_by(|a, b| {
+        a.already_collected
+            .cmp(&b.already_collected)
+            .then_with(|| {
+                b.relevance
+                    .partial_cmp(&a.relevance)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .then_with(|| {
+                duration_preference_weight(b.duration_sec)
+                    .partial_cmp(&duration_preference_weight(a.duration_sec))
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .then_with(|| a.title.cmp(&b.title))
+    });
+    out.truncate((limit.saturating_mul(2)).clamp(10, 80));
+    Ok(out)
+}
+
+#[tauri::command]
+pub fn language_learning_import_audio_candidates(
+    app: tauri::AppHandle,
+    input: ListeningCandidateImportInput,
+) -> Result<Vec<AudioResource>, String> {
+    let learning_lang = normalize_learning_lang(input.learning_lang);
+    let topic = input.topic.trim().to_string();
+    if input.candidates.is_empty() {
+        return Err("请至少选择一条要导入的资源".to_string());
+    }
+    let mut out = Vec::new();
+    for candidate in input.candidates {
+        let source_uri = normalize_media_uri(&candidate.source_uri);
+        if source_uri.is_empty() {
+            continue;
+        }
+        let title = if candidate.title.trim().is_empty() {
+            topic.clone()
         } else {
-            empty_rounds = 0;
-        }
+            candidate.title.trim().to_string()
+        };
+        let saved = language_learning_upsert_audio_resource(
+            app.clone(),
+            AudioResourceInput {
+                id: None,
+                title,
+                source_kind: "remote".to_string(),
+                source_uri,
+                provider: Some(candidate.provider),
+                topic: Some(if topic.is_empty() {
+                    candidate.topic
+                } else {
+                    topic.clone()
+                }),
+                language_tag: Some(if candidate.language_tag.trim().is_empty() {
+                    learning_lang.clone()
+                } else {
+                    candidate.language_tag
+                }),
+                transcript: Some(String::new()),
+                sync_json_uri: Some(String::new()),
+                notes: Some(candidate.notes),
+                duration_sec: Some(candidate.duration_sec.max(0.0)),
+            },
+            Some(learning_lang.clone()),
+        )?;
+        out.push(saved);
     }
     if out.is_empty() {
-        return Err("未找到可用听力资源，请尝试更换主题或语言".to_string());
+        return Err("没有可导入的听力资源".to_string());
     }
     Ok(out)
 }
 
-async fn collect_from_archive_org(
-    client: &Client,
-    app: &tauri::AppHandle,
-    topic: &str,
-    learning_lang: &str,
-    limit: usize,
-    seen: &mut HashSet<String>,
-    out: &mut Vec<AudioResource>,
-) {
-    if limit == 0 {
-        return;
+fn candidate_id_for(uri: &str) -> String {
+    format!("cand_{:016x}", stable_hash_u64(uri))
+}
+
+fn json_f64(value: Option<&serde_json::Value>) -> f64 {
+    match value {
+        Some(serde_json::Value::Number(n)) => n.as_f64().unwrap_or(0.0),
+        Some(serde_json::Value::String(s)) => s.trim().parse::<f64>().unwrap_or(0.0),
+        _ => 0.0,
     }
-    let lang_filter = match learning_lang {
+}
+
+fn topic_relevance_score(text: &str, topic: &str) -> f64 {
+    let text_lc = text.to_lowercase();
+    let variants = topic_keyword_variants(topic);
+    if variants.is_empty() {
+        return 0.0;
+    }
+    let hits = variants
+        .iter()
+        .filter(|kw| !kw.is_empty() && text_lc.contains(kw.as_str()))
+        .count();
+    (hits as f64 / variants.len() as f64).clamp(0.0, 1.0)
+}
+
+fn duration_allowed(duration_sec: f64, min_duration: f64, max_duration: f64) -> bool {
+    if duration_sec <= 0.0 {
+        // 时长未知时不直接丢弃：部分开放目录不返回时长，交给用户预览时判断。
+        return true;
+    }
+    duration_sec >= min_duration && duration_sec <= max_duration
+}
+
+async fn preview_from_archive_org(
+    client: Client,
+    topic: String,
+    learning_lang: String,
+    min_duration: f64,
+    max_duration: f64,
+    limit: usize,
+) -> Vec<ListeningCandidate> {
+    if limit == 0 {
+        return Vec::new();
+    }
+    let lang_filter = match learning_lang.as_str() {
         "en" => " AND (language:(eng OR english))",
         "zh" => " AND (language:(chi OR zho OR chinese))",
         "ja" => " AND (language:(jpn OR japanese))",
@@ -2014,9 +2262,9 @@ async fn collect_from_archive_org(
         "ru" => " AND (language:(rus OR russian))",
         _ => "",
     };
-    let variants = topic_keyword_variants(topic);
+    let variants = topic_keyword_variants(&topic);
     let topic_query = if variants.is_empty() {
-        topic.to_string()
+        topic.clone()
     } else {
         variants
             .iter()
@@ -2031,12 +2279,12 @@ async fn collect_from_archive_org(
     let url = format!(
         "https://archive.org/advancedsearch.php?q={}&fl[]=identifier&fl[]=title&fl[]=description&rows={}&page={}&sort[]=publicdate%20desc&output=json",
         encode(&query),
-        limit.saturating_mul(5).clamp(16, 140),
+        limit.saturating_mul(4).clamp(16, 120),
         archive_page
     );
-    let payload = match fetch_json(client, &url).await {
+    let payload = match fetch_json(&client, &url).await {
         Some(v) => v,
-        None => return,
+        None => return Vec::new(),
     };
     let docs = payload
         .get("response")
@@ -2044,117 +2292,113 @@ async fn collect_from_archive_org(
         .and_then(|v| v.as_array())
         .cloned()
         .unwrap_or_default();
-    let mut collected = 0usize;
-    for doc in docs {
-        if collected >= limit {
-            break;
-        }
-        let identifier = doc
-            .get("identifier")
-            .and_then(|v| v.as_str())
-            .unwrap_or_default()
-            .trim()
-            .to_string();
-        if identifier.is_empty() {
-            continue;
-        }
-        let title = doc
-            .get("title")
-            .and_then(|v| v.as_str())
-            .unwrap_or_default()
-            .trim()
-            .to_string();
-        let notes = doc
-            .get("description")
-            .and_then(|v| v.as_str())
-            .unwrap_or_default()
-            .trim()
-            .to_string();
-        let metadata_url = format!("https://archive.org/metadata/{}", encode(&identifier));
-        let metadata = match fetch_json(client, &metadata_url).await {
-            Some(v) => v,
-            None => continue,
-        };
-        let files = metadata
-            .get("files")
-            .and_then(|v| v.as_array())
-            .cloned()
-            .unwrap_or_default();
-        let mut source_uri = String::new();
-        for f in files {
-            let name = f
-                .get("name")
+    let tasks = docs.into_iter().map(|doc| {
+        let client = client.clone();
+        let topic = topic.clone();
+        let learning_lang = learning_lang.clone();
+        async move {
+            let identifier = doc
+                .get("identifier")
                 .and_then(|v| v.as_str())
                 .unwrap_or_default()
                 .trim()
                 .to_string();
-            if name.is_empty() {
-                continue;
+            if identifier.is_empty() {
+                return None;
             }
-            let lname = name.to_lowercase();
-            if !(lname.ends_with(".mp3")
-                || lname.ends_with(".m4a")
-                || lname.ends_with(".wav")
-                || lname.ends_with(".ogg")
-                || lname.ends_with(".flac"))
-            {
-                continue;
+            let title = doc
+                .get("title")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .trim()
+                .to_string();
+            let notes = doc
+                .get("description")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .trim()
+                .to_string();
+            let metadata_url = format!("https://archive.org/metadata/{}", encode(&identifier));
+            let metadata = fetch_json(&client, &metadata_url).await?;
+            let files = metadata
+                .get("files")
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default();
+            let mut source_uri = String::new();
+            let mut duration_sec = 0.0;
+            for f in files {
+                let name = f
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .trim()
+                    .to_string();
+                if name.is_empty() {
+                    continue;
+                }
+                let lname = name.to_lowercase();
+                if !(lname.ends_with(".mp3")
+                    || lname.ends_with(".m4a")
+                    || lname.ends_with(".wav")
+                    || lname.ends_with(".ogg")
+                    || lname.ends_with(".flac"))
+                {
+                    continue;
+                }
+                duration_sec = json_f64(f.get("length")).max(0.0);
+                source_uri = format!(
+                    "https://archive.org/download/{}/{}",
+                    encode(&identifier),
+                    encode(&name)
+                );
+                break;
             }
-            let url = format!(
-                "https://archive.org/download/{}/{}",
-                encode(&identifier),
-                encode(&name)
-            );
-            source_uri = url;
-            break;
-        }
-        if source_uri.is_empty() || seen.contains(&source_uri) {
-            continue;
-        }
-        seen.insert(source_uri.clone());
-        let saved = language_learning_upsert_audio_resource(
-            app.clone(),
-            AudioResourceInput {
-                id: None,
+            if source_uri.is_empty() || !duration_allowed(duration_sec, min_duration, max_duration) {
+                return None;
+            }
+            let relevance = topic_relevance_score(&format!("{} {}", title, notes), &topic).max(0.4);
+            Some(ListeningCandidate {
+                candidate_id: candidate_id_for(&source_uri),
                 title: if title.is_empty() {
                     format!("{}（Archive）", topic)
                 } else {
                     title
                 },
-                source_kind: "remote".to_string(),
                 source_uri,
-                provider: Some("archive".to_string()),
-                topic: Some(topic.to_string()),
-                language_tag: Some(learning_lang.to_string()),
-                transcript: Some(String::new()),
-                sync_json_uri: Some(String::new()),
-                notes: Some(notes),
-                duration_sec: Some(0.0),
-            },
-            Some(learning_lang.to_string()),
-        );
-        if let Ok(row) = saved {
-            out.push(row);
-            collected += 1;
+                provider: "archive".to_string(),
+                topic: topic.clone(),
+                language_tag: learning_lang,
+                duration_sec,
+                notes,
+                page_url: format!("https://archive.org/details/{}", identifier),
+                relevance,
+                has_transcript: false,
+                already_collected: false,
+            })
         }
-    }
+    });
+    futures_util::stream::iter(tasks)
+        .buffer_unordered(8)
+        .filter_map(|item| async move { item })
+        .collect::<Vec<ListeningCandidate>>()
+        .await
 }
 
-async fn collect_from_wikimedia_commons(
-    client: &Client,
-    app: &tauri::AppHandle,
-    topic: &str,
-    learning_lang: &str,
+async fn preview_from_wikimedia_commons(
+    client: Client,
+    topic: String,
+    learning_lang: String,
+    min_duration: f64,
+    max_duration: f64,
     limit: usize,
-    seen: &mut HashSet<String>,
-    out: &mut Vec<AudioResource>,
-) {
+) -> Vec<ListeningCandidate> {
     if limit == 0 {
-        return;
+        return Vec::new();
     }
-    let variants = topic_keyword_variants(topic);
+    let variants = topic_keyword_variants(&topic);
     let query_terms = if variants.is_empty() {
-        topic.to_string()
+        topic.clone()
     } else {
         variants
             .iter()
@@ -2172,9 +2416,9 @@ async fn collect_from_wikimedia_commons(
         sr_offset,
         limit.saturating_mul(4).clamp(12, 80)
     );
-    let payload = match fetch_json(client, &search_url).await {
+    let payload = match fetch_json(&client, &search_url).await {
         Some(v) => v,
-        None => return,
+        None => return Vec::new(),
     };
     let rows = payload
         .get("query")
@@ -2182,248 +2426,178 @@ async fn collect_from_wikimedia_commons(
         .and_then(|v| v.as_array())
         .cloned()
         .unwrap_or_default();
-    let mut collected = 0usize;
-    for row in rows {
-        if collected >= limit {
-            break;
-        }
-        let page_id = row.get("pageid").and_then(|v| v.as_i64()).unwrap_or_default();
-        if page_id <= 0 {
-            continue;
-        }
-        let title = row
-            .get("title")
-            .and_then(|v| v.as_str())
-            .unwrap_or_default()
-            .trim()
-            .trim_start_matches("File:")
-            .to_string();
-        let detail_url = format!(
-            "https://commons.wikimedia.org/w/api.php?action=query&prop=imageinfo&pageids={}&iiprop=url|mime&format=json",
-            page_id
-        );
-        let detail = match fetch_json(client, &detail_url).await {
-            Some(v) => v,
-            None => continue,
-        };
-        let page_key = page_id.to_string();
-        let image = detail
-            .get("query")
-            .and_then(|v| v.get("pages"))
-            .and_then(|v| v.get(&page_key))
-            .and_then(|v| v.get("imageinfo"))
-            .and_then(|v| v.as_array())
-            .and_then(|arr| arr.first())
-            .cloned();
-        let source_uri = image
-            .as_ref()
-            .and_then(|v| v.get("url"))
-            .and_then(|v| v.as_str())
-            .unwrap_or_default()
-            .trim()
-            .to_string();
-        let mime = image
-            .as_ref()
-            .and_then(|v| v.get("mime"))
-            .and_then(|v| v.as_str())
-            .unwrap_or_default()
-            .to_lowercase();
-        if source_uri.is_empty() || !mime.starts_with("audio/") || seen.contains(&source_uri) {
-            continue;
-        }
-        seen.insert(source_uri.clone());
-        let saved = language_learning_upsert_audio_resource(
-            app.clone(),
-            AudioResourceInput {
-                id: None,
+    let tasks = rows.into_iter().map(|row| {
+        let client = client.clone();
+        let topic = topic.clone();
+        let learning_lang = learning_lang.clone();
+        async move {
+            let page_id = row.get("pageid").and_then(|v| v.as_i64()).unwrap_or_default();
+            if page_id <= 0 {
+                return None;
+            }
+            let title = row
+                .get("title")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .trim()
+                .trim_start_matches("File:")
+                .to_string();
+            let detail_url = format!(
+                "https://commons.wikimedia.org/w/api.php?action=query&prop=imageinfo&pageids={}&iiprop=url|mime|size|mediatype&iiextmetadatafilter=Length&format=json",
+                page_id
+            );
+            let detail = fetch_json(&client, &detail_url).await?;
+            let page_key = page_id.to_string();
+            let image = detail
+                .get("query")
+                .and_then(|v| v.get("pages"))
+                .and_then(|v| v.get(&page_key))
+                .and_then(|v| v.get("imageinfo"))
+                .and_then(|v| v.as_array())
+                .and_then(|arr| arr.first())
+                .cloned()?;
+            let source_uri = image
+                .get("url")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .trim()
+                .to_string();
+            let mime = image
+                .get("mime")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_lowercase();
+            if source_uri.is_empty() || !mime.starts_with("audio/") {
+                return None;
+            }
+            let mut duration_sec = json_f64(image.get("duration")).max(0.0);
+            if duration_sec <= 0.0 {
+                duration_sec = parse_duration_text(
+                    image
+                        .get("extmetadata")
+                        .and_then(|v| v.get("Length"))
+                        .and_then(|v| v.get("value"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default(),
+                )
+                .unwrap_or(0.0);
+            }
+            if !duration_allowed(duration_sec, min_duration, max_duration) {
+                return None;
+            }
+            let relevance = topic_relevance_score(&title, &topic).max(0.35);
+            Some(ListeningCandidate {
+                candidate_id: candidate_id_for(&source_uri),
                 title: if title.is_empty() {
                     format!("{}（Wikimedia）", topic)
                 } else {
                     title
                 },
-                source_kind: "remote".to_string(),
                 source_uri,
-                provider: Some("wikimedia".to_string()),
-                topic: Some(topic.to_string()),
-                language_tag: Some(learning_lang.to_string()),
-                transcript: Some(String::new()),
-                sync_json_uri: Some(String::new()),
-                notes: Some("来源：Wikimedia Commons".to_string()),
-                duration_sec: Some(0.0),
-            },
-            Some(learning_lang.to_string()),
-        );
-        if let Ok(row) = saved {
-            out.push(row);
-            collected += 1;
+                provider: "wikimedia".to_string(),
+                topic: topic.clone(),
+                language_tag: learning_lang,
+                duration_sec,
+                notes: "来源：Wikimedia Commons".to_string(),
+                page_url: format!("https://commons.wikimedia.org/?curid={}", page_id),
+                relevance,
+                has_transcript: false,
+                already_collected: false,
+            })
         }
-    }
+    });
+    futures_util::stream::iter(tasks)
+        .buffer_unordered(6)
+        .filter_map(|item| async move { item })
+        .collect::<Vec<ListeningCandidate>>()
+        .await
 }
 
-async fn collect_from_rss_feed(
-    client: &Client,
-    app: &tauri::AppHandle,
-    topic: &str,
-    learning_lang: &str,
-    provider: &str,
-    feed_url: &str,
-    max_duration_sec: f64,
+async fn preview_from_rss_feed(
+    client: Client,
+    topic: String,
+    learning_lang: String,
+    provider: String,
+    feed_url: String,
+    min_duration: f64,
+    max_duration: f64,
     limit: usize,
-    seen: &mut HashSet<String>,
-    out: &mut Vec<AudioResource>,
-) {
+) -> Vec<ListeningCandidate> {
     if limit == 0 {
-        return;
+        return Vec::new();
     }
-    let xml = match client.get(feed_url).send().await {
+    let xml = match client.get(&feed_url).send().await {
         Ok(resp) if resp.status().is_success() => match resp.text().await {
             Ok(v) => v,
-            Err(_) => return,
+            Err(_) => return Vec::new(),
         },
-        _ => return,
+        _ => return Vec::new(),
     };
     let channel = match Channel::read_from(xml.as_bytes()) {
         Ok(v) => v,
-        Err(_) => return,
+        Err(_) => return Vec::new(),
     };
-    struct RssCandidate {
-        source_uri: String,
-        title: String,
-        notes: String,
-        page_url: String,
-        content_text: String,
-        duration_sec: f64,
-        pub_ts: Option<i64>,
-        score: f64,
-    }
-    let bucket = chrono::Utc::now().format("%Y%m%d%H").to_string();
-    let mut candidates = Vec::new();
+    let mut out = Vec::new();
     for item in channel.items() {
         let enclosure = match item.enclosure() {
             Some(v) => v,
             None => continue,
         };
         let source_uri = normalize_media_uri(enclosure.url());
-        if source_uri.is_empty() || seen.contains(&source_uri) {
+        if source_uri.is_empty() {
             continue;
         }
         let title = item.title().unwrap_or_default().trim().to_string();
         let desc_raw = item.description().unwrap_or_default().trim().to_string();
         let content_raw = item.content().unwrap_or_default().trim().to_string();
-        let base_notes = strip_html_tags(&desc_raw);
+        let notes = strip_html_tags(&desc_raw);
         let content_text = strip_html_tags(&content_raw);
         let page_url = item.link().unwrap_or_default().trim().to_string();
-        let notes = if page_url.is_empty() {
-            base_notes.clone()
-        } else if base_notes.is_empty() {
-            format!("来源页: {}", page_url)
-        } else {
-            format!("{}\n来源页: {}", base_notes, page_url)
-        };
         let search_text = format!("{} {}", title.to_lowercase(), notes.to_lowercase());
-        if !topic_matches_text(&search_text, topic) {
+        if !topic_matches_text(&search_text, &topic) {
             continue;
         }
-        let mut duration_sec =
+        let duration_sec =
             parse_duration_text(item.itunes_ext().and_then(|x| x.duration()).unwrap_or_default())
                 .unwrap_or(0.0);
-        if duration_sec <= 0.0 {
-            duration_sec = 0.0;
-        }
-        if duration_sec > max_duration_sec {
+        if duration_sec > 0.0 && !duration_allowed(duration_sec, min_duration, max_duration) {
             continue;
         }
         let pub_ts = parse_pub_datetime_to_ts(item.pub_date().unwrap_or_default());
         let recency = recency_preference_weight(pub_ts);
-        let duration_pref = duration_preference_weight(duration_sec);
-        let jitter = (stable_hash_u64(&format!(
-            "{}|{}|{}|{}",
-            source_uri, topic, provider, bucket
-        )) % 1000) as f64
-            / 1000.0
-            * 0.24;
-        candidates.push(RssCandidate {
+        let relevance = (topic_relevance_score(&format!("{} {}", title, notes), &topic).max(0.5)
+            * (1.0 + (recency - 1.0) * 0.35))
+            .clamp(0.0, 1.0);
+        let has_transcript = content_text.chars().count() >= 220;
+        let full_notes = if page_url.is_empty() {
+            notes
+        } else {
+            format!("{}\n来源页: {}", notes, page_url).trim().to_string()
+        };
+        out.push(ListeningCandidate {
+            candidate_id: candidate_id_for(&source_uri),
+            title: if title.is_empty() {
+                format!("{}（{}）", topic, provider)
+            } else {
+                title
+            },
             source_uri,
-            title,
-            notes,
-            page_url,
-            content_text,
+            provider: provider.clone(),
+            topic: topic.clone(),
+            language_tag: learning_lang.clone(),
             duration_sec,
-            pub_ts,
-            score: recency * duration_pref + jitter,
+            notes: full_notes,
+            page_url,
+            relevance,
+            has_transcript,
+            already_collected: false,
         });
-    }
-    candidates.sort_by(|a, b| {
-        b.score
-            .partial_cmp(&a.score)
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then_with(|| b.pub_ts.unwrap_or(0).cmp(&a.pub_ts.unwrap_or(0)))
-    });
-    let mut collected = 0usize;
-    for candidate in candidates.into_iter().take(limit) {
-        if collected >= limit {
+        if out.len() >= limit {
             break;
         }
-        let mut transcript = if candidate.content_text.chars().count() >= 220 {
-            split_long_text_to_lines(&candidate.content_text)
-        } else {
-            String::new()
-        };
-        if transcript.trim().is_empty() {
-            transcript = fetch_transcript_from_source(
-                client,
-                Some(provider),
-                &candidate.source_uri,
-                if candidate.page_url.is_empty() {
-                    None
-                } else {
-                    Some(candidate.page_url.as_str())
-                },
-                if candidate.notes.is_empty() {
-                    None
-                } else {
-                    Some(candidate.notes.as_str())
-                },
-            )
-            .await
-            .unwrap_or_default();
-        }
-        if transcript.trim().is_empty() {
-            transcript = if candidate.notes.is_empty() {
-                String::new()
-            } else {
-                candidate.notes.clone()
-            };
-        }
-        seen.insert(candidate.source_uri.clone());
-        let saved = language_learning_upsert_audio_resource(
-            app.clone(),
-            AudioResourceInput {
-                id: None,
-                title: if candidate.title.is_empty() {
-                    format!("{}（{}）", topic, provider)
-                } else {
-                    candidate.title
-                },
-                source_kind: "remote".to_string(),
-                source_uri: candidate.source_uri,
-                provider: Some(provider.to_string()),
-                topic: Some(topic.to_string()),
-                language_tag: Some(learning_lang.to_string()),
-                transcript: Some(transcript),
-                sync_json_uri: Some(String::new()),
-                notes: Some(candidate.notes),
-                duration_sec: Some(candidate.duration_sec),
-            },
-            Some(learning_lang.to_string()),
-        );
-        if let Ok(row) = saved {
-            out.push(row);
-            collected += 1;
-        }
     }
+    out
 }
-
 #[tauri::command]
 pub async fn language_learning_fetch_transcript_from_source(
     input: ListeningTranscriptFetchInput,
@@ -2510,21 +2684,26 @@ pub async fn language_learning_generate_whisper_sync_json(
     app: tauri::AppHandle,
     audio_id: String,
     learning_lang: Option<String>,
+    native_lang: Option<String>,
+    force: Option<bool>,
 ) -> Result<AudioResource, String> {
     let request_lang = normalize_learning_lang(learning_lang);
-    let translate_target_lang = resolve_listening_translate_target_lang();
+    let translate_target_lang = resolve_translate_target_lang(native_lang);
+    let force = force.unwrap_or(false);
+    set_sync_job(&audio_id, "prepare", 2.0, "准备音频", "");
     let (resolved_lang, row) = with_db(&app, |conn| {
         ensure_lang_tables(conn, &request_lang)?;
         load_audio_resource_with_fallback_lang(conn, &audio_id, &request_lang)?
             .ok_or_else(|| "听力条目不存在".to_string())
     })?;
     let existing_sync = normalize_media_uri(&row.sync_json_uri);
-    if !existing_sync.is_empty() {
+    if !force && !existing_sync.is_empty() {
         let p = PathBuf::from(&existing_sync);
         if p.exists() && p.is_file() {
             let has_full_translation = sync_json_has_full_translation(&existing_sync);
             let has_transcript = !row.transcript.trim().is_empty();
             if has_full_translation && has_transcript {
+                set_sync_job(&row.id, "done", 100.0, "同步数据已就绪", "");
                 return Ok(row);
             }
             warn!(
@@ -2537,9 +2716,17 @@ pub async fn language_learning_generate_whisper_sync_json(
         }
     }
     let entry_dir = resolve_listening_entry_dir(&row)?;
+    set_sync_job(&row.id, "download", 8.0, "获取音频", "");
     let local_audio = prepare_entry_audio_file(&row, &entry_dir).await?;
-    let local_json =
-        run_whisper_and_build_sync_json(&local_audio, &entry_dir, translate_target_lang.as_str()).await?;
+    let local_json = run_whisper_and_build_sync_json(
+        &row.id,
+        &local_audio,
+        &entry_dir,
+        translate_target_lang.as_str(),
+        resolved_lang.as_str(),
+    )
+    .await?;
+    set_sync_job(&row.id, "save", 97.0, "写入同步数据", "");
     let json_text = fs::read_to_string(&local_json).map_err(|e| format!("读取同步 JSON 失败: {}", e))?;
     let payload: WhisperSyncPayload =
         serde_json::from_str(&json_text).map_err(|e| format!("解析同步 JSON 失败: {}", e))?;
@@ -2547,7 +2734,7 @@ pub async fn language_learning_generate_whisper_sync_json(
     let next = language_learning_upsert_audio_resource(
         app,
         AudioResourceInput {
-            id: Some(row.id),
+            id: Some(row.id.clone()),
             title: row.title,
             source_kind: "local".to_string(),
             source_uri: local_audio.to_string_lossy().to_string(),
@@ -2569,6 +2756,7 @@ pub async fn language_learning_generate_whisper_sync_json(
         },
         Some(resolved_lang),
     )?;
+    set_sync_job(&row.id, "done", 100.0, "同步完成", "");
     Ok(next)
 }
 
@@ -2627,9 +2815,10 @@ pub async fn language_learning_backfill_sync_translation(
     app: tauri::AppHandle,
     audio_id: String,
     learning_lang: Option<String>,
+    native_lang: Option<String>,
 ) -> Result<AudioResource, String> {
     let request_lang = normalize_learning_lang(learning_lang);
-    let translate_target_lang = resolve_listening_translate_target_lang();
+    let translate_target_lang = resolve_translate_target_lang(native_lang.clone());
     let (resolved_lang, row) = with_db(&app, |conn| {
         ensure_lang_tables(conn, &request_lang)?;
         load_audio_resource_with_fallback_lang(conn, &audio_id, &request_lang)?
@@ -2642,6 +2831,7 @@ pub async fn language_learning_backfill_sync_translation(
             let has_full_translation = sync_json_has_full_translation(&existing_sync);
             let has_transcript = !row.transcript.trim().is_empty();
             if has_full_translation && has_transcript {
+                set_sync_job(&row.id, "done", 100.0, "同步数据已就绪", "");
                 return Ok(row);
             }
             info!(
@@ -2651,6 +2841,7 @@ pub async fn language_learning_backfill_sync_translation(
                 has_transcript,
                 "backfill translation for existing sync json"
             );
+            set_sync_job(&row.id, "translate", 20.0, "补齐译文", "");
             if let Ok(payload) = backfill_existing_sync_json_translation(&sync_path, translate_target_lang.as_str()).await {
                 let transcript = if row.transcript.trim().is_empty() {
                     payload.transcript.trim().to_string()
@@ -2679,12 +2870,20 @@ pub async fn language_learning_backfill_sync_translation(
                     Some(resolved_lang.clone()),
                 )?;
                 if sync_json_has_full_translation(&existing_sync) {
+                    set_sync_job(&row.id, "done", 100.0, "同步完成", "");
                     return Ok(next);
                 }
             }
         }
     }
-    language_learning_generate_whisper_sync_json(app, audio_id, Some(resolved_lang)).await
+    language_learning_generate_whisper_sync_json(
+        app,
+        audio_id,
+        Some(resolved_lang),
+        native_lang,
+        None,
+    )
+    .await
 }
 
 #[tauri::command]
@@ -2692,6 +2891,8 @@ pub fn language_learning_generate_whisper_sync_json_async(
     app: tauri::AppHandle,
     audio_id: String,
     learning_lang: Option<String>,
+    native_lang: Option<String>,
+    force: Option<bool>,
 ) -> Result<(), String> {
     let id = audio_id.trim().to_string();
     if id.is_empty() {
@@ -2706,24 +2907,90 @@ pub fn language_learning_generate_whisper_sync_json_async(
         }
         pending.insert(id.clone());
     }
+    set_sync_job(&id, "queued", 0.0, "排队等待", "");
     let app_handle = app.clone();
     let lang = learning_lang.clone();
+    let target_lang = native_lang.clone();
     tauri::async_runtime::spawn(async move {
         let _guard = LISTENING_SYNC_LOCK.lock().await;
         // 这里原来是 `let _ = ...`：同步一旦失败就彻底没有痕迹，前端只表现为「没有翻译」，
         // 日志里全是下游的噪声（coverage:zero、empty path）。失败原因至少要留一条。
-        if let Err(error) = language_learning_generate_whisper_sync_json(app_handle, id.clone(), lang).await {
+        if let Err(error) = language_learning_generate_whisper_sync_json(
+            app_handle,
+            id.clone(),
+            lang,
+            target_lang,
+            force,
+        )
+        .await
+        {
             warn!(
                 audio_id = id.as_str(),
                 error = error.as_str(),
                 "听力同步转写失败"
             );
+            set_sync_job(&id, "error", 0.0, "转写失败", error.as_str());
         }
         if let Ok(mut pending) = LISTENING_SYNC_PENDING_IDS.lock() {
             pending.remove(&id);
         }
     });
     Ok(())
+}
+
+/// 清掉已有译文后按新的母语重译；没有同步数据时退化为完整转写。
+#[tauri::command]
+pub async fn language_learning_retranslate_audio(
+    app: tauri::AppHandle,
+    audio_id: String,
+    learning_lang: Option<String>,
+    native_lang: Option<String>,
+) -> Result<AudioResource, String> {
+    let request_lang = normalize_learning_lang(learning_lang);
+    let target_lang = resolve_translate_target_lang(native_lang.clone());
+    let (_resolved_lang, row) = with_db(&app, |conn| {
+        ensure_lang_tables(conn, &request_lang)?;
+        load_audio_resource_with_fallback_lang(conn, &audio_id, &request_lang)?
+            .ok_or_else(|| "听力条目不存在".to_string())
+    })?;
+    let sync_path = normalize_media_uri(&row.sync_json_uri);
+    if sync_path.is_empty() || !PathBuf::from(&sync_path).is_file() {
+        return language_learning_generate_whisper_sync_json(
+            app,
+            audio_id,
+            Some(request_lang),
+            native_lang,
+            Some(true),
+        )
+        .await;
+    }
+    set_sync_job(&audio_id, "translate", 10.0, "清空旧译文", "");
+    let json_text = fs::read_to_string(&sync_path).map_err(|e| format!("读取同步 JSON 失败: {}", e))?;
+    let mut payload: WhisperSyncPayload =
+        serde_json::from_str(&json_text).map_err(|e| format!("解析同步 JSON 失败: {}", e))?;
+    if payload.segments.is_empty() {
+        return language_learning_generate_whisper_sync_json(
+            app,
+            audio_id,
+            Some(request_lang),
+            native_lang,
+            Some(true),
+        )
+        .await;
+    }
+    for segment in payload.segments.iter_mut() {
+        segment.translated_text.clear();
+    }
+    let formatted =
+        serde_json::to_string_pretty(&payload).map_err(|e| format!("构建同步 JSON 失败: {}", e))?;
+    fs::write(&sync_path, formatted).map_err(|e| format!("写入同步 JSON 失败: {}", e))?;
+    language_learning_backfill_sync_translation(
+        app,
+        audio_id,
+        Some(request_lang),
+        Some(target_lang),
+    )
+    .await
 }
 
 async fn fetch_transcript_from_source(
@@ -3047,7 +3314,7 @@ fn load_audio_resource_by_id(
     ensure_audio_table_columns(conn, table);
     let sql = format!(
         r#"
-        SELECT id, title, source_kind, source_uri, provider, topic, language_tag, transcript, sync_json_uri, notes, duration_sec, created_at, updated_at
+        SELECT id, title, source_kind, source_uri, origin_uri, provider, topic, language_tag, transcript, sync_json_uri, notes, duration_sec, created_at, updated_at
         FROM {table}
         WHERE id = ?1
         LIMIT 1
@@ -3063,15 +3330,16 @@ fn load_audio_resource_by_id(
             title: r.get(1)?,
             source_kind: r.get(2)?,
             source_uri: r.get(3)?,
-            provider: r.get(4)?,
-            topic: r.get(5)?,
-            language_tag: r.get(6)?,
-            transcript: r.get(7)?,
-            sync_json_uri: r.get(8)?,
-            notes: r.get(9)?,
-            duration_sec: r.get(10)?,
-            created_at: r.get(11)?,
-            updated_at: r.get(12)?,
+            origin_uri: r.get(4)?,
+            provider: r.get(5)?,
+            topic: r.get(6)?,
+            language_tag: r.get(7)?,
+            transcript: r.get(8)?,
+            sync_json_uri: r.get(9)?,
+            notes: r.get(10)?,
+            duration_sec: r.get(11)?,
+            created_at: r.get(12)?,
+            updated_at: r.get(13)?,
         })
     })
     .optional()
@@ -3094,6 +3362,10 @@ fn ensure_audio_table_columns(conn: &Connection, table: &str) {
         ),
         format!(
             "ALTER TABLE {} ADD COLUMN sync_json_uri TEXT NOT NULL DEFAULT ''",
+            table
+        ),
+        format!(
+            "ALTER TABLE {} ADD COLUMN origin_uri TEXT NOT NULL DEFAULT ''",
             table
         ),
     ] {
@@ -3340,13 +3612,13 @@ async fn prepare_entry_audio_file(row: &AudioResource, entry_dir: &Path) -> Resu
     Ok(audio_path)
 }
 
-fn resolve_whisper_models() -> Result<(PathBuf, PathBuf), String> {
+fn resolve_whisper_models(source_lang: &str) -> Result<(PathBuf, PathBuf), String> {
     let base = bundled_resources::ensure_relative_dir("utils/Models/whisper_onnx")?;
-    let model_dir = fs::read_dir(&base)
+    let candidates = fs::read_dir(&base)
         .map_err(|e| format!("读取 whisper 模型目录失败（{}）：{}", base.display(), e))?
         .flatten()
         .map(|entry| entry.path())
-        .find(|path| {
+        .filter(|path| {
             path.is_dir()
                 && fs::read_dir(path)
                     .map(|entries| {
@@ -3356,12 +3628,44 @@ fn resolve_whisper_models() -> Result<(PathBuf, PathBuf), String> {
                     })
                     .unwrap_or(false)
         })
-        .ok_or_else(|| {
-            format!(
-                "未在 {} 下找到 whisper ONNX 模型目录，请运行 tools/fetch_sherpa_onnx_libs 下载",
-                base.display()
-            )
-        })?;
+        .collect::<Vec<PathBuf>>();
+    if candidates.is_empty() {
+        return Err(format!(
+            "未在 {} 下找到 whisper ONNX 模型目录，请运行 tools/fetch_sherpa_onnx_libs 下载",
+            base.display()
+        ));
+    }
+
+    let lang = source_lang.trim().to_lowercase();
+    let pick = if lang.is_empty() || lang == "en" {
+        candidates
+            .iter()
+            .find(|path| {
+                path.file_name()
+                    .map(|x| x.to_string_lossy().to_lowercase().contains(".en"))
+                    .unwrap_or(false)
+            })
+            .or_else(|| candidates.first())
+    } else {
+        candidates.iter().find(|path| {
+            path.file_name()
+                .map(|x| !x.to_string_lossy().to_lowercase().contains(".en"))
+                .unwrap_or(false)
+        })
+    }
+    .cloned();
+
+    let model_dir = pick.ok_or_else(|| {
+        let installed = candidates
+            .iter()
+            .filter_map(|p| p.file_name().map(|x| x.to_string_lossy().to_string()))
+            .collect::<Vec<_>>()
+            .join("、");
+        format!(
+            "学习语言「{}」需要多语种 Whisper 模型，当前只安装了英文模型（{}）。请下载多语种模型后重试",
+            lang, installed
+        )
+    })?;
 
     let vad = bundled_resources::ensure_relative_dir("utils/Models/vad/silero_vad.onnx")?;
     if !vad.is_file() {
@@ -3373,22 +3677,31 @@ fn resolve_whisper_models() -> Result<(PathBuf, PathBuf), String> {
     Ok((model_dir, vad))
 }
 
-async fn run_whisper_and_build_sync_json(local_audio: &Path, entry_dir: &Path, target_lang: &str) -> Result<PathBuf, String> {
+async fn run_whisper_and_build_sync_json(
+    audio_id: &str,
+    local_audio: &Path,
+    entry_dir: &Path,
+    target_lang: &str,
+    source_lang: &str,
+) -> Result<PathBuf, String> {
     if !entry_dir.exists() {
         fs::create_dir_all(entry_dir).map_err(|e| format!("创建听力目录失败: {}", e))?;
     }
-    let (model_dir, vad_model) = resolve_whisper_models()?;
+    let (model_dir, vad_model) = resolve_whisper_models(source_lang)?;
+    set_sync_job(audio_id, "transcribe", 14.0, "转写中", "");
     // 有可用的 CUDA 就走 GPU，没有就在 resolve 阶段自己退回 CPU。
     let config = crate::guaxiservices::speech::resolve_whisper_onnx_engine_config(
         &model_dir,
         "auto",
-        Some("en"),
+        Some(source_lang),
     )?;
     let using_gpu = config.provider != "cpu";
     info!(
         audio = %local_audio.display(),
         model_dir = %model_dir.display(),
         provider = config.provider.as_str(),
+        source_lang = source_lang,
+        target_lang = target_lang,
         "language_learning whisper in-process"
     );
     let parsed = match crate::guaxiservices::speech::transcribe_segments_audio(
@@ -3406,7 +3719,7 @@ async fn run_whisper_and_build_sync_json(local_audio: &Path, entry_dir: &Path, t
             let cpu_config = crate::guaxiservices::speech::resolve_whisper_onnx_engine_config(
                 &model_dir,
                 "cpu",
-                Some("en"),
+                Some(source_lang),
             )?;
             crate::guaxiservices::speech::transcribe_segments_audio(
                 cpu_config,
@@ -3424,7 +3737,20 @@ async fn run_whisper_and_build_sync_json(local_audio: &Path, entry_dir: &Path, t
     let mut segments = Vec::new();
     let mut transcript_lines = Vec::new();
     let source_lines = parsed.iter().map(|segment| segment.text.clone()).collect::<Vec<_>>();
-    let translated_lines = translate_segments_with_sentence_groups(&source_lines, target_lang).await;
+    let translated_lines = if target_lang.trim().is_empty() || target_lang.eq_ignore_ascii_case(source_lang) {
+        set_sync_job(audio_id, "translate", 82.0, "学习语言与母语相同，跳过翻译", "");
+        Vec::new()
+    } else {
+        set_sync_job(
+            audio_id,
+            "translate",
+            70.0,
+            &format!("已识别 {} 段，翻译中", source_lines.len()),
+            "",
+        );
+        translate_segments_with_sentence_groups(&source_lines, target_lang).await
+    };
+    set_sync_job(audio_id, "timeline", 94.0, "整理时间轴", "");
     for (idx, segment) in parsed.iter().enumerate() {
         transcript_lines.push(segment.text.clone());
         segments.push(WhisperSyncSegment {

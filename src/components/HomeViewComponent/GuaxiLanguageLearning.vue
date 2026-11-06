@@ -1,754 +1,1026 @@
 <template>
   <n-message-provider>
-    <div class="lang-learn-page">
-      <div class="manager-header">
-        <div class="title-main">学习记录管理器</div>
-        <div class="toolbar-row">
-          <n-button quaternary circle size="small" title="听力资源管理" @click="openAudioManager">
-            <Icon :icon="settingsIcon" width="16" height="16" />
-          </n-button>
-          <n-button quaternary circle size="small" title="导入并恢复" :loading="importingLearningData" @click="importLearningData">
-            <Icon :icon="importIcon" width="16" height="16" />
-          </n-button>
-          <n-button quaternary circle size="small" title="导出学习数据" :loading="exportingLearningData" @click="exportLearningData">
-            <Icon :icon="exportIcon" width="16" height="16" />
-          </n-button>
-          <n-button quaternary circle size="small" title="随机抽查卡牌" @click="openRandomCheckBoard">
-            <Icon :icon="shuffleIcon" width="16" height="16" />
-          </n-button>
-          <n-tag v-if="syncQueueVisualRunning" size="small" type="warning">后台转换 {{ Math.min(syncQueueDone, syncQueueTotal) }}/{{ syncQueueTotal }}</n-tag>
-          <n-select
-            v-model:value="learningLang"
-            size="small"
-            :options="learningLangOptions"
-            style="width: 140px"
-          />
+    <div class="lang-learn-page" :class="{ 'is-immersive': isListeningImmersiveReady }">
+      <header v-if="!isListeningImmersiveReady" class="ll-topbar">
+        <div class="ll-brand">
+          <div class="ll-brand-kicker">GUAXI · LANGUAGE</div>
+          <h1 class="ll-brand-title serif">语言学习中心</h1>
+        </div>
+        <nav class="ll-mainnav">
+          <button class="ll-navbtn" :class="{ active: activeTab === 'manager' }" @click="activeTab = 'manager'">书架</button>
+          <button class="ll-navbtn" :class="{ active: activeTab === 'review' }" @click="goToReview">复习训练</button>
+        </nav>
+        <div class="ll-topright">
+          <div class="ll-langpair" title="学习语言 → 母语（决定转写与翻译目标）">
+            <n-select v-model:value="learningLang" size="small" :options="learningLangOptions" style="width: 116px" />
+            <span class="ll-langarrow">→</span>
+            <n-select v-model:value="nativeLang" size="small" :options="nativeLangOptions" style="width: 116px" />
+          </div>
           <n-input
+            v-if="activeTab === 'manager'"
             v-model:value="keyword"
             clearable
             size="small"
-            placeholder="搜索单词、释义、例句、笔记..."
-            style="width: 260px"
+            class="ll-search"
+            placeholder="搜索词条 / 译文 / 笔记"
             @keydown.enter="refreshAll"
           />
-          <n-button quaternary circle size="small" title="刷新数据" @click="refreshAll">
-            <Icon :icon="refreshIcon" width="16" height="16" />
-          </n-button>
-        </div>
-      </div>
-
-      <n-tabs v-model:value="activeTab" animated type="line" class="page-tabs">
-        <n-tab-pane name="manager" tab="学习管理">
-          <div v-if="isListeningImmersiveReady" class="listening-immersive-page">
-            <div class="immersive-global-back">
-              <n-button quaternary circle size="small" class="immersive-back-btn" title="返回听力管理界面" @click="exitListeningImmersive">
-                <Icon :icon="chevronLeftIcon" width="16" height="16" />
-              </n-button>
-              <span class="immersive-title">{{ activeAudio?.title || '听力学习面板' }}</span>
-            </div>
-            <div class="listening-detail-layout immersive">
-              <div class="listening-player-pane">
-                <div class="immersive-media-shell">
-                  <video
-                    v-if="activeMediaIsVideo"
-                    ref="activeAudioPlayerRef"
-                    class="listening-player listening-video-player"
-                    controls
-                    playsinline
-                    :src="activeAudioPlayableSrc"
-                    @loadedmetadata="onAudioLoadedMetadata"
-                    @canplay="handleListeningMediaCanPlay('active', $event)"
-                    @play="handleListeningMediaPlay('active', $event)"
-                    @timeupdate="handleAudioTimeUpdate"
-                    @error="handleListeningMediaError('active', $event)"
-                  >
-                    <track
-                      v-if="activeMediaSubtitleVttSrc"
-                      kind="subtitles"
-                      srclang="zh"
-                      label="自动字幕"
-                      :src="activeMediaSubtitleVttSrc"
-                      default
-                    />
-                  </video>
-                  <audio
-                    v-else
-                    ref="activeAudioPlayerRef"
-                    class="listening-player"
-                    controls
-                    :src="activeAudioPlayableSrc"
-                    @loadedmetadata="onAudioLoadedMetadata"
-                    @canplay="handleListeningMediaCanPlay('active', $event)"
-                    @play="handleListeningMediaPlay('active', $event)"
-                    @timeupdate="handleAudioTimeUpdate"
-                    @error="handleListeningMediaError('active', $event)"
-                  ></audio>
-                </div>
-                <div class="playback-row">
-                  <span class="detail-label">播放速度</span>
-                  <n-select v-model:value="playbackRate" size="small" style="width: 140px" :options="playbackRateOptions" @update:value="applyAudioPlaybackRate" />
-                </div>
-                <div class="detail-block">
-                  <div class="detail-label">资源来源 / 主题</div>
-                  <div class="detail-content">{{ activeAudio?.provider || '—' }} / {{ activeAudio?.topic || '—' }}</div>
-                </div>
-                <div class="detail-actions">
-                  <n-button size="small" @click="editAudio(activeAudio)">编辑资源</n-button>
-                  <n-button size="small" @click="applyReviewResult('known')">听懂了</n-button>
-                  <n-button size="small" @click="applyReviewResult('fuzzy')">半懂</n-button>
-                  <n-button size="small" @click="applyReviewResult('unknown')">听不懂</n-button>
-                </div>
-              </div>
-              <div class="listening-transcript-pane">
-                <div class="transcript-head">
-                  <div class="detail-label">音文对照</div>
-                  <div class="transcript-head-actions">
-                    <n-tag v-if="activeTranscriptTranslating" size="small" type="warning">译文加载中...</n-tag>
-                    <n-button quaternary circle size="small" class="transcript-mode-btn" :title="`切换显示模式（当前：${transcriptDisplayModeLabel}）`" @click="cycleTranscriptDisplayMode">
-                      <Icon :icon="languagesIcon" width="13" height="13" />
-                    </n-button>
-                    <n-button quaternary circle size="small" class="transcript-mode-btn" :disabled="!activeMediaIsVideo" :title="`切换视频字幕（当前：${subtitleDisplayModeLabel}）`" @click="cycleSubtitleDisplayMode">
-                      <Icon :icon="badgeInfoIcon" width="13" height="13" />
-                    </n-button>
-                    <n-button quaternary circle size="small" class="transcript-font-btn" title="减小字号" @click="decreaseTranscriptFontScale">A-</n-button>
-                    <n-button quaternary circle size="small" class="transcript-font-btn" title="增大字号" @click="increaseTranscriptFontScale">A+</n-button>
-                  </div>
-                </div>
-                <div ref="immersiveTranscriptListRef" class="transcript-list" :style="transcriptListStyle" @scroll="handleActiveTranscriptScroll">
-                  <div
-                    v-for="item in visibleActiveAudioTranscriptTimeline"
-                    :key="`immersive-tr-${item.idx}`"
-                    class="transcript-line"
-                    :class="{ active: item.idx === currentTranscriptLineIndex, hovered: item.idx === hoveredTranscriptIndex }"
-                    :data-transcript-idx="item.idx"
-                    @click="seekActiveAudioToTranscript(item.idx)"
-                    @mouseenter="hoveredTranscriptIndex = item.idx"
-                    @mouseleave="hoveredTranscriptIndex = -1"
-                  >
-                    <div class="transcript-source" v-if="transcriptDisplayMode !== 'target'">{{ item.line.text }}</div>
-                    <div class="transcript-target" v-if="transcriptDisplayMode !== 'source'">{{ resolveTranscriptTargetText(item.line) }}</div>
-                  </div>
-                </div>
-              </div>
-            </div>
+          <div v-if="syncQueueVisualRunning" class="ll-syncpill">
+            <span class="pulse-dot"></span>
+            后台处理 {{ Math.min(syncQueueDone, syncQueueTotal) }}/{{ syncQueueTotal }}
           </div>
-          <div v-else class="manager-layout" :class="{ 'left-collapsed': leftCollapsed, 'right-collapsed': rightCollapsed }">
-            <n-card size="small" class="left-tree-card" v-show="!leftCollapsed">
-              <div class="tree-group-title">学习分组</div>
-              <div
-                v-for="it in leftShelfItems"
-                :key="it.key"
-                class="tree-item"
-                :class="{ active: selectedShelf === it.key }"
-                @click="selectedShelf = it.key"
+          <n-dropdown trigger="click" :options="moreMenuOptions" @select="onMoreMenuSelect">
+            <n-button quaternary circle size="small" title="更多">
+              <Icon :icon="moreIcon" width="16" height="16" />
+            </n-button>
+          </n-dropdown>
+        </div>
+      </header>
+
+      <section v-if="isListeningImmersiveReady" class="ll-studio">
+        <header class="studio-head">
+          <button class="studio-back" title="返回听力书架" @click="exitListeningImmersive">
+            <Icon :icon="chevronLeftIcon" width="18" height="18" />
+            <span>书架</span>
+          </button>
+          <div class="studio-titleblock">
+            <div class="eyebrow">{{ activeAudio?.provider || 'LISTENING' }} · {{ activeAudio?.topic || '未标注主题' }}</div>
+            <h1 class="studio-title serif">{{ activeAudio?.title || '听力学习' }}</h1>
+          </div>
+          <div class="studio-headmeta">
+            <span class="studio-duration">{{ fmtDuration(activeAudio?.duration_sec) }}</span>
+            <span class="sync-chip" :class="`tone-${activeAudioSyncState.tone}`">
+              <span v-if="activeAudioSyncState.tone === 'running'" class="pulse-dot"></span>
+              {{ activeAudioSyncState.label }}
+            </span>
+          </div>
+        </header>
+
+        <div class="studio-grid">
+          <aside class="studio-player">
+            <div class="player-sheet">
+              <video
+                v-if="activeMediaIsVideo"
+                ref="activeAudioPlayerRef"
+                class="listening-player listening-video-player"
+                controls
+                playsinline
+                :src="activeAudioPlayableSrc"
+                @loadedmetadata="onAudioLoadedMetadata"
+                @canplay="handleListeningMediaCanPlay('active', $event)"
+                @play="handleListeningMediaPlay('active', $event)"
+                @timeupdate="handleAudioTimeUpdate"
+                @error="handleListeningMediaError('active', $event)"
               >
-                <span>{{ it.label }}</span>
-                <span class="tree-count">({{ it.count }})</span>
-              </div>
-            </n-card>
-
-            <n-card size="small" class="middle-table-card">
-              <div class="edge-toggle left" :title="leftCollapsed ? '展开左侧栏' : '收起左侧栏'" @click="leftCollapsed = !leftCollapsed">
-                <Icon :icon="leftCollapsed ? chevronRightIcon : chevronLeftIcon" width="16" height="16" />
-              </div>
-              <div class="edge-toggle right" :title="rightCollapsed ? '展开右侧栏' : '收起右侧栏'" @click="rightCollapsed = !rightCollapsed">
-                <Icon :icon="rightCollapsed ? chevronLeftIcon : chevronRightIcon" width="16" height="16" />
-              </div>
-              <div class="table-toolbar">
-                <n-button quaternary circle size="small" title="新增记录" @click="openCreateDialog">
-                  <Icon :icon="plusIcon" width="16" height="16" />
-                </n-button>
-                <n-button quaternary circle size="small" title="编辑记录" :disabled="!activeRow || activeRow.sourceType === 'audio'" @click="openEditDialog(activeRow)">
-                  <Icon :icon="editIcon" width="16" height="16" />
-                </n-button>
-                <n-button quaternary circle size="small" title="编辑听力" :disabled="!activeAudio" @click="editAudio(activeAudio)">
-                  <Icon :icon="settingsIcon" width="16" height="16" />
-                </n-button>
-                <n-button quaternary circle size="small" title="删除选中项" :disabled="!checkedRowKeys.length && !activeRow" @click="deleteSelectedRows">
-                  <Icon :icon="trashIcon" width="16" height="16" />
-                </n-button>
-                <n-button quaternary circle size="small" title="开始复习" @click="startReviewFromSelection">
-                  <Icon :icon="reviewIcon" width="16" height="16" />
-                </n-button>
-                <n-button quaternary circle size="small" title="刷新词汇拓展（仅单词：音标、释义、近义词、例句）" :disabled="!activeWordRecord" @click="refreshWordMeta(activeWordRecord)">
-                  <Icon :icon="sparkleIcon" width="16" height="16" />
-                </n-button>
-                <span class="table-toolbar-hint" v-if="activeWordRecord">词汇拓展：刷新音标/释义/例句</span>
-              </div>
-              <template v-if="managerMode === 'random'">
-                <div class="random-board">
-                  <div class="random-board-head">
-                    <n-tag size="small" type="success">随机抽查</n-tag>
-                    <span>{{ selectedShelfLabel }}</span>
-                    <span class="random-deck-index">{{ randomDecks.length ? `${randomDeckIndex + 1} / ${randomDecks.length}` : '0 / 0' }}</span>
-                    <div class="random-board-actions">
-                      <n-button quaternary circle size="small" title="上一组卡堆（←）" @click="gotoPrevRandomDeck">
-                        <Icon :icon="chevronLeftIcon" width="16" height="16" />
-                      </n-button>
-                      <n-button quaternary circle size="small" title="下一组卡堆（→）" @click="gotoNextRandomDeck">
-                        <Icon :icon="chevronRightIcon" width="16" height="16" />
-                      </n-button>
-                      <n-button quaternary circle size="small" title="翻牌（空格）" @click="toggleCurrentDeckFlip">
-                        <Icon :icon="reviewIcon" width="16" height="16" />
-                      </n-button>
-                      <n-button quaternary circle size="small" title="抽新卡（回车）" @click="drawRandomCards">
-                        <Icon :icon="shuffleIcon" width="16" height="16" />
-                      </n-button>
-                      <n-button quaternary circle size="small" title="返回列表模式" @click="managerMode = 'list'">
-                        <Icon :icon="listIcon" width="16" height="16" />
-                      </n-button>
-                    </div>
-                  </div>
-                  <div class="random-cards-grid">
-                    <div class="random-board-card" v-for="card in currentRandomCards" :key="card.id" @click="toggleRandomCardFlip(card)">
-                      <div class="random-card-flip" :class="{ flipped: isCardFlipped(card) }">
-                        <div class="random-card-face front" :class="{ 'random-card-face-listening-front': card.rowType === 'listening' }">
-                          <div class="random-card-type">{{ rowTypeLabel(card.rowType) }}</div>
-                          <template v-if="card.rowType === 'word'">
-                            <div class="random-card-word">{{ card.title }}</div>
-                            <div class="random-card-phonetic">{{ card.phonetic || '—' }}</div>
-                            <div class="random-card-text">{{ card.sourceText || '—' }}</div>
-                          </template>
-                          <template v-else-if="card.rowType === 'listening'">
-                            <div class="random-card-listening-main">
-                              <div class="random-card-word">{{ card.title }}</div>
-                              <div class="random-card-text random-card-text-clamped">{{ card.summary || card.note || '—' }}</div>
-                            </div>
-                            <div class="random-card-audio-row">
-                              <div class="random-audio-action" :class="randomCardAudioActionState(card)" :title="randomCardAudioActionTitle(card)" @click.stop="playRandomCardAudio(card)">
-                                <Icon :icon="randomCardAudioActionIcon(card)" width="24" height="24" />
-                              </div>
-                            </div>
-                          </template>
-                          <template v-else>
-                            <div class="random-card-text">{{ card.sourceText || '—' }}</div>
-                          </template>
-                        </div>
-                        <div class="random-card-face back" :class="{ 'random-card-face-listening-back': card.rowType === 'listening' }">
-                          <template v-if="card.rowType === 'word'">
-                            <div class="random-card-word-main random-card-listening-main-scroll">
-                              <div class="random-card-head-row">
-                                <div class="random-card-word">{{ card.title }}</div>
-                                <div class="random-card-stars">{{ masteryStars(card.masteryLevel) }}</div>
-                              </div>
-                              <div class="random-card-meta-row">
-                                <div class="phonetic-group" v-if="card.phoneticUk || card.phonetic">
-                                  <n-tag size="small" round :bordered="false" class="phonetic-tag">
-                                    <template #icon><Icon :icon="speechIcon" /></template>
-                                    英 {{ card.phoneticUk || card.phonetic }}
-                                  </n-tag>
-                                  <n-button text size="tiny" class="phonetic-btn" @click.stop="playWordPronunciation(card.title, 'uk')">
-                                    <Icon :icon="volumeUkIcon" width="14" height="14" />
-                                  </n-button>
-                                </div>
-                                <div class="phonetic-group" v-if="card.phoneticUs || card.phonetic">
-                                  <n-tag size="small" round :bordered="false" class="phonetic-tag">
-                                    <template #icon><Icon :icon="speechIcon" /></template>
-                                    美 {{ card.phoneticUs || card.phonetic }}
-                                  </n-tag>
-                                  <n-button text size="tiny" class="phonetic-btn" @click.stop="playWordPronunciation(card.title, 'us')">
-                                    <Icon :icon="volumeUsIcon" width="14" height="14" />
-                                  </n-button>
-                                </div>
-                                <n-tag v-if="card.partOfSpeech" size="small" round type="info" :bordered="false">{{ card.partOfSpeech }}</n-tag>
-                              </div>
-                              
-                              <div class="random-card-section">
-                                <div class="random-card-label">释义</div>
-                                <div class="random-card-content">{{ cardWordMeanings(card).join('；') || '—' }}</div>
-                              </div>
-
-                              <div class="random-card-section" v-if="cardWordPairs(card.payload?.synonyms, card.payload?.synonyms_translations).length">
-                                <div class="random-card-label">近义词</div>
-                                <div class="chip-wrap">
-                                  <n-tag v-for="(x, i) in cardWordPairs(card.payload?.synonyms, card.payload?.synonyms_translations)" :key="`rd-s-${card.id}-${i}`" size="small" :bordered="false">{{ x.word }}<span v-if="x.translation" class="tag-trans"> · {{ x.translation }}</span></n-tag>
-                                </div>
-                              </div>
-
-                              <div class="random-card-section" v-if="cardWordPairs(card.payload?.antonyms, card.payload?.antonyms_translations).length">
-                                <div class="random-card-label">反义词</div>
-                                <div class="chip-wrap">
-                                  <n-tag v-for="(x, i) in cardWordPairs(card.payload?.antonyms, card.payload?.antonyms_translations)" :key="`rd-a-${card.id}-${i}`" size="small" type="warning" :bordered="false">{{ x.word }}<span v-if="x.translation" class="tag-trans"> · {{ x.translation }}</span></n-tag>
-                                </div>
-                              </div>
-
-                              <div class="random-card-section" v-if="cardWordPairs(card.payload?.associates, card.payload?.associates_translations).length">
-                                <div class="random-card-label">联想词</div>
-                                <div class="chip-wrap">
-                                  <n-tag v-for="(x, i) in cardWordPairs(card.payload?.associates, card.payload?.associates_translations)" :key="`rd-r-${card.id}-${i}`" size="small" type="info" :bordered="false">{{ x.word }}<span v-if="x.translation" class="tag-trans"> · {{ x.translation }}</span></n-tag>
-                                </div>
-                              </div>
-
-                              <div class="random-card-section" v-if="card.phrasePairs?.length">
-                                <div class="random-card-label">常用短语</div>
-                                <div class="example-line" v-for="(x, i) in card.phrasePairs" :key="`rd-p-${card.id}-${i}`">
-                                  <div class="example-src">{{ i + 1 }}. {{ x.source }}</div>
-                                  <div class="example-target" v-if="x.target">{{ x.target }}</div>
-                                </div>
-                              </div>
-
-                              <div class="random-card-section" v-if="card.examplePairs?.length">
-                                <div class="random-card-label">常用例句</div>
-                                <div class="example-line" v-for="(x, i) in card.examplePairs" :key="`rd-e-${card.id}-${i}`">
-                                  <div class="example-src">{{ i + 1 }}. {{ x.source }}</div>
-                                  <div class="example-target" v-if="x.target">{{ x.target }}</div>
-                                </div>
-                              </div>
-                            </div>
-                          </template>
-                          <template v-else-if="card.rowType === 'listening'">
-                            <div class="random-card-listening-main random-card-listening-main-scroll" tabindex="0" @keydown.stop="handleListeningCardScrollKeydown">
-                              <div class="random-card-head-row">
-                                <div class="random-card-word">{{ card.title }}</div>
-                              </div>
-                              <div class="random-card-section">
-                                <div class="random-card-label">来源 / 备注</div>
-                                <div class="random-card-content">{{ card.note || '—' }}</div>
-                              </div>
-                              <div class="random-card-section">
-                                <div class="random-card-label">原文 / 摘要</div>
-                                <div class="random-card-content">{{ card.sourceText || card.summary || '—' }}</div>
-                              </div>
-                            </div>
-                            <div class="random-card-audio-row">
-                              <div class="random-audio-action" :class="randomCardAudioActionState(card)" :title="randomCardAudioActionTitle(card)" @click.stop="playRandomCardAudio(card)">
-                                <Icon :icon="randomCardAudioActionIcon(card)" width="24" height="24" />
-                              </div>
-                            </div>
-                          </template>
-                          <template v-else>
-                            <div class="random-card-section">
-                              <div class="random-card-label">原文</div>
-                              <div class="random-card-content">{{ card.sourceText || '—' }}</div>
-                            </div>
-                            <div class="random-card-section">
-                              <div class="random-card-label">译文</div>
-                              <div class="random-card-content">{{ card.translatedText || card.summary || '—' }}</div>
-                            </div>
-                          </template>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </template>
-              <template v-else-if="selectedShelf !== 'my_listening'">
-                <n-data-table
-                  class="manager-data-table"
-                  size="small"
-                  :columns="managerColumns"
-                  :data="filteredRows"
-                  flex-height
-                  :row-key="(row) => row.id"
-                  :row-props="managerRowProps"
-                  :single-line="false"
-                  :checked-row-keys="checkedRowKeys"
-                  @update:checked-row-keys="onManagerCheckedRowKeysChange"
-                  virtual-scroll
+                <track
+                  v-if="activeMediaSubtitleVttSrc"
+                  kind="subtitles"
+                  srclang="zh"
+                  label="自动字幕"
+                  :src="activeMediaSubtitleVttSrc"
+                  default
                 />
-                <div class="table-footer">
-                  <n-pagination
-                    size="small"
-                    :page="recordPage"
-                    :page-size="recordPageSize"
-                    :item-count="recordCounts.records"
-                    show-size-picker
-                    :page-sizes="[50, 100, 200, 500]"
-                    @update:page="onRecordPageChange"
-                    @update:page-size="onRecordPageSizeChange"
-                  />
+              </video>
+              <audio
+                v-else
+                ref="activeAudioPlayerRef"
+                class="listening-player"
+                controls
+                :src="activeAudioPlayableSrc"
+                @loadedmetadata="onAudioLoadedMetadata"
+                @canplay="handleListeningMediaCanPlay('active', $event)"
+                @play="handleListeningMediaPlay('active', $event)"
+                @timeupdate="handleAudioTimeUpdate"
+                @error="handleListeningMediaError('active', $event)"
+              ></audio>
+            </div>
+
+            <div class="player-row">
+              <span class="section-label">播放速度</span>
+              <n-select
+                v-model:value="playbackRate"
+                size="small"
+                style="width: 112px"
+                :options="playbackRateOptions"
+                @update:value="applyAudioPlaybackRate"
+              />
+              <span class="player-hint">{{ activeAudioTranscriptTimeline.length }} 段文稿</span>
+            </div>
+
+            <div class="sync-sheet" v-if="activeAudioSyncState.tone !== 'ready'">
+              <div class="sync-sheet-head">
+                <span class="section-label">{{ activeAudioSyncState.tone === 'error' ? '同步失败' : activeAudioSyncState.tone === 'partial' ? '译文待补齐' : '后台同步' }}</span>
+                <span class="sync-percent">{{ Math.round(activeAudioSyncState.progress || 0) }}%</span>
+              </div>
+              <n-progress
+                type="line"
+                :percentage="Math.round(activeAudioSyncState.progress || 0)"
+                :status="activeAudioSyncState.tone === 'error' ? 'error' : 'info'"
+                :show-indicator="false"
+                :height="4"
+              />
+              <div class="sync-message">{{ activeAudioSyncState.message || '正在准备音频' }}</div>
+              <n-button v-if="activeAudioSyncState.tone === 'error'" size="tiny" @click="fetchTranscriptForActiveAudio">重试同步</n-button>
+              <n-button v-else-if="activeAudioSyncState.tone === 'partial'" size="tiny" @click="retranslateActiveAudio">补齐译文</n-button>
+            </div>
+
+            <div class="studio-verdict">
+              <span class="section-label">听完这一条，感觉如何？</span>
+              <div class="verdict-actions">
+                <button class="verdict-btn known" @click="applyReviewResult('known')">听懂了</button>
+                <button class="verdict-btn fuzzy" @click="applyReviewResult('fuzzy')">半懂</button>
+                <button class="verdict-btn unknown" @click="applyReviewResult('unknown')">听不懂</button>
+              </div>
+            </div>
+
+            <div class="studio-facts">
+              <div class="fact">
+                <span class="section-label">来源 / 主题</span>
+                <span>{{ activeAudio?.provider || '—' }} / {{ activeAudio?.topic || '—' }}</span>
+              </div>
+              <div class="fact">
+                <span class="section-label">创建时间</span>
+                <span>{{ fmtDate(activeAudio?.created_at) }}</span>
+              </div>
+              <div class="fact">
+                <span class="section-label">译文覆盖</span>
+                <span>{{ formatCoverageLabel(activeAudio?.translationCoverage || { translated: 0, total: 0, ratio: 0 }) }}</span>
+              </div>
+            </div>
+
+            <div class="studio-actions">
+              <n-button size="small" @click="editAudio(activeAudio)">编辑资源</n-button>
+              <n-button size="small" @click="retranslateActiveAudio">重译</n-button>
+              <n-button size="small" @click="fetchTranscriptForActiveAudio">重新同步</n-button>
+            </div>
+          </aside>
+
+          <section class="studio-transcript">
+            <header class="transcript-head">
+              <div>
+                <div class="eyebrow">TRANSCRIPT</div>
+                <div class="transcript-sub">点击任意一行跳转播放</div>
+              </div>
+              <div class="transcript-tools">
+                <div class="seg-group">
+                  <button
+                    v-for="mode in transcriptDisplayModes"
+                    :key="mode.value"
+                    class="seg-btn"
+                    :class="{ active: transcriptDisplayMode === mode.value }"
+                    @click="transcriptDisplayMode = mode.value"
+                  >{{ mode.label }}</button>
+                </div>
+                <button
+                  v-if="activeMediaIsVideo"
+                  class="seg-btn subtitle-toggle"
+                  :title="`视频字幕：${subtitleDisplayModeLabel}`"
+                  @click="cycleSubtitleDisplayMode"
+                >视频字幕</button>
+                <div class="font-stepper">
+                  <button @click="decreaseTranscriptFontScale">A-</button>
+                  <button @click="increaseTranscriptFontScale">A+</button>
+                </div>
+              </div>
+            </header>
+
+            <div
+              v-if="activeAudioTranscriptTimeline.length"
+              ref="immersiveTranscriptListRef"
+              class="transcript-list"
+              :style="transcriptListStyle"
+              @scroll="handleActiveTranscriptScroll"
+            >
+              <div
+                v-for="item in visibleActiveAudioTranscriptTimeline"
+                :key="`immersive-tr-${item.idx}`"
+                class="transcript-line"
+                :class="{ active: item.idx === currentTranscriptLineIndex, hovered: item.idx === hoveredTranscriptIndex }"
+                :data-transcript-idx="item.idx"
+                @click="seekActiveAudioToTranscript(item.idx)"
+                @mouseenter="hoveredTranscriptIndex = item.idx"
+                @mouseleave="hoveredTranscriptIndex = -1"
+              >
+                <span class="transcript-index">{{ String(item.idx + 1).padStart(2, '0') }}</span>
+                <div class="transcript-body">
+                  <div v-if="transcriptDisplayMode !== 'target'" class="transcript-source">{{ item.line.text }}</div>
+                  <div v-if="transcriptDisplayMode !== 'source'" class="transcript-target">{{ resolveTranscriptTargetText(item.line) }}</div>
+                </div>
+              </div>
+            </div>
+
+            <div v-else class="transcript-empty">
+              <div class="skeleton-stack">
+                <span v-for="n in 7" :key="`sk-${n}`" :style="{ width: `${92 - (n % 3) * 11}%` }"></span>
+              </div>
+              <div class="transcript-empty-copy">
+                <div class="eyebrow">WAITING FOR SYNC</div>
+                <h3 class="serif">文稿还在路上</h3>
+                <p>{{ activeAudioSyncState.message || '音频会先转写，再逐段翻译；你可以一边播放一边等。' }}</p>
+                <div class="empty-progress" v-if="activeAudioSyncState.tone === 'running'">
+                  <n-progress type="line" :percentage="Math.round(activeAudioSyncState.progress || 0)" :show-indicator="false" :height="4" />
+                  <span>{{ Math.round(activeAudioSyncState.progress || 0) }}%</span>
+                </div>
+                <n-button v-else size="small" type="primary" @click="fetchTranscriptForActiveAudio">开始转写</n-button>
+              </div>
+            </div>
+          </section>
+        </div>
+      </section>
+
+      <main v-else-if="activeTab === 'review'" class="ll-review">
+        <header class="review-head">
+          <button class="studio-back" @click="activeTab = 'manager'">
+            <Icon :icon="chevronLeftIcon" width="18" height="18" />
+            <span>书架</span>
+          </button>
+          <div class="review-titleblock">
+            <div class="eyebrow">REVIEW DESK</div>
+            <h1 class="serif">复习训练</h1>
+          </div>
+          <div class="review-counter">{{ reviewRows.length ? `${reviewIndex + 1} / ${reviewRows.length}` : '0 / 0' }}</div>
+        </header>
+
+        <div class="review-grid">
+          <aside class="review-side">
+            <div class="review-stat">
+              <span class="section-label">总学习项</span>
+              <strong>{{ totalLearningItemCount }}</strong>
+            </div>
+            <div class="review-stat">
+              <span class="section-label">当前掌握度</span>
+              <strong>{{ currentReviewMasteryLabel }}</strong>
+            </div>
+            <div class="review-stat">
+              <span class="section-label">掌握占比</span>
+              <strong>{{ masteryPercent }}%</strong>
+              <div class="rail-meter"><span :style="{ width: `${masteryPercent}%` }"></span></div>
+            </div>
+            <div class="review-keys">
+              <div><kbd>Space</kbd> 显示答案</div>
+              <div><kbd>1</kbd> 认识 · <kbd>2</kbd> 模糊 · <kbd>3</kbd> 不认识</div>
+              <div><kbd>←</kbd><kbd>→</kbd> 切换卡片</div>
+            </div>
+          </aside>
+
+          <section v-if="currentReviewItem" class="review-card2">
+            <header class="review-card-head">
+              <span class="type-chip">{{ rowTypeLabel(currentReviewItem.rowType) }}</span>
+              <n-radio-group v-model:value="reviewType" size="small">
+                <n-radio-button value="mixed">混合</n-radio-button>
+                <n-radio-button value="word">单词</n-radio-button>
+                <n-radio-button value="sentence">例句</n-radio-button>
+                <n-radio-button value="paragraph">段落</n-radio-button>
+                <n-radio-button value="listening">听力</n-radio-button>
+              </n-radio-group>
+            </header>
+
+            <div class="review-front">
+              <template v-if="currentReviewItem.rowType === 'word'">
+                <div class="review-word serif">{{ currentReviewItem.title }}</div>
+                <div class="review-phonetic">{{ currentReviewItem.phonetic || '暂无音标' }}</div>
+                <div class="mastery-dots large">{{ masteryDots(getMasteryLevel('record', currentReviewItem.rawId)) }}</div>
+                <div class="review-prompt">先回忆释义，再显示答案</div>
+              </template>
+              <template v-else-if="currentReviewItem.rowType === 'listening'">
+                <div class="review-listening">
+                  <audio
+                    ref="reviewAudioPlayerRef"
+                    class="review-listening-player"
+                    controls
+                    :src="reviewAudioPlayableSrc"
+                    @timeupdate="handleReviewAudioTimeUpdate"
+                    @loadedmetadata="handleReviewAudioLoadedMetadata"
+                    @canplay="handleListeningMediaCanPlay('review', $event)"
+                    @play="handleListeningMediaPlay('review', $event)"
+                    @error="handleListeningMediaError('review', $event)"
+                  ></audio>
+                  <div class="review-prompt">先听，再显示原文与译文</div>
                 </div>
               </template>
               <template v-else>
-                <div class="listening-toolbar">
-                  <n-radio-group v-model:value="listeningKindFilter" size="small">
-                    <n-radio-button value="all">全部听力</n-radio-button>
-                    <n-radio-button value="remote">在线听力</n-radio-button>
-                    <n-radio-button value="local">本地音频</n-radio-button>
-                  </n-radio-group>
-                  <n-select v-model:value="listeningProviderFilter" size="small" :options="listeningProviderOptions" style="width: 150px" />
-                  <n-select
-                    v-model:value="collectTopicCategory"
-                    size="small"
-                    :options="listeningTopicCategoryOptions"
-                    clearable
-                    placeholder="选择分类（支持中文）"
-                    style="width: 190px"
-                    @update:value="onCollectTopicCategoryChange"
-                  />
-                  <n-input v-model:value="collectTopic" size="small" clearable placeholder="输入主题后采集听力资源" style="width: 220px" />
-                  <n-input-number v-model:value="collectLimit" size="small" :min="1" :max="50" style="width: 110px" />
-                  <n-button class="listening-toolbar-circle-btn" quaternary circle size="small" title="听力源管理器" @click="sourceManagerVisible = true">
-                    <Icon :icon="settingsIcon" width="16" height="16" />
-                  </n-button>
-                  <n-button class="listening-toolbar-circle-btn" quaternary circle size="small" title="导入本地听力" @click="importLocalAudio">
-                    <Icon :icon="importIcon" width="16" height="16" />
-                  </n-button>
-                  <n-button class="listening-toolbar-circle-btn" quaternary circle size="small" title="按主题采集听力" :loading="collectListeningLoading || syncQueueRunning" @click="openCollectSourceDialog">
-                    <Icon v-if="!collectListeningLoading && !syncQueueRunning" :icon="sparkleIcon" width="16" height="16" />
-                  </n-button>
-                </div>
-                <n-data-table
-                  class="manager-data-table"
-                  size="small"
-                  :columns="listeningColumns"
-                  :data="pagedListeningRows"
-                  flex-height
-                  :scroll-x="1300"
-                  :row-key="(row) => row.id"
-                  :checked-row-keys="checkedRowKeys"
-                  :row-props="listeningRowProps"
-                  :single-line="false"
-                  @update:checked-row-keys="onListeningCheckedRowKeysChange"
-                />
-                <div class="table-footer">
-                  <n-pagination
-                    size="small"
-                    :page="listeningPage"
-                    :page-size="listeningPageSize"
-                    :item-count="listeningRows.length"
-                    show-size-picker
-                    :page-sizes="[20, 50, 100, 200]"
-                    @update:page="onListeningPageChange"
-                    @update:page-size="onListeningPageSizeChange"
-                  />
-                </div>
+                <blockquote class="review-text">{{ currentReviewItem.sourceText }}</blockquote>
+                <div class="review-prompt">试着口头复述，再显示译文</div>
               </template>
-            </n-card>
+            </div>
 
-            <n-card size="small" class="right-detail-card" v-show="!rightCollapsed || isListeningImmersive" :title="selectedShelf === 'my_listening' ? '听力信息' : '词条详情 / 学习信息'">
-              <div v-if="isListeningImmersive" class="immersive-global-back">
-                <n-button quaternary circle size="small" title="返回听力管理界面" @click="exitListeningImmersive">
-                  <Icon :icon="chevronLeftIcon" width="16" height="16" />
+            <transition name="reveal-answer">
+              <div v-if="reviewShowAnswer" class="review-answer">
+                <div class="answer-rule"></div>
+                <template v-if="currentReviewItem.rowType === 'word'">
+                  <div class="answer-meta">
+                    <span>音标 {{ currentReviewItem.phonetic || '—' }}</span>
+                    <span>词性 {{ currentReviewItem.partOfSpeech || '—' }}</span>
+                  </div>
+                  <div class="answer-text">{{ currentReviewItem.combinedTranslation || currentReviewItem.translatedText || '—' }}</div>
+                  <div v-if="currentReviewItem.examplePairs?.length" class="answer-examples">
+                    <div class="section-label">例句</div>
+                    <div v-for="(x, i) in currentReviewItem.examplePairs" :key="`rv-ex-${i}`" class="example-line">
+                      <div class="example-src">{{ i + 1 }}. {{ x.source }}</div>
+                      <div class="example-target" v-if="x.target">{{ x.target }}</div>
+                    </div>
+                  </div>
+                </template>
+                <template v-else-if="currentReviewItem.rowType === 'listening'">
+                  <div class="answer-head">
+                    <span class="section-label">原文与译文</span>
+                    <div class="seg-group small">
+                      <button
+                        v-for="mode in transcriptDisplayModes"
+                        :key="`rv-mode-${mode.value}`"
+                        class="seg-btn"
+                        :class="{ active: transcriptDisplayMode === mode.value }"
+                        @click="transcriptDisplayMode = mode.value"
+                      >{{ mode.label }}</button>
+                    </div>
+                  </div>
+                  <div v-if="currentReviewListeningTranscriptTimeline.length" ref="reviewTranscriptListRef" class="transcript-list review-transcript-list" :style="transcriptListStyle" @scroll="handleReviewTranscriptScroll">
+                    <div
+                      v-for="item in visibleReviewListeningTranscriptTimeline"
+                      :key="`rv-tr-${item.idx}`"
+                      class="transcript-line"
+                      :class="{ active: item.idx === currentReviewTranscriptIndex, hovered: item.idx === hoveredReviewTranscriptIndex }"
+                      :data-transcript-idx="item.idx"
+                      @mouseenter="hoveredReviewTranscriptIndex = item.idx"
+                      @mouseleave="hoveredReviewTranscriptIndex = -1"
+                    >
+                      <span class="transcript-index">{{ String(item.idx + 1).padStart(2, '0') }}</span>
+                      <div class="transcript-body">
+                        <div v-if="transcriptDisplayMode !== 'target'" class="transcript-source">{{ item.line.text }}</div>
+                        <div v-if="transcriptDisplayMode !== 'source'" class="transcript-target">{{ resolveTranscriptTargetText(item.line) }}</div>
+                      </div>
+                    </div>
+                  </div>
+                  <div v-else class="answer-text">同步数据尚未就绪，稍后再试。</div>
+                </template>
+                <template v-else>
+                  <div class="answer-text">{{ currentReviewItem.summary || currentReviewItem.translatedText || '—' }}</div>
+                </template>
+              </div>
+            </transition>
+
+            <footer class="review-actions">
+              <n-button size="small" @click="reviewShowAnswer = !reviewShowAnswer">{{ reviewShowAnswer ? '隐藏答案' : '显示答案' }}</n-button>
+              <div class="review-grade">
+                <n-button size="small" type="success" @click="gradeAndNext('known')">认识</n-button>
+                <n-button size="small" type="warning" @click="gradeAndNext('fuzzy')">模糊</n-button>
+                <n-button size="small" type="error" @click="gradeAndNext('unknown')">不认识</n-button>
+              </div>
+              <div class="review-nav">
+                <n-button size="small" quaternary @click="gotoPrevReview">上一个</n-button>
+                <n-button size="small" quaternary @click="gotoNextReview">下一个</n-button>
+              </div>
+            </footer>
+          </section>
+
+          <n-empty v-else description="当前筛选下暂无可复习内容" class="review-empty" />
+
+          <aside class="review-filters">
+            <div class="eyebrow">FILTER</div>
+            <label class="filter-field">
+              <span>添加时间</span>
+              <n-select v-model:value="reviewFilter.createdPeriod" :options="createdPeriodOptions" size="small" />
+            </label>
+            <label class="filter-field">
+              <span>上次复习</span>
+              <n-select v-model:value="reviewFilter.lastReviewPeriod" :options="lastReviewPeriodOptions" size="small" />
+            </label>
+            <label class="filter-field">
+              <span>掌握程度</span>
+              <n-select v-model:value="reviewFilter.masteryBand" :options="masteryBandOptions" size="small" />
+            </label>
+            <label class="filter-field">
+              <span>排序方式</span>
+              <n-select v-model:value="reviewFilter.orderBy" :options="reviewOrderOptions" size="small" />
+            </label>
+            <div class="review-filter-actions">
+              <n-button size="small" type="primary" @click="startReviewFromSelection">应用并开始</n-button>
+              <n-button size="small" @click="resetReviewFilter">重置</n-button>
+              <n-button size="small" quaternary @click="shuffleReviewRows">洗牌</n-button>
+            </div>
+          </aside>
+        </div>
+      </main>
+
+      <main v-else class="ll-workspace" :class="{ 'inspector-hidden': rightCollapsed }">
+        <aside class="ll-rail">
+          <section class="rail-today">
+            <div class="eyebrow">TODAY</div>
+            <div class="rail-today-line">
+              <strong class="serif">{{ totalLearningItemCount }}</strong>
+              <span>条学习记录</span>
+            </div>
+            <div class="rail-meter"><span :style="{ width: `${masteryPercent}%` }"></span></div>
+            <div class="rail-today-meta">掌握 {{ masteryPercent }}% · 听力 {{ listeningPendingCount }} 条待处理</div>
+          </section>
+
+          <section class="rail-group">
+            <div class="eyebrow">SHELVES</div>
+            <button
+              v-for="it in leftShelfItems"
+              :key="it.key"
+              class="rail-shelf"
+              :class="{ active: selectedShelf === it.key }"
+              @click="selectedShelf = it.key"
+            >
+              <span class="rail-glyph">{{ shelfGlyph(it.key) }}</span>
+              <span class="rail-shelf-label">{{ it.label }}</span>
+              <span class="rail-count">{{ it.count }}</span>
+            </button>
+          </section>
+
+          <section class="rail-group">
+            <div class="eyebrow">ACTIONS</div>
+            <button class="rail-action" @click="openCreateDialog">
+              <Icon :icon="plusIcon" width="15" height="15" />
+              <span>新建学习项</span>
+            </button>
+            <button class="rail-action" @click="openAudioManager">
+              <Icon :icon="settingsIcon" width="15" height="15" />
+              <span>采集 / 导入听力</span>
+            </button>
+            <button class="rail-action" @click="openRandomCheckBoard">
+              <Icon :icon="shuffleIcon" width="15" height="15" />
+              <span>随机抽查</span>
+            </button>
+            <button class="rail-action" @click="goToReview">
+              <Icon :icon="reviewIcon" width="15" height="15" />
+              <span>开始复习</span>
+            </button>
+          </section>
+
+          <div class="rail-foot">
+            <span class="rail-dot"></span>
+            本地数据库 · 离线可用
+          </div>
+        </aside>
+
+        <section class="ll-ledger">
+          <header class="ledger-head">
+            <div class="ledger-titleblock">
+              <div class="eyebrow">{{ selectedShelf === 'my_listening' ? 'LISTENING LEDGER' : 'LIBRARY LEDGER' }}</div>
+              <h2 class="serif">{{ selectedShelfLabel }}</h2>
+              <div class="ledger-subline">{{ ledgerSubline }}</div>
+            </div>
+            <div class="ledger-tools">
+              <n-button v-if="selectedShelf === 'my_listening'" type="primary" size="small" @click="openCollectSourceDialog">
+                <template #icon><Icon :icon="sparkleIcon" width="15" height="15" /></template>
+                采集听力
+              </n-button>
+              <n-button v-else type="primary" size="small" @click="openCreateDialog">
+                <template #icon><Icon :icon="plusIcon" width="15" height="15" /></template>
+                新建词条
+              </n-button>
+              <n-dropdown trigger="click" :options="ledgerMenuOptions" @select="onLedgerMenuSelect">
+                <n-button quaternary circle size="small" title="更多操作">
+                  <Icon :icon="moreIcon" width="16" height="16" />
                 </n-button>
-              </div>
-              <template v-if="activeWordRecord">
-                <div class="word-detail-head">
-                  <div class="word-detail-title">{{ activeWordRecord.word || activeWordRecord.source_text }}</div>
-                  <div class="word-detail-meta">
-                    <div v-if="activeWordPhoneticUk" class="phonetic-row">
-                      <n-tag size="small" round>
-                        <template #icon>
-                          <Icon :icon="speechIcon" width="13" height="13" />
-                        </template>
-                        英 {{ activeWordPhoneticUk }}
-                      </n-tag>
-                      <n-button text size="tiny" title="英式发音" @click="playWordPronunciation(activeWordRecord.word || activeWordRecord.source_text, 'uk')">
-                        <Icon :icon="volumeUkIcon" width="16" height="16" />
-                      </n-button>
-                    </div>
-                    <div v-if="activeWordPhoneticUs" class="phonetic-row">
-                      <n-tag size="small" round>
-                        <template #icon>
-                          <Icon :icon="speechIcon" width="13" height="13" />
-                        </template>
-                        美 {{ activeWordPhoneticUs }}
-                      </n-tag>
-                      <n-button text size="tiny" title="美式发音" @click="playWordPronunciation(activeWordRecord.word || activeWordRecord.source_text, 'us')">
-                        <Icon :icon="volumeUsIcon" width="16" height="16" />
-                      </n-button>
-                    </div>
-                    <n-tag v-if="activeWordRecord.part_of_speech" size="small" round type="info">
-                      <template #icon>
-                        <Icon :icon="badgeInfoIcon" width="13" height="13" />
-                      </template>
-                      词性: {{ activeWordRecord.part_of_speech }}
-                    </n-tag>
-                    <span>掌握度 {{ masteryStars(getMasteryLevel('record', activeWordRecord.id)) }}</span>
-                  </div>
-                </div>
-                <div class="detail-block">
-                  <div class="detail-label">译文</div>
-                  <div class="detail-content">{{ activeWordCombinedTranslation || '—' }}</div>
-                </div>
-                <div class="detail-block" v-if="activeWordPhrasePairs.length">
-                  <div class="detail-label">常用短语</div>
-                  <div class="example-line" v-for="(x, i) in activeWordPhrasePairs" :key="`wd-p-${i}`">
-                    <div class="example-src">{{ i + 1 }}. {{ x.source }}</div>
-                    <div class="example-target" v-if="x.target">{{ x.target }}</div>
-                  </div>
-                </div>
-                <div class="detail-block" v-if="activeWordSynonyms.length || activeWordAntonyms.length || activeWordAssociates.length">
-                  <div class="detail-label">近义 / 反义 / 联想词</div>
-                  <div class="detail-label tiny">近义词</div>
-                  <div class="chip-wrap" v-if="activeWordSynonyms.length">
-                    <n-tag v-for="(x, i) in activeWordSynonymPairs" :key="`wd-s-${i}`" size="small">{{ x.word }}<span v-if="x.translation"> · {{ x.translation }}</span></n-tag>
-                  </div>
-                  <div class="detail-label tiny" v-if="activeWordAntonyms.length">反义词</div>
-                  <div class="chip-wrap" v-if="activeWordAntonyms.length">
-                    <n-tag v-for="(x, i) in activeWordAntonymPairs" :key="`wd-a-${i}`" size="small" type="warning">{{ x.word }}<span v-if="x.translation"> · {{ x.translation }}</span></n-tag>
-                  </div>
-                  <div class="detail-label tiny" v-if="activeWordAssociates.length">联想词</div>
-                  <div class="chip-wrap" v-if="activeWordAssociates.length">
-                    <n-tag v-for="(x, i) in activeWordAssociatePairs" :key="`wd-r-${i}`" size="small" type="info">{{ x.word }}<span v-if="x.translation"> · {{ x.translation }}</span></n-tag>
-                  </div>
-                </div>
-                <div class="detail-block" v-if="activeWordExamplePairs.length">
-                  <div class="detail-label">常用例句库</div>
-                  <div class="example-line" v-for="(x, i) in activeWordExamplePairs" :key="`wd-e-${i}`">
-                    <div class="example-src">{{ i + 1 }}. {{ x.source }}</div>
-                    <div class="example-target" v-if="x.target">{{ x.target }}</div>
-                  </div>
-                </div>
-              </template>
+              </n-dropdown>
+              <n-button quaternary circle size="small" :title="rightCollapsed ? '展开检视器' : '收起检视器'" @click="rightCollapsed = !rightCollapsed">
+                <Icon :icon="rightCollapsed ? chevronLeftIcon : chevronRightIcon" width="16" height="16" />
+              </n-button>
+            </div>
+          </header>
 
-              <template v-else-if="activeAudio">
-                <div class="listening-info-panel">
-                  <div class="detail-actions">
-                    <n-button type="primary" size="small" @click="enterListeningStudy">
-                      <template #icon>
-                        <Icon :icon="playIcon" width="14" height="14" />
-                      </template>
-                      进入听力学习
-                    </n-button>
-                  </div>
-                  <div class="detail-block">
-                    <div class="detail-label">标题</div>
-                    <div class="detail-content">{{ activeAudio.title || '—' }}</div>
-                  </div>
-                  <div class="detail-block">
-                    <div class="detail-label">主题 / 来源</div>
-                    <div class="detail-content">{{ activeAudio.topic || '未标注' }} / {{ activeAudio.provider || '未知' }}</div>
-                  </div>
-                  <div class="detail-block">
-                    <div class="detail-label">时长 / 创建时间</div>
-                    <div class="detail-content">{{ fmtDuration(activeAudio.duration_sec) }} / {{ activeAudio.created_at || '—' }}</div>
-                  </div>
-                  <div class="detail-block">
-                    <div class="detail-label">简明信息</div>
-                    <div class="detail-content">{{ activeAudio.notes || '暂无说明' }}</div>
-                  </div>
-                  <div class="detail-block">
-                    <div class="detail-label">同步状态</div>
-                    <div class="detail-content">
-                      {{ activeAudioTranscriptTimeline.length ? `已加载 ${activeAudioTranscriptTimeline.length} 段` : (activeAudioSyncGenerating ? '后台正在生成同步数据，请稍后进入学习' : '等待后台生成同步数据') }}
-                    </div>
-                  </div>
-                <div class="detail-block">
-                  <div class="detail-label">译文可用率</div>
-                  <div class="detail-content">{{ formatCoverageLabel(activeAudio?.translationCoverage || { translated: 0, total: 0, ratio: 0 }) }}</div>
-                </div>
-                </div>
+          <div class="ledger-filterbar">
+            <div class="filter-chips">
+              <template v-if="selectedShelf === 'my_listening'">
+                <button
+                  v-for="opt in listeningStatusOptions"
+                  :key="opt.value"
+                  class="filter-chip"
+                  :class="{ active: listeningStatusFilter === opt.value }"
+                  @click="listeningStatusFilter = opt.value"
+                >{{ opt.label }}</button>
               </template>
-
-              <template v-else-if="isListeningImmersive">
-                <div class="empty-row">
-                  <div class="detail-label">未找到当前听力资源</div>
-                  <div class="detail-content">该条目可能已被筛选或刚被刷新，点击左上返回后重新选择。</div>
-                </div>
+              <template v-else>
+                <button class="filter-chip" :class="{ active: !keyword }" @click="keyword = ''">全部</button>
+                <span class="filter-hint">{{ keyword ? `搜索「${keyword}」` : '按添加时间倒序' }}</span>
               </template>
-
-              <template v-else-if="activeSentenceRecord">
-                <div class="detail-block">
-                  <div class="detail-label">原文</div>
-                  <div class="detail-content">{{ activeSentenceRecord.source_text }}</div>
-                </div>
-                <div class="detail-block">
-                  <div class="detail-label">译文</div>
-                  <div class="detail-content">{{ activeSentenceRecord.translated_text }}</div>
-                </div>
+            </div>
+            <div class="filter-selects">
+              <template v-if="selectedShelf === 'my_listening'">
+                <n-select v-model:value="listeningKindFilter" :options="listeningKindOptions" size="small" style="width: 108px" />
+                <n-select v-model:value="listeningProviderFilter" :options="listeningProviderOptions" size="small" style="width: 128px" />
+                <n-select v-model:value="listeningSort" :options="listeningSortOptions" size="small" style="width: 112px" />
               </template>
-
-              <n-empty v-else description="请从中间列表选择学习项" />
-            </n-card>
+              <n-button quaternary circle size="small" title="随机抽查当前列表" @click="openRandomCheckBoard">
+                <Icon :icon="shuffleIcon" width="16" height="16" />
+              </n-button>
+            </div>
           </div>
-        </n-tab-pane>
 
-        <n-tab-pane name="review" tab="复习训练">
-          <div class="review-layout">
-            <n-card size="small" class="review-stat-card">
-              <div class="review-stat-grid">
-                <div class="stat-cell">
-                  <div class="stat-label">总学习项</div>
-                  <div class="stat-value">{{ totalLearningItemCount }}</div>
-                </div>
-                <div class="stat-cell">
-                  <div class="stat-label">当前内容掌握度</div>
-                  <div class="stat-value">{{ currentReviewMasteryLabel }}</div>
-                </div>
-                <div class="stat-cell">
-                  <div class="stat-label">掌握占比</div>
-                  <div class="stat-value">{{ masteryPercent }}%</div>
-                </div>
-                <div class="stat-cell">
-                  <div class="stat-label">当前卡组</div>
-                  <div class="stat-value">{{ reviewRows.length ? `${reviewIndex + 1}/${reviewRows.length}` : '0/0' }}</div>
-                </div>
-              </div>
-              <div class="mastery-bar-track">
-                <div class="mastery-bar-fill" :style="{ width: `${masteryPercent}%` }"></div>
-              </div>
-            </n-card>
-
-            <n-card size="small" class="review-card-panel">
-              <div class="review-topbar">
-                <n-radio-group v-model:value="reviewType" size="small">
-                  <n-radio-button value="mixed">混合</n-radio-button>
-                  <n-radio-button value="word">单词</n-radio-button>
-                  <n-radio-button value="sentence">例句</n-radio-button>
-                  <n-radio-button value="paragraph">段落</n-radio-button>
-                  <n-radio-button value="listening">听力</n-radio-button>
-                </n-radio-group>
-                <n-button size="small" @click="shuffleReviewRows">洗牌</n-button>
-              </div>
-
-              <div v-if="currentReviewItem" class="review-card">
-                <div class="review-card-type">
-                  <n-tag size="small" type="info">{{ rowTypeLabel(currentReviewItem.rowType) }}</n-tag>
-                  <span>{{ reviewIndex + 1 }} / {{ reviewRows.length }}</span>
-                </div>
-                <div class="review-card-front">
-                  <template v-if="currentReviewItem.rowType === 'word'">
-                    <div class="review-word">{{ currentReviewItem.title }}</div>
-                    <div class="review-phonetic">{{ currentReviewItem.phonetic || '—' }}</div>
-                  </template>
-                  <template v-else-if="currentReviewItem.rowType === 'listening'">
-                    <div class="review-listening-player-wrap">
-                      <audio
-                        ref="reviewAudioPlayerRef"
-                        class="review-listening-player"
-                        controls
-                        :src="reviewAudioPlayableSrc"
-                        @timeupdate="handleReviewAudioTimeUpdate"
-                        @loadedmetadata="handleReviewAudioLoadedMetadata"
-                        @canplay="handleListeningMediaCanPlay('review', $event)"
-                        @play="handleListeningMediaPlay('review', $event)"
-                        @error="handleListeningMediaError('review', $event)"
-                      ></audio>
-                      <div class="review-phonetic">点击显示答案后可查看完整原文</div>
-                    </div>
-                  </template>
-                  <template v-else>
-                    <div class="review-text">{{ currentReviewItem.sourceText }}</div>
-                  </template>
-                </div>
-                <div class="review-card-answer" v-if="reviewShowAnswer">
-                  <div class="review-answer-title">答案</div>
-                  <template v-if="currentReviewItem.rowType === 'word'">
-                    <div class="review-answer-meta">
-                      <div class="review-answer-chip">音标：{{ currentReviewItem.phonetic || '—' }}</div>
-                      <div class="review-answer-chip">词性：{{ currentReviewItem.partOfSpeech || '—' }}</div>
-                    </div>
-                    <div class="review-answer-text">{{ currentReviewItem.combinedTranslation || currentReviewItem.translatedText || '—' }}</div>
-                    <div v-if="currentReviewItem.examplePairs?.length" class="review-examples">
-                      <div class="review-answer-title">例句</div>
-                      <div class="review-example-item" v-for="(x, i) in currentReviewItem.examplePairs" :key="`rv-ex-${i}`">
-                        <div class="review-answer-text">{{ i + 1 }}. {{ x.source }}</div>
-                        <div class="review-answer-text review-answer-target" v-if="x.target">{{ x.target }}</div>
-                      </div>
-                    </div>
-                  </template>
-                  <template v-else-if="currentReviewItem.rowType === 'listening'">
-                    <div class="review-answer-title-row">
-                      <div class="review-answer-title">原文与译文</div>
-                      <n-button quaternary circle size="small" class="transcript-mode-btn" :title="`切换显示模式（当前：${transcriptDisplayModeLabel}）`" @click="cycleTranscriptDisplayMode">
-                        <Icon :icon="languagesIcon" width="13" height="13" />
-                      </n-button>
-                    </div>
-                    <div v-if="currentReviewListeningTranscriptTimeline.length" ref="reviewTranscriptListRef" class="transcript-list review-transcript-list" :style="transcriptListStyle" @scroll="handleReviewTranscriptScroll">
-                      <div
-                        v-for="item in visibleReviewListeningTranscriptTimeline"
-                        :key="`rv-tr-${item.idx}`"
-                        class="transcript-line"
-                        :class="{ active: item.idx === currentReviewTranscriptIndex, hovered: item.idx === hoveredReviewTranscriptIndex }"
-                        :data-transcript-idx="item.idx"
-                        @mouseenter="hoveredReviewTranscriptIndex = item.idx"
-                        @mouseleave="hoveredReviewTranscriptIndex = -1"
-                      >
-                        <div class="transcript-source" v-if="transcriptDisplayMode !== 'target'">{{ item.line.text }}</div>
-                        <div class="transcript-target" v-if="transcriptDisplayMode !== 'source'">{{ resolveTranscriptTargetText(item.line) }}</div>
-                      </div>
-                    </div>
-                    <div v-else class="review-answer-text">同步数据尚未就绪，请稍后重试。</div>
-                  </template>
-                  <template v-else>
-                    <div class="review-answer-text">{{ currentReviewItem.summary || currentReviewItem.translatedText || '—' }}</div>
-                    <div v-if="currentReviewItem.examples?.length" class="review-examples">
-                      <div class="review-answer-title">例句</div>
-                      <div class="review-answer-text" v-for="(x, i) in currentReviewItem.examples" :key="`rv-ex-${i}`">{{ x }}</div>
-                    </div>
-                  </template>
-                </div>
-                <div class="review-actions">
-                  <n-button size="small" @click="reviewShowAnswer = !reviewShowAnswer">{{ reviewShowAnswer ? '隐藏答案' : '显示答案' }}</n-button>
-                  <n-button size="small" type="success" @click="gradeAndNext('known')">认识</n-button>
-                  <n-button size="small" type="warning" @click="gradeAndNext('fuzzy')">模糊</n-button>
-                  <n-button size="small" type="error" @click="gradeAndNext('unknown')">不认识</n-button>
-                  <n-button size="small" @click="gotoPrevReview">上一个</n-button>
-                  <n-button size="small" @click="gotoNextReview">下一个</n-button>
-                </div>
-              </div>
-              <n-empty v-else description="当前筛选下暂无可复习内容" />
-            </n-card>
-
-            <n-card size="small" class="audio-form-card" title="复习筛选">
-              <n-form :model="reviewFilter" label-placement="left" label-width="90">
-                <n-form-item label="添加时间">
-                  <n-select v-model:value="reviewFilter.createdPeriod" :options="createdPeriodOptions" />
-                </n-form-item>
-                <n-form-item label="上次复习">
-                  <n-select v-model:value="reviewFilter.lastReviewPeriod" :options="lastReviewPeriodOptions" />
-                </n-form-item>
-                <n-form-item label="掌握程度">
-                  <n-select v-model:value="reviewFilter.masteryBand" :options="masteryBandOptions" />
-                </n-form-item>
-                <n-form-item label="排序方式">
-                  <n-select v-model:value="reviewFilter.orderBy" :options="reviewOrderOptions" />
-                </n-form-item>
-              </n-form>
-              <n-space>
-                <n-button type="primary" @click="startReviewFromSelection">应用筛选并开始</n-button>
-                <n-button @click="resetReviewFilter">重置筛选</n-button>
-              </n-space>
-            </n-card>
+          <div v-if="libraryLoading" class="ledger-loading">
+            <n-spin size="small" />
+            <span>正在翻开索引…</span>
           </div>
-        </n-tab-pane>
-      </n-tabs>
 
-      <n-modal v-model:show="audioManagerVisible" preset="card" style="width: 760px" title="听力资源管理">
-        <n-form :model="audioForm" label-placement="left" label-width="72">
+          <template v-else-if="managerMode === 'random'">
+            <div class="random-board">
+              <div class="random-board-head">
+                <span class="type-chip">随机抽查</span>
+                <span class="random-topic">{{ selectedShelfLabel }}</span>
+                <span class="random-deck-index">{{ randomDecks.length ? `${randomDeckIndex + 1} / ${randomDecks.length}` : '0 / 0' }}</span>
+                <div class="random-board-actions">
+                  <n-button quaternary circle size="small" title="上一组（←）" @click="gotoPrevRandomDeck">
+                    <Icon :icon="chevronLeftIcon" width="16" height="16" />
+                  </n-button>
+                  <n-button quaternary circle size="small" title="下一组（→）" @click="gotoNextRandomDeck">
+                    <Icon :icon="chevronRightIcon" width="16" height="16" />
+                  </n-button>
+                  <n-button quaternary circle size="small" title="翻牌（空格）" @click="toggleCurrentDeckFlip">
+                    <Icon :icon="reviewIcon" width="16" height="16" />
+                  </n-button>
+                  <n-button quaternary circle size="small" title="抽新卡（回车）" @click="drawRandomCards">
+                    <Icon :icon="shuffleIcon" width="16" height="16" />
+                  </n-button>
+                  <n-button quaternary circle size="small" title="返回列表" @click="managerMode = 'list'">
+                    <Icon :icon="listIcon" width="16" height="16" />
+                  </n-button>
+                </div>
+              </div>
+
+              <div class="random-cards-grid">
+                <div class="random-board-card" v-for="card in currentRandomCards" :key="card.id" @click="toggleRandomCardFlip(card)">
+                  <div class="random-card-flip" :class="{ flipped: isCardFlipped(card) }">
+                    <div class="random-card-face front" :class="{ 'is-listening': card.rowType === 'listening' }">
+                      <div class="random-card-type">{{ rowTypeLabel(card.rowType) }}</div>
+                      <template v-if="card.rowType === 'word'">
+                        <div class="random-card-word serif">{{ card.title }}</div>
+                        <div class="random-card-phonetic">{{ card.phonetic || '—' }}</div>
+                        <div class="random-card-text">{{ card.sourceText || '—' }}</div>
+                      </template>
+                      <template v-else-if="card.rowType === 'listening'">
+                        <div class="random-card-word serif">{{ card.title }}</div>
+                        <div class="random-card-text clamped">{{ card.summary || card.note || '—' }}</div>
+                        <div class="random-card-audio-row">
+                          <button class="random-audio-action" :class="randomCardAudioActionState(card)" :title="randomCardAudioActionTitle(card)" @click.stop="playRandomCardAudio(card)">
+                            <Icon :icon="randomCardAudioActionIcon(card)" width="22" height="22" />
+                          </button>
+                        </div>
+                      </template>
+                      <template v-else>
+                        <div class="random-card-text">{{ card.sourceText || '—' }}</div>
+                      </template>
+                    </div>
+
+                    <div class="random-card-face back" :class="{ 'is-listening': card.rowType === 'listening' }">
+                      <template v-if="card.rowType === 'word'">
+                        <div class="random-card-head-row">
+                          <div class="random-card-word serif">{{ card.title }}</div>
+                          <span class="mastery-dots">{{ masteryDots(card.masteryLevel) }}</span>
+                        </div>
+                        <div class="random-card-meta-row">
+                          <span v-if="card.phoneticUk || card.phonetic" class="phonetic-pill">英 {{ card.phoneticUk || card.phonetic }}</span>
+                          <span v-if="card.phoneticUs || card.phonetic" class="phonetic-pill">美 {{ card.phoneticUs || card.phonetic }}</span>
+                          <span v-if="card.partOfSpeech" class="type-chip">{{ card.partOfSpeech }}</span>
+                        </div>
+                        <div class="random-card-section">
+                          <div class="section-label">释义</div>
+                          <div class="random-card-content">{{ cardWordMeanings(card).join('；') || '—' }}</div>
+                        </div>
+                        <div class="random-card-section" v-if="cardWordPairs(card.payload?.synonyms, card.payload?.synonyms_translations).length">
+                          <div class="section-label">近义词</div>
+                          <div class="chip-wrap">
+                            <span v-for="(x, i) in cardWordPairs(card.payload?.synonyms, card.payload?.synonyms_translations)" :key="`rd-s-${card.id}-${i}`" class="word-chip">{{ x.word }}<em v-if="x.translation"> · {{ x.translation }}</em></span>
+                          </div>
+                        </div>
+                        <div class="random-card-section" v-if="cardWordPairs(card.payload?.antonyms, card.payload?.antonyms_translations).length">
+                          <div class="section-label">反义词</div>
+                          <div class="chip-wrap">
+                            <span v-for="(x, i) in cardWordPairs(card.payload?.antonyms, card.payload?.antonyms_translations)" :key="`rd-a-${card.id}-${i}`" class="word-chip warn">{{ x.word }}<em v-if="x.translation"> · {{ x.translation }}</em></span>
+                          </div>
+                        </div>
+                        <div class="random-card-section" v-if="card.examplePairs?.length">
+                          <div class="section-label">例句</div>
+                          <div class="example-line" v-for="(x, i) in card.examplePairs.slice(0, 3)" :key="`rd-e-${card.id}-${i}`">
+                            <div class="example-src">{{ i + 1 }}. {{ x.source }}</div>
+                            <div class="example-target" v-if="x.target">{{ x.target }}</div>
+                          </div>
+                        </div>
+                      </template>
+                      <template v-else-if="card.rowType === 'listening'">
+                        <div class="random-card-head-row">
+                          <div class="random-card-word serif">{{ card.title }}</div>
+                        </div>
+                        <div class="random-card-section">
+                          <div class="section-label">来源 / 备注</div>
+                          <div class="random-card-content">{{ card.note || '—' }}</div>
+                        </div>
+                        <div class="random-card-section">
+                          <div class="section-label">原文 / 摘要</div>
+                          <div class="random-card-content scrollable" tabindex="0" @keydown.stop="handleListeningCardScrollKeydown">{{ card.sourceText || card.summary || '—' }}</div>
+                        </div>
+                        <div class="random-card-audio-row">
+                          <button class="random-audio-action" :class="randomCardAudioActionState(card)" :title="randomCardAudioActionTitle(card)" @click.stop="playRandomCardAudio(card)">
+                            <Icon :icon="randomCardAudioActionIcon(card)" width="22" height="22" />
+                          </button>
+                        </div>
+                      </template>
+                      <template v-else>
+                        <div class="random-card-section">
+                          <div class="section-label">原文</div>
+                          <div class="random-card-content">{{ card.sourceText || '—' }}</div>
+                        </div>
+                        <div class="random-card-section">
+                          <div class="section-label">译文</div>
+                          <div class="random-card-content">{{ card.translatedText || card.summary || '—' }}</div>
+                        </div>
+                      </template>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </template>
+
+          <template v-else-if="selectedShelf === 'my_listening'">
+            <div class="ledger-table listening-table">
+              <div class="ledger-thead">
+                <span class="col-check">
+                  <n-checkbox :checked="allPageChecked" :indeterminate="somePageChecked" @update:checked="togglePageChecked" />
+                </span>
+                <span class="col-idx">#</span>
+                <span class="col-main">标题 / 主题</span>
+                <span class="col-duration">时长</span>
+                <span class="col-status">同步</span>
+                <span class="col-coverage">译文</span>
+                <span class="col-open"></span>
+              </div>
+              <div
+                v-for="(row, idx) in pagedListeningRows"
+                :key="row.id"
+                class="ledger-row listening-row"
+                :class="{ active: activeRow?.id === row.id, selected: isRowChecked(row.id), error: syncStateForRow(row).tone === 'error' }"
+                @click="selectListeningRow(row)"
+                @dblclick="openListeningImmersive(row)"
+              >
+                <span class="col-check" @click.stop>
+                  <n-checkbox :checked="isRowChecked(row.id)" @update:checked="(checked) => toggleRowChecked(row.id, checked)" />
+                </span>
+                <span class="col-idx">{{ String((listeningPage - 1) * listeningPageSize + idx + 1).padStart(2, '0') }}</span>
+                <div class="col-main">
+                  <div class="row-title serif">{{ row.title || '未命名听力' }}</div>
+                  <div class="row-sub">
+                    <span>{{ normalizeTopicForDisplay(row.payload?.topic) }}</span>
+                    <span class="dot-sep">·</span>
+                    <span>{{ row.payload?.provider || 'local' }}</span>
+                  </div>
+                </div>
+                <span class="col-duration">{{ fmtDuration(row.payload?.duration_sec) }}</span>
+                <span class="col-status">
+                  <span class="sync-chip" :class="`tone-${syncStateForRow(row).tone}`" :title="syncStateForRow(row).message">
+                    <span v-if="syncStateForRow(row).tone === 'running'" class="pulse-dot"></span>
+                    {{ syncStateForRow(row).label }}
+                  </span>
+                  <span v-if="syncStateForRow(row).tone === 'running'" class="row-progress">
+                    <span :style="{ width: `${syncStateForRow(row).progress}%` }"></span>
+                  </span>
+                </span>
+                <span class="col-coverage">
+                  <span class="coverage-track"><span :style="{ width: `${coveragePercent(row)}%` }"></span></span>
+                  <em>{{ coveragePercent(row) }}%</em>
+                </span>
+                <span class="col-open" @click.stop="openListeningImmersive(row)">
+                  <Icon :icon="playIcon" width="15" height="15" />
+                </span>
+              </div>
+            </div>
+
+            <div v-if="!pagedListeningRows.length" class="ledger-empty">
+              <div class="empty-card">
+                <div class="empty-mark">听</div>
+                <h3 class="serif">这一排放着听力</h3>
+                <p>按主题搜索公开音频，预览时长与来源后，勾选导入。导入后会在后台转写、翻译。</p>
+                <n-button type="primary" size="small" @click="openCollectSourceDialog">去采集</n-button>
+              </div>
+            </div>
+
+            <footer class="table-footer" v-if="filteredListeningRows.length">
+              <n-pagination
+                size="small"
+                :page="listeningPage"
+                :page-size="listeningPageSize"
+                :item-count="filteredListeningRows.length"
+                show-size-picker
+                :page-sizes="[20, 50, 100, 200]"
+                @update:page="onListeningPageChange"
+                @update:page-size="onListeningPageSizeChange"
+              />
+            </footer>
+          </template>
+
+          <template v-else>
+            <div class="ledger-table record-table">
+              <div class="ledger-thead">
+                <span class="col-check">
+                  <n-checkbox :checked="allPageChecked" :indeterminate="somePageChecked" @update:checked="togglePageChecked" />
+                </span>
+                <span class="col-idx">#</span>
+                <span class="col-type">类型</span>
+                <span class="col-main">词目 / 释义</span>
+                <span class="col-phon">音标</span>
+                <span class="col-mastery">掌握</span>
+                <span class="col-date">添加</span>
+              </div>
+              <div
+                v-for="(row, idx) in filteredRows"
+                :key="row.id"
+                class="ledger-row record-row"
+                :class="{ active: activeRow?.id === row.id, selected: isRowChecked(row.id) }"
+                @click="activeRow = row"
+                @dblclick="row.sourceType === 'record' ? openEditDialog(row) : null"
+              >
+                <span class="col-check" @click.stop>
+                  <n-checkbox :checked="isRowChecked(row.id)" @update:checked="(checked) => toggleRowChecked(row.id, checked)" />
+                </span>
+                <span class="col-idx">{{ String((recordPage - 1) * recordPageSize + idx + 1).padStart(2, '0') }}</span>
+                <span class="col-type"><span class="type-sigil">{{ typeGlyph(row.rowType) }}</span></span>
+                <div class="col-main">
+                  <div class="row-title serif">{{ row.title || row.sourceText }}</div>
+                  <div class="row-translation">{{ row.combinedTranslation || row.translatedText || row.summary || '—' }}</div>
+                </div>
+                <span class="col-phon">{{ row.phonetic || row.phoneticUs || '—' }}</span>
+                <span class="col-mastery"><span class="mastery-dots">{{ masteryDots(row.masteryLevel) }}</span></span>
+                <span class="col-date">{{ fmtDate(row.createdAt) }}</span>
+              </div>
+            </div>
+
+            <div v-if="!filteredRows.length" class="ledger-empty">
+              <div class="empty-card">
+                <div class="empty-mark">词</div>
+                <h3 class="serif">还没有收进这一格</h3>
+                <p>在阅读器里划词、翻译，或手动新建一条；这里会自动按单词、例句和段落归档。</p>
+                <n-button type="primary" size="small" @click="openCreateDialog">新建一条</n-button>
+              </div>
+            </div>
+
+            <footer class="table-footer" v-if="recordCounts.records">
+              <n-pagination
+                size="small"
+                :page="recordPage"
+                :page-size="recordPageSize"
+                :item-count="recordCounts.records"
+                show-size-picker
+                :page-sizes="[50, 100, 200, 500]"
+                @update:page="onRecordPageChange"
+                @update:page-size="onRecordPageSizeChange"
+              />
+            </footer>
+          </template>
+
+          <div class="selection-bar" v-if="checkedRowKeys.length">
+            <span class="selection-count">已选 {{ checkedRowKeys.length }} 项</span>
+            <button class="selection-action" @click="startReviewFromSelection">开始复习</button>
+            <button v-if="selectedShelf === 'my_listening'" class="selection-action" @click="batchRetrySync">重新同步</button>
+            <button class="selection-action danger" @click="deleteSelectedRows">删除</button>
+            <button class="selection-action muted" @click="checkedRowKeys = []">取消选择</button>
+          </div>
+        </section>
+
+        <aside v-show="!rightCollapsed" class="ll-inspector">
+          <header class="inspector-head">
+            <span class="eyebrow">INSPECTOR</span>
+            <button class="icon-ghost" title="收起" @click="rightCollapsed = true">
+              <Icon :icon="chevronRightIcon" width="16" height="16" />
+            </button>
+          </header>
+
+          <template v-if="activeWordRecord">
+            <div class="word-hero">
+              <div class="word-overline">{{ activeWordRecord.part_of_speech || 'WORD' }}</div>
+              <h2 class="word-headword serif">{{ activeWordRecord.word || activeWordRecord.source_text }}</h2>
+              <div class="word-phonetics">
+                <span v-if="activeWordPhoneticUk" class="phonetic-pill">
+                  英 {{ activeWordPhoneticUk }}
+                  <button class="phonetic-play" title="英式发音" @click="playWordPronunciation(activeWordRecord.word || activeWordRecord.source_text, 'uk')">
+                    <Icon :icon="volumeUkIcon" width="13" height="13" />
+                  </button>
+                </span>
+                <span v-if="activeWordPhoneticUs" class="phonetic-pill">
+                  美 {{ activeWordPhoneticUs }}
+                  <button class="phonetic-play" title="美式发音" @click="playWordPronunciation(activeWordRecord.word || activeWordRecord.source_text, 'us')">
+                    <Icon :icon="volumeUsIcon" width="13" height="13" />
+                  </button>
+                </span>
+              </div>
+              <div class="word-mastery">
+                <span class="mastery-dots">{{ masteryDots(getMasteryLevel('record', activeWordRecord.id)) }}</span>
+                <span class="muted">掌握度</span>
+              </div>
+            </div>
+
+            <section class="inspector-section">
+              <div class="section-label">释义</div>
+              <ol class="meaning-list">
+                <li v-for="(meaning, idx) in activeWordMeaningList" :key="`wm-${idx}`">{{ meaning }}</li>
+                <li v-if="!activeWordMeaningList.length" class="muted">暂无释义</li>
+              </ol>
+            </section>
+
+            <section class="inspector-section" v-if="activeWordPhrasePairs.length">
+              <div class="section-label">常用短语</div>
+              <div class="example-line" v-for="(x, i) in activeWordPhrasePairs" :key="`wd-p-${i}`">
+                <div class="example-src">{{ x.source }}</div>
+                <div class="example-target" v-if="x.target">{{ x.target }}</div>
+              </div>
+            </section>
+
+            <section class="inspector-section" v-if="activeWordSynonyms.length || activeWordAntonyms.length || activeWordAssociates.length">
+              <div class="section-label">词族</div>
+              <div class="relation-group" v-if="activeWordSynonymPairs.length">
+                <span class="relation-label">近义</span>
+                <div class="chip-wrap">
+                  <span v-for="(x, i) in activeWordSynonymPairs" :key="`wd-s-${i}`" class="word-chip">{{ x.word }}<em v-if="x.translation"> · {{ x.translation }}</em></span>
+                </div>
+              </div>
+              <div class="relation-group" v-if="activeWordAntonymPairs.length">
+                <span class="relation-label">反义</span>
+                <div class="chip-wrap">
+                  <span v-for="(x, i) in activeWordAntonymPairs" :key="`wd-a-${i}`" class="word-chip warn">{{ x.word }}<em v-if="x.translation"> · {{ x.translation }}</em></span>
+                </div>
+              </div>
+              <div class="relation-group" v-if="activeWordAssociatePairs.length">
+                <span class="relation-label">联想</span>
+                <div class="chip-wrap">
+                  <span v-for="(x, i) in activeWordAssociatePairs" :key="`wd-r-${i}`" class="word-chip">{{ x.word }}<em v-if="x.translation"> · {{ x.translation }}</em></span>
+                </div>
+              </div>
+            </section>
+
+            <section class="inspector-section" v-if="activeWordExamplePairs.length">
+              <div class="section-label">例句</div>
+              <div class="example-line" v-for="(x, i) in activeWordExamplePairs.slice(0, 8)" :key="`wd-e-${i}`">
+                <div class="example-src">{{ i + 1 }}. {{ x.source }}</div>
+                <div class="example-target" v-if="x.target">{{ x.target }}</div>
+              </div>
+            </section>
+
+            <div class="inspector-actions">
+              <n-button size="small" type="primary" @click="refreshWordMeta(activeWordRecord)">刷新拓展</n-button>
+              <n-button size="small" @click="openEditDialog(activeRow)">编辑</n-button>
+              <n-button size="small" @click="applyReviewResult('known')">标记掌握</n-button>
+              <n-button size="small" quaternary @click="deleteSelectedRows">删除</n-button>
+            </div>
+          </template>
+
+          <template v-else-if="activeSentenceRecord">
+            <div class="entry-hero">
+              <div class="eyebrow">{{ rowTypeLabel(activeSentenceRecord.record_type) }}</div>
+              <blockquote class="entry-source serif">{{ activeSentenceRecord.source_text }}</blockquote>
+              <div class="entry-translation">{{ activeSentenceRecord.translated_text || '—' }}</div>
+              <div class="entry-meta">
+                <span>{{ fmtDate(activeSentenceRecord.created_at) }}</span>
+                <span v-if="activeSentenceRecord.engine">{{ activeSentenceRecord.engine }}</span>
+              </div>
+            </div>
+            <div class="inspector-actions">
+              <n-button size="small" type="primary" @click="startReviewFromSelection">拿它复习</n-button>
+              <n-button size="small" @click="openEditDialog(activeRow)">编辑</n-button>
+              <n-button size="small" quaternary @click="deleteSelectedRows">删除</n-button>
+            </div>
+          </template>
+
+          <template v-else-if="activeAudio">
+            <div class="audio-hero">
+              <div class="eyebrow">LISTENING · {{ activeAudio.provider || 'LOCAL' }}</div>
+              <h2 class="audio-title serif">{{ activeAudio.title }}</h2>
+              <div class="audio-meta">
+                <span>{{ activeAudio.topic || '未标注主题' }}</span>
+                <span class="dot-sep">·</span>
+                <span>{{ fmtDuration(activeAudio.duration_sec) }}</span>
+                <span class="dot-sep">·</span>
+                <span>{{ fmtDate(activeAudio.created_at) }}</span>
+              </div>
+            </div>
+
+            <section class="inspector-section sync-inspector">
+              <div class="sync-inspector-head">
+                <div class="section-label">同步状态</div>
+                <span class="sync-chip" :class="`tone-${activeAudioSyncState.tone}`">
+                  <span v-if="activeAudioSyncState.tone === 'running'" class="pulse-dot"></span>
+                  {{ activeAudioSyncState.label }}
+                </span>
+              </div>
+              <n-progress
+                type="line"
+                :percentage="Math.round(activeAudioSyncState.progress || 0)"
+                :status="activeAudioSyncState.tone === 'error' ? 'error' : activeAudioSyncState.tone === 'ready' ? 'success' : 'info'"
+                :show-indicator="false"
+                :height="4"
+              />
+              <div class="sync-message">{{ activeAudioSyncState.message || '等待后台处理' }}</div>
+              <div class="coverage-line">
+                <span>译文 {{ formatCoverageLabel(activeAudio.translationCoverage) }}</span>
+                <span class="coverage-track"><span :style="{ width: `${coveragePercent({ translationCoverage: activeAudio.translationCoverage })}%` }"></span></span>
+              </div>
+            </section>
+
+            <section class="inspector-section" v-if="activeAudioPreviewLines.length">
+              <div class="section-label">文稿预览</div>
+              <div class="preview-transcript">
+                <div v-for="line in activeAudioPreviewLines" :key="`ap-${line.idx}`" class="preview-transcript-line">
+                  <div class="transcript-source">{{ line.text }}</div>
+                  <div class="transcript-target">{{ resolveTranscriptTargetText(line) }}</div>
+                </div>
+              </div>
+            </section>
+
+            <section class="inspector-section" v-if="activeAudio.notes">
+              <div class="section-label">备注</div>
+              <div class="detail-content">{{ activeAudio.notes }}</div>
+            </section>
+
+            <div class="inspector-actions">
+              <n-button size="small" type="primary" @click="enterListeningStudy">进入听力学习</n-button>
+              <n-button size="small" @click="retranslateActiveAudio">重译</n-button>
+              <n-button size="small" @click="fetchTranscriptForActiveAudio">重新同步</n-button>
+              <n-button size="small" @click="editAudio(activeAudio)">编辑</n-button>
+              <n-button size="small" quaternary @click="removeAudio(activeAudio)">删除</n-button>
+            </div>
+          </template>
+
+          <div v-else class="inspector-empty">
+            <div class="empty-mark">↘</div>
+            <h3 class="serif">选中一条</h3>
+            <p>词条会在这里展开释义、词族和例句；听力会显示同步进度与文稿预览。</p>
+          </div>
+        </aside>
+      </main>
+
+      <n-modal v-model:show="audioManagerVisible" preset="card" style="width: 720px" :title="audioForm.id ? '编辑听力资源' : '新增听力资源'">
+        <div class="dialog-lede">本地音频会保留原文件；在线音频会在后台下载并转写。</div>
+        <n-form :model="audioForm" label-placement="left" label-width="76">
           <n-form-item label="标题">
-            <n-input v-model:value="audioForm.title" placeholder="例如：BBC-News-01" />
+            <n-input v-model:value="audioForm.title" placeholder="例如：BBC 6 Minute English - Sleep" />
           </n-form-item>
-          <n-form-item label="类型">
-            <n-select v-model:value="audioForm.source_kind" :options="audioKindOptions" />
-          </n-form-item>
+          <div class="form-grid">
+            <n-form-item label="类型">
+              <n-select v-model:value="audioForm.source_kind" :options="audioKindOptions" />
+            </n-form-item>
+            <n-form-item label="主题">
+              <n-input v-model:value="audioForm.topic" placeholder="新闻 / 科技 / 旅行…" />
+            </n-form-item>
+          </div>
           <n-form-item label="地址">
             <n-input v-model:value="audioForm.source_uri" placeholder="本地路径或在线 URL" />
           </n-form-item>
-          <n-form-item label="时长">
-            <n-input-number v-model:value="audioForm.duration_sec" :min="0" />
-          </n-form-item>
+          <div class="form-grid">
+            <n-form-item label="时长">
+              <n-input-number v-model:value="audioForm.duration_sec" :min="0" placeholder="秒" />
+            </n-form-item>
+            <n-form-item label="来源">
+              <n-input v-model:value="audioForm.provider" placeholder="archive / wikimedia / local" />
+            </n-form-item>
+          </div>
           <n-form-item label="转写">
-            <n-input v-model:value="audioForm.transcript" type="textarea" :autosize="{ minRows: 2, maxRows: 5 }" />
+            <n-input v-model:value="audioForm.transcript" type="textarea" :autosize="{ minRows: 2, maxRows: 5 }" placeholder="可留空，保存后自动转写" />
           </n-form-item>
           <n-form-item label="备注">
             <n-input v-model:value="audioForm.notes" type="textarea" :autosize="{ minRows: 2, maxRows: 4 }" />
           </n-form-item>
-          <n-form-item label="主题标签">
-            <n-input v-model:value="audioForm.topic" placeholder="例如：旅行、科技、商务英语" />
-          </n-form-item>
-          <n-form-item label="资源来源">
-            <n-input v-model:value="audioForm.provider" placeholder="例如：archive / wikimedia / local" />
-          </n-form-item>
         </n-form>
         <template #action>
-          <n-space justify="end">
+          <div class="dialog-actions">
             <n-button @click="importLocalAudio">导入本地音频</n-button>
             <n-button @click="openCollectSourceDialog">按主题采集</n-button>
-            <n-button type="primary" @click="saveAudio">保存资源</n-button>
-          </n-space>
+            <span class="dialog-spacer"></span>
+            <n-button @click="audioManagerVisible = false">取消</n-button>
+            <n-button type="primary" @click="saveAudio">保存并转写</n-button>
+          </div>
         </template>
       </n-modal>
 
-      <n-modal v-model:show="collectSourceDialogVisible" preset="card" style="width: 720px" title="本次抓取来源">
-        <n-space vertical :size="12">
-          <n-radio-group v-model:value="collectSourceMode" size="small">
-            <n-radio-button value="default">默认策略（平均从每个源抓取）</n-radio-button>
-            <n-radio-button value="custom">自定义本次来源</n-radio-button>
-          </n-radio-group>
-          <n-tag size="small" :type="collectAvailableSourceOptions.length ? 'info' : 'warning'">可用来源 {{ collectAvailableSourceOptions.length }} 个</n-tag>
-          <div v-if="!collectAvailableSourceOptions.length" class="collect-source-hint">{{ collectSourceEmptyHint }}</div>
+      <n-modal v-model:show="collectSourceDialogVisible" preset="card" style="width: 640px" title="按主题采集听力">
+        <div class="collect-dialog">
+          <div class="collect-topic-row">
+            <n-input v-model:value="collectTopic" clearable placeholder="输入主题，例如：量子物理、咖啡文化、面试英语" @keydown.enter="confirmCollectListeningByTopic" />
+            <n-select v-model:value="collectTopicCategory" :options="listeningTopicCategoryOptions" clearable placeholder="选分类" style="width: 132px" @update:value="onCollectTopicCategoryChange" />
+          </div>
+          <div class="collect-range">
+            <div class="range-field">
+              <span class="section-label">最小时长</span>
+              <n-input-number v-model:value="collectMinMinutes" :min="0" :max="120" size="small" />
+              <span class="range-unit">分钟</span>
+            </div>
+            <div class="range-field">
+              <span class="section-label">最大时长</span>
+              <n-input-number v-model:value="collectMaxMinutes" :min="1" :max="120" size="small" />
+              <span class="range-unit">分钟</span>
+            </div>
+            <div class="range-field">
+              <span class="section-label">目标条数</span>
+              <n-input-number v-model:value="collectLimit" :min="1" :max="50" size="small" />
+            </div>
+          </div>
+          <div class="collect-source-head">
+            <span class="section-label">本次来源</span>
+            <n-radio-group v-model:value="collectSourceMode" size="small">
+              <n-radio-button value="default">全部启用</n-radio-button>
+              <n-radio-button value="custom">自定义</n-radio-button>
+            </n-radio-group>
+            <span class="muted">{{ collectAvailableSourceOptions.length }} 个可用</span>
+          </div>
           <n-select
             v-if="collectSourceMode === 'custom'"
             v-model:value="collectSourceIds"
@@ -756,42 +1028,97 @@
             clearable
             filterable
             :options="collectAvailableSourceOptions"
-            placeholder="选择本次抓取来源（可多选）"
+            placeholder="选择本次抓取来源"
           />
-        </n-space>
+          <div v-if="!collectAvailableSourceOptions.length" class="source-hint">{{ collectSourceEmptyHint }}</div>
+          <div v-else class="source-hint">时长未知的候选会保留并标注，导入前可自行勾选。</div>
+        </div>
         <template #action>
-          <n-space justify="end">
+          <div class="dialog-actions">
+            <span class="dialog-spacer"></span>
             <n-button @click="collectSourceDialogVisible = false">取消</n-button>
-            <n-button type="primary" :loading="collectListeningLoading" @click="confirmCollectListeningByTopic">开始抓取</n-button>
-          </n-space>
+            <n-button type="primary" :loading="collectPreviewLoading" @click="confirmCollectListeningByTopic">搜索候选</n-button>
+          </div>
         </template>
       </n-modal>
 
-      <n-modal v-model:show="sourceManagerVisible" preset="card" style="width: 860px" title="听力源管理器">
+      <n-modal v-model:show="collectPreviewVisible" preset="card" style="width: 880px" title="候选听力">
+        <div class="preview-head">
+          <n-checkbox :checked="collectPreviewAllSelected" @update:checked="togglePreviewAll">全选可导入项</n-checkbox>
+          <span class="muted">已选 {{ collectPreviewSelected.length }} / {{ collectPreviewRows.length }}</span>
+          <span class="preview-topic">{{ collectPreviewTopic }}</span>
+        </div>
+        <div class="preview-list">
+          <div
+            v-for="candidate in collectPreviewRows"
+            :key="candidate.candidate_id"
+            class="preview-row"
+            :class="{ disabled: candidate.already_collected, picked: isPreviewSelected(candidate) }"
+          >
+            <n-checkbox
+              :checked="isPreviewSelected(candidate)"
+              :disabled="candidate.already_collected"
+              @update:checked="(checked) => togglePreviewCandidate(candidate, checked)"
+            />
+            <div class="preview-main">
+              <div class="preview-title">{{ candidate.title }}</div>
+              <div class="preview-meta">
+                <span>{{ candidate.provider }}</span>
+                <span class="dot-sep">·</span>
+                <span>{{ candidate.duration_sec ? fmtDuration(candidate.duration_sec) : '时长未知' }}</span>
+                <span class="dot-sep">·</span>
+                <span>相关度 {{ Math.round((candidate.relevance || 0) * 100) }}%</span>
+              </div>
+            </div>
+            <span v-if="candidate.already_collected" class="preview-flag">已在库</span>
+            <span v-else-if="candidate.has_transcript" class="preview-flag good">带原文</span>
+          </div>
+          <div v-if="!collectPreviewRows.length" class="preview-empty">没有找到符合时长与主题的候选，换个主题或放宽时长再试。</div>
+        </div>
+        <template #action>
+          <div class="dialog-actions">
+            <span class="muted">导入后会依次进入转写队列</span>
+            <span class="dialog-spacer"></span>
+            <n-button @click="collectPreviewVisible = false">取消</n-button>
+            <n-button type="primary" :loading="collectImporting" :disabled="!collectPreviewSelected.length" @click="importSelectedCandidates">
+              导入 {{ collectPreviewSelected.length }} 条
+            </n-button>
+          </div>
+        </template>
+      </n-modal>
+
+      <n-modal v-model:show="sourceManagerVisible" preset="card" style="width: 900px" title="听力源管理器">
+        <div class="dialog-lede">RSS 地址可以用 <code>{topic}</code> 占位符；时长上限用于过滤过长的节目。</div>
         <div class="source-manager-head">
-          <n-input v-model:value="newSourceName" size="small" placeholder="来源名称（如 TED 技术演讲）" style="width: 180px" />
-          <n-input v-model:value="newSourceProvider" size="small" placeholder="来源标识（如 ted）" style="width: 120px" />
-          <n-input v-model:value="newSourceFeedUrl" size="small" placeholder="RSS地址，可用 {topic} 占位符" style="flex: 1" />
-          <n-select v-model:value="newSourceLanguage" size="small" style="width: 110px" :options="learningLangOptions" />
-          <n-input-number v-model:value="newSourceMaxDurationMin" size="small" :min="1" :max="30" style="width: 92px" />
+          <n-input v-model:value="newSourceName" size="small" placeholder="来源名称" style="width: 158px" />
+          <n-input v-model:value="newSourceProvider" size="small" placeholder="标识" style="width: 96px" />
+          <n-input v-model:value="newSourceFeedUrl" size="small" placeholder="RSS 地址，可用 {topic}" style="flex: 1" />
+          <n-select v-model:value="newSourceLanguage" size="small" style="width: 108px" :options="learningLangOptions" />
+          <n-input-number v-model:value="newSourceMaxDurationMin" size="small" :min="1" :max="30" style="width: 86px" />
           <n-button size="small" type="primary" @click="addListeningSource">新增</n-button>
         </div>
         <div class="source-manager-list">
           <div class="source-item" v-for="src in listeningSources" :key="src.id">
-            <n-switch v-model:value="src.enabled" @update:value="persistListeningSources" />
-            <n-input v-model:value="src.name" size="small" style="width: 170px" @blur="persistListeningSources" />
-            <n-input v-model:value="src.provider" size="small" style="width: 100px" @blur="persistListeningSources" />
+            <n-switch v-model:value="src.enabled" size="small" @update:value="persistListeningSources" />
+            <n-input v-model:value="src.name" size="small" style="width: 160px" @blur="persistListeningSources" />
+            <n-input v-model:value="src.provider" size="small" style="width: 92px" @blur="persistListeningSources" />
             <n-input v-model:value="src.feed_url" size="small" style="flex: 1" @blur="persistListeningSources" />
-            <n-select v-model:value="src.language_tag" size="small" style="width: 110px" :options="learningLangOptions" @update:value="persistListeningSources" />
-            <n-input-number v-model:value="src.max_duration_min" size="small" :min="1" :max="30" style="width: 92px" @update:value="persistListeningSources" />
-            <n-button quaternary circle size="small" title="删除来源" @click="removeListeningSource(src.id)">
-              <Icon :icon="trashIcon" width="16" height="16" />
-            </n-button>
+            <n-select v-model:value="src.language_tag" size="small" style="width: 104px" :options="learningLangOptions" @update:value="persistListeningSources" />
+            <n-input-number v-model:value="src.max_duration_min" size="small" :min="1" :max="30" style="width: 84px" @update:value="persistListeningSources" />
+            <button class="icon-ghost danger" title="删除来源" @click="removeListeningSource(src.id)">
+              <Icon :icon="trashIcon" width="15" height="15" />
+            </button>
           </div>
         </div>
+        <template #action>
+          <div class="dialog-actions">
+            <span class="dialog-spacer"></span>
+            <n-button type="primary" @click="sourceManagerVisible = false">完成</n-button>
+          </div>
+        </template>
       </n-modal>
 
-      <n-modal v-model:show="recordEditVisible" preset="card" style="width: 680px" :title="recordEditMode === 'edit' ? '编辑学习记录' : '新增学习记录'">
+      <n-modal v-model:show="recordEditVisible" preset="card" style="width: 620px" :title="recordEditMode === 'edit' ? '编辑学习记录' : '新增学习记录'">
         <n-form :model="recordForm" label-placement="left" label-width="84">
           <n-form-item label="记录类型">
             <n-select v-model:value="recordForm.record_type" :options="recordKindOptions.filter((x) => x.value !== 'all' && x.value !== 'listening')" />
@@ -802,21 +1129,35 @@
           <n-form-item label="译文">
             <n-input v-model:value="recordForm.translated_text" type="textarea" :autosize="{ minRows: 3, maxRows: 8 }" />
           </n-form-item>
-          <n-form-item label="来源语言">
-            <n-input v-model:value="recordForm.source_lang" />
-          </n-form-item>
-          <n-form-item label="目标语言">
-            <n-input v-model:value="recordForm.target_lang" />
-          </n-form-item>
+          <div class="form-grid">
+            <n-form-item label="来源语言">
+              <n-input v-model:value="recordForm.source_lang" />
+            </n-form-item>
+            <n-form-item label="目标语言">
+              <n-input v-model:value="recordForm.target_lang" />
+            </n-form-item>
+          </div>
           <n-form-item label="引擎">
             <n-input v-model:value="recordForm.engine" />
           </n-form-item>
         </n-form>
         <template #action>
-          <n-space justify="end">
+          <div class="dialog-actions">
+            <span class="dialog-spacer"></span>
             <n-button @click="recordEditVisible = false">取消</n-button>
             <n-button type="primary" @click="saveRecord">保存</n-button>
-          </n-space>
+          </div>
+        </template>
+      </n-modal>
+
+      <n-modal v-model:show="confirmDialog.show" preset="card" style="width: 420px" :title="confirmDialog.title">
+        <div class="confirm-body">{{ confirmDialog.message }}</div>
+        <template #action>
+          <div class="dialog-actions">
+            <span class="dialog-spacer"></span>
+            <n-button @click="confirmDialog.show = false">取消</n-button>
+            <n-button type="error" @click="runConfirm">确认删除</n-button>
+          </div>
         </template>
       </n-modal>
     </div>
@@ -833,6 +1174,7 @@ import volumeUsIcon from '@iconify-icons/lucide/volume-2'
 import volumeUkIcon from '@iconify-icons/lucide/volume-1'
 import chevronLeftIcon from '@iconify-icons/lucide/chevron-left'
 import chevronRightIcon from '@iconify-icons/lucide/chevron-right'
+import moreIcon from '@iconify-icons/lucide/more-horizontal'
 import settingsIcon from '@iconify-icons/lucide/settings-2'
 import importIcon from '@iconify-icons/lucide/download'
 import exportIcon from '@iconify-icons/lucide/upload'
@@ -851,7 +1193,9 @@ import { open, save } from '@tauri-apps/plugin-dialog'
 import {
   NButton,
   NCard,
+  NCheckbox,
   NDataTable,
+  NDropdown,
   NEmpty,
   NForm,
   NFormItem,
@@ -860,10 +1204,12 @@ import {
   NMessageProvider,
   NModal,
   NPagination,
+  NProgress,
   NRadioButton,
   NRadioGroup,
   NSelect,
   NSpace,
+  NSpin,
   NSwitch,
   NTabPane,
   NTabs,
@@ -896,6 +1242,8 @@ const pickLearningLangFromStoredSources = () => {
 const learningLang = ref(
   window.localStorage.getItem(learningLangStorageKey) || pickLearningLangFromStoredSources() || 'en'
 )
+const nativeLangStorageKey = 'guaxi_language_learning_native_lang'
+const nativeLang = ref(window.localStorage.getItem(nativeLangStorageKey) || 'zh')
 const selectedShelf = ref('all')
 const records = ref([])
 const audioResources = ref([])
@@ -906,10 +1254,22 @@ const rightCollapsed = ref(false)
 const checkedRowKeys = ref([])
 const listeningKindFilter = ref('all')
 const listeningProviderFilter = ref('all')
+const listeningStatusFilter = ref('all')
+const listeningSort = ref('recent')
 const collectTopicCategory = ref('')
 const collectTopic = ref('')
 const collectLimit = ref(15)
+const collectMinMinutes = ref(2)
+const collectMaxMinutes = ref(15)
 const collectListeningLoading = ref(false)
+const collectPreviewVisible = ref(false)
+const collectPreviewRows = ref([])
+const collectPreviewSelected = ref([])
+const collectPreviewTopic = ref('')
+const collectPreviewLoading = ref(false)
+const collectImporting = ref(false)
+const libraryLoading = ref(false)
+const syncJobs = ref({})
 const exportingLearningData = ref(false)
 const importingLearningData = ref(false)
 const listeningImmersiveMode = ref(false)
@@ -984,6 +1344,9 @@ const newSourceMaxDurationMin = ref(30)
 const collectSourceDialogVisible = ref(false)
 const collectSourceMode = ref('default')
 const collectSourceIds = ref([])
+const confirmDialog = reactive({ show: false, title: '', message: '', action: null })
+let syncPollTimer = 0
+let syncCompleteRefreshTimer = 0
 
 const reviewFilter = reactive({
   createdPeriod: 'all',
@@ -1000,7 +1363,7 @@ const recordForm = reactive({
   translated_text: '',
   record_type: 'sentence',
   source_lang: 'auto',
-  target_lang: 'zh',
+  target_lang: nativeLang.value,
   engine: 'Manual',
 })
 
@@ -1023,6 +1386,17 @@ const learningLangOptions = [
   { label: '学习俄语', value: 'ru' },
 ]
 
+const nativeLangOptions = [
+  { label: '母语中文', value: 'zh' },
+  { label: '母语英语', value: 'en' },
+  { label: '母语日语', value: 'ja' },
+  { label: '母语韩语', value: 'ko' },
+  { label: '母语法语', value: 'fr' },
+  { label: '母语德语', value: 'de' },
+  { label: '母语西语', value: 'es' },
+  { label: '母语俄语', value: 'ru' },
+]
+
 const audioKindOptions = [
   { label: '在线音频', value: 'remote' },
   { label: '本地文件', value: 'local' },
@@ -1033,6 +1407,24 @@ const listeningProviderOptions = [
   { label: 'Archive', value: 'archive' },
   { label: 'Wikimedia', value: 'wikimedia' },
   { label: '本地导入', value: 'local' },
+]
+const listeningKindOptions = [
+  { label: '全部音频', value: 'all' },
+  { label: '在线音频', value: 'remote' },
+  { label: '本地文件', value: 'local' },
+]
+const listeningStatusOptions = [
+  { label: '全部', value: 'all' },
+  { label: '待转写', value: 'pending' },
+  { label: '处理中', value: 'running' },
+  { label: '待翻译', value: 'partial' },
+  { label: '已就绪', value: 'ready' },
+  { label: '失败', value: 'error' },
+]
+const listeningSortOptions = [
+  { label: '最近添加', value: 'recent' },
+  { label: '时长最长', value: 'duration' },
+  { label: '标题', value: 'title' },
 ]
 const listeningTopicCategoryOptions = [
   { label: '新闻', value: 'news' },
@@ -1135,7 +1527,8 @@ const resolveLearningLangLabel = (value) => {
   const hit = learningLangOptions.find((x) => x.value === key)
   return String(hit?.label || key)
 }
-const learningLangLabel = computed(() => resolveLearningLangLabel(learningLang.value))
+const learningLangLabel = computed(() => resolveLearningLangLabel(learningLang.value).replace(/^学习/, ''))
+const nativeLangLabel = computed(() => resolveLearningLangLabel(nativeLang.value).replace(/^学习/, ''))
 const collectSourceEmptyHint = computed(() => {
   const enabled = listeningSources.value.filter((x) => x.enabled && x.feed_url)
   if (!enabled.length) return '当前没有已启用的听力源，请先在听力源管理器启用来源。'
@@ -1348,6 +1741,47 @@ const masteryStars = (level) => {
   return `${'★'.repeat(n)}${'☆'.repeat(5 - n)}`
 }
 
+const masteryDots = (level) => {
+  const n = Math.min(5, Math.max(0, Math.round(toNum(level))))
+  return `${'●'.repeat(n)}${'○'.repeat(5 - n)}`
+}
+
+const shelfGlyph = (key) => {
+  if (key === 'my_vocab') return '词'
+  if (key === 'my_sentences') return '句'
+  if (key === 'my_paragraphs') return '段'
+  if (key === 'my_listening') return '听'
+  return '全'
+}
+
+const typeGlyph = (t) => {
+  if (t === 'word') return '词'
+  if (t === 'paragraph') return '段'
+  if (t === 'listening') return '听'
+  return '句'
+}
+
+const fmtDate = (raw) => {
+  if (!raw) return '—'
+  const ts = new Date(raw)
+  if (Number.isNaN(ts.getTime())) return String(raw).slice(0, 10) || '—'
+  return new Intl.DateTimeFormat('zh-CN', { year: '2-digit', month: '2-digit', day: '2-digit' }).format(ts)
+}
+
+const askConfirm = (title, message, action) => {
+  confirmDialog.title = title
+  confirmDialog.message = message
+  confirmDialog.action = action
+  confirmDialog.show = true
+}
+
+const runConfirm = async () => {
+  const action = confirmDialog.action
+  confirmDialog.show = false
+  confirmDialog.action = null
+  if (typeof action === 'function') await action()
+}
+
 const rowTypeLabel = (t) => {
   if (t === 'word') return '单词'
   if (t === 'paragraph') return '段落'
@@ -1492,11 +1926,157 @@ const listeningRows = computed(() => {
   return rows
 })
 
+const syncStageLabel = (stage) => {
+  const map = {
+    queued: '排队中',
+    prepare: '准备音频',
+    download: '获取音频',
+    transcribe: '转写中',
+    translate: '翻译中',
+    timeline: '整理时间轴',
+    save: '写入数据',
+    done: '已就绪',
+    error: '失败',
+  }
+  return map[String(stage || '')] || '处理中'
+}
+
+const syncStateForRow = (row) => {
+  const id = String(row?.rawId || '').trim()
+  const job = id ? syncJobs.value[id] : null
+  if (job && job.stage && job.stage !== 'done' && job.stage !== 'error') {
+    return {
+      tone: 'running',
+      label: syncStageLabel(job.stage),
+      progress: Math.max(0, Math.min(100, Number(job.progress || 0))),
+      message: String(job.message || ''),
+    }
+  }
+  if (job?.stage === 'error') {
+    return {
+      tone: 'error',
+      label: '失败',
+      progress: 0,
+      message: String(job.error || job.message || '转写失败'),
+    }
+  }
+  const coverage = row?.translationCoverage || { translated: 0, total: 0, ratio: 0 }
+  const hasSync = Boolean(String(row?.payload?.sync_json_uri || '').trim())
+  if (coverage.total > 0) {
+    if (coverage.ratio >= 0.98 && String(row?.payload?.transcript || '').trim()) {
+      return { tone: 'ready', label: '已就绪', progress: 100, message: '文稿与译文完整' }
+    }
+    return {
+      tone: 'partial',
+      label: coverage.ratio > 0 ? `待翻译 ${Math.round(Number(coverage.ratio || 0) * 100)}%` : '待翻译',
+      progress: Math.round(Number(coverage.ratio || 0) * 100),
+      message: '已有文稿，译文尚未补齐',
+    }
+  }
+  if (hasSync) {
+    return { tone: 'partial', label: '待翻译', progress: 0, message: '同步数据存在但缺少译文' }
+  }
+  return { tone: 'pending', label: '待转写', progress: 0, message: '尚未生成文稿' }
+}
+
+const filteredListeningRows = computed(() => {
+  let rows = [...listeningRows.value]
+  if (listeningStatusFilter.value !== 'all') {
+    rows = rows.filter((row) => syncStateForRow(row).tone === listeningStatusFilter.value)
+  }
+  if (listeningSort.value === 'duration') {
+    rows.sort((a, b) => Number(b.payload?.duration_sec || 0) - Number(a.payload?.duration_sec || 0))
+  } else if (listeningSort.value === 'title') {
+    rows.sort((a, b) => String(a.title || '').localeCompare(String(b.title || ''), 'zh-CN'))
+  } else {
+    rows.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime())
+  }
+  return rows
+})
+
+const listeningPendingCount = computed(() => {
+  return allRows.value
+    .filter((row) => row.rowType === 'listening')
+    .filter((row) => {
+      const tone = syncStateForRow(row).tone
+      return tone === 'pending' || tone === 'partial' || tone === 'error'
+    })
+    .length
+})
+
+const coveragePercent = (row) => {
+  const ratio = Number(row?.translationCoverage?.ratio || 0)
+  return Math.max(0, Math.min(100, Math.round(ratio * 100)))
+}
+
+const ledgerSubline = computed(() => {
+  if (selectedShelf.value === 'my_listening') {
+    const running = listeningRows.value.filter((row) => syncStateForRow(row).tone === 'running').length
+    return `${listeningRows.value.length} 条 · 处理中 ${running} · 待处理 ${listeningPendingCount.value}`
+  }
+  return `${recordCounts.records} 条 · ${keyword.value ? '搜索结果' : '按添加时间倒序'}`
+})
+
+const activeAudioSyncState = computed(() => {
+  const row = allRows.value.find((item) => item.id === activeRow.value?.id)
+  if (!row) {
+    return { tone: 'pending', label: '等待开始', progress: 0, message: '' }
+  }
+  return syncStateForRow(row)
+})
+
+const activeAudioPreviewLines = computed(() => {
+  const timeline = activeAudioTranscriptTimeline.value
+  return Array.isArray(timeline) ? timeline.slice(0, 4).map((line, idx) => ({ ...line, idx })) : []
+})
+
+const activeWordMeaningList = computed(() => {
+  return String(activeWordCombinedTranslation.value || '')
+    .split(/[；;]/)
+    .map((x) => x.trim())
+    .filter(Boolean)
+})
+
+const pageRows = computed(() => {
+  return selectedShelf.value === 'my_listening' ? filteredListeningRows.value.slice(
+    (Math.max(1, listeningPage.value) - 1) * listeningPageSize.value,
+    Math.max(1, listeningPage.value) * listeningPageSize.value
+  ) : filteredRows.value
+})
+
+const isRowChecked = (id) => checkedRowKeys.value.includes(id)
+
+const toggleRowChecked = (id, checked) => {
+  const set = new Set(checkedRowKeys.value)
+  if (checked) set.add(id)
+  else set.delete(id)
+  checkedRowKeys.value = [...set]
+}
+
+const allPageChecked = computed(() => {
+  const rows = pageRows.value
+  return rows.length > 0 && rows.every((row) => isRowChecked(row.id))
+})
+
+const somePageChecked = computed(() => {
+  return pageRows.value.some((row) => isRowChecked(row.id)) && !allPageChecked.value
+})
+
+const togglePageChecked = (checked) => {
+  const ids = pageRows.value.map((row) => row.id)
+  const set = new Set(checkedRowKeys.value)
+  ids.forEach((id) => {
+    if (checked) set.add(id)
+    else set.delete(id)
+  })
+  checkedRowKeys.value = [...set]
+}
+
 const pagedListeningRows = computed(() => {
   const pageSize = Math.max(1, Number(listeningPageSize.value || 100))
   const page = Math.max(1, Number(listeningPage.value || 1))
   const offset = (page - 1) * pageSize
-  return listeningRows.value.slice(offset, offset + pageSize)
+  return filteredListeningRows.value.slice(offset, offset + pageSize)
 })
 
 const isListeningImmersive = computed(() => {
@@ -1850,53 +2430,171 @@ const selectListeningRow = (row) => {
   rightCollapsed.value = false
 }
 
-const enterListeningStudy = async () => {
+const enterListeningStudy = () => {
   if (!activeRow.value || activeRow.value.sourceType !== 'audio') {
     message.warning('请先选择一个听力条目')
     return
   }
-  const audioId = String(activeRow.value.rawId || '').trim()
-  if (audioId) {
-    activeAudioSyncGenerating.value = true
-    try {
-      const refreshed = await invoke('language_learning_backfill_sync_translation', {
-        audioId,
-        learningLang: learningLang.value,
-      })
-      if (refreshed?.id) {
-        const idx = audioResources.value.findIndex((x) => String(x?.id || '') === String(refreshed.id))
-        if (idx >= 0) {
-          audioResources.value[idx] = refreshed
-        }
-      }
-      const latestSyncPath = String(refreshed?.sync_json_uri || activeAudio.value?.sync_json_uri || '').trim()
-      const timeline = await loadSyncTimelineByJsonPath(latestSyncPath)
-      if (Array.isArray(timeline) && timeline.length) {
-        activeAudioSyncTimeline.value = timeline
-        audioTranslationCoverageMap.value = {
-          ...audioTranslationCoverageMap.value,
-          [audioId]: resolveTranslationCoverageFromTimeline(timeline),
-        }
-      }
-    } catch {
-      activeAudioSyncGenerating.value = triggerSyncGenerationForAudioId(audioId, false, learningLang.value)
-      if (shouldRunQuickTimelineTranslate(audioId)) {
-        const patchedTimeline = await quickTranslateTimelineToZh(activeAudioTranscriptTimeline.value, activeTimelineQuickTranslating)
-        if (Array.isArray(patchedTimeline) && patchedTimeline.length) {
-          activeAudioSyncTimeline.value = patchedTimeline
-        }
-      }
-    } finally {
-      if (!timelineHasMissingTranslation(activeAudioTranscriptTimeline.value)) {
-        activeAudioSyncGenerating.value = false
-      }
-    }
-  }
+  // 先进入再转写：播放入口不等后台任务，watch(activeAudio) 会在进入后触发同步。
   openListeningImmersive(activeRow.value)
+  refreshSyncJobs()
 }
 
 const exitListeningImmersive = () => {
   listeningImmersiveMode.value = false
+}
+
+const goToReview = () => {
+  activeTab.value = 'review'
+  rebuildReviewRows()
+}
+
+const hasRunningSyncJobs = computed(() => {
+  return Object.values(syncJobs.value).some((job) => job && job.stage && !['done', 'error'].includes(job.stage))
+})
+
+const scheduleSyncCompletionRefresh = () => {
+  if (syncCompleteRefreshTimer) window.clearTimeout(syncCompleteRefreshTimer)
+  syncCompleteRefreshTimer = window.setTimeout(async () => {
+    syncCompleteRefreshTimer = 0
+    await refreshAudio()
+    const audioId = String(activeAudio.value?.id || '').trim()
+    if (!audioId) return
+    const row = allRows.value.find((item) => item.id === `audio:${audioId}`)
+    const timeline = await loadSyncTimelineByJsonPath(row?.payload?.sync_json_uri || '')
+    if (Array.isArray(timeline) && timeline.length) {
+      activeAudioSyncTimeline.value = timeline
+      audioTranslationCoverageMap.value = {
+        ...audioTranslationCoverageMap.value,
+        [audioId]: resolveTranslationCoverageFromTimeline(timeline),
+      }
+    }
+  }, 450)
+}
+
+let lastSyncStageById = new Map()
+const refreshSyncJobs = async () => {
+  try {
+    const list = await invoke('language_learning_get_sync_jobs')
+    const rows = Array.isArray(list) ? list : []
+    const map = {}
+    let completed = false
+    rows.forEach((job) => {
+      const id = String(job?.audio_id || '').trim()
+      if (!id) return
+      map[id] = job
+      const prevStage = lastSyncStageById.get(id)
+      if (prevStage !== job.stage && (job.stage === 'done' || job.stage === 'error')) {
+        completed = true
+      }
+      lastSyncStageById.set(id, job.stage)
+    })
+    syncJobs.value = map
+    if (completed) scheduleSyncCompletionRefresh()
+  } catch {}
+}
+
+const ensureSyncPolling = () => {
+  if (syncPollTimer) return
+  syncPollTimer = window.setInterval(async () => {
+    await refreshSyncJobs()
+    if (!hasRunningSyncJobs.value) {
+      window.clearInterval(syncPollTimer)
+      syncPollTimer = 0
+    }
+  }, 1100)
+}
+
+const retranslateActiveAudio = async () => {
+  const id = String(activeAudio.value?.id || '').trim()
+  if (!id) return
+  syncJobs.value = {
+    ...syncJobs.value,
+    [id]: { audio_id: id, stage: 'translate', progress: 8, message: '按当前母语重译', error: '' },
+  }
+  ensureSyncPolling()
+  try {
+    await invoke('language_learning_retranslate_audio', {
+      audioId: id,
+      learningLang: learningLang.value,
+      nativeLang: nativeLang.value,
+    })
+    message.success('已按当前母语重新翻译')
+    await refreshAudio()
+    const row = allRows.value.find((item) => item.id === `audio:${id}`)
+    const timeline = await loadSyncTimelineByJsonPath(row?.payload?.sync_json_uri || '')
+    if (timeline.length) activeAudioSyncTimeline.value = timeline
+    await refreshSyncJobs()
+  } catch (err) {
+    message.error(`重译失败: ${String(err?.message || err || '')}`)
+    await refreshSyncJobs()
+  }
+}
+
+const batchRetrySync = async () => {
+  const ids = allRows.value
+    .filter((row) => checkedRowKeys.value.includes(row.id) && row.sourceType === 'audio')
+    .map((row) => String(row.rawId || ''))
+    .filter(Boolean)
+  if (!ids.length) {
+    message.warning('请先选择听力条目')
+    return
+  }
+  for (const id of ids) {
+    try {
+      await invoke('language_learning_generate_whisper_sync_json_async', {
+        audioId: id,
+        learningLang: learningLang.value,
+        nativeLang: nativeLang.value,
+        force: true,
+      })
+    } catch (err) {
+      message.error(`提交重新转写失败: ${String(err?.message || err || '')}`)
+    }
+  }
+  ensureSyncPolling()
+  message.info(`已提交 ${ids.length} 条重新转写`)
+}
+
+const moreMenuOptions = [
+  { label: '导入学习数据', key: 'import' },
+  { label: '导出学习数据', key: 'export' },
+  { label: '听力源管理器', key: 'sources' },
+  { label: '随机抽查', key: 'random' },
+]
+
+const onMoreMenuSelect = (key) => {
+  if (key === 'import') importLearningData()
+  else if (key === 'export') exportLearningData()
+  else if (key === 'sources') sourceManagerVisible.value = true
+  else if (key === 'random') openRandomCheckBoard()
+}
+
+const ledgerMenuOptions = computed(() => {
+  if (selectedShelf.value === 'my_listening') {
+    return [
+      { label: '编辑当前听力', key: 'editAudio', disabled: !activeAudio.value },
+      { label: '重新同步选中项', key: 'retry', disabled: !checkedRowKeys.value.length },
+      { label: '删除选中项', key: 'delete', disabled: !checkedRowKeys.value.length && !activeRow.value },
+      { label: '听力源管理器', key: 'sources' },
+    ]
+  }
+  return [
+    { label: '编辑当前词条', key: 'editRecord', disabled: !activeRow.value || activeRow.value.sourceType !== 'record' },
+    { label: '开始复习', key: 'review' },
+    { label: '删除选中项', key: 'delete', disabled: !checkedRowKeys.value.length && !activeRow.value },
+    { label: '导出当前分类', key: 'export' },
+  ]
+})
+
+const onLedgerMenuSelect = (key) => {
+  if (key === 'editAudio') editAudio(activeAudio.value)
+  else if (key === 'retry') batchRetrySync()
+  else if (key === 'delete') deleteSelectedRows()
+  else if (key === 'sources') sourceManagerVisible.value = true
+  else if (key === 'editRecord') openEditDialog(activeRow.value)
+  else if (key === 'review') startReviewFromSelection()
+  else if (key === 'export') exportLearningData()
 }
 
 const listeningRowProps = (row) => ({
@@ -2337,6 +3035,7 @@ const runSyncQueueWorker = async () => {
     const task = syncQueuedTasks.shift()
     const id = String(task?.id || '').trim()
     const taskLearningLang = String(task?.learningLang || learningLang.value || '').trim() || 'zh'
+    const taskNativeLang = String(task?.nativeLang || nativeLang.value || 'zh').trim() || 'zh'
     const queueKey = `${taskLearningLang}:${id}`
     if (!id) continue
     currentSyncingAudioId.value = id
@@ -2353,6 +3052,7 @@ const runSyncQueueWorker = async () => {
       const refreshed = await invoke('language_learning_backfill_sync_translation', {
         audioId: id,
         learningLang: taskLearningLang,
+        nativeLang: taskNativeLang,
       })
       if (refreshed?.id) {
         const idx = audioResources.value.findIndex((x) => String(x?.id || '') === String(refreshed.id))
@@ -2420,7 +3120,7 @@ const triggerSyncGenerationForAudioId = (audioId, showHint = false, lang = '') =
   syncLastEnqueueAtMap.set(queueKey, now)
   syncQueuedIdSet.add(queueKey)
   syncingAudioIdSet.add(queueKey)
-  syncQueuedTasks.push({ id, learningLang: taskLearningLang })
+  syncQueuedTasks.push({ id, learningLang: taskLearningLang, nativeLang: nativeLang.value })
   syncQueueTotal.value += 1
   console.info('[LangLearning] syncQueue:enqueue', {
     audioId: id,
@@ -2436,6 +3136,7 @@ const triggerSyncGenerationForAudioId = (audioId, showHint = false, lang = '') =
   if (showHint) {
     message.info('已加入后台转换队列，将依次转写并翻译')
   }
+  ensureSyncPolling()
   runSyncQueueWorker()
   return true
 }
@@ -2470,17 +3171,27 @@ const resumePendingSyncTasks = async () => {
       learningLang: learningLang.value,
     })
     const list = Array.isArray(ids) ? ids : []
-    list.forEach((id) => triggerSyncGenerationForAudioId(id, false, learningLang.value))
+    list.forEach((id) => {
+      // 已经失败的任务不自动重试，避免每个刷新周期都重新跑一遍长音频；
+      // 用户点「重新同步」会显式 force 重跑。
+      if (syncJobs.value[String(id)]?.stage === 'error') return
+      triggerSyncGenerationForAudioId(id, false, learningLang.value)
+    })
   } catch {}
 }
 
 const refreshAll = async () => {
-  await refreshRecords()
-  await refreshAudio()
-  await refreshShelfCounts()
-  checkedRowKeys.value = []
-  if (!activeRow.value && filteredRows.value.length) {
-    activeRow.value = filteredRows.value[0]
+  libraryLoading.value = true
+  try {
+    await refreshRecords()
+    await refreshAudio()
+    await refreshShelfCounts()
+    checkedRowKeys.value = []
+    if (!activeRow.value && filteredRows.value.length) {
+      activeRow.value = filteredRows.value[0]
+    }
+  } finally {
+    libraryLoading.value = false
   }
 }
 
@@ -2510,7 +3221,7 @@ const refreshWordMeta = async (row) => {
     const payload = await invoke('language_learning_enrich_word', {
       word: row.word || row.source_text,
       sourceLang: row.source_lang || 'auto',
-      targetLang: row.target_lang || 'zh',
+      targetLang: nativeLang.value || row.target_lang || 'zh',
     })
     await invoke('language_learning_record_translation', {
       input: {
@@ -2602,17 +3313,20 @@ const saveAudio = async () => {
   }
 }
 
-const removeAudio = async (row) => {
-  try {
-    await invoke('language_learning_delete_audio_resource', { id: row.id, learningLang: learningLang.value })
-    message.success('听力资源已删除')
-    if (activeRow.value?.sourceType === 'audio' && activeRow.value?.rawId === row.id) {
-      activeRow.value = null
+const removeAudio = (row) => {
+  if (!row) return
+  askConfirm('删除听力资源', `将删除「${row.title || '未命名听力'}」及其本地缓存文件。`, async () => {
+    try {
+      await invoke('language_learning_delete_audio_resource', { id: row.id, learningLang: learningLang.value })
+      message.success('听力资源已删除')
+      if (activeRow.value?.sourceType === 'audio' && activeRow.value?.rawId === row.id) {
+        activeRow.value = null
+      }
+      await refreshAudio()
+    } catch (err) {
+      message.error(`删除听力资源失败: ${String(err?.message || err || '')}`)
     }
-    await refreshAudio()
-  } catch (err) {
-    message.error(`删除听力资源失败: ${String(err?.message || err || '')}`)
-  }
+  })
 }
 
 const openCreateDialog = () => {
@@ -2622,7 +3336,7 @@ const openCreateDialog = () => {
   recordForm.translated_text = ''
   recordForm.record_type = selectedShelf.value === 'my_paragraphs' ? 'paragraph' : 'sentence'
   recordForm.source_lang = 'auto'
-  recordForm.target_lang = 'zh'
+  recordForm.target_lang = nativeLang.value
   recordForm.engine = 'Manual'
   recordEditVisible.value = true
 }
@@ -2635,7 +3349,7 @@ const openEditDialog = (row) => {
   recordForm.translated_text = String(row.payload?.translated_text || '')
   recordForm.record_type = String(row.payload?.record_type || 'sentence')
   recordForm.source_lang = String(row.payload?.source_lang || 'auto')
-  recordForm.target_lang = String(row.payload?.target_lang || learningLang.value)
+  recordForm.target_lang = String(row.payload?.target_lang || nativeLang.value)
   recordForm.engine = String(row.payload?.engine || 'Manual')
   recordEditVisible.value = true
 }
@@ -2672,7 +3386,7 @@ const saveRecord = async () => {
   }
 }
 
-const deleteSelectedRows = async () => {
+const deleteSelectedRows = () => {
   const selected = allRows.value.filter((r) => checkedRowKeys.value.includes(r.id))
   const fallback = activeRow.value ? [activeRow.value] : []
   const rows = selected.length ? selected : fallback
@@ -2680,29 +3394,36 @@ const deleteSelectedRows = async () => {
     message.warning('请先选择要删除的项目')
     return
   }
-  try {
-    const recordIds = rows.filter((r) => r.sourceType === 'record').map((r) => r.rawId)
-    const audioIds = rows.filter((r) => r.sourceType === 'audio').map((r) => r.rawId)
-    dropSyncTasksForAudioIds(audioIds)
-    if (recordIds.length) {
-      await invoke('language_learning_delete_records', {
-        ids: recordIds,
-        learningLang: learningLang.value,
-      })
+  const label = rows.length === 1 ? `「${rows[0].title || '未命名'}」` : `${rows.length} 项学习记录`
+  askConfirm('删除学习记录', `将永久删除 ${label}，听力对应的本地音频缓存也会一并清理。此操作不可撤销。`, async () => {
+    try {
+      const recordIds = rows.filter((r) => r.sourceType === 'record').map((r) => r.rawId)
+      const audioIds = rows.filter((r) => r.sourceType === 'audio').map((r) => r.rawId)
+      dropSyncTasksForAudioIds(audioIds)
+      if (recordIds.length) {
+        await invoke('language_learning_delete_records', {
+          ids: recordIds,
+          learningLang: learningLang.value,
+        })
+      }
+      for (const id of audioIds) {
+        await invoke('language_learning_delete_audio_resource', { id, learningLang: learningLang.value })
+      }
+      message.success(`已删除 ${rows.length} 项`)
+      activeRow.value = null
+      await refreshAll()
+      rebuildReviewRows()
+    } catch (err) {
+      message.error(`删除失败: ${String(err?.message || err || '')}`)
     }
-    for (const id of audioIds) {
-      await invoke('language_learning_delete_audio_resource', { id, learningLang: learningLang.value })
-    }
-    message.success(`已删除 ${rows.length} 项`)
-    activeRow.value = null
-    await refreshAll()
-    rebuildReviewRows()
-  } catch (err) {
-    message.error(`删除失败: ${String(err?.message || err || '')}`)
-  }
+  })
 }
 
 const openCollectSourceDialog = () => {
+  audioManagerVisible.value = false
+  if (!String(collectTopic.value || '').trim() && String(audioForm.topic || '').trim()) {
+    collectTopic.value = audioForm.topic
+  }
   const ids = collectAvailableSourcePayload.value.map((x) => x.id)
   collectSourceIds.value = ids
   collectSourceMode.value = 'default'
@@ -2724,52 +3445,103 @@ const confirmCollectListeningByTopic = async () => {
       return
     }
   }
+  const baseTopic = String(collectTopic.value || audioForm.topic || '').trim()
+  const categoryLabel = resolveTopicCategoryLabel(collectTopicCategory.value)
+  const topic = (baseTopic || categoryLabel).trim()
+  if (!topic) {
+    message.warning('请先输入听力主题或选择分类')
+    return
+  }
+  if (Number(collectMinMinutes.value || 0) > Number(collectMaxMinutes.value || 0)) {
+    message.warning('最小时长不能大于最大时长')
+    return
+  }
   collectSourceDialogVisible.value = false
-  await collectListeningByTopic(selected.map(({ id, ...rest }) => rest))
+  await previewCollectListeningByTopic(topic, selected.map(({ id, ...rest }) => rest))
 }
 
-const collectListeningByTopic = async (selectedSourcesOverride = null) => {
+const previewCollectListeningByTopic = async (topic, selectedSources) => {
+  collectPreviewLoading.value = true
   collectListeningLoading.value = true
   try {
-    const baseTopic = String(collectTopic.value || audioForm.topic || '').trim()
-    const categoryLabel = resolveTopicCategoryLabel(collectTopicCategory.value)
-    const topic = (baseTopic || categoryLabel).trim()
-    if (!topic) {
-      message.warning('请先输入听力主题或选择分类')
-      return
-    }
-    const limit = Number(collectLimit.value || 15)
-    const selectedSources = Array.isArray(selectedSourcesOverride) && selectedSourcesOverride.length
-      ? selectedSourcesOverride
-      : collectAvailableSourcePayload.value.map(({ id, ...rest }) => rest)
-    if (!selectedSources.length) {
-      message.warning(collectSourceEmptyHint.value)
-      return
-    }
-    const rows = await invoke('language_learning_collect_audio_by_topic', {
+    const rows = await invoke('language_learning_preview_audio_by_topic', {
       input: {
         topic,
         learning_lang: learningLang.value,
-        limit,
+        limit: Number(collectLimit.value || 15),
+        min_duration_sec: Math.round(Number(collectMinMinutes.value || 0) * 60),
+        max_duration_sec: Math.round(Number(collectMaxMinutes.value || 15) * 60),
         sources: selectedSources,
-      }
+      },
     })
-    if (Array.isArray(rows) && rows.length) {
-      message.success(`已采集 ${rows.length} 条听力资源`)
-      rows.forEach((item) => {
-        if (item?.id) triggerSyncGenerationForAudioId(item.id, false)
-      })
-    } else {
-      message.warning('未采集到可用资源，请更换主题重试')
-    }
+    const list = Array.isArray(rows) ? rows : []
+    collectPreviewRows.value = list
+    collectPreviewSelected.value = list
+      .filter((item) => !item.already_collected)
+      .map((item) => item.candidate_id)
+    collectPreviewTopic.value = topic
+    collectPreviewVisible.value = true
+    audioForm.topic = topic
+    if (!list.length) message.warning('没有找到符合时长与主题的候选，试试放宽时长')
+  } catch (err) {
+    message.error(`搜索候选失败: ${String(err?.message || err || '')}`)
+  } finally {
+    collectPreviewLoading.value = false
+    collectListeningLoading.value = false
+  }
+}
+
+const isPreviewSelected = (candidate) => collectPreviewSelected.value.includes(candidate?.candidate_id)
+
+const togglePreviewCandidate = (candidate, checked) => {
+  const id = String(candidate?.candidate_id || '')
+  if (!id) return
+  const set = new Set(collectPreviewSelected.value)
+  if (checked) set.add(id)
+  else set.delete(id)
+  collectPreviewSelected.value = [...set]
+}
+
+const collectPreviewAllSelected = computed(() => {
+  const importable = collectPreviewRows.value.filter((item) => !item.already_collected)
+  return importable.length > 0 && importable.every((item) => isPreviewSelected(item))
+})
+
+const togglePreviewAll = (checked) => {
+  collectPreviewSelected.value = checked
+    ? collectPreviewRows.value.filter((item) => !item.already_collected).map((item) => item.candidate_id)
+    : []
+}
+
+const importSelectedCandidates = async () => {
+  const candidates = collectPreviewRows.value.filter((item) => isPreviewSelected(item))
+  if (!candidates.length) return
+  collectImporting.value = true
+  try {
+    const saved = await invoke('language_learning_import_audio_candidates', {
+      input: {
+        learning_lang: learningLang.value,
+        topic: collectPreviewTopic.value,
+        candidates,
+      },
+    })
+    const rows = Array.isArray(saved) ? saved : []
+    message.success(`已导入 ${rows.length} 条听力，正在转入后台转写`)
+    collectPreviewVisible.value = false
+    rows.forEach((item) => {
+      if (item?.id) triggerSyncGenerationForAudioId(item.id, false)
+    })
     await refreshAudio()
     await refreshShelfCounts()
-    collectTopic.value = baseTopic || categoryLabel
-    audioForm.topic = collectTopic.value
+    const first = rows[0]
+    if (first?.id) {
+      const hit = allRows.value.find((item) => item.id === `audio:${first.id}`)
+      if (hit) activeRow.value = hit
+    }
   } catch (err) {
-    message.error(`主题采集失败: ${String(err?.message || err || '')}`)
+    message.error(`导入候选失败: ${String(err?.message || err || '')}`)
   } finally {
-    collectListeningLoading.value = false
+    collectImporting.value = false
   }
 }
 
@@ -3025,6 +3797,43 @@ const cardWordMeanings = (card) => {
     ? card.payload.meanings
     : splitSimpleTranslations(card?.translatedText || '')
   return normalizeList(meanings)
+}
+
+const handleReviewKeydown = (evt) => {
+  if (activeTab.value !== 'review') return
+  if (confirmDialog.show || collectPreviewVisible.value || collectSourceDialogVisible.value || audioManagerVisible.value || recordEditVisible.value || sourceManagerVisible.value) return
+  const target = evt.target
+  const tag = String(target?.tagName || '').toUpperCase()
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || target?.isContentEditable) return
+  if (evt.code === 'Space') {
+    evt.preventDefault()
+    reviewShowAnswer.value = !reviewShowAnswer.value
+    return
+  }
+  if (evt.key === '1') {
+    evt.preventDefault()
+    gradeAndNext('known')
+    return
+  }
+  if (evt.key === '2') {
+    evt.preventDefault()
+    gradeAndNext('fuzzy')
+    return
+  }
+  if (evt.key === '3') {
+    evt.preventDefault()
+    gradeAndNext('unknown')
+    return
+  }
+  if (evt.key === 'ArrowRight') {
+    evt.preventDefault()
+    gotoNextReview()
+    return
+  }
+  if (evt.key === 'ArrowLeft') {
+    evt.preventDefault()
+    gotoPrevReview()
+  }
 }
 
 const handleRandomBoardKeydown = (evt) => {
@@ -3287,6 +4096,7 @@ const timelineHasMissingTranslation = (timeline) =>
 
 const quickTranslateTimelineToZh = async (timeline, stateRef) => {
   if (!Array.isArray(timeline) || !timeline.length || stateRef.value) return timeline
+  if (String(nativeLang.value) === String(learningLang.value)) return timeline
   const groups = buildSentenceGroupsFromTimeline(timeline)
   const requestGroups = groups
     .map((indices) => {
@@ -3313,7 +4123,7 @@ const quickTranslateTimelineToZh = async (timeline, stateRef) => {
     const result = await invoke('translate_text_free', {
       texts: requestGroups.map((x) => x.sourceText),
       from: 'auto',
-      to: 'zh',
+      to: nativeLang.value || 'zh',
     })
     const translated = Array.isArray(result?.translated_texts) ? result.translated_texts : []
     const patched = [...timeline]
@@ -3568,8 +4378,24 @@ const applyAudioPlaybackRate = () => {
 
 const fetchTranscriptForActiveAudio = async () => {
   const row = activeAudio.value
-  if (!row) return
-  triggerSyncGenerationForAudioId(row.id, true, 'zh')
+  if (!row?.id) return
+  const id = String(row.id)
+  syncJobs.value = {
+    ...syncJobs.value,
+    [id]: { audio_id: id, stage: 'queued', progress: 0, message: '重新转写', error: '' },
+  }
+  ensureSyncPolling()
+  try {
+    await invoke('language_learning_generate_whisper_sync_json_async', {
+      audioId: id,
+      learningLang: learningLang.value,
+      nativeLang: nativeLang.value,
+      force: true,
+    })
+    message.info('已提交后台重新转写')
+  } catch (err) {
+    message.error(`提交同步失败: ${String(err?.message || err || '')}`)
+  }
 }
 
 let learningPronounceAudio = null
@@ -3739,6 +4565,27 @@ watch(learningLang, async (v) => {
   rebuildReviewRows()
 })
 
+watch(nativeLang, (value, previous) => {
+  try {
+    window.localStorage.setItem(nativeLangStorageKey, String(value || 'zh'))
+  } catch {}
+  if (previous && value !== previous) {
+    message.info('母语已切换；已有译文不会自动改写，可在听力条目上点「重译」按新母语生成')
+  }
+})
+
+watch([listeningStatusFilter, listeningSort], () => {
+  listeningPage.value = 1
+  if (selectedShelf.value !== 'my_listening') return
+  if (!filteredListeningRows.value.length) {
+    activeRow.value = null
+    return
+  }
+  if (!activeRow.value || !filteredListeningRows.value.some((x) => x.id === activeRow.value.id)) {
+    activeRow.value = filteredListeningRows.value[0]
+  }
+})
+
 watch(playbackRate, () => {
   applyAudioPlaybackRate()
 })
@@ -3803,7 +4650,7 @@ watch(activeAudio, async () => {
     applyAudioPlaybackRate()
   }, 0)
   if (activeAudio.value?.id && !activeAudio.value?.sync_json_uri && !activeAudioSyncTimeline.value.length) {
-    triggerSyncGenerationForAudioId(activeAudio.value.id, false, 'zh')
+    triggerSyncGenerationForAudioId(activeAudio.value.id, false, learningLang.value)
   }
   console.info('[LangLearning] activeAudio:changed', {
     hasAudio: Boolean(activeAudio.value),
@@ -3937,12 +4784,15 @@ watch(managerMode, (mode) => {
 onMounted(async () => {
   window.addEventListener('error', handleWindowResizeObserverWarning, true)
   window.addEventListener('keydown', handleRandomBoardKeydown)
+  window.addEventListener('keydown', handleReviewKeydown)
   loadMasteryStore()
   loadListeningSources()
   persistListeningSources()
   await cleanupDuplicateListeningTopics()
   await refreshAll()
   await resumePendingSyncTasks()
+  await refreshSyncJobs()
+  if (hasRunningSyncJobs.value) ensureSyncPolling()
   if (filteredRows.value.length) {
     activeRow.value = filteredRows.value[0]
   }
@@ -3952,6 +4802,7 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   window.removeEventListener('error', handleWindowResizeObserverWarning, true)
   window.removeEventListener('keydown', handleRandomBoardKeydown)
+  window.removeEventListener('keydown', handleReviewKeydown)
   if (learningPronounceAudio) {
     learningPronounceAudio.pause()
     learningPronounceAudio = null
@@ -3965,232 +4816,1966 @@ onBeforeUnmount(() => {
     window.clearTimeout(pendingSyncSweepTimer)
     pendingSyncSweepTimer = 0
   }
+  if (syncPollTimer) {
+    window.clearInterval(syncPollTimer)
+    syncPollTimer = 0
+  }
+  if (syncCompleteRefreshTimer) {
+    window.clearTimeout(syncCompleteRefreshTimer)
+    syncCompleteRefreshTimer = 0
+  }
 })
 </script>
 
 <style scoped>
 .lang-learn-page {
+  --ll-serif: 'Iowan Old Style', 'Palatino Linotype', 'Book Antiqua', Georgia, 'Songti SC', 'SimSun', serif;
+  --ll-bg: var(--guaxi-app-bg);
+  --ll-panel: var(--guaxi-panel-bg);
+  --ll-border: var(--guaxi-border);
+  --ll-border-soft: color-mix(in srgb, var(--guaxi-border) 62%, transparent);
+  --ll-text: var(--guaxi-text-primary);
+  --ll-muted: var(--guaxi-text-secondary);
+  --ll-accent: var(--primary-color, #61afef);
+  --ll-amber: var(--warning-color, #e5c07b);
+  --ll-green: var(--success-color, #98c379);
+  --ll-red: var(--error-color, #e06c75);
+  --ll-paper: color-mix(in srgb, var(--guaxi-panel-bg) 97%, #c8a96a 3%);
+  --ll-accent-wash: color-mix(in srgb, var(--ll-accent) 9%, transparent);
+  --ll-accent-line: color-mix(in srgb, var(--ll-accent) 42%, var(--ll-border));
+  --ll-shadow: 0 16px 40px rgba(0, 0, 0, 0.18);
   height: 100vh;
   box-sizing: border-box;
-  padding: 12px;
-  background: var(--guaxi-app-bg);
+  background: var(--ll-bg);
+  color: var(--ll-text);
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  font-family: var(--editor-font-family, 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei', 'Courier New');
+  font-family: var(--editor-font-family, 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei');
+  overflow: hidden;
 }
 
-.manager-header {
+.lang-learn-page *,
+.lang-learn-page *::before,
+.lang-learn-page *::after {
+  box-sizing: border-box;
+}
+
+.lang-learn-page *::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.lang-learn-page *::-webkit-scrollbar-thumb {
+  background: var(--guaxi-scrollbar-thumb, rgba(127, 127, 127, 0.32));
+  border-radius: 8px;
+}
+
+.lang-learn-page *::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.serif {
+  font-family: var(--ll-serif);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.eyebrow,
+.section-label {
+  font-size: 10px;
+  line-height: 1.4;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: var(--ll-muted);
+}
+
+.section-label {
+  letter-spacing: 0.08em;
+  font-size: 10.5px;
+}
+
+.muted {
+  color: var(--ll-muted);
+  font-size: 11px;
+}
+
+.dot-sep {
+  color: var(--ll-muted);
+  opacity: 0.55;
+  margin: 0 5px;
+}
+
+/* ---------- top bar ---------- */
+.ll-topbar {
+  flex: 0 0 66px;
+  height: 66px;
   display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.title-main {
-  font-size: 22px;
-  font-weight: 700;
-  color: var(--guaxi-text-primary);
-}
-
-.toolbar-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
   align-items: center;
+  gap: 26px;
+  padding: 0 22px;
+  border-bottom: 1px solid var(--ll-border);
+  background: color-mix(in srgb, var(--ll-panel) 86%, transparent);
+  backdrop-filter: blur(8px);
+  z-index: 20;
 }
 
-.page-tabs {
+.ll-brand {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 190px;
+}
+
+.ll-brand-kicker {
+  font-size: 9px;
+  letter-spacing: 0.22em;
+  color: var(--ll-muted);
+}
+
+.ll-brand-title {
+  margin: 0;
+  font-size: 21px;
+  line-height: 1.18;
+  color: var(--ll-text);
+}
+
+.ll-mainnav {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 100%;
+}
+
+.ll-navbtn {
+  position: relative;
+  height: 100%;
+  padding: 0 14px;
+  background: none;
+  border: 0;
+  color: var(--ll-muted);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+  transition: color 0.16s ease;
+}
+
+.ll-navbtn::after {
+  content: '';
+  position: absolute;
+  left: 14px;
+  right: 14px;
+  bottom: -1px;
+  height: 2px;
+  background: transparent;
+  transition: background 0.16s ease;
+}
+
+.ll-navbtn:hover {
+  color: var(--ll-text);
+}
+
+.ll-navbtn.active {
+  color: var(--ll-text);
+}
+
+.ll-navbtn.active::after {
+  background: var(--ll-accent);
+}
+
+.ll-topright {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.ll-langpair {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 6px;
+  border: 1px solid var(--ll-border-soft);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--ll-panel) 92%, transparent);
+}
+
+.ll-langarrow {
+  color: var(--ll-muted);
+  font-size: 11px;
+}
+
+.ll-search {
+  width: clamp(180px, 26vw, 320px);
+}
+
+.ll-syncpill {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 26px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--ll-amber) 38%, var(--ll-border));
+  background: color-mix(in srgb, var(--ll-amber) 10%, transparent);
+  color: color-mix(in srgb, var(--ll-amber) 72%, var(--ll-text));
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.pulse-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 0 0 currentColor;
+  animation: llPulse 1.4s infinite;
+  flex: 0 0 auto;
+}
+
+@keyframes llPulse {
+  0% { box-shadow: 0 0 0 0 color-mix(in srgb, currentColor 55%, transparent); opacity: 1; }
+  70% { box-shadow: 0 0 0 6px transparent; opacity: 0.55; }
+  100% { box-shadow: 0 0 0 0 transparent; opacity: 1; }
+}
+
+/* ---------- workspace ---------- */
+.ll-workspace {
   flex: 1 1 auto;
   min-height: 0;
-}
-
-.listening-immersive-page {
-  height: calc(100vh - 150px);
-  border: 1px solid var(--guaxi-border);
-  border-radius: 10px;
-  padding: 10px;
-  background: var(--guaxi-panel-bg);
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
-}
-
-.manager-layout {
-  height: calc(100vh - 150px);
   display: grid;
-  grid-template-columns: 260px 1fr 420px;
-  gap: 10px;
+  grid-template-columns: 228px minmax(0, 1fr) 412px;
+  transition: grid-template-columns 0.18s ease;
 }
 
-.manager-layout.left-collapsed {
-  grid-template-columns: 1fr 420px;
+.ll-workspace.inspector-hidden {
+  grid-template-columns: 228px minmax(0, 1fr) 0;
 }
 
-.manager-layout.right-collapsed {
-  grid-template-columns: 260px 1fr;
-}
-
-.manager-layout.left-collapsed.right-collapsed {
-  grid-template-columns: 1fr;
-}
-
-.manager-layout.listening-immersive {
-  grid-template-columns: 0 0 1fr;
-}
-
-.manager-layout.listening-immersive .left-tree-card,
-.manager-layout.listening-immersive .middle-table-card {
-  display: none;
-}
-
-.left-tree-card,
-.middle-table-card,
-.right-detail-card {
+.ll-rail {
   min-height: 0;
+  overflow: auto;
+  padding: 20px 14px 16px;
+  border-right: 1px solid var(--ll-border);
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.rail-today {
+  padding: 14px 14px 13px;
+  border: 1px solid var(--ll-border-soft);
+  border-radius: 10px;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--ll-accent) 5%, transparent), transparent 70%),
+    var(--ll-panel);
+}
+
+.rail-today-line {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 6px 0 10px;
+}
+
+.rail-today-line strong {
+  font-size: 34px;
+  line-height: 1;
+  font-weight: 600;
+  color: var(--ll-text);
+}
+
+.rail-today-line span {
+  font-size: 11px;
+  color: var(--ll-muted);
+}
+
+.rail-meter {
+  height: 3px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--ll-border) 70%, transparent);
   overflow: hidden;
 }
 
-.left-tree-card {
+.rail-meter span {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, var(--ll-accent), var(--ll-green));
+  transition: width 0.3s ease;
+}
+
+.rail-today-meta {
+  margin-top: 9px;
+  font-size: 10.5px;
+  color: var(--ll-muted);
+  line-height: 1.5;
+}
+
+.rail-group {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  overflow: auto;
+  gap: 3px;
 }
 
-.tree-group-title {
-  font-size: 12px;
-  color: var(--guaxi-text-secondary);
-  margin-bottom: 4px;
+.rail-group > .eyebrow {
+  margin: 0 0 7px 8px;
 }
 
-.tree-item {
+.rail-shelf {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 9px;
+  width: 100%;
+  min-height: 36px;
+  padding: 5px 9px 5px 7px;
   border: 1px solid transparent;
   border-radius: 8px;
-  padding: 8px 10px;
+  background: transparent;
+  color: var(--ll-text);
+  font: inherit;
+  font-size: 12.5px;
+  text-align: left;
   cursor: pointer;
-  color: var(--guaxi-text-primary);
-  background: color-mix(in srgb, var(--guaxi-panel-bg) 82%, transparent);
+  transition: background 0.15s ease, border-color 0.15s ease;
 }
 
-.tree-item.active {
-  border-color: var(--primary-color, #4acadb);
-  background: color-mix(in srgb, var(--primary-color, #4acadb) 14%, var(--guaxi-panel-bg));
+.rail-shelf:hover {
+  background: var(--ll-accent-wash);
 }
 
-.tree-count {
-  color: var(--guaxi-text-secondary);
+.rail-shelf.active {
+  background: color-mix(in srgb, var(--ll-accent) 11%, transparent);
+  border-color: color-mix(in srgb, var(--ll-accent) 30%, transparent);
+}
+
+.rail-glyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  flex: 0 0 24px;
+  border: 1px solid var(--ll-border);
+  border-radius: 6px;
+  font-family: var(--ll-serif);
   font-size: 12px;
+  color: var(--ll-muted);
+  background: color-mix(in srgb, var(--ll-panel) 80%, transparent);
 }
 
-.middle-table-card {
+.rail-shelf.active .rail-glyph {
+  border-color: var(--ll-accent-line);
+  color: var(--ll-accent);
+}
+
+.rail-shelf-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rail-count {
+  margin-left: auto;
+  font-size: 10.5px;
+  color: var(--ll-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.rail-action {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  min-height: 32px;
+  padding: 4px 9px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--ll-muted);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+
+.rail-action:hover {
+  color: var(--ll-text);
+  background: var(--ll-accent-wash);
+}
+
+.rail-foot {
+  margin-top: auto;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px;
+  color: var(--ll-muted);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+}
+
+.rail-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--ll-green);
+}
+
+/* ---------- ledger ---------- */
+.ll-ledger {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  padding: 22px 28px 14px;
   display: flex;
   flex-direction: column;
-  position: relative;
+  overflow: hidden;
 }
 
-.edge-toggle {
-  position: absolute;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 22px;
-  height: 46px;
-  border-radius: 11px;
+.ledger-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  padding-bottom: 16px;
+}
+
+.ledger-titleblock h2 {
+  margin: 4px 0 3px;
+  font-size: 30px;
+  line-height: 1.1;
+  font-weight: 600;
+}
+
+.ledger-subline {
+  color: var(--ll-muted);
+  font-size: 11.5px;
+}
+
+.ledger-tools {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding-top: 4px;
+}
+
+.ledger-filterbar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 38px;
+  padding: 0 0 10px;
+  border-bottom: 1px solid var(--ll-border-soft);
+}
+
+.filter-chips {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.filter-chip {
+  height: 25px;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ll-muted);
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+
+.filter-chip:hover {
+  color: var(--ll-text);
+  border-color: var(--ll-border-soft);
+}
+
+.filter-chip.active {
+  color: var(--ll-accent);
+  border-color: color-mix(in srgb, var(--ll-accent) 32%, transparent);
+  background: var(--ll-accent-wash);
+}
+
+.filter-hint {
+  margin-left: 6px;
+  font-size: 10.5px;
+  color: var(--ll-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.filter-selects {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ledger-loading {
+  flex: 1 1 auto;
   display: flex;
   align-items: center;
   justify-content: center;
-  border: 1px solid var(--guaxi-border);
-  color: var(--guaxi-text-secondary);
-  background: color-mix(in srgb, var(--guaxi-panel-bg) 90%, transparent);
-  cursor: pointer;
-  z-index: 6;
-  transition: all .2s ease;
-}
-
-.edge-toggle.left {
-  left: -12px;
-}
-
-.edge-toggle.right {
-  right: -12px;
-}
-
-.edge-toggle:hover {
-  border-color: var(--primary-color, #4acadb);
-  color: var(--primary-color, #4acadb);
-  transform: translateY(-50%) scale(1.04);
-}
-
-.table-toolbar {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-bottom: 8px;
-  align-items: center;
-}
-
-.table-toolbar-hint {
+  gap: 10px;
+  color: var(--ll-muted);
   font-size: 12px;
-  color: var(--guaxi-text-secondary);
-  padding: 3px 10px;
+}
+
+.ledger-table {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  margin: 0 -10px;
+  padding: 0 10px;
+}
+
+.ledger-thead,
+.ledger-row {
+  display: grid;
+  align-items: center;
+  gap: 10px;
+}
+
+.record-table .ledger-thead,
+.record-table .ledger-row {
+  grid-template-columns: 26px 34px 42px minmax(180px, 1fr) 140px 92px 92px;
+}
+
+.listening-table .ledger-thead,
+.listening-table .ledger-row {
+  grid-template-columns: 26px 34px minmax(200px, 1fr) 74px 132px 108px 30px;
+}
+
+.ledger-thead {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  height: 32px;
+  background: var(--ll-bg);
+  border-bottom: 1px solid var(--ll-border);
+  color: var(--ll-muted);
+  font-size: 9.5px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.ledger-row {
+  min-height: 58px;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--ll-border-soft);
+  cursor: pointer;
+  transition: background 0.13s ease, box-shadow 0.13s ease;
+}
+
+.ledger-row:hover {
+  background: color-mix(in srgb, var(--ll-accent) 5%, transparent);
+}
+
+.ledger-row.active {
+  background: color-mix(in srgb, var(--ll-accent) 8%, transparent);
+  box-shadow: inset 2px 0 0 var(--ll-accent);
+}
+
+.ledger-row.selected {
+  background: color-mix(in srgb, var(--ll-accent) 12%, transparent);
+}
+
+.ledger-row.error {
+  box-shadow: inset 2px 0 0 var(--ll-red);
+}
+
+.col-check {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.ledger-row .col-check :deep(.n-checkbox) {
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+
+.ledger-row:hover .col-check :deep(.n-checkbox),
+.ledger-row.selected .col-check :deep(.n-checkbox) {
+  opacity: 1;
+}
+
+.col-idx {
+  font-size: 10px;
+  color: var(--ll-muted);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.04em;
+}
+
+.col-main {
+  min-width: 0;
+}
+
+.row-title {
+  font-size: 15.5px;
+  line-height: 1.35;
+  color: var(--ll-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.row-translation,
+.row-sub {
+  margin-top: 2px;
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: var(--ll-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.row-sub {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.type-sigil {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: 1px solid var(--ll-border);
+  border-radius: 6px;
+  font-family: var(--ll-serif);
+  font-size: 11px;
+  color: var(--ll-muted);
+}
+
+.col-phon {
+  font-size: 11px;
+  color: var(--ll-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mastery-dots {
+  font-size: 9px;
+  letter-spacing: 2px;
+  color: var(--ll-amber);
+  white-space: nowrap;
+}
+
+.mastery-dots.large {
+  font-size: 12px;
+  letter-spacing: 3px;
+}
+
+.col-date,
+.col-duration {
+  font-size: 10.5px;
+  color: var(--ll-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.col-status {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.row-progress {
+  height: 2px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--ll-border) 70%, transparent);
+  overflow: hidden;
+}
+
+.row-progress span {
+  display: block;
+  height: 100%;
+  background: var(--ll-accent);
+  transition: width 0.4s ease;
+}
+
+.col-coverage {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+  color: var(--ll-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.coverage-track {
+  display: block;
+  width: 56px;
+  height: 3px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--ll-border) 70%, transparent);
+  overflow: hidden;
+}
+
+.coverage-track > span {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, var(--ll-accent), var(--ll-green));
+}
+
+.col-open {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  color: var(--ll-muted);
+  transition: all 0.15s ease;
+}
+
+.ledger-row:hover .col-open {
+  color: var(--ll-accent);
+  background: var(--ll-accent-wash);
+}
+
+.sync-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  width: fit-content;
+  max-width: 100%;
+  height: 21px;
+  padding: 0 8px;
   border-radius: 999px;
-  border: 1px dashed color-mix(in srgb, var(--primary-color, #4acadb) 34%, var(--guaxi-border));
-  background: color-mix(in srgb, var(--primary-color, #4acadb) 8%, var(--guaxi-panel-bg));
+  border: 1px solid var(--ll-border);
+  font-size: 10px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sync-chip.tone-pending {
+  color: var(--ll-muted);
+  border-color: var(--ll-border);
+}
+
+.sync-chip.tone-running {
+  color: color-mix(in srgb, var(--ll-accent) 84%, var(--ll-text));
+  border-color: color-mix(in srgb, var(--ll-accent) 38%, var(--ll-border));
+  background: var(--ll-accent-wash);
+}
+
+.sync-chip.tone-ready {
+  color: var(--ll-green);
+  border-color: color-mix(in srgb, var(--ll-green) 34%, var(--ll-border));
+  background: color-mix(in srgb, var(--ll-green) 8%, transparent);
+}
+
+.sync-chip.tone-partial {
+  color: color-mix(in srgb, var(--ll-amber) 82%, var(--ll-text));
+  border-color: color-mix(in srgb, var(--ll-amber) 34%, var(--ll-border));
+  background: color-mix(in srgb, var(--ll-amber) 8%, transparent);
+}
+
+.sync-chip.tone-error {
+  color: var(--ll-red);
+  border-color: color-mix(in srgb, var(--ll-red) 38%, var(--ll-border));
+  background: color-mix(in srgb, var(--ll-red) 8%, transparent);
 }
 
 .table-footer {
+  flex: 0 0 auto;
   display: flex;
   justify-content: flex-end;
+  padding-top: 10px;
+}
+
+/* ---------- empty / selection ---------- */
+.ledger-empty {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 30px;
+}
+
+.empty-card {
+  width: min(380px, 90%);
+  padding: 28px;
+  border: 1px dashed color-mix(in srgb, var(--ll-border) 80%, transparent);
+  border-radius: 12px;
+  text-align: center;
+  background:
+    repeating-linear-gradient(0deg, transparent, transparent 27px, color-mix(in srgb, var(--ll-border) 22%, transparent) 28px),
+    var(--ll-panel);
+}
+
+.empty-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  height: 42px;
+  margin-bottom: 12px;
+  border: 1px solid var(--ll-border);
+  border-radius: 50%;
+  font-family: var(--ll-serif);
+  font-size: 18px;
+  color: var(--ll-muted);
+}
+
+.empty-card h3 {
+  margin: 0 0 7px;
+  font-size: 20px;
+}
+
+.empty-card p {
+  margin: 0 0 16px;
+  color: var(--ll-muted);
+  font-size: 11.5px;
+  line-height: 1.7;
+}
+
+.selection-bar {
+  position: absolute;
+  left: 50%;
+  bottom: 18px;
+  transform: translateX(-50%);
+  z-index: 12;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 9px 7px 14px;
+  border: 1px solid var(--ll-accent-line);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--ll-panel) 94%, transparent);
+  box-shadow: var(--ll-shadow);
+  backdrop-filter: blur(10px);
+  animation: selectionUp 0.18s ease;
+}
+
+@keyframes selectionUp {
+  from { opacity: 0; transform: translate(-50%, 8px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}
+
+.selection-count {
+  font-size: 11px;
+  color: var(--ll-muted);
+  margin-right: 4px;
+  white-space: nowrap;
+}
+
+.selection-action {
+  height: 26px;
+  padding: 0 11px;
+  border: 1px solid var(--ll-border-soft);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ll-text);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.selection-action:hover {
+  border-color: var(--ll-accent-line);
+  color: var(--ll-accent);
+}
+
+.selection-action.danger:hover {
+  border-color: color-mix(in srgb, var(--ll-red) 50%, var(--ll-border));
+  color: var(--ll-red);
+}
+
+.selection-action.muted {
+  color: var(--ll-muted);
+}
+
+/* ---------- inspector ---------- */
+.ll-inspector {
+  min-height: 0;
+  overflow: auto;
+  border-left: 1px solid var(--ll-border);
+  padding: 18px 22px 26px;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--ll-amber) 3%, transparent), transparent 46%),
+    var(--ll-paper);
+}
+
+.inspector-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--ll-border-soft);
+}
+
+.icon-ghost {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ll-muted);
+  cursor: pointer;
+}
+
+.icon-ghost:hover {
+  color: var(--ll-text);
+  background: var(--ll-accent-wash);
+}
+
+.icon-ghost.danger:hover {
+  color: var(--ll-red);
+}
+
+.word-hero {
+  padding: 20px 0 16px;
+  border-bottom: 1px solid var(--ll-border-soft);
+}
+
+.word-overline {
+  font-size: 9.5px;
+  letter-spacing: 0.16em;
+  color: var(--ll-muted);
+  text-transform: uppercase;
+}
+
+.word-headword {
+  margin: 6px 0 10px;
+  font-size: 36px;
+  line-height: 1.06;
+  font-weight: 600;
+  word-break: break-word;
+}
+
+.word-phonetics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.phonetic-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 23px;
+  padding: 0 8px;
+  border: 1px solid var(--ll-border-soft);
+  border-radius: 999px;
+  font-size: 10.5px;
+  color: var(--ll-muted);
+  background: color-mix(in srgb, var(--ll-panel) 70%, transparent);
+}
+
+.phonetic-play {
+  display: inline-flex;
+  align-items: center;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ll-accent);
+  cursor: pointer;
+}
+
+.word-mastery {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.inspector-section {
+  padding: 15px 0;
+  border-bottom: 1px solid var(--ll-border-soft);
+}
+
+.inspector-section > .section-label {
+  margin-bottom: 9px;
+}
+
+.meaning-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: meaning;
+}
+
+.meaning-list li {
+  position: relative;
+  padding: 3px 0 3px 24px;
+  font-size: 12.5px;
+  line-height: 1.65;
+  counter-increment: meaning;
+}
+
+.meaning-list li::before {
+  content: counter(meaning, decimal-leading-zero);
+  position: absolute;
+  left: 0;
+  top: 5px;
+  font-size: 9px;
+  color: var(--ll-accent);
+  letter-spacing: 0.04em;
+}
+
+.example-line {
+  padding: 6px 0 6px 10px;
+  border-left: 1px solid var(--ll-border-soft);
+  margin-bottom: 5px;
+}
+
+.example-src {
+  font-family: var(--ll-serif);
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--ll-text);
+}
+
+.example-target {
+  margin-top: 2px;
+  font-size: 11px;
+  line-height: 1.55;
+  color: var(--ll-muted);
+}
+
+.relation-group {
+  display: flex;
+  gap: 8px;
+  padding: 4px 0;
+}
+
+.relation-label {
+  flex: 0 0 30px;
+  padding-top: 3px;
+  font-size: 10px;
+  color: var(--ll-muted);
+}
+
+.chip-wrap {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.word-chip {
+  display: inline-flex;
+  align-items: baseline;
+  padding: 2px 7px;
+  border: 1px solid var(--ll-border-soft);
+  border-radius: 5px;
+  font-size: 10.5px;
+  color: var(--ll-text);
+  background: color-mix(in srgb, var(--ll-panel) 72%, transparent);
+}
+
+.word-chip em {
+  font-style: normal;
+  color: var(--ll-muted);
+}
+
+.word-chip.warn {
+  border-color: color-mix(in srgb, var(--ll-amber) 28%, var(--ll-border));
+}
+
+.inspector-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  padding-top: 16px;
+}
+
+.entry-hero {
+  padding: 20px 0 14px;
+}
+
+.entry-source {
+  margin: 10px 0 14px;
+  padding: 0 0 0 16px;
+  border-left: 2px solid var(--ll-accent);
+  font-size: 20px;
+  line-height: 1.5;
+  font-weight: 500;
+}
+
+.entry-translation {
+  font-size: 13px;
+  line-height: 1.75;
+  color: var(--ll-muted);
+  padding-left: 18px;
+}
+
+.entry-meta {
+  display: flex;
+  gap: 12px;
+  margin-top: 16px;
+  padding-left: 18px;
+  font-size: 10px;
+  color: var(--ll-muted);
+}
+
+.audio-hero {
+  padding: 20px 0 14px;
+  border-bottom: 1px solid var(--ll-border-soft);
+}
+
+.audio-title {
+  margin: 7px 0 8px;
+  font-size: 24px;
+  line-height: 1.25;
+}
+
+.audio-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  font-size: 10.5px;
+  color: var(--ll-muted);
+}
+
+.sync-inspector-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.sync-message {
+  margin-top: 6px;
+  font-size: 10.5px;
+  color: var(--ll-muted);
+  line-height: 1.5;
+}
+
+.coverage-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  font-size: 10.5px;
+  color: var(--ll-muted);
+}
+
+.preview-transcript {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+.preview-transcript-line {
+  padding-left: 10px;
+  border-left: 1px solid var(--ll-border-soft);
+}
+
+.preview-transcript-line .transcript-source {
+  font-family: var(--ll-serif);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.preview-transcript-line .transcript-target {
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--ll-muted);
+  margin-top: 1px;
+}
+
+.detail-content {
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--ll-muted);
+  white-space: pre-wrap;
+}
+
+.inspector-empty {
+  padding: 60px 20px;
+  text-align: center;
+}
+
+.inspector-empty h3 {
+  margin: 8px 0 7px;
+  font-size: 20px;
+}
+
+.inspector-empty p {
+  margin: 0;
+  color: var(--ll-muted);
+  font-size: 11.5px;
+  line-height: 1.7;
+}
+
+/* ---------- immersive studio ---------- */
+.is-immersive {
+  background: var(--ll-bg);
+}
+
+.ll-studio {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.studio-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding: 14px 22px;
+  border-bottom: 1px solid var(--ll-border);
+  background: color-mix(in srgb, var(--ll-panel) 82%, transparent);
+}
+
+.studio-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 30px;
+  padding: 0 9px 0 5px;
+  border: 1px solid var(--ll-border-soft);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ll-muted);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.studio-back:hover {
+  color: var(--ll-accent);
+  border-color: var(--ll-accent-line);
+}
+
+.studio-titleblock {
+  min-width: 0;
+}
+
+.studio-titleblock .eyebrow {
+  margin-bottom: 3px;
+}
+
+.studio-title {
+  margin: 0;
+  font-size: 24px;
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.studio-headmeta {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.studio-duration {
+  font-size: 11px;
+  color: var(--ll-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.studio-grid {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(340px, 42%) minmax(0, 1fr);
+}
+
+.studio-player {
+  min-height: 0;
+  overflow: auto;
+  padding: 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  border-right: 1px solid var(--ll-border);
+}
+
+.player-sheet {
+  position: relative;
+  border: 1px solid var(--ll-border);
+  border-radius: 12px;
+  padding: 14px;
+  background:
+    radial-gradient(120% 120% at 20% 0%, color-mix(in srgb, var(--ll-accent) 9%, transparent), transparent 60%),
+    color-mix(in srgb, var(--ll-panel) 94%, #000 6%);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, #fff 5%, transparent);
+}
+
+.listening-player {
+  width: 100%;
+  display: block;
+}
+
+.listening-video-player {
+  max-height: 300px;
+  border-radius: 7px;
+  background: #000;
+}
+
+.player-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.player-hint {
+  margin-left: auto;
+  font-size: 10px;
+  color: var(--ll-muted);
+}
+
+.sync-sheet {
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--ll-accent) 24%, var(--ll-border));
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--ll-accent) 5%, transparent);
+}
+
+.sync-sheet-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 7px;
+}
+
+.sync-percent {
+  font-size: 10px;
+  color: var(--ll-accent);
+  font-variant-numeric: tabular-nums;
+}
+
+.studio-verdict {
+  padding: 12px;
+  border: 1px solid var(--ll-border-soft);
+  border-radius: 9px;
+  background: var(--ll-panel);
+}
+
+.verdict-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 9px;
+}
+
+.verdict-btn {
+  flex: 1;
+  height: 31px;
+  border: 1px solid var(--ll-border-soft);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--ll-text);
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.verdict-btn:hover {
+  background: var(--ll-accent-wash);
+  border-color: var(--ll-accent-line);
+}
+
+.verdict-btn.known:hover { color: var(--ll-green); border-color: color-mix(in srgb, var(--ll-green) 46%, var(--ll-border)); }
+.verdict-btn.fuzzy:hover { color: var(--ll-amber); border-color: color-mix(in srgb, var(--ll-amber) 46%, var(--ll-border)); }
+.verdict-btn.unknown:hover { color: var(--ll-red); border-color: color-mix(in srgb, var(--ll-red) 46%, var(--ll-border)); }
+
+.studio-facts {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+.fact {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 11px;
+  color: var(--ll-text);
+}
+
+.studio-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: auto;
+}
+
+.studio-transcript {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 16px 22px 8px;
+}
+
+.transcript-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--ll-border-soft);
+}
+
+.transcript-sub {
+  margin-top: 3px;
+  font-size: 10.5px;
+  color: var(--ll-muted);
+}
+
+.transcript-tools {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.seg-group {
+  display: inline-flex;
+  padding: 2px;
+  border: 1px solid var(--ll-border-soft);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--ll-panel) 80%, transparent);
+}
+
+.seg-group.small .seg-btn {
+  height: 20px;
+  padding: 0 7px;
+  font-size: 9.5px;
+}
+
+.seg-btn {
+  height: 23px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--ll-muted);
+  font: inherit;
+  font-size: 10.5px;
+  cursor: pointer;
+  transition: all 0.14s ease;
+  white-space: nowrap;
+}
+
+.seg-btn:hover {
+  color: var(--ll-text);
+}
+
+.seg-btn.active {
+  background: color-mix(in srgb, var(--ll-accent) 14%, var(--ll-panel));
+  color: var(--ll-accent);
+}
+
+.subtitle-toggle {
+  border: 1px solid var(--ll-border-soft);
+  border-radius: 6px;
+}
+
+.font-stepper {
+  display: inline-flex;
+  border: 1px solid var(--ll-border-soft);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.font-stepper button {
+  width: 28px;
+  height: 25px;
+  border: 0;
+  background: transparent;
+  color: var(--ll-muted);
+  font: inherit;
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.font-stepper button + button {
+  border-left: 1px solid var(--ll-border-soft);
+}
+
+.font-stepper button:hover {
+  color: var(--ll-accent);
+  background: var(--ll-accent-wash);
+}
+
+.transcript-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 10px 6px 40px 0;
+  scroll-behavior: smooth;
+}
+
+.transcript-line {
+  display: flex;
+  gap: 12px;
+  padding: 9px 12px 9px 10px;
+  border-left: 2px solid transparent;
+  border-radius: 0 7px 7px 0;
+  cursor: pointer;
+  transition: background 0.13s ease, border-color 0.13s ease;
+}
+
+.transcript-line:hover,
+.transcript-line.hovered {
+  background: color-mix(in srgb, var(--ll-accent) 5%, transparent);
+}
+
+.transcript-line.active {
+  background: color-mix(in srgb, var(--ll-accent) 9%, transparent);
+  border-left-color: var(--ll-accent);
+}
+
+.transcript-index {
+  flex: 0 0 20px;
+  padding-top: 3px;
+  font-size: 9px;
+  color: var(--ll-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.transcript-body {
+  min-width: 0;
+}
+
+.transcript-source {
+  font-family: var(--ll-serif);
+  font-size: calc(15px * var(--transcript-font-scale, 1.1));
+  line-height: 1.55;
+  color: var(--ll-text);
+}
+
+.transcript-line.active .transcript-source {
+  color: color-mix(in srgb, var(--ll-accent) 40%, var(--ll-text));
+}
+
+.transcript-target {
+  margin-top: 2px;
+  font-size: calc(12px * var(--transcript-font-scale, 1.1));
+  line-height: 1.55;
+  color: var(--ll-muted);
+}
+
+.transcript-empty {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  align-items: center;
+  gap: 30px;
+  padding: 20px 8% 40px;
+}
+
+.skeleton-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  opacity: 0.6;
+}
+
+.skeleton-stack span {
+  display: block;
+  height: 13px;
+  border-radius: 4px;
+  background: linear-gradient(90deg,
+    color-mix(in srgb, var(--ll-border) 45%, transparent) 25%,
+    color-mix(in srgb, var(--ll-border) 80%, transparent) 37%,
+    color-mix(in srgb, var(--ll-border) 45%, transparent) 63%);
+  background-size: 400% 100%;
+  animation: llShimmer 1.6s ease infinite;
+}
+
+@keyframes llShimmer {
+  0% { background-position: 100% 50%; }
+  100% { background-position: 0 50%; }
+}
+
+.transcript-empty-copy h3 {
+  margin: 8px 0 8px;
+  font-size: 26px;
+}
+
+.transcript-empty-copy p {
+  margin: 0 0 16px;
+  max-width: 360px;
+  color: var(--ll-muted);
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+.empty-progress {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: 300px;
+  font-size: 10px;
+  color: var(--ll-accent);
+}
+
+.empty-progress :deep(.n-progress) {
+  flex: 1;
+}
+
+/* ---------- review ---------- */
+.ll-review {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 18px 24px 22px;
+}
+
+.review-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--ll-border);
+}
+
+.review-titleblock h1 {
+  margin: 2px 0 0;
+  font-size: 28px;
+  line-height: 1.1;
+}
+
+.review-counter {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--ll-muted);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.08em;
+}
+
+.review-grid {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 190px minmax(0, 1fr) 250px;
+  gap: 18px;
+  padding-top: 18px;
+}
+
+.review-side {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding-right: 16px;
+  border-right: 1px solid var(--ll-border-soft);
+}
+
+.review-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.review-stat strong {
+  font-family: var(--ll-serif);
+  font-size: 22px;
+  font-weight: 600;
+}
+
+.review-stat .rail-meter {
+  margin-top: 4px;
+}
+
+.review-keys {
+  margin-top: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding-top: 14px;
+  border-top: 1px solid var(--ll-border-soft);
+  font-size: 10px;
+  color: var(--ll-muted);
+  line-height: 1.6;
+}
+
+kbd {
+  display: inline-block;
+  min-width: 18px;
+  padding: 1px 4px;
+  border: 1px solid var(--ll-border);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  background: var(--ll-panel);
+  font: inherit;
+  font-size: 9px;
+  text-align: center;
+}
+
+.review-card2 {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 18px 22px;
+  border: 1px solid var(--ll-border);
+  border-radius: 12px;
+  background:
+    repeating-linear-gradient(0deg, transparent, transparent 31px, color-mix(in srgb, var(--ll-border) 14%, transparent) 32px),
+    var(--ll-panel);
+  overflow: auto;
+}
+
+.review-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.type-chip {
+  display: inline-flex;
+  align-items: center;
+  height: 21px;
+  padding: 0 8px;
+  border: 1px solid var(--ll-border-soft);
+  border-radius: 999px;
+  font-size: 9.5px;
+  letter-spacing: 0.06em;
+  color: var(--ll-muted);
+}
+
+.review-front {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 34px 12px;
+  text-align: center;
+}
+
+.review-word {
+  font-size: clamp(38px, 5.2vw, 64px);
+  line-height: 1.05;
+  word-break: break-word;
+}
+
+.review-phonetic {
+  margin-top: 12px;
+  font-size: 12px;
+  color: var(--ll-muted);
+}
+
+.review-prompt {
+  margin-top: 22px;
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--ll-muted) 76%, transparent);
+}
+
+.review-text {
+  max-width: 680px;
+  margin: 0;
+  padding: 0 0 0 18px;
+  border-left: 2px solid var(--ll-accent);
+  text-align: left;
+  font-family: var(--ll-serif);
+  font-size: clamp(20px, 2.6vw, 30px);
+  line-height: 1.5;
+}
+
+.review-listening {
+  width: min(560px, 100%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+
+.review-listening-player {
+  width: 100%;
+}
+
+.review-answer {
+  flex: 0 0 auto;
+  max-height: 46%;
+  overflow: auto;
+  padding: 4px 2px 12px;
+}
+
+.answer-rule {
+  height: 1px;
+  margin-bottom: 14px;
+  background: linear-gradient(90deg, var(--ll-accent), transparent 70%);
+}
+
+.answer-meta {
+  display: flex;
+  gap: 16px;
+  font-size: 10.5px;
+  color: var(--ll-muted);
+}
+
+.answer-text {
+  margin-top: 8px;
+  font-size: 13.5px;
+  line-height: 1.75;
+}
+
+.answer-examples {
+  margin-top: 14px;
+}
+
+.answer-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.review-transcript-list {
+  max-height: 280px;
+  padding-right: 6px;
+}
+
+.review-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-top: 12px;
+  border-top: 1px solid var(--ll-border-soft);
+}
+
+.review-grade {
+  display: flex;
+  gap: 5px;
+}
+
+.review-nav {
+  margin-left: auto;
+  display: flex;
+  gap: 3px;
+}
+
+.review-filters {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding-left: 16px;
+  border-left: 1px solid var(--ll-border-soft);
+}
+
+.filter-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 10.5px;
+  color: var(--ll-muted);
+}
+
+.review-filter-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
   margin-top: 8px;
 }
 
+.reveal-answer-enter-active,
+.reveal-answer-leave-active {
+  transition: opacity 0.18s ease, transform 0.18s ease;
+}
+
+.reveal-answer-enter-from,
+.reveal-answer-leave-to {
+  opacity: 0;
+  transform: translateY(6px);
+}
+
+.review-empty {
+  align-self: center;
+  justify-self: center;
+}
+
+/* ---------- random board ---------- */
 .random-board {
+  flex: 1 1 auto;
+  min-height: 0;
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  min-height: 640px;
+  gap: 12px;
+  padding-top: 4px;
+  overflow: auto;
 }
 
 .random-board-head {
   display: flex;
   align-items: center;
   gap: 10px;
-  color: var(--guaxi-text-secondary);
+  color: var(--ll-muted);
+  font-size: 11px;
+}
+
+.random-topic {
+  color: var(--ll-text);
 }
 
 .random-deck-index {
-  font-size: 12px;
   padding: 2px 8px;
+  border: 1px solid var(--ll-border-soft);
   border-radius: 999px;
-  border: 1px solid var(--guaxi-border);
+  font-size: 10px;
 }
 
 .random-board-actions {
   margin-left: auto;
   display: flex;
-  gap: 6px;
+  gap: 5px;
 }
 
 .random-cards-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
+  min-height: 0;
 }
 
 .random-board-card {
-  min-height: 520px;
+  min-height: 460px;
   perspective: 1400px;
-  animation: cardPop .22s ease;
+  animation: cardPop 0.2s ease;
+}
+
+@keyframes cardPop {
+  from { opacity: 0; transform: translateY(5px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
 .random-card-flip {
   position: relative;
   width: 100%;
-  min-height: 520px;
+  min-height: 460px;
   transform-style: preserve-3d;
-  transition: transform .38s ease;
+  transition: transform 0.38s cubic-bezier(0.2, 0.7, 0.2, 1);
 }
 
 .random-card-flip.flipped {
@@ -4200,882 +6785,346 @@ onBeforeUnmount(() => {
 .random-card-face {
   position: absolute;
   inset: 0;
-  border: 1px solid var(--guaxi-border);
-  border-radius: 14px;
-  padding: 12px;
   display: flex;
   flex-direction: column;
   gap: 10px;
+  padding: 15px;
+  border: 1px solid var(--ll-border);
+  border-radius: 12px;
   backface-visibility: hidden;
-  background: linear-gradient(155deg, color-mix(in srgb, var(--guaxi-panel-bg) 93%, #8dd2ff 7%), color-mix(in srgb, var(--guaxi-panel-bg) 93%, #89f0cb 7%));
+  background:
+    linear-gradient(160deg, color-mix(in srgb, var(--ll-accent) 5%, transparent), transparent 55%),
+    var(--ll-panel);
   overflow: auto;
+}
+
+.random-card-face.is-listening {
+  background:
+    linear-gradient(160deg, color-mix(in srgb, var(--ll-amber) 5%, transparent), transparent 55%),
+    var(--ll-panel);
 }
 
 .random-card-face.back {
   transform: rotateY(180deg);
-  background: linear-gradient(155deg, color-mix(in srgb, var(--guaxi-panel-bg) 93%, #b7b8ff 7%), color-mix(in srgb, var(--guaxi-panel-bg) 93%, #8df0d5 7%));
-}
-
-.random-card-face-listening-front {
-  overflow: hidden;
-}
-
-.random-card-face-listening-back {
-  overflow: hidden;
 }
 
 .random-card-type {
-  font-size: 12px;
-  color: var(--guaxi-text-secondary);
+  font-size: 9px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ll-muted);
 }
 
 .random-card-word {
-  font-size: 24px;
-  font-weight: 700;
-  line-height: 1.2;
+  font-size: 28px;
+  line-height: 1.15;
+  word-break: break-word;
 }
 
 .random-card-phonetic {
-  color: var(--guaxi-text-secondary);
-  font-size: 12px;
+  font-size: 11px;
+  color: var(--ll-muted);
 }
 
 .random-card-text {
-  line-height: 1.55;
-  white-space: pre-wrap;
-  word-break: break-word;
-  font-size: 13px;
-}
-
-.random-card-listening-main {
-  flex: 1 1 auto;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  overflow: hidden;
-}
-
-.random-card-word-main {
-  flex: 1 1 auto;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.random-card-listening-main-scroll {
-  overflow-y: auto;
-  padding-right: 2px;
-  scrollbar-width: thin;
-  scrollbar-color: color-mix(in srgb, var(--primary-color, #4acadb) 32%, transparent) transparent;
-}
-
-.random-card-listening-main-scroll:focus-visible {
-  outline: 1px solid color-mix(in srgb, var(--primary-color, #4acadb) 42%, transparent);
-  outline-offset: 2px;
-  border-radius: 8px;
-}
-
-.random-card-listening-main-scroll::-webkit-scrollbar {
-  width: 6px;
-}
-
-.random-card-listening-main-scroll::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.random-card-listening-main-scroll::-webkit-scrollbar-thumb {
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--primary-color, #4acadb) 28%, transparent);
-}
-
-.random-card-listening-main-scroll::-webkit-scrollbar-thumb:hover {
-  background: color-mix(in srgb, var(--primary-color, #4acadb) 42%, transparent);
-}
-
-.random-card-text-clamped {
-  overflow: hidden;
-}
-
-.random-card-audio-row {
-  margin-top: auto;
-  min-height: 58px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-}
-
-.random-card-subtitle {
-  font-size: 12px;
-  color: var(--guaxi-text-secondary);
-}
-
-.random-card-list {
-  border-top: 1px dashed var(--guaxi-border);
-  padding-top: 8px;
-}
-
-.random-card-answer {
-  border-top: 1px dashed var(--guaxi-border);
-  padding-top: 8px;
-  color: color-mix(in srgb, var(--primary-color, #4acadb) 70%, var(--guaxi-text-primary));
+  font-size: 11.5px;
   line-height: 1.6;
+  color: var(--ll-muted);
   white-space: pre-wrap;
   word-break: break-word;
 }
 
-.random-audio-action {
-  margin-inline: auto;
-  width: 54px;
-  height: 54px;
-  border-radius: 999px;
-  border: 1px solid var(--guaxi-border);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  cursor: pointer;
-  color: var(--primary-color, #4acadb);
-  background: color-mix(in srgb, var(--guaxi-panel-bg) 84%, transparent);
-  transition: transform .2s ease, border-color .2s ease, box-shadow .2s ease, background-color .2s ease;
-}
-
-.random-audio-action.idle {
-  color: color-mix(in srgb, var(--guaxi-text-secondary) 78%, var(--primary-color, #4acadb));
-  border-color: color-mix(in srgb, var(--guaxi-border) 88%, transparent);
-  background: color-mix(in srgb, var(--guaxi-panel-bg) 92%, transparent);
-}
-
-.random-audio-action.paused {
-  color: color-mix(in srgb, #f59f00 78%, var(--guaxi-text-primary));
-  border-color: color-mix(in srgb, #f59f00 42%, var(--guaxi-border));
-  background: color-mix(in srgb, #f59f00 12%, var(--guaxi-panel-bg));
-}
-
-.random-audio-action:hover {
-  transform: scale(1.06);
-  border-color: var(--primary-color, #4acadb);
-}
-
-.random-audio-action.playing {
-  color: var(--primary-color, #4acadb);
-  border-color: color-mix(in srgb, var(--primary-color, #4acadb) 80%, var(--guaxi-border));
-  background: color-mix(in srgb, var(--primary-color, #4acadb) 14%, var(--guaxi-panel-bg));
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary-color, #4acadb) 22%, transparent);
-  animation: randomAudioPulse 1.25s ease-in-out infinite;
-}
-
-@keyframes randomAudioPulse {
-  0% {
-    transform: scale(1);
-  }
-  50% {
-    transform: scale(1.08);
-  }
-  100% {
-    transform: scale(1);
-  }
-}
-
-.listening-toolbar {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-bottom: 8px;
-  align-items: center;
-}
-
-.listening-toolbar-circle-btn {
-  width: 28px;
-  min-width: 28px;
-  height: 28px;
-  padding: 0;
-}
-
-.listening-toolbar-circle-btn :deep(.n-button__content) {
-  width: 100%;
-  height: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.listening-toolbar-circle-btn :deep(.n-button__icon) {
-  margin-right: 0 !important;
-}
-
-.listening-toolbar-circle-btn :deep(.n-base-loading) {
-  margin-right: 0 !important;
-}
-
-.listening-info-panel {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.middle-table-card :deep(.n-card__content) {
-  flex: 1 1 auto;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-}
-
-.manager-data-table {
-  flex: 1 1 auto;
-  min-height: 0;
-}
-
-.middle-table-card :deep(.n-data-table-tbody .n-data-table-tr) {
-  cursor: pointer;
-}
-
-.middle-table-card :deep(.n-data-table-tbody .n-data-table-tr:hover) {
-  background: color-mix(in srgb, var(--primary-color, #4acadb) 10%, var(--guaxi-panel-bg));
-}
-
-.list-item-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.list-item-title {
-  font-weight: 600;
-}
-
-.list-item-sub {
-  margin-top: 4px;
-  color: var(--guaxi-text-secondary);
-  line-height: 1.45;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-.topic-cell {
-  max-width: 100%;
-  padding: 2px 8px;
-  border-radius: 999px;
-  border: 1px solid color-mix(in srgb, var(--primary-color, #4acadb) 34%, var(--guaxi-border));
-  background: color-mix(in srgb, var(--primary-color, #4acadb) 8%, var(--guaxi-panel-bg));
-  color: color-mix(in srgb, var(--primary-color, #4acadb) 78%, var(--guaxi-text-primary));
+.random-card-text.clamped {
+  display: -webkit-box;
+  -webkit-line-clamp: 6;
+  -webkit-box-orient: vertical;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.mastery-stars {
-  font-size: 12px;
-  color: #f5a524;
-  letter-spacing: 1px;
-}
-
-.right-detail-card {
-  overflow: auto;
-}
-
-.immersive-global-back {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  justify-content: flex-start;
-  margin-bottom: 12px;
-}
-
-.immersive-back-btn {
-  width: 34px;
-  height: 34px;
-  border-radius: 999px;
-  border: 1px solid color-mix(in srgb, var(--primary-color, #4acadb) 46%, var(--guaxi-border));
-  background: linear-gradient(135deg, color-mix(in srgb, var(--primary-color, #4acadb) 22%, var(--guaxi-panel-bg)), var(--guaxi-panel-bg));
-  box-shadow: 0 8px 18px color-mix(in srgb, var(--primary-color, #4acadb) 24%, transparent);
-  transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease, background-color .18s ease;
-}
-
-.immersive-back-btn:hover {
-  transform: translateY(-1px) scale(1.06);
-  border-color: color-mix(in srgb, var(--primary-color, #4acadb) 78%, var(--guaxi-border));
-  box-shadow: 0 10px 22px color-mix(in srgb, var(--primary-color, #4acadb) 34%, transparent);
-}
-
-.immersive-back-btn:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--primary-color, #4acadb) 62%, transparent);
-  outline-offset: 2px;
-}
-
-.immersive-title {
-  font-size: 18px;
-  font-weight: 700;
-  color: var(--guaxi-text-primary);
-  padding: 4px 12px;
-  border-radius: 999px;
-  border: 1px solid color-mix(in srgb, var(--primary-color, #4acadb) 30%, var(--guaxi-border));
-  background: color-mix(in srgb, var(--primary-color, #4acadb) 10%, var(--guaxi-header-bg));
-}
-
-.listening-detail-layout {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 12px;
-}
-
-.listening-detail-layout.immersive {
-  flex: 1 1 auto;
-  min-height: 0;
-  height: 100%;
-}
-
-.listening-player-pane,
-.listening-transcript-pane {
-  min-height: 0;
-  height: 100%;
-}
-
-.listening-player-pane {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.immersive-media-shell {
-  border: 1px solid color-mix(in srgb, var(--primary-color, #4acadb) 24%, var(--guaxi-border));
-  border-radius: 16px;
-  padding: 8px;
-  background: linear-gradient(155deg, color-mix(in srgb, var(--primary-color, #4acadb) 10%, var(--guaxi-panel-bg)), var(--guaxi-panel-bg));
-}
-
-.listening-video-player {
-  min-height: 260px;
-  background: #0f1721;
-  object-fit: contain;
-}
-
-.listening-player-topbar {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 8px;
-}
-
-.listening-player {
-  width: 100%;
-  margin-top: 8px;
-  margin-bottom: 12px;
-  border-radius: 14px;
-  border: 1px solid color-mix(in srgb, var(--primary-color, #4acadb) 26%, var(--guaxi-border));
-  background: linear-gradient(135deg, color-mix(in srgb, var(--primary-color, #4acadb) 10%, var(--guaxi-panel-bg)), var(--guaxi-panel-bg));
-  box-shadow: 0 8px 24px color-mix(in srgb, var(--primary-color, #4acadb) 18%, transparent);
-  accent-color: var(--primary-color, #4acadb);
-}
-
-.listening-player::-webkit-media-controls-panel {
-  background: transparent;
-}
-
-.listening-player::-webkit-media-controls-play-button,
-.listening-player::-webkit-media-controls-mute-button {
-  filter: saturate(1.15) contrast(1.08);
-}
-
-.playback-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 8px;
-  padding: 8px 10px;
-  border-radius: 10px;
-  border: 1px solid var(--guaxi-border);
-  background: color-mix(in srgb, var(--guaxi-panel-bg) 92%, var(--primary-color, #4acadb));
-}
-
-.transcript-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.transcript-head-actions {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.transcript-mode-btn {
-  width: 32px;
-  height: 32px;
-  border-radius: 999px;
-  border: 1px solid color-mix(in srgb, var(--primary-color, #4acadb) 46%, var(--guaxi-border));
-  color: var(--primary-color, #4acadb);
-  background: color-mix(in srgb, var(--primary-color, #4acadb) 12%, var(--guaxi-panel-bg));
-  box-shadow: 0 6px 16px color-mix(in srgb, var(--primary-color, #4acadb) 24%, transparent);
-}
-
-.transcript-font-btn {
-  width: 32px;
-  height: 32px;
-  font-size: 11px;
-  font-weight: 700;
-  border-radius: 999px;
-  border: 1px solid color-mix(in srgb, var(--primary-color, #4acadb) 40%, var(--guaxi-border));
-  background: color-mix(in srgb, var(--primary-color, #4acadb) 10%, var(--guaxi-panel-bg));
-  color: color-mix(in srgb, var(--primary-color, #4acadb) 86%, var(--guaxi-text-primary));
-}
-
-.listening-transcript-pane {
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-}
-
-.transcript-list {
-  border: 1px solid var(--guaxi-border);
-  border-radius: 10px;
-  padding: 8px 10px;
-  flex: 1 1 auto;
-  min-height: 0;
-  max-height: none;
-  overflow-y: auto;
-  overflow-x: hidden;
-  background: var(--guaxi-panel-bg);
-}
-
-.transcript-line {
-  display: block;
-  width: 100%;
-  max-width: 100%;
-  box-sizing: border-box;
-  line-height: 1.72;
-  padding: 7px 10px;
-  border-radius: 6px;
-  border: 1px solid transparent;
-  color: var(--guaxi-text-secondary);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  word-break: break-word;
-  cursor: pointer;
-  transform-origin: center left;
-  transition: background-color 0.18s ease, border-color 0.18s ease, transform 0.2s ease, box-shadow 0.2s ease, color 0.18s ease;
-}
-
-.transcript-line.hovered {
-  background: color-mix(in srgb, var(--primary-color, #4acadb) 8%, var(--guaxi-panel-bg));
-}
-
-.transcript-line.active {
-  background: color-mix(in srgb, var(--primary-color, #4acadb) 20%, var(--guaxi-panel-bg));
-  border-color: color-mix(in srgb, var(--primary-color, #4acadb) 62%, var(--guaxi-border));
-  color: var(--guaxi-text-primary);
-  transform: scale(1.018);
-  box-shadow: 0 10px 24px color-mix(in srgb, var(--primary-color, #4acadb) 32%, transparent);
-  border-left: 4px solid var(--primary-color, #4acadb);
-  padding-left: 12px;
-}
-
-.transcript-line.active .transcript-source {
-  color: var(--guaxi-text-primary);
-  font-weight: 700;
-  text-shadow: 0 0 12px color-mix(in srgb, var(--primary-color, #4acadb) 38%, transparent);
-}
-
-.transcript-line.active .transcript-target {
-  color: color-mix(in srgb, var(--primary-color, #4acadb) 82%, var(--guaxi-text-primary));
-}
-
-.transcript-source {
-  font-size: calc(16px * var(--transcript-font-scale, 1));
-  line-height: 1.65;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  word-break: break-word;
-}
-
-.transcript-target {
-  margin-top: 3px;
-  color: color-mix(in srgb, var(--primary-color, #4acadb) 72%, var(--guaxi-text-primary));
-  font-size: calc(15px * var(--transcript-font-scale, 1));
-  line-height: 1.62;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  word-break: break-word;
-}
-
-.word-detail-head {
-  border: 1px solid var(--guaxi-border);
-  border-radius: 10px;
-  padding: 10px 12px;
-  margin-bottom: 10px;
-  background: color-mix(in srgb, var(--guaxi-header-bg) 70%, transparent);
-}
-
-.word-detail-title {
-  font-size: 28px;
-  font-weight: 700;
-  line-height: 1.05;
-}
-
-.word-detail-meta {
-  margin-top: 8px;
-  color: var(--guaxi-text-secondary);
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-}
-
-.phonetic-row {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.detail-block {
-  margin-bottom: 12px;
-}
-
-.detail-label {
-  font-size: 12px;
-  color: var(--guaxi-text-secondary);
-  margin-bottom: 6px;
-}
-
-.detail-label.tiny {
-  font-size: 12px;
-  opacity: 0.85;
-  margin-top: 6px;
-}
-
-.detail-content {
-  border: 1px solid var(--guaxi-border);
-  border-radius: 8px;
-  padding: 8px 10px;
-  line-height: 1.56;
-  white-space: pre-wrap;
-  word-break: break-word;
-  background: var(--guaxi-panel-bg);
-}
-
-.source-manager-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 12px;
-}
-
-.source-manager-list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  max-height: 420px;
-  overflow: auto;
-}
-
-.source-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  border: 1px solid var(--guaxi-border);
-  border-radius: 8px;
-  padding: 8px;
-}
-
-.collect-source-hint {
-  font-size: 12px;
-  line-height: 1.6;
-  color: var(--guaxi-text-secondary);
-  padding: 6px 10px;
-  border-radius: 8px;
-  border: 1px dashed color-mix(in srgb, #f0a020 45%, var(--guaxi-border));
-  background: color-mix(in srgb, #f0a020 12%, var(--guaxi-panel-bg));
-}
-
-.chip-wrap {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.example-line {
-  border: 1px solid var(--guaxi-border);
-  border-radius: 8px;
-  padding: 8px 10px;
-  margin-bottom: 6px;
-  line-height: 1.5;
-}
-
-.example-src {
-  line-height: 1.55;
-}
-
-.example-target {
-  margin-top: 4px;
-  line-height: 1.55;
-  color: color-mix(in srgb, var(--primary-color, #4acadb) 70%, var(--guaxi-text-primary));
-}
-
-.detail-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  padding: 8px 10px;
-  border: 1px solid var(--guaxi-border);
-  border-radius: 10px;
-  background: color-mix(in srgb, var(--guaxi-panel-bg) 93%, var(--primary-color, #4acadb));
-}
-
-.review-layout {
-  height: calc(100vh - 150px);
-  display: grid;
-  grid-template-columns: 340px 1fr 360px;
-  gap: 10px;
-}
-
-.review-stat-card {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.review-stat-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
-}
-
-.stat-cell {
-  border: 1px solid var(--guaxi-border);
-  border-radius: 10px;
-  padding: 10px;
-  background: color-mix(in srgb, var(--guaxi-panel-bg) 86%, transparent);
-}
-
-.stat-label {
-  font-size: 12px;
-  color: var(--guaxi-text-secondary);
-}
-
-.stat-value {
-  margin-top: 4px;
-  font-size: 24px;
-  font-weight: 700;
-  color: var(--guaxi-text-primary);
-}
-
-.mastery-bar-track {
-  height: 10px;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--guaxi-border) 75%, transparent);
-  overflow: hidden;
-}
-
-.mastery-bar-fill {
-  height: 100%;
-  background: linear-gradient(90deg, #4acadb 0%, #6ed4a1 100%);
-}
-
-.review-card-panel {
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-}
-
-.review-topbar {
-  display: flex;
-  justify-content: space-between;
-  gap: 8px;
-  margin-bottom: 10px;
-}
-
-.review-card {
-  border: 1px solid var(--guaxi-border);
-  border-radius: 14px;
-  padding: 16px;
-  background: linear-gradient(160deg, color-mix(in srgb, var(--guaxi-panel-bg) 95%, #7cc8ff 5%) 0%, color-mix(in srgb, var(--guaxi-panel-bg) 95%, #87f6c9 5%) 100%);
-  min-height: 420px;
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-}
-
-.review-card-type {
-  display: flex;
-  justify-content: space-between;
-  font-size: 12px;
-  color: var(--guaxi-text-secondary);
-}
-
-.review-card-front {
-  border: 1px solid var(--guaxi-border);
-  border-radius: 12px;
-  padding: 16px;
-  min-height: 150px;
-  background: var(--guaxi-panel-bg);
-}
-
-.review-word {
-  font-size: 40px;
-  font-weight: 700;
-  line-height: 1.08;
-}
-
-.review-phonetic {
-  margin-top: 10px;
-  font-size: 14px;
-  color: var(--guaxi-text-secondary);
-}
-
-.review-text {
-  white-space: pre-wrap;
-  word-break: break-word;
-  line-height: 1.7;
-  font-size: 18px;
-}
-
-.review-listening-player-wrap {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.review-listening-player {
-  width: 100%;
-}
-
-.review-card-answer {
-  border: 1px solid var(--guaxi-border);
-  border-radius: 12px;
-  padding: 14px;
-  background: linear-gradient(160deg, color-mix(in srgb, var(--guaxi-header-bg) 74%, transparent) 0%, color-mix(in srgb, var(--guaxi-panel-bg) 92%, #8fb8ff 8%) 100%);
-}
-
-.review-answer-title {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--guaxi-text-secondary);
-  margin-bottom: 6px;
-}
-
-.review-answer-title-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.review-answer-meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-bottom: 8px;
-}
-
-.review-answer-chip {
-  border: 1px solid var(--guaxi-border);
-  border-radius: 999px;
-  padding: 3px 10px;
-  font-size: 12px;
-  background: color-mix(in srgb, var(--guaxi-panel-bg) 92%, transparent);
-}
-
-.review-answer-text {
-  line-height: 1.65;
-  font-size: 15px;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-.review-transcript-list {
-  max-height: 280px;
-}
-
-.review-examples {
-  margin-top: 10px;
-}
-
-.review-example-item {
-  border: 1px solid var(--guaxi-border);
-  border-radius: 10px;
-  padding: 8px 10px;
-  margin-top: 6px;
-  background: color-mix(in srgb, var(--guaxi-panel-bg) 90%, transparent);
-}
-
-.review-answer-target {
-  margin-top: 4px;
-  color: color-mix(in srgb, var(--primary-color, #4acadb) 72%, var(--guaxi-text-primary));
-}
-
-.review-actions {
-  margin-top: auto;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.audio-form-card {
-  overflow: auto;
-}
-
-@keyframes cardPop {
-  from {
-    opacity: 0;
-    transform: translateY(8px) scale(0.98);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-  }
 }
 
 .random-card-head-row {
   display: flex;
-  justify-content: space-between;
   align-items: flex-start;
-  margin-bottom: 8px;
-}
-
-.random-card-stars {
-  font-size: 14px;
-  color: #f5a524;
-  letter-spacing: 2px;
+  justify-content: space-between;
+  gap: 10px;
 }
 
 .random-card-meta-row {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
   align-items: center;
-  margin-bottom: 12px;
-}
-
-.phonetic-group {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-}
-
-.phonetic-tag {
-  background: color-mix(in srgb, var(--guaxi-panel-bg) 60%, transparent);
-}
-
-.tag-trans {
-  opacity: 0.8;
-  font-size: 90%;
+  gap: 5px;
 }
 
 .random-card-section {
-  margin-bottom: 12px;
-}
-
-.random-card-label {
-  font-size: 12px;
-  color: var(--guaxi-text-secondary);
-  margin-bottom: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
 }
 
 .random-card-content {
+  font-size: 11.5px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.random-card-content.scrollable {
+  max-height: 180px;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.random-card-audio-row {
+  margin-top: auto;
+  display: flex;
+  justify-content: center;
+  padding-top: 8px;
+}
+
+.random-audio-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border: 1px solid var(--ll-accent-line);
+  border-radius: 50%;
+  background: var(--ll-accent-wash);
+  color: var(--ll-accent);
+  cursor: pointer;
+  transition: transform 0.15s ease;
+}
+
+.random-audio-action:hover {
+  transform: scale(1.05);
+}
+
+.random-audio-action.playing {
+  color: var(--ll-green);
+  border-color: color-mix(in srgb, var(--ll-green) 50%, var(--ll-border));
+}
+
+/* ---------- dialogs ---------- */
+.dialog-lede {
+  margin-bottom: 14px;
+  color: var(--ll-muted);
+  font-size: 11px;
   line-height: 1.6;
+}
+
+.dialog-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+}
+
+.dialog-spacer {
+  flex: 1;
+}
+
+.confirm-body {
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--ll-muted);
+}
+
+.form-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.collect-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.collect-topic-row {
+  display: flex;
+  gap: 8px;
+}
+
+.collect-range {
+  display: flex;
+  align-items: flex-end;
+  gap: 14px;
+}
+
+.range-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.range-field :deep(.n-input-number) {
+  width: 112px;
+}
+
+.range-unit {
+  font-size: 10px;
+  color: var(--ll-muted);
+}
+
+.collect-source-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding-top: 4px;
+  border-top: 1px solid var(--ll-border-soft);
+}
+
+.source-hint {
+  padding: 9px 11px;
+  border-radius: 7px;
+  border: 1px dashed var(--ll-border);
+  color: var(--ll-muted);
+  font-size: 10.5px;
+  line-height: 1.6;
+}
+
+.preview-head {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--ll-border-soft);
+}
+
+.preview-topic {
+  margin-left: auto;
+  padding: 2px 9px;
+  border: 1px solid var(--ll-accent-line);
+  border-radius: 999px;
+  color: var(--ll-accent);
+  font-size: 10px;
+}
+
+.preview-list {
+  max-height: 54vh;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.preview-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 4px;
+  border-bottom: 1px solid var(--ll-border-soft);
+}
+
+.preview-row.picked {
+  background: color-mix(in srgb, var(--ll-accent) 5%, transparent);
+}
+
+.preview-row.disabled {
+  opacity: 0.5;
+}
+
+.preview-main {
+  min-width: 0;
+  flex: 1;
+}
+
+.preview-title {
+  font-family: var(--ll-serif);
   font-size: 14px;
+  line-height: 1.4;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.preview-meta {
+  margin-top: 2px;
+  font-size: 10px;
+  color: var(--ll-muted);
+}
+
+.preview-flag {
+  padding: 2px 7px;
+  border: 1px solid var(--ll-border);
+  border-radius: 999px;
+  font-size: 9.5px;
+  color: var(--ll-muted);
+  white-space: nowrap;
+}
+
+.preview-flag.good {
+  color: var(--ll-green);
+  border-color: color-mix(in srgb, var(--ll-green) 32%, var(--ll-border));
+}
+
+.preview-empty {
+  padding: 40px 10px;
+  text-align: center;
+  color: var(--ll-muted);
+  font-size: 11.5px;
+}
+
+.source-manager-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--ll-border-soft);
+}
+
+.source-manager-list {
+  max-height: 48vh;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 10px;
+}
+
+.source-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 4px;
+  border-bottom: 1px solid var(--ll-border-soft);
+}
+
+/* ---------- responsive ---------- */
+@media (max-width: 1240px) {
+  .ll-workspace {
+    grid-template-columns: 200px minmax(0, 1fr) 360px;
+  }
+  .ll-workspace.inspector-hidden {
+    grid-template-columns: 200px minmax(0, 1fr) 0;
+  }
+  .ll-search {
+    width: 190px;
+  }
+  .review-grid {
+    grid-template-columns: 170px minmax(0, 1fr) 220px;
+  }
+}
+
+@media (max-width: 1080px) {
+  .ll-brand {
+    min-width: 150px;
+  }
+  .ll-brand-title {
+    font-size: 18px;
+  }
+  .ll-workspace {
+    grid-template-columns: 188px minmax(0, 1fr) 0;
+  }
+  .ll-inspector {
+    display: none;
+  }
+  .record-table .ledger-thead,
+  .record-table .ledger-row {
+    grid-template-columns: 26px 34px 42px minmax(160px, 1fr) 120px 84px;
+  }
+  .record-table .col-date {
+    display: none;
+  }
 }
 </style>
