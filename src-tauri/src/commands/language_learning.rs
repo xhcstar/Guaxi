@@ -177,6 +177,9 @@ pub struct AudioResource {
     pub transcript: String,
     #[serde(default)]
     pub sync_json_uri: String,
+    /// 本地音频缓存是否仍然存在；源文件被移动或删除后条目无法再转写。
+    #[serde(default = "default_true")]
+    pub audio_available: bool,
     pub notes: String,
     pub duration_sec: f64,
     pub created_at: String,
@@ -325,6 +328,22 @@ pub struct ListeningTranscriptFetchInput {
 
 fn now_iso() -> String {
     chrono::Utc::now().to_rfc3339()
+}
+
+fn default_true() -> bool {
+    true
+}
+
+/// 条目还能不能拿到可转写的音频：远程地址只要有 URL，本地地址则要求文件仍在。
+fn audio_source_available(source_uri: &str) -> bool {
+    let uri = normalize_media_uri(source_uri);
+    if uri.is_empty() {
+        return false;
+    }
+    if uri.starts_with("http://") || uri.starts_with("https://") {
+        return true;
+    }
+    Path::new(&uri).is_file()
 }
 
 fn resolve_db_path() -> Result<PathBuf, String> {
@@ -1787,6 +1806,7 @@ pub fn language_learning_list_audio_resources(
                     language_tag: r.get(7)?,
                     transcript: r.get(8)?,
                     sync_json_uri: r.get(9)?,
+                    audio_available: audio_source_available(&r.get::<_, String>(3)?),
                     notes: r.get(10)?,
                     duration_sec: r.get::<_, f64>(11)?,
                     created_at: r.get(12)?,
@@ -1814,7 +1834,7 @@ pub fn language_learning_list_pending_sync_audio_ids(
         let audio_table = audio_table_for(&learning_lang);
         let sql = format!(
             r#"
-                SELECT id, transcript, sync_json_uri
+                SELECT id, transcript, sync_json_uri, source_uri
                 FROM {table}
                 ORDER BY datetime(created_at) DESC
             "#,
@@ -1829,14 +1849,20 @@ pub fn language_learning_list_pending_sync_audio_ids(
                     r.get::<_, String>(0)?,
                     r.get::<_, String>(1)?,
                     r.get::<_, String>(2)?,
+                    r.get::<_, String>(3)?,
                 ))
             })
             .map_err(|e| format!("执行待同步条目查询失败: {}", e))?;
         let mut out = Vec::new();
         for row in rows {
-            let (id, transcript, sync_json_uri) =
+            let (id, transcript, sync_json_uri, source_uri) =
                 row.map_err(|e| format!("读取待同步条目失败: {}", e))?;
             if transcript.trim().is_empty() || !sync_json_has_full_translation(&sync_json_uri) {
+                // 本地音频已被移动/删除的条目重试多少次都不会成功，
+                // 只会每次刷新都弹一条失败提示，直接跳过交给用户处理。
+                if !audio_source_available(&source_uri) {
+                    continue;
+                }
                 out.push(id);
             }
         }
@@ -1940,6 +1966,7 @@ pub fn language_learning_upsert_audio_resource(
             id,
             title,
             source_kind,
+            audio_available: audio_source_available(&source_uri),
             source_uri,
             origin_uri,
             provider,
@@ -3343,6 +3370,7 @@ fn load_audio_resource_by_id(
             language_tag: r.get(7)?,
             transcript: r.get(8)?,
             sync_json_uri: r.get(9)?,
+            audio_available: audio_source_available(&r.get::<_, String>(3)?),
             notes: r.get(10)?,
             duration_sec: r.get(11)?,
             created_at: r.get(12)?,

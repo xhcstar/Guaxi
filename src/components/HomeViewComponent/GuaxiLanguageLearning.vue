@@ -65,7 +65,7 @@
                 class="listening-player listening-video-player"
                 controls
                 playsinline
-                :src="activeAudioPlayableSrc"
+                :src="activeAudioPlayableSrc || undefined"
                 @loadedmetadata="onAudioLoadedMetadata"
                 @canplay="handleListeningMediaCanPlay('active', $event)"
                 @play="handleListeningMediaPlay('active', $event)"
@@ -86,7 +86,7 @@
                 ref="activeAudioPlayerRef"
                 class="listening-player"
                 controls
-                :src="activeAudioPlayableSrc"
+                :src="activeAudioPlayableSrc || undefined"
                 @loadedmetadata="onAudioLoadedMetadata"
                 @canplay="handleListeningMediaCanPlay('active', $event)"
                 @play="handleListeningMediaPlay('active', $event)"
@@ -109,7 +109,7 @@
 
             <div class="sync-sheet" v-if="activeAudioSyncState.tone !== 'ready'">
               <div class="sync-sheet-head">
-                <span class="section-label">{{ activeAudioSyncState.tone === 'error' ? '同步失败' : activeAudioSyncState.tone === 'partial' ? '译文待补齐' : '后台同步' }}</span>
+                <span class="section-label">{{ activeAudioSyncState.tone === 'error' ? (activeAudioSyncState.label === '音频缺失' ? '音频缺失' : '同步失败') : activeAudioSyncState.tone === 'partial' ? '译文待补齐' : '后台同步' }}</span>
                 <span class="sync-percent">{{ Math.round(activeAudioSyncState.progress || 0) }}%</span>
               </div>
               <n-progress
@@ -120,7 +120,7 @@
                 :height="4"
               />
               <div class="sync-message">{{ activeAudioSyncState.message || '正在准备音频' }}</div>
-              <n-button v-if="activeAudioSyncState.tone === 'error'" size="tiny" @click="fetchTranscriptForActiveAudio">重试同步</n-button>
+              <n-button v-if="activeAudioSyncState.tone === 'error' && activeAudioSyncState.label !== '音频缺失'" size="tiny" @click="fetchTranscriptForActiveAudio">重试同步</n-button>
               <n-button v-else-if="activeAudioSyncState.tone === 'partial'" size="tiny" @click="retranslateActiveAudio">补齐译文</n-button>
             </div>
 
@@ -268,20 +268,27 @@
             </div>
           </aside>
 
-          <section v-if="currentReviewItem" class="review-card2">
-            <header class="review-card-head">
-              <span class="type-chip">{{ rowTypeLabel(currentReviewItem.rowType) }}</span>
-              <div class="review-card-tools">
-                <button class="seg-btn" :class="{ active: reviewDictationMode }" @click="toggleReviewDictation">听写</button>
-                <n-radio-group v-model:value="reviewType" size="small">
-                  <n-radio-button value="mixed">混合</n-radio-button>
-                  <n-radio-button value="word">单词</n-radio-button>
-                  <n-radio-button value="sentence">例句</n-radio-button>
-                  <n-radio-button value="paragraph">段落</n-radio-button>
-                  <n-radio-button value="listening">听力</n-radio-button>
-                </n-radio-group>
-              </div>
-            </header>
+          <section class="review-main">
+            <div class="review-typebar">
+              <button
+                v-for="opt in reviewTypeOptions"
+                :key="opt.value"
+                class="review-type-btn"
+                :class="{ active: reviewType === opt.value, empty: !reviewTypeCounts[opt.value] }"
+                @click="reviewType = opt.value"
+              >
+                <span>{{ opt.label }}</span>
+                <span class="review-type-count">{{ reviewTypeCounts[opt.value] || 0 }}</span>
+              </button>
+            </div>
+
+            <section v-if="currentReviewItem" class="review-card2">
+              <header class="review-card-head">
+                <span class="type-chip">{{ rowTypeLabel(currentReviewItem.rowType) }}</span>
+                <div class="review-card-tools">
+                  <button class="seg-btn" :class="{ active: reviewDictationMode }" @click="toggleReviewDictation">听写</button>
+                </div>
+              </header>
 
             <div class="review-front">
               <template v-if="currentReviewItem.rowType === 'word'">
@@ -303,7 +310,7 @@
                     ref="reviewAudioPlayerRef"
                     class="review-listening-player"
                     controls
-                    :src="reviewAudioPlayableSrc"
+                    :src="reviewAudioPlayableSrc || undefined"
                     @timeupdate="handleReviewAudioTimeUpdate"
                     @loadedmetadata="handleReviewAudioLoadedMetadata"
                     @canplay="handleListeningMediaCanPlay('review', $event)"
@@ -402,9 +409,18 @@
                 <n-button size="small" quaternary @click="gotoNextReview">下一个</n-button>
               </div>
             </footer>
-          </section>
+            </section>
 
-          <n-empty v-else description="当前筛选下暂无可复习内容" class="review-empty" />
+            <div v-else class="review-empty">
+              <n-empty :description="reviewEmptyDescription" />
+              <div class="review-empty-actions">
+                <n-button v-if="reviewType !== 'mixed' && reviewTypeCounts.mixed" size="small" @click="reviewType = 'mixed'">
+                  查看全部分类（{{ reviewTypeCounts.mixed }}）
+                </n-button>
+                <n-button size="small" type="primary" @click="resetReviewFilter">重置筛选并开始</n-button>
+              </div>
+            </div>
+          </section>
 
           <aside class="review-filters">
             <div class="eyebrow">FILTER</div>
@@ -501,9 +517,8 @@
         <section class="ll-ledger">
           <header class="ledger-head">
             <div class="ledger-titleblock">
-              <div class="eyebrow">{{ selectedShelf === 'my_listening' ? 'LISTENING LEDGER' : 'LIBRARY LEDGER' }}</div>
               <h2 class="serif">{{ selectedShelfLabel }}</h2>
-              <div class="ledger-subline">{{ ledgerSubline }}</div>
+              <span class="ledger-subline">{{ ledgerSubline }}</span>
             </div>
             <div class="ledger-tools">
               <n-button v-if="selectedShelf === 'my_listening'" type="primary" size="small" @click="openCollectSourceDialog">
@@ -1223,7 +1238,11 @@
                 <div class="dict-entry-meanings">{{ entry.meanings.join('；') }}</div>
               </div>
             </div>
-            <div v-else class="muted dict-lookup-empty">查询结果会显示在这里；没有对应语言对的词典时为空。</div>
+            <div v-else class="muted dict-lookup-empty">
+              {{ dictLookupSearched
+                ? `没有找到「${dictLookupWord.trim()}」的词条（当前语言对 ${learningLangLabel} → ${nativeLangLabel}）。`
+                : '查询结果会显示在这里；没有对应语言对的词典时为空。' }}
+            </div>
           </section>
         </div>
         <template #action>
@@ -1572,6 +1591,7 @@ const dictCatalog = ref([])
 const dictJobs = ref({})
 const dictLookupWord = ref('')
 const dictLookupRows = ref([])
+const dictLookupSearched = ref(false)
 const dictLookupLoading = ref(false)
 const dictImportName = ref('')
 const dictImportSource = ref(learningLang.value)
@@ -2330,6 +2350,14 @@ const syncStateForRow = (row) => {
       message: String(job.error || job.message || '转写失败'),
     }
   }
+  if (row?.rowType === 'listening' && row.payload?.audio_available === false) {
+    return {
+      tone: 'error',
+      label: '音频缺失',
+      progress: 0,
+      message: '本地音频文件已不存在，请重新导入该条目',
+    }
+  }
   const coverage = row?.translationCoverage || { translated: 0, total: 0, ratio: 0 }
   const hasSync = Boolean(String(row?.payload?.sync_json_uri || '').trim())
   if (coverage.total > 0) {
@@ -2384,7 +2412,7 @@ const ledgerSubline = computed(() => {
     const running = listeningRows.value.filter((row) => syncStateForRow(row).tone === 'running').length
     return `${listeningRows.value.length} 条 · 处理中 ${running} · 待处理 ${listeningPendingCount.value}`
   }
-  return `${recordCounts.records} 条 · ${keyword.value ? '搜索结果' : '按添加时间倒序'}`
+  return `${recordCounts.records} 条${keyword.value ? ' · 搜索结果' : ''}`
 })
 
 const activeAudioSyncState = computed(() => {
@@ -2545,6 +2573,11 @@ const resolvePlayableMediaSrc = async (raw) => {
 
 const refreshActiveAudioPlayableSrc = async () => {
   const sourceUri = activeAudio.value?.source_uri || ''
+  // 音频文件已丢失时不要再交给 asset 协议去读盘，否则 webview 只会报 500。
+  if (activeAudio.value?.audio_available === false) {
+    activeAudioPlayableSrc.value = ''
+    return
+  }
   activeAudioPlayableSrc.value = await resolvePlayableMediaSrc(sourceUri)
   console.info('[LangLearning] activeAudio:playable-src-refreshed', {
     audioId: activeAudio.value?.id || '',
@@ -2556,6 +2589,10 @@ const refreshActiveAudioPlayableSrc = async () => {
 
 const refreshReviewAudioPlayableSrc = async () => {
   const sourceUri = currentReviewItem.value?.payload?.source_uri || ''
+  if (currentReviewItem.value?.payload?.audio_available === false) {
+    reviewAudioPlayableSrc.value = ''
+    return
+  }
   reviewAudioPlayableSrc.value = await resolvePlayableMediaSrc(sourceUri)
   console.info('[LangLearning] reviewAudio:playable-src-refreshed', {
     audioId: currentReviewItem.value?.payload?.id || '',
@@ -2818,7 +2855,8 @@ const loadAllRecordsForReview = async () => {
   if (reviewRecordsSnapshot) return
   reviewRecordsSnapshot = records.value
   try {
-    const kind = resolveQueryKind()
+    // 复习是全局范围，记录按全部类型加载，避免停在某个书架时只载入局部数据。
+    const kind = 'all'
     const all = []
     let offset = 0
     while (offset < 10000) {
@@ -3127,6 +3165,7 @@ const lookupDictWord = async () => {
   const word = String(dictLookupWord.value || '').trim()
   if (!word) {
     dictLookupRows.value = []
+    dictLookupSearched.value = false
     return
   }
   dictLookupLoading.value = true
@@ -3140,6 +3179,7 @@ const lookupDictWord = async () => {
       limit: 6,
     })
     dictLookupRows.value = Array.isArray(rows) ? rows : []
+    dictLookupSearched.value = true
   } catch (err) {
     message.error(`离线查词失败: ${String(err?.message || err || '')}`)
   } finally {
@@ -3549,8 +3589,10 @@ const applyReviewResult = (result) => {
   }
 }
 
-const reviewRowsByType = computed(() => {
-  const rows = filteredRows.value.filter((row) => {
+const reviewRowsBase = computed(() => {
+  // 复习范围跟左侧“总学习项”一致，不受当前书架筛选影响；
+  // 否则停在空书架（如例句 0 条）时点“开始今日复习”会直接无内容可复习。
+  return allRows.value.filter(matchesKeyword).filter((row) => {
     const now = Date.now()
     const createdTs = row.createdAt ? new Date(row.createdAt).getTime() : 0
     const lastReviewedTs = row.lastReviewedAt ? new Date(row.lastReviewedAt).getTime() : 0
@@ -3575,8 +3617,33 @@ const reviewRowsByType = computed(() => {
     }
     return true
   })
-  if (reviewType.value === 'mixed') return rows
-  return rows.filter((r) => r.rowType === reviewType.value)
+})
+
+const reviewTypeOptions = [
+  { label: '混合', value: 'mixed' },
+  { label: '单词', value: 'word' },
+  { label: '例句', value: 'sentence' },
+  { label: '段落', value: 'paragraph' },
+  { label: '听力', value: 'listening' },
+]
+
+const reviewTypeCounts = computed(() => {
+  const counts = { mixed: reviewRowsBase.value.length, word: 0, sentence: 0, paragraph: 0, listening: 0 }
+  reviewRowsBase.value.forEach((row) => {
+    if (row.rowType in counts) counts[row.rowType] += 1
+  })
+  return counts
+})
+
+const reviewRowsByType = computed(() => {
+  if (reviewType.value === 'mixed') return reviewRowsBase.value
+  return reviewRowsBase.value.filter((r) => r.rowType === reviewType.value)
+})
+
+const reviewEmptyDescription = computed(() => {
+  if (!reviewRowsBase.value.length) return '当前筛选下暂无可复习内容，可重置筛选后再试'
+  const typeLabel = reviewTypeOptions.find((opt) => opt.value === reviewType.value)?.label || '当前类型'
+  return `「${typeLabel}」在筛选范围内没有内容，可切换到其他类型`
 })
 
 const currentReviewItem = computed(() => {
@@ -3874,6 +3941,10 @@ const refreshAudioTranslationCoverage = async (rows) => {
   const entries = await Promise.all(list.map(async (row) => {
     const id = String(row?.id || '').trim()
     if (!id) return ['', { translated: 0, total: 0, ratio: 0 }]
+    // 本地音频已丢失的条目无法再补同步，每次刷新都去读不存在的 JSON 只会刷日志。
+    if (row?.audio_available === false) {
+      return [id, { translated: 0, total: 0, ratio: 0 }]
+    }
     const syncPath = sanitizeMediaUri(row?.sync_json_uri || '')
     let timeline = []
     if (syncPath) {
@@ -4483,6 +4554,8 @@ const resetReviewFilter = () => {
   reviewFilter.orderBy = 'created_desc'
   reviewFilter.dueOnly = true
   reviewFilter.includeNew = true
+  reviewType.value = 'mixed'
+  rebuildReviewRows()
 }
 
 const selectedShelfLabel = computed(() => {
@@ -4595,6 +4668,7 @@ const openRandomCheckBoard = () => {
 
 const playRandomCardAudio = (card) => {
   if (String(card?.rowType || '') !== 'listening') return
+  if (card?.payload?.audio_available === false) return
   const cardId = String(card?.id || '')
   if (!cardId || !sanitizeMediaUri(card?.payload?.source_uri || '')) return
   if (randomCardAudioPlayer && randomCardAudioPlayingId.value === cardId) {
@@ -5522,7 +5596,8 @@ watch(activeAudio, async () => {
   currentTranscriptLineIndex.value = 0
   activeTranscriptVisibleCount.value = transcriptScreenPageSize
   activeAudioDurationSec.value = Number(activeAudio.value?.duration_sec || 0)
-  activeAudioSyncTimeline.value = await loadSyncTimelineByJsonPath(activeAudio.value?.sync_json_uri || '')
+  const audioUnavailable = activeAudio.value?.audio_available === false
+  activeAudioSyncTimeline.value = audioUnavailable ? [] : await loadSyncTimelineByJsonPath(activeAudio.value?.sync_json_uri || '')
   if (!activeAudioSyncTimeline.value.length) {
     activeAudioSyncTimeline.value = buildTranscriptTimeline(activeAudio.value?.transcript || '', activeAudioDurationSec.value || 0)
   }
@@ -5536,8 +5611,8 @@ watch(activeAudio, async () => {
         return source && (!translated || translated === source)
       }).length,
     })
-    activeAudioSyncGenerating.value = triggerSyncGenerationForAudioId(activeAudio.value.id, false, learningLang.value)
-    if (shouldRunQuickTimelineTranslate(activeAudio.value.id)) {
+    activeAudioSyncGenerating.value = !audioUnavailable && triggerSyncGenerationForAudioId(activeAudio.value.id, false, learningLang.value)
+    if (!audioUnavailable && shouldRunQuickTimelineTranslate(activeAudio.value.id)) {
       const patchedTimeline = await quickTranslateTimelineToZh(activeAudioSyncTimeline.value, activeTimelineQuickTranslating)
       if (Array.isArray(patchedTimeline) && patchedTimeline.length) {
         activeAudioSyncTimeline.value = patchedTimeline
@@ -5555,7 +5630,7 @@ watch(activeAudio, async () => {
   setTimeout(() => {
     applyAudioPlaybackRate()
   }, 0)
-  if (activeAudio.value?.id && !activeAudio.value?.sync_json_uri && !activeAudioSyncTimeline.value.length) {
+  if (activeAudio.value?.id && !audioUnavailable && !activeAudio.value?.sync_json_uri && !activeAudioSyncTimeline.value.length) {
     triggerSyncGenerationForAudioId(activeAudio.value.id, false, learningLang.value)
   }
   console.info('[LangLearning] activeAudio:changed', {
@@ -5578,7 +5653,8 @@ watch(currentReviewItem, async (row) => {
   currentReviewTranscriptIndex.value = 0
   reviewTranscriptVisibleCount.value = transcriptScreenPageSize
   reviewAudioDurationSec.value = Number(row?.payload?.duration_sec || 0)
-  reviewAudioSyncTimeline.value = await loadSyncTimelineByJsonPath(row?.payload?.sync_json_uri || '')
+  const audioUnavailable = row?.payload?.audio_available === false
+  reviewAudioSyncTimeline.value = audioUnavailable ? [] : await loadSyncTimelineByJsonPath(row?.payload?.sync_json_uri || '')
   if (!reviewAudioSyncTimeline.value.length) {
     reviewAudioSyncTimeline.value = buildTranscriptTimeline(row?.payload?.transcript || '', reviewAudioDurationSec.value || 0)
   }
@@ -5592,8 +5668,8 @@ watch(currentReviewItem, async (row) => {
         return source && (!translated || translated === source)
       }).length,
     })
-    triggerSyncGenerationForAudioId(row.payload.id, false, learningLang.value)
-    if (shouldRunQuickTimelineTranslate(row.payload.id)) {
+    if (!audioUnavailable) triggerSyncGenerationForAudioId(row.payload.id, false, learningLang.value)
+    if (!audioUnavailable && shouldRunQuickTimelineTranslate(row.payload.id)) {
       const patchedTimeline = await quickTranslateTimelineToZh(reviewAudioSyncTimeline.value, reviewTimelineQuickTranslating)
       if (Array.isArray(patchedTimeline) && patchedTimeline.length) {
         reviewAudioSyncTimeline.value = patchedTimeline
@@ -5663,7 +5739,7 @@ watch([isListeningImmersive, activeAudio], ([immersive, audio]) => {
   }
 })
 
-watch([reviewType, filteredRows, () => reviewFilter.createdPeriod, () => reviewFilter.lastReviewPeriod, () => reviewFilter.masteryBand, () => reviewFilter.orderBy, () => reviewFilter.dueOnly, () => reviewFilter.includeNew], () => {
+watch([reviewType, reviewRowsBase, () => reviewFilter.createdPeriod, () => reviewFilter.lastReviewPeriod, () => reviewFilter.masteryBand, () => reviewFilter.orderBy, () => reviewFilter.dueOnly, () => reviewFilter.includeNew], () => {
   rebuildReviewRows()
 })
 
@@ -6146,7 +6222,7 @@ onBeforeUnmount(() => {
   position: relative;
   min-width: 0;
   min-height: 0;
-  padding: 22px 28px 14px;
+  padding: 14px 28px 14px;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -6155,21 +6231,30 @@ onBeforeUnmount(() => {
 .ledger-head {
   flex: 0 0 auto;
   display: flex;
-  align-items: flex-start;
-  gap: 16px;
-  padding-bottom: 16px;
+  align-items: center;
+  gap: 12px;
+  padding-bottom: 10px;
+}
+
+.ledger-titleblock {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .ledger-titleblock h2 {
-  margin: 4px 0 3px;
-  font-size: 30px;
-  line-height: 1.1;
+  margin: 0;
+  font-size: 20px;
+  line-height: 1.2;
   font-weight: 600;
 }
 
 .ledger-subline {
   color: var(--ll-muted);
   font-size: 11.5px;
+  white-space: nowrap;
 }
 
 .ledger-tools {
@@ -6177,7 +6262,6 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   gap: 7px;
-  padding-top: 4px;
 }
 
 .ledger-filterbar {
@@ -7398,6 +7482,60 @@ onBeforeUnmount(() => {
   padding-top: 18px;
 }
 
+.review-main {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+  min-height: 0;
+}
+
+.review-typebar {
+  flex: 0 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.review-type-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 11px;
+  border: 1px solid var(--ll-border-soft);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ll-muted);
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+
+.review-type-btn:hover {
+  color: var(--ll-text);
+  border-color: var(--ll-border);
+}
+
+.review-type-btn.active {
+  color: var(--ll-accent);
+  border-color: color-mix(in srgb, var(--ll-accent) 32%, transparent);
+  background: var(--ll-accent-wash);
+}
+
+.review-type-btn.empty {
+  opacity: 0.55;
+}
+
+.review-type-count {
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.8;
+}
+
 .review-side {
   display: flex;
   flex-direction: column;
@@ -7448,6 +7586,7 @@ kbd {
 }
 
 .review-card2 {
+  flex: 1 1 auto;
   min-height: 0;
   display: flex;
   flex-direction: column;
@@ -7669,8 +7808,17 @@ kbd {
 }
 
 .review-empty {
-  align-self: center;
-  justify-self: center;
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+}
+
+.review-empty-actions {
+  display: flex;
+  gap: 8px;
 }
 
 /* ---------- random board ---------- */
@@ -7862,6 +8010,11 @@ kbd {
 }
 
 /* ---------- dialogs ---------- */
+/* Naive 卡片底部 action 自带一档底色，和弹窗主体不一致，会在底部露出色带。 */
+:global(body .n-card > .n-card__action) {
+  background-color: transparent;
+}
+
 .dialog-lede {
   margin-bottom: 14px;
   color: var(--ll-muted);

@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use std::env;
 use tracing::{info, warn};
 
+use crate::commands::offline_dict;
 use crate::commands::translate_local;
 use crate::commands::translate_pool::{self, ProviderSpec};
 use crate::commands::translator;
@@ -62,6 +63,39 @@ fn load_vendor_secret_pair() -> Option<(String, String)> {
     None
 }
 
+/// 离线词典只收录词条，碰到整句就交给在线接口：
+/// 这样单个词/短语在断网时也能出结果，又不会把句子硬塞进词典匹配。
+fn offline_dict_translation(text: &str, from: &str, to: &str) -> Option<String> {
+    let term = text.trim();
+    if term.is_empty() || term.chars().count() > 64 {
+        return None;
+    }
+    if term.split_whitespace().count() > 4 {
+        return None;
+    }
+    if term.chars().any(|c| {
+        matches!(
+            c,
+            '.' | ',' | ';' | ':' | '!' | '?' | '\n' | '。' | '，' | '；' | '：' | '！' | '？'
+        )
+    }) {
+        return None;
+    }
+    let entry = offline_dict::lookup_word(term, from, to)?;
+    let joined = entry
+        .meanings
+        .iter()
+        .map(|m| m.trim())
+        .filter(|m| !m.is_empty())
+        .collect::<Vec<_>>()
+        .join("；");
+    if joined.is_empty() {
+        None
+    } else {
+        Some(joined)
+    }
+}
+
 /// 批量翻译。配置了腾讯云密钥时优先走官方接口，否则整批交给免费接口池。
 #[tauri::command]
 pub async fn translate_text_free(
@@ -76,15 +110,39 @@ pub async fn translate_text_free(
     let to = normalize_lang_lower(&to.unwrap_or_else(|| "zh".into()));
     let clean: Vec<String> = texts.iter().map(|t| preprocess_text(t)).collect();
 
+    // 词条先查离线词典：命中就不必等网络，剩下的句子再交给在线接口。
+    let mut translated: Vec<Option<String>> = vec![None; clean.len()];
+    let mut pending: Vec<usize> = Vec::new();
+    for (idx, text) in clean.iter().enumerate() {
+        match offline_dict_translation(text, &from, &to) {
+            Some(hit) => {
+                translate_pool::cache_put_engine(&from, &to, text, &hit, "OfflineDict");
+                translated[idx] = Some(hit);
+            }
+            None => pending.push(idx),
+        }
+    }
+    if pending.is_empty() {
+        info!("[Translate] {} 条 (from={}, to={}) 由 OfflineDict 完成", clean.len(), from, to);
+        return Ok(TranslationResult {
+            success: true,
+            translated_texts: translated.into_iter().map(|x| x.unwrap_or_default()).collect(),
+            error: None,
+        });
+    }
+    let pending_texts: Vec<String> = pending.iter().map(|idx| clean[*idx].clone()).collect();
+
     if let Some((secret_id, secret_key)) = load_vendor_secret_pair() {
-        match translator::translate_text(clean.clone(), secret_id, secret_key).await {
-            Ok(resp) if resp.success && resp.translated_texts.len() == clean.len() => {
-                for (src, dst) in clean.iter().zip(resp.translated_texts.iter()) {
-                    translate_pool::cache_put_engine(&from, &to, src, dst, "Tencent");
+        match translator::translate_text(pending_texts.clone(), secret_id, secret_key).await {
+            Ok(resp) if resp.success && resp.translated_texts.len() == pending_texts.len() => {
+                for (pos, dst) in resp.translated_texts.iter().enumerate() {
+                    let idx = pending[pos];
+                    translate_pool::cache_put_engine(&from, &to, &clean[idx], dst, "Tencent");
+                    translated[idx] = Some(dst.clone());
                 }
                 return Ok(TranslationResult {
                     success: true,
-                    translated_texts: resp.translated_texts,
+                    translated_texts: translated.into_iter().map(|x| x.unwrap_or_default()).collect(),
                     error: None,
                 });
             }
@@ -93,7 +151,12 @@ pub async fn translate_text_free(
         }
     }
 
-    let outcome = translate_pool::translate_texts(&clean, &from, &to).await;
+    let outcome = translate_pool::translate_texts(&pending_texts, &from, &to).await;
+    for (pos, idx) in pending.iter().enumerate() {
+        if let Some(text) = outcome.texts.get(pos) {
+            translated[*idx] = Some(text.clone());
+        }
+    }
     info!(
         "[Translate] {} 条 (from={}, to={}) 由 {} 完成",
         clean.len(),
@@ -103,7 +166,7 @@ pub async fn translate_text_free(
     );
     Ok(TranslationResult {
         success: outcome.error.is_none(),
-        translated_texts: outcome.texts,
+        translated_texts: translated.into_iter().map(|x| x.unwrap_or_default()).collect(),
         error: outcome.error,
     })
 }
@@ -131,6 +194,7 @@ pub async fn selection_translate_free_multi(
     let clean = preprocess_text(&raw);
     let from_norm = normalize_lang_lower(&from);
     let to_norm = normalize_lang_lower(&to);
+    let offline_hit = offline_dict_translation(&clean, &from_norm, &to_norm);
 
     // 同一段文字重复划词（很常见）直接命中缓存：先查进程内，再查落盘库，零网络耗时。
     if let Some(hit) = translate_pool::cache_get_persistent(&from_norm, &to_norm, &clean).await {
@@ -153,6 +217,19 @@ pub async fn selection_translate_free_multi(
 
     let candidates: Vec<&'static ProviderSpec> = translate_pool::ranked_for_selection(&to_norm, want);
     if candidates.is_empty() {
+        // 没有可用在线接口时，离线词典命中就足以给出结果。
+        if let Some(hit) = offline_hit {
+            return Ok(SelectionTranslateMultiResult {
+                success: true,
+                items: vec![SelectionTranslateEngineItem {
+                    engine: "离线词典".into(),
+                    success: true,
+                    text: hit,
+                    error: None,
+                }],
+                error: None,
+            });
+        }
         return Err("翻译接口池为空".into());
     }
     info!(
@@ -235,6 +312,17 @@ pub async fn selection_translate_free_multi(
             text: String::new(),
             error: Some("未在时限内返回".into()),
         }));
+    }
+    if offline_hit.is_some() {
+        items.insert(
+            0,
+            SelectionTranslateEngineItem {
+                engine: "离线词典".into(),
+                success: true,
+                text: offline_hit.clone().unwrap_or_default(),
+                error: None,
+            },
+        );
     }
     items.sort_by_key(|it| !it.success);
 

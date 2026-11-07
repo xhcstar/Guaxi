@@ -20,6 +20,7 @@ use std::io::{BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use tokio::io::AsyncWriteExt;
+use tracing::info;
 use uuid::Uuid;
 use zip::write::FileOptions;
 use zip::{ZipArchive, ZipWriter};
@@ -262,9 +263,25 @@ fn installed_packs() -> Vec<(DictManifest, PathBuf, u64)> {
     out
 }
 
+/// 语言码只比较主语言：`en-US` / `en_GB` 都应命中 `en` 词典，
+/// 否则调用方带上区域码时会静默查不到任何包。
+fn lang_key(raw: &str) -> String {
+    raw.trim()
+        .to_ascii_lowercase()
+        .split(['-', '_'])
+        .next()
+        .unwrap_or_default()
+        .to_string()
+}
+
+fn lang_matches(a: &str, b: &str) -> bool {
+    let a = lang_key(a);
+    !a.is_empty() && a == lang_key(b)
+}
+
 fn pack_matches(manifest: &DictManifest, source: &str, target: &str) -> bool {
-    let src_ok = source.is_empty() || source == "auto" || manifest.source_lang == source;
-    let dst_ok = target.is_empty() || target == "auto" || manifest.target_lang == target;
+    let src_ok = source.is_empty() || source == "auto" || lang_matches(&manifest.source_lang, source);
+    let dst_ok = target.is_empty() || target == "auto" || lang_matches(&manifest.target_lang, target);
     src_ok && dst_ok
 }
 
@@ -363,20 +380,29 @@ pub fn lookup_entries(
     let source = if source_lang.trim().is_empty() || source_lang == "auto" {
         detect_lang(term).to_string()
     } else {
-        normalize_lang(source_lang, "")
+        lang_key(source_lang)
     };
-    let target = normalize_lang(target_lang, "zh");
+    let target = lang_key(&normalize_lang(target_lang, "zh"));
+    let packs = installed_packs();
     let mut out = Vec::new();
-    for (manifest, dir, _) in installed_packs() {
-        if !pack_matches(&manifest, &source, &target) {
+    for (manifest, dir, _) in &packs {
+        if !pack_matches(manifest, &source, &target) {
             continue;
         }
-        let found = query_pack(&dir.join(DICT_DB), &manifest, term, limit.saturating_sub(out.len()).max(1));
+        let found = query_pack(&dir.join(DICT_DB), manifest, term, limit.saturating_sub(out.len()).max(1));
         out.extend(found);
         if out.len() >= limit {
             break;
         }
     }
+    info!(
+        term,
+        source = source.as_str(),
+        target = target.as_str(),
+        packs = packs.len(),
+        hits = out.len(),
+        "offline dict lookup"
+    );
     out
 }
 
