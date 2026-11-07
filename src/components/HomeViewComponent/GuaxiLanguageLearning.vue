@@ -293,13 +293,21 @@
             <div class="review-front">
               <template v-if="currentReviewItem.rowType === 'word'">
                 <template v-if="reviewDictationMode">
-                  <div class="review-phonetic">{{ currentReviewItem.phonetic || '听发音，写出单词' }}</div>
+                  <div class="review-phonetic">{{ currentReviewItem.phoneticUk || currentReviewItem.phoneticUs || currentReviewItem.phonetic || '听发音，写出单词' }}</div>
                   <n-button size="small" @click="playWordPronunciation(currentReviewItem.title, 'us')">播放发音</n-button>
                   <div class="review-prompt">听发音，写出单词</div>
                 </template>
                 <template v-else>
                   <div class="review-word serif">{{ currentReviewItem.title }}</div>
-                  <div class="review-phonetic">{{ currentReviewItem.phonetic || '暂无音标' }}</div>
+                  <div class="review-phonetic">
+                    <span>{{ currentReviewItem.phoneticUk || currentReviewItem.phoneticUs || currentReviewItem.phonetic || '暂无音标' }}</span>
+                    <button class="phonetic-play" title="英式发音" @click="playWordPronunciation(currentReviewItem.title, 'uk')">
+                      <Icon :icon="volumeUkIcon" width="14" height="14" />
+                    </button>
+                    <button class="phonetic-play" title="美式发音" @click="playWordPronunciation(currentReviewItem.title, 'us')">
+                      <Icon :icon="volumeUsIcon" width="14" height="14" />
+                    </button>
+                  </div>
                   <div class="mastery-dots large">{{ masteryDots(getMasteryLevel('record', currentReviewItem.rawId)) }}</div>
                   <div class="review-prompt">先回忆释义，再显示答案</div>
                 </template>
@@ -346,11 +354,43 @@
               <div v-if="reviewShowAnswer" class="review-answer">
                 <div class="answer-rule"></div>
                 <template v-if="currentReviewItem.rowType === 'word'">
-                  <div class="answer-meta">
-                    <span>音标 {{ currentReviewItem.phonetic || '—' }}</span>
-                    <span>词性 {{ currentReviewItem.partOfSpeech || '—' }}</span>
+                  <div class="answer-word-row">
+                    <span class="answer-word serif">{{ currentReviewItem.title }}</span>
+                    <span v-if="currentReviewItem.partOfSpeech" class="type-chip">{{ currentReviewItem.partOfSpeech }}</span>
                   </div>
-                  <div class="answer-text">{{ currentReviewItem.combinedTranslation || currentReviewItem.translatedText || '—' }}</div>
+                  <div class="answer-meta">
+                    <span>音标 {{ currentReviewItem.phoneticUk || currentReviewItem.phoneticUs || currentReviewItem.phonetic || '—' }}</span>
+                    <button class="phonetic-play" title="英式发音" @click="playWordPronunciation(currentReviewItem.title, 'uk')">
+                      <Icon :icon="volumeUkIcon" width="13" height="13" />
+                    </button>
+                    <button class="phonetic-play" title="美式发音" @click="playWordPronunciation(currentReviewItem.title, 'us')">
+                      <Icon :icon="volumeUsIcon" width="13" height="13" />
+                    </button>
+                  </div>
+                  <div class="answer-meanings">
+                    <div v-for="(meaning, i) in cardWordMeanings(currentReviewItem)" :key="`rv-m-${i}`" class="answer-meaning">
+                      <span class="answer-meaning-index">{{ i + 1 }}</span>
+                      <span>{{ meaning }}</span>
+                    </div>
+                  </div>
+                  <div v-if="currentReviewItem.phrasePairs?.length" class="answer-section">
+                    <div class="section-label">短语</div>
+                    <div class="chip-wrap">
+                      <span v-for="(x, i) in currentReviewItem.phrasePairs" :key="`rv-ph-${i}`" class="word-chip">{{ x.source }}<em v-if="x.target"> · {{ x.target }}</em></span>
+                    </div>
+                  </div>
+                  <div v-if="cardWordPairs(currentReviewItem.payload?.synonyms, currentReviewItem.payload?.synonyms_translations).length" class="answer-section">
+                    <div class="section-label">近义词</div>
+                    <div class="chip-wrap">
+                      <span v-for="(x, i) in cardWordPairs(currentReviewItem.payload?.synonyms, currentReviewItem.payload?.synonyms_translations)" :key="`rv-syn-${i}`" class="word-chip">{{ x.word }}<em v-if="x.translation"> · {{ x.translation }}</em></span>
+                    </div>
+                  </div>
+                  <div v-if="cardWordPairs(currentReviewItem.payload?.antonyms, currentReviewItem.payload?.antonyms_translations).length" class="answer-section">
+                    <div class="section-label">反义词</div>
+                    <div class="chip-wrap">
+                      <span v-for="(x, i) in cardWordPairs(currentReviewItem.payload?.antonyms, currentReviewItem.payload?.antonyms_translations)" :key="`rv-ant-${i}`" class="word-chip warn">{{ x.word }}<em v-if="x.translation"> · {{ x.translation }}</em></span>
+                    </div>
+                  </div>
                   <div v-if="currentReviewItem.examplePairs?.length" class="answer-examples">
                     <div class="section-label">例句</div>
                     <div v-for="(x, i) in currentReviewItem.examplePairs" :key="`rv-ex-${i}`" class="example-line">
@@ -392,7 +432,10 @@
                   <div v-else class="answer-text">同步数据尚未就绪，稍后再试。</div>
                 </template>
                 <template v-else>
-                  <div class="answer-text">{{ currentReviewItem.summary || currentReviewItem.translatedText || '—' }}</div>
+                  <div class="section-label">原文</div>
+                  <div v-if="currentReviewItem.sourceText" class="answer-source-text">{{ currentReviewItem.sourceText }}</div>
+                  <div class="section-label answer-label-gap">译文</div>
+                  <div class="answer-text">{{ currentReviewItem.translatedText || currentReviewItem.summary || '—' }}</div>
                 </template>
               </div>
             </transition>
@@ -580,6 +623,15 @@
                 <span class="random-topic">{{ selectedShelfLabel }}</span>
                 <span class="random-deck-index">{{ randomDecks.length ? `${randomDeckIndex + 1} / ${randomDecks.length}` : '0 / 0' }}</span>
                 <div class="random-board-actions">
+                  <div class="seg-group small random-display-modes">
+                    <button
+                      v-for="mode in randomTranscriptDisplayModes"
+                      :key="`random-mode-${mode.value}`"
+                      class="seg-btn"
+                      :class="{ active: randomTranscriptDisplayMode === mode.value }"
+                      @click="randomTranscriptDisplayMode = mode.value"
+                    >{{ mode.label }}</button>
+                  </div>
                   <n-button quaternary circle size="small" title="上一组（←）" @click="gotoPrevRandomDeck">
                     <Icon :icon="chevronLeftIcon" width="16" height="16" />
                   </n-button>
@@ -610,7 +662,10 @@
                       </template>
                       <template v-else-if="card.rowType === 'listening'">
                         <div class="random-card-word serif">{{ card.title }}</div>
-                        <div class="random-card-text clamped">{{ card.summary || '—' }}</div>
+                        <div v-if="randomTranscriptDisplayMode !== 'target'" class="random-card-text clamped">{{ card.summary || '—' }}</div>
+                        <div v-if="randomTranscriptDisplayMode !== 'source'" class="random-card-text clamped target-preview">
+                          {{ randomCardTargetPreview(card) || '（译文生成中）' }}
+                        </div>
                         <div class="random-card-audio-row">
                           <button class="random-audio-action" :class="randomCardAudioActionState(card)" :title="randomCardAudioActionTitle(card)" @click.stop="playRandomCardAudio(card)">
                             <Icon :icon="randomCardAudioActionIcon(card)" width="22" height="22" />
@@ -670,11 +725,23 @@
                             @keydown.stop="handleListeningCardScrollKeydown"
                           >
                             <div
-                              v-for="(line, idx) in randomCardTimelineFor(card)"
-                              :key="`rt-${card.id}-${idx}`"
-                              class="random-transcript-line"
-                              :class="{ active: isRandomTranscriptLineActive(card, idx) }"
-                            >{{ line.text }}</div>
+                              v-if="randomTranscriptDisplayMode === 'target' && !randomCardHasTarget(card)"
+                              class="random-transcript-empty"
+                            >译文尚未生成，后台同步完成后可查看。</div>
+                            <template v-else>
+                              <div
+                                v-for="(line, idx) in randomCardTimelineFor(card)"
+                                :key="`rt-${card.id}-${idx}`"
+                                class="random-transcript-seg"
+                                :class="{ active: isRandomTranscriptLineActive(card, idx) }"
+                              >
+                                <div v-if="randomTranscriptDisplayMode !== 'target'" class="random-transcript-source">{{ line.text }}</div>
+                                <div
+                                  v-if="randomTranscriptDisplayMode !== 'source' && (randomTranscriptDisplayMode === 'target' || randomTranscriptTargetOf(line))"
+                                  class="random-transcript-target"
+                                >{{ randomTranscriptTargetOf(line) || '（译文生成中）' }}</div>
+                              </div>
+                            </template>
                           </div>
                           <div
                             v-else
@@ -1653,9 +1720,16 @@ const randomDeckIndex = ref(0)
 const randomFlippedMap = ref({})
 const randomCardAudioPlayingId = ref('')
 const randomCardAudioPaused = ref(false)
-const randomCardTimeline = ref([])
+const randomCardTimelines = ref({})
 const randomCardTimelineCardId = ref('')
 const randomCardActiveLineIndex = ref(-1)
+const randomTranscriptDisplayMode = ref('both')
+const randomTranscriptDisplayModes = [
+  { label: '双语', value: 'both' },
+  { label: '原文', value: 'source' },
+  { label: '译文', value: 'target' },
+]
+const randomCardTimelineLoading = new Set()
 const currentTranscriptLineIndex = ref(0)
 const hoveredTranscriptIndex = ref(-1)
 const activeAudioPlayerRef = ref(null)
@@ -2245,15 +2319,11 @@ const allRows = computed(() => {
       examplePairs: (() => {
         const sources = Array.isArray(r.examples) ? r.examples : []
         const targets = Array.isArray(r.example_translations) ? r.example_translations : []
-        const list = sources.map((source, idx) => ({
+        // 只展示真实例句：以前会拼一句 “This is a xxx.” 的假例句，容易被当成词条内容。
+        return sources.map((source, idx) => ({
           source: String(source || '').trim(),
           target: String(targets[idx] || '').trim(),
         })).filter((x) => x.source)
-        if (list.length) return list
-        const fallback = String(((Array.isArray(r.phrases) ? r.phrases : [])[0]) || '').trim() || `This is a ${String(r.word || r.source_text || '').trim()}.`
-        const fallbackTarget = String(((Array.isArray(r.phrase_translations) ? r.phrase_translations : [])[0]) || '').trim()
-          || normalizeList(Array.isArray(r.meanings) ? r.meanings : splitSimpleTranslations(r.translated_text)).slice(0, 1).join('')
-        return [{ source: fallback, target: fallbackTarget }]
       })(),
       phrasePairs: (Array.isArray(r.phrases) ? r.phrases : []).map((source, idx) => ({
         source: String(source || '').trim(),
@@ -4696,8 +4766,17 @@ const openRandomCheckBoard = () => {
 
 const randomCardTimelineFor = (card) => {
   const cardId = String(card?.id || '')
-  return cardId && cardId === randomCardTimelineCardId.value ? randomCardTimeline.value : []
+  return (cardId && randomCardTimelines.value[cardId]) || []
 }
+
+const randomTranscriptTargetOf = (line) => String(line?.translated_text || line?.translation || '').trim()
+
+const randomCardHasTarget = (card) => randomCardTimelineFor(card).some((line) => randomTranscriptTargetOf(line))
+
+const randomCardTargetPreview = (card) => randomCardTimelineFor(card)
+  .map((line) => randomTranscriptTargetOf(line))
+  .filter(Boolean)
+  .join(' ')
 
 const isRandomTranscriptLineActive = (card, idx) => {
   const cardId = String(card?.id || '')
@@ -4705,38 +4784,48 @@ const isRandomTranscriptLineActive = (card, idx) => {
 }
 
 const syncRandomCardTranscriptHighlight = (player) => {
-  const timeline = randomCardTimeline.value
+  const timeline = randomCardTimelines.value[randomCardTimelineCardId.value] || []
   if (!timeline.length) return
   const idx = resolveTranscriptHighlightIndex(timeline, Number(player?.currentTime || 0), -0.03)
   if (idx === randomCardActiveLineIndex.value) return
   randomCardActiveLineIndex.value = idx
   nextTick(() => {
-    const el = document.querySelector('.random-transcript-line.active')
+    const el = document.querySelector('.random-transcript-seg.active')
     if (el && typeof el.scrollIntoView === 'function') {
       el.scrollIntoView({ block: 'nearest' })
     }
   })
 }
 
-const loadRandomCardTimelineFor = async (card) => {
+const ensureRandomCardTimeline = async (card) => {
   const cardId = String(card?.id || '')
-  const payload = card?.payload || {}
-  let timeline = []
-  const syncPath = sanitizeMediaUri(payload.sync_json_uri || '')
-  if (syncPath) {
-    timeline = await loadSyncTimelineByJsonPath(syncPath)
-  }
-  if (!timeline.length) {
-    timeline = buildTranscriptTimeline(String(payload.transcript || ''), Number(payload.duration_sec || 0))
-  }
-  timeline = timeline.filter((line) => String(line?.text || '').trim())
-  // 加载期间可能已经切到别的卡片/停止了播放。
-  if (randomCardTimelineCardId.value !== cardId) return
-  randomCardTimeline.value = timeline
-  if (randomCardAudioPlayer && randomCardAudioPlayingId.value === cardId) {
-    syncRandomCardTranscriptHighlight(randomCardAudioPlayer)
+  if (!cardId || randomCardTimelines.value[cardId] || randomCardTimelineLoading.has(cardId)) return
+  randomCardTimelineLoading.add(cardId)
+  try {
+    const payload = card?.payload || {}
+    let timeline = []
+    const syncPath = sanitizeMediaUri(payload.sync_json_uri || '')
+    if (syncPath) {
+      timeline = await loadSyncTimelineByJsonPath(syncPath)
+    }
+    if (!timeline.length) {
+      timeline = buildTranscriptTimeline(String(payload.transcript || ''), Number(payload.duration_sec || 0))
+    }
+    timeline = timeline.filter((line) => String(line?.text || '').trim())
+    randomCardTimelines.value = { ...randomCardTimelines.value, [cardId]: timeline }
+    if (randomCardAudioPlayer && randomCardAudioPlayingId.value === cardId) {
+      syncRandomCardTranscriptHighlight(randomCardAudioPlayer)
+    }
+  } finally {
+    randomCardTimelineLoading.delete(cardId)
   }
 }
+
+watch(currentRandomCards, (cards) => {
+  ;(Array.isArray(cards) ? cards : []).forEach((card) => {
+    if (card?.rowType === 'listening') ensureRandomCardTimeline(card)
+  })
+}, { immediate: true })
 
 const playRandomCardAudio = (card) => {
   if (String(card?.rowType || '') !== 'listening') return
@@ -4767,9 +4856,7 @@ const playRandomCardAudio = (card) => {
         randomCardAudioPlayingId.value = cardId
         randomCardAudioPaused.value = false
         randomCardTimelineCardId.value = cardId
-        randomCardTimeline.value = []
         randomCardActiveLineIndex.value = -1
-        loadRandomCardTimelineFor(card)
         player.ontimeupdate = () => {
           syncRandomCardTranscriptHighlight(player)
         }
@@ -4779,6 +4866,7 @@ const playRandomCardAudio = (card) => {
         player.onerror = () => {
           stopRandomCardAudio()
         }
+        ensureRandomCardTimeline(card)
         player.play().catch(() => {
           stopRandomCardAudio()
         })
@@ -4798,7 +4886,6 @@ const stopRandomCardAudio = () => {
   randomCardAudioPlayingId.value = ''
   randomCardAudioPaused.value = false
   randomCardTimelineCardId.value = ''
-  randomCardTimeline.value = []
   randomCardActiveLineIndex.value = -1
 }
 
@@ -7758,6 +7845,10 @@ kbd {
 }
 
 .review-phonetic {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
   margin-top: 12px;
   font-size: 12px;
   color: var(--ll-muted);
@@ -7796,7 +7887,7 @@ kbd {
 
 .review-answer {
   flex: 0 0 auto;
-  max-height: 46%;
+  max-height: 54%;
   overflow: auto;
   padding: 4px 2px 12px;
 }
@@ -7807,11 +7898,67 @@ kbd {
   background: linear-gradient(90deg, var(--ll-accent), transparent 70%);
 }
 
+.answer-word-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.answer-word {
+  font-size: 20px;
+  line-height: 1.2;
+}
+
 .answer-meta {
   display: flex;
-  gap: 16px;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
   font-size: 10.5px;
   color: var(--ll-muted);
+}
+
+.answer-meanings {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.answer-meaning {
+  display: flex;
+  gap: 8px;
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+.answer-meaning-index {
+  flex: 0 0 auto;
+  width: 16px;
+  font-size: 11px;
+  line-height: 1.9;
+  text-align: right;
+  color: var(--ll-muted);
+}
+
+.answer-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 14px;
+}
+
+.answer-source-text {
+  margin-top: 6px;
+  font-size: 13.5px;
+  line-height: 1.85;
+  color: var(--ll-text);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.answer-label-gap {
+  margin-top: 12px;
 }
 
 .answer-text {
@@ -8034,6 +8181,11 @@ kbd {
   overflow: hidden;
 }
 
+.random-card-text.target-preview {
+  color: var(--ll-muted);
+  -webkit-line-clamp: 5;
+}
+
 .random-card-head-row {
   display: flex;
   align-items: flex-start;
@@ -8086,19 +8238,50 @@ kbd {
   scroll-behavior: smooth;
 }
 
-.random-transcript-line {
+.random-transcript-seg {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
   padding: 5px 9px;
   border-radius: 6px;
-  font-size: 14.5px;
-  line-height: 1.75;
-  color: color-mix(in srgb, var(--ll-text) 78%, transparent);
-  transition: color 0.15s ease, background-color 0.15s ease;
+  transition: background-color 0.15s ease;
 }
 
-.random-transcript-line.active {
-  color: var(--ll-text);
+.random-transcript-empty {
+  padding: 10px 2px;
+  font-size: 13.5px;
+  color: var(--ll-muted);
+}
+
+.random-transcript-source {
+  font-size: 14.5px;
+  line-height: 1.7;
+  color: color-mix(in srgb, var(--ll-text) 80%, transparent);
+  word-break: break-word;
+}
+
+.random-transcript-target {
+  font-size: 13.5px;
+  line-height: 1.65;
+  color: var(--ll-muted);
+  word-break: break-word;
+}
+
+.random-transcript-seg.active {
   background: var(--ll-accent-wash);
   box-shadow: inset 2px 0 0 var(--ll-accent);
+}
+
+.random-transcript-seg.active .random-transcript-source {
+  color: var(--ll-text);
+}
+
+.random-transcript-seg.active .random-transcript-target {
+  color: color-mix(in srgb, var(--ll-text) 86%, transparent);
+}
+
+.random-display-modes {
+  margin-right: 6px;
 }
 
 .random-card-audio-row {
