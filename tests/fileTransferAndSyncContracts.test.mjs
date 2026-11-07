@@ -67,6 +67,11 @@ test('传输中心包含设备栏、拖拽、重试与 P2P 直传入口', () => 
   assert.match(transferVue, /p2p_send_files/)
   assert.match(transferVue, /p2p-file-progress/)
   assert.match(transferVue, /receiverToken/)
+  assert.match(transferVue, /filetransfer_list_local_ips/)
+  assert.match(transferVue, /selectedLocalUrl/)
+  assert.match(transferVue, /toggleHttpServer/)
+  assert.match(transferRs, /filetransfer_list_local_ips/)
+  assert.match(mainRs, /filetransfer_list_local_ips/)
 })
 
 test('WebRTC 信令配对码前后端都接通', () => {

@@ -1294,6 +1294,7 @@ async fn app_main() {
             commands::filetransfer::filetransfer_start_lan_discovery,
             commands::filetransfer::filetransfer_stop_lan_discovery,
             commands::filetransfer::filetransfer_get_peers,
+            commands::filetransfer::filetransfer_list_local_ips,
             commands::filetransfer::filetransfer_send_files,
             commands::filetransfer::filetransfer_send_entries,
             commands::filetransfer::filetransfer_collect_entries,

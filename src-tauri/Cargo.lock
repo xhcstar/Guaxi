@@ -5254,6 +5254,7 @@ dependencies = [
  "mime_guess",
  "mockito",
  "mp3lame-encoder",
+ "network-interface",
  "notify",
  "nucleo",
  "num-bigint 0.4.6",

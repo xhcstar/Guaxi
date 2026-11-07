@@ -1,4 +1,5 @@
 use crate::commands::settingview::{get_config_path, get_libraries_root, get_webrtc_signal_token};
+use network_interface::{Addr, NetworkInterface, NetworkInterfaceConfig};
 use actix_web::{web, App, HttpRequest, HttpResponse, HttpServer, Responder};
 use chrono::Utc;
 use futures_util::Stream;
@@ -50,6 +51,15 @@ pub struct HttpShareStatus {
     pub base_url: String,
     pub read_only: bool,
     pub requires_token: bool,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalIpInfo {
+    pub name: String,
+    pub address: String,
+    pub family: String,
+    pub is_loopback: bool,
 }
 
 #[derive(Clone, Serialize)]
@@ -1641,6 +1651,76 @@ pub async fn filetransfer_stop_http_share() -> Result<(), String> {
     *SHARE_TOKEN.lock() = String::new();
     SHARE_READ_ONLY.store(true, std::sync::atomic::Ordering::Relaxed);
     Ok(())
+}
+
+/// 列出本机可用于局域网访问的地址，供传输中心选择/复制。
+/// 监听端仍用 0.0.0.0，这样回环、多个网卡都能访问；这里只负责展示可分享的 IP。
+#[tauri::command]
+pub fn filetransfer_list_local_ips() -> Result<Vec<LocalIpInfo>, String> {
+    let interfaces = NetworkInterface::show().map_err(|e| format!("枚举本机网卡失败：{}", e))?;
+    let mut out = Vec::new();
+    for interface in interfaces {
+        for addr in interface.addr {
+            match addr {
+                Addr::V4(v4) => {
+                    let ip = v4.ip;
+                    if ip.is_unspecified() {
+                        continue;
+                    }
+                    out.push(LocalIpInfo {
+                        name: interface.name.clone(),
+                        address: ip.to_string(),
+                        family: "ipv4".to_string(),
+                        is_loopback: ip.is_loopback(),
+                    });
+                }
+                Addr::V6(v6) => {
+                    let ip = v6.ip;
+                    if ip.is_unspecified() || ip.is_loopback() {
+                        continue;
+                    }
+                    // 跳过 fe80::/10 链路本地地址，其它设备通常无法直接使用。
+                    if (ip.segments()[0] & 0xffc0) == 0xfe80 {
+                        continue;
+                    }
+                    out.push(LocalIpInfo {
+                        name: interface.name.clone(),
+                        address: ip.to_string(),
+                        family: "ipv6".to_string(),
+                        is_loopback: false,
+                    });
+                }
+            }
+        }
+    }
+    out.sort_by(|a, b| {
+        let rank = |item: &LocalIpInfo| {
+            if item.is_loopback {
+                3
+            } else {
+                match item.address.parse::<std::net::IpAddr>() {
+                    Ok(std::net::IpAddr::V4(v4)) if v4.is_private() => 0,
+                    Ok(std::net::IpAddr::V4(_)) => 1,
+                    _ => 2,
+                }
+            }
+        };
+        rank(a)
+            .cmp(&rank(b))
+            // 先按地址排序，保证同一 IP 出现在多个网卡时能连续去重。
+            .then_with(|| a.address.cmp(&b.address))
+            .then_with(|| a.name.cmp(&b.name))
+    });
+    out.dedup_by(|a, b| a.address == b.address);
+    if out.is_empty() {
+        out.push(LocalIpInfo {
+            name: "本机回环".to_string(),
+            address: "127.0.0.1".to_string(),
+            family: "ipv4".to_string(),
+            is_loopback: true,
+        });
+    }
+    Ok(out)
 }
 
 #[tauri::command]

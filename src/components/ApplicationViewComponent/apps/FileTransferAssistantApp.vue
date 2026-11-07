@@ -85,10 +85,30 @@
         </button>
 
         <div class="ftc-device-foot">
-          <button type="button" @click="copyMyUrl">复制我的地址</button>
-          <button v-if="receiverStatus?.baseUrl" type="button" class="ftc-mono" @click="copyText(receiverStatus.baseUrl)">
-            {{ receiverStatus.baseUrl }}
+          <div class="ftc-addr-head">
+            <span>本机地址</span>
+            <em :class="{ 'is-on': receiverStatus?.running }">
+              {{ receiverStatus?.running ? `HTTP 已开启 · ${receiverPortValue}` : 'HTTP 未开启' }}
+            </em>
+          </div>
+          <div v-if="!localIps.length" class="ftc-empty-mini">未发现可用网卡</div>
+          <button
+            v-for="ip in localIps"
+            :key="`${ip.name}-${ip.address}`"
+            type="button"
+            class="ftc-addr"
+            :class="{ 'is-active': selectedLocalIp === ip.address }"
+            @click="selectedLocalIp = ip.address"
+          >
+            <span class="ftc-addr-ip">{{ ip.address }}</span>
+            <span class="ftc-addr-name">{{ ip.name }}</span>
           </button>
+          <div class="ftc-addr-actions">
+            <button type="button" @click="toggleHttpServer">
+              {{ receiverStatus?.running ? '停止 HTTP 服务' : '开启 HTTP 服务' }}
+            </button>
+            <button type="button" :disabled="!selectedLocalUrl" @click="copyMyUrl">复制地址</button>
+          </div>
         </div>
       </aside>
 
@@ -179,7 +199,9 @@
           <div class="ftc-actions">
             <button type="button" :disabled="!!receiverStatus?.running" @click="startReceiver">启动接收</button>
             <button type="button" :disabled="!receiverStatus?.running" @click="stopReceiver">停止</button>
-            <span class="ftc-mono">{{ receiverStatus?.baseUrl || '未启动' }}</span>
+            <span class="ftc-mono">
+              {{ receiverStatus?.running ? `监听 ${receiverStatus.bindAddr}:${receiverStatus.port}（所有网卡）` : '未启动' }}
+            </span>
           </div>
 
           <h4>局域网发现</h4>
@@ -336,6 +358,8 @@ const shareReadOnly = ref(true)
 const receiverStatus = ref(null)
 const httpShareStatus = ref(null)
 const discoveryRunning = ref(false)
+const localIps = ref([])
+const selectedLocalIp = ref('')
 
 const peers = ref([])
 const tasks = ref([])
@@ -355,6 +379,13 @@ const discoverable = computed(() => Boolean(receiverStatus.value?.running) && di
 const activeTasks = computed(() => tasks.value.filter((task) => task.status === 'running' || task.status === 'paused'))
 const visibleTasks = computed(() => tasks.value.slice(0, 60))
 const targetLabel = computed(() => (selectedPeer.value ? `发送到 ${selectedPeer.value.name}` : '先选一个设备'))
+const receiverPortValue = computed(() => receiverStatus.value?.port || receiverPort.value)
+const selectedLocalUrl = computed(() => {
+  const ip = localIps.value.find((item) => item.address === selectedLocalIp.value)
+  if (!ip) return ''
+  const host = ip.family === 'ipv6' ? `[${ip.address}]` : ip.address
+  return `http://${host}:${receiverPortValue.value}`
+})
 
 const webrtcIceServersText = ref('stun:stun.cloudflare.com:3478\nstun:stun.l.google.com:19302')
 const webrtcLocalSdp = ref('')
@@ -421,7 +452,22 @@ const tagTypeForTask = (t) => {
 }
 
 const refreshAll = async () => {
-  await Promise.allSettled([refreshStatus(), refreshPeers(), refreshTasks(), refreshP2PPeers()])
+  await Promise.allSettled([refreshStatus(), refreshPeers(), refreshTasks(), refreshP2PPeers(), loadLocalIps()])
+}
+
+const loadLocalIps = async () => {
+  try {
+    const list = await invoke('filetransfer_list_local_ips')
+    localIps.value = Array.isArray(list) ? list : []
+    if (!localIps.value.some((item) => item.address === selectedLocalIp.value)) {
+      selectedLocalIp.value = (
+        localIps.value.find((item) => !item.isLoopback) || localIps.value[0]
+      )?.address || ''
+    }
+  } catch (error) {
+    logger.warn('[FTA] load local ips failed:', error)
+    localIps.value = []
+  }
 }
 
 const refreshP2PPeers = async () => {
@@ -516,6 +562,7 @@ const loadTransferPrefs = () => {
     if (Number(value?.sharePort) > 0) sharePort.value = Number(value.sharePort)
     if (typeof value?.shareRootDir === 'string') shareRootDir.value = value.shareRootDir
     if (typeof value?.shareReadOnly === 'boolean') shareReadOnly.value = value.shareReadOnly
+    if (typeof value?.selectedLocalIp === 'string') selectedLocalIp.value = value.selectedLocalIp
   } catch (error) {
     logger.warn('[FTA] load prefs failed:', error)
   }
@@ -535,6 +582,7 @@ const scheduleSaveTransferPrefs = () => {
         sharePort: sharePort.value,
         shareRootDir: shareRootDir.value,
         shareReadOnly: shareReadOnly.value,
+        selectedLocalIp: selectedLocalIp.value,
       }))
     } catch (error) {
       logger.warn('[FTA] save prefs failed:', error)
@@ -543,7 +591,7 @@ const scheduleSaveTransferPrefs = () => {
 }
 
 watch(
-  [receiverBindAddr, receiverPort, receiverSaveDir, discoveryPort, shareBindAddr, sharePort, shareRootDir, shareReadOnly],
+  [receiverBindAddr, receiverPort, receiverSaveDir, discoveryPort, shareBindAddr, sharePort, shareRootDir, shareReadOnly, selectedLocalIp],
   scheduleSaveTransferPrefs
 )
 
@@ -641,13 +689,25 @@ const clearFinished = async () => {
   }
 }
 
+const toggleHttpServer = async () => {
+  if (receiverStatus.value?.running) {
+    await stopReceiver()
+  } else {
+    await startReceiver()
+  }
+  await refreshAll()
+}
+
 const copyMyUrl = async () => {
-  const url = receiverStatus.value?.baseUrl
-  if (!url) {
-    transferNotice.value = '先开启「可被发现」或启动接收服务'
+  if (!receiverStatus.value?.running) {
+    transferNotice.value = '先开启 HTTP 服务，再复制地址'
     return
   }
-  await copyText(url)
+  if (!selectedLocalUrl.value) {
+    transferNotice.value = '没有可用的本机地址'
+    return
+  }
+  await copyText(selectedLocalUrl.value)
 }
 
 const sendToCustomUrl = async (folder) => {
@@ -1898,6 +1958,57 @@ onUnmounted(async () => {
   white-space: nowrap;
 }
 .ftc-device-foot button:hover { color: var(--guaxi-text-primary); background: var(--guaxi-hover-bg); }
+
+.ftc-addr-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 0 4px 2px;
+  color: var(--guaxi-text-secondary);
+  font-size: 9.5px;
+}
+.ftc-addr-head em { font-style: normal; opacity: 0.8; white-space: nowrap; }
+.ftc-addr-head em.is-on { color: var(--ftc-accent); opacity: 1; }
+.ftc-addr {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 5px 6px !important;
+  border: 1px solid transparent !important;
+  border-radius: 6px;
+  text-align: left;
+}
+.ftc-addr.is-active {
+  border-color: rgba(95, 179, 161, 0.42) !important;
+  background: rgba(95, 179, 161, 0.09);
+}
+.ftc-addr-ip {
+  flex: 0 0 auto;
+  color: var(--guaxi-text-primary);
+  font-family: var(--guaxi-editor-font-family);
+  font-size: 10px;
+}
+.ftc-addr-name {
+  min-width: 0;
+  color: var(--guaxi-text-secondary);
+  font-size: 9.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ftc-addr-actions { display: flex; gap: 5px; margin-top: 3px; }
+.ftc-addr-actions button {
+  flex: 1;
+  min-width: 0;
+  padding: 5px 4px !important;
+  border: 1px solid var(--guaxi-border) !important;
+  border-radius: 5px;
+  text-align: center;
+  white-space: nowrap;
+}
+.ftc-addr-actions button:disabled { opacity: 0.5; cursor: default; }
 
 .ftc-main {
   min-width: 0;
