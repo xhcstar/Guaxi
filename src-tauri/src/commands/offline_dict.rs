@@ -290,10 +290,11 @@ fn open_readonly(path: &Path) -> Result<Connection, String> {
         .map_err(|e| format!("打开离线词典失败: {}", e))
 }
 
+/// 查询列顺序：term, phonetic, pos, meanings_json, examples_json, synonyms_json。
 fn row_to_entry(row: &rusqlite::Row<'_>, manifest: &DictManifest) -> rusqlite::Result<DictEntry> {
-    let meanings_json: String = row.get(4)?;
-    let examples_json: String = row.get(5)?;
-    let synonyms_json: String = row.get(6)?;
+    let meanings_json: String = row.get(3)?;
+    let examples_json: String = row.get(4)?;
+    let synonyms_json: String = row.get(5)?;
     Ok(DictEntry {
         term: row.get(0)?,
         phonetic: row.get(1)?,

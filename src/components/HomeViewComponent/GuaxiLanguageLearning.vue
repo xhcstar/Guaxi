@@ -610,7 +610,7 @@
                       </template>
                       <template v-else-if="card.rowType === 'listening'">
                         <div class="random-card-word serif">{{ card.title }}</div>
-                        <div class="random-card-text clamped">{{ card.summary || card.note || '—' }}</div>
+                        <div class="random-card-text clamped">{{ card.summary || '—' }}</div>
                         <div class="random-card-audio-row">
                           <button class="random-audio-action" :class="randomCardAudioActionState(card)" :title="randomCardAudioActionTitle(card)" @click.stop="playRandomCardAudio(card)">
                             <Icon :icon="randomCardAudioActionIcon(card)" width="22" height="22" />
@@ -661,13 +661,27 @@
                         <div class="random-card-head-row">
                           <div class="random-card-word serif">{{ card.title }}</div>
                         </div>
-                        <div class="random-card-section">
-                          <div class="section-label">来源 / 备注</div>
-                          <div class="random-card-content">{{ card.note || '—' }}</div>
-                        </div>
-                        <div class="random-card-section">
+                        <div class="random-card-section grow">
                           <div class="section-label">原文 / 摘要</div>
-                          <div class="random-card-content scrollable" tabindex="0" @keydown.stop="handleListeningCardScrollKeydown">{{ card.sourceText || card.summary || '—' }}</div>
+                          <div
+                            v-if="randomCardTimelineFor(card).length"
+                            class="random-card-transcript scrollable"
+                            tabindex="0"
+                            @keydown.stop="handleListeningCardScrollKeydown"
+                          >
+                            <div
+                              v-for="(line, idx) in randomCardTimelineFor(card)"
+                              :key="`rt-${card.id}-${idx}`"
+                              class="random-transcript-line"
+                              :class="{ active: isRandomTranscriptLineActive(card, idx) }"
+                            >{{ line.text }}</div>
+                          </div>
+                          <div
+                            v-else
+                            class="random-card-content scrollable"
+                            tabindex="0"
+                            @keydown.stop="handleListeningCardScrollKeydown"
+                          >{{ card.sourceText || card.summary || '—' }}</div>
                         </div>
                         <div class="random-card-audio-row">
                           <button class="random-audio-action" :class="randomCardAudioActionState(card)" :title="randomCardAudioActionTitle(card)" @click.stop="playRandomCardAudio(card)">
@@ -1639,6 +1653,9 @@ const randomDeckIndex = ref(0)
 const randomFlippedMap = ref({})
 const randomCardAudioPlayingId = ref('')
 const randomCardAudioPaused = ref(false)
+const randomCardTimeline = ref([])
+const randomCardTimelineCardId = ref('')
+const randomCardActiveLineIndex = ref(-1)
 const currentTranscriptLineIndex = ref(0)
 const hoveredTranscriptIndex = ref(-1)
 const activeAudioPlayerRef = ref(null)
@@ -3589,10 +3606,13 @@ const applyReviewResult = (result) => {
   }
 }
 
+// 本地音频已丢失的听力条目放不出声，不该进入复习/抽查卡组。
+const isReviewableRow = (row) => row?.rowType !== 'listening' || row.payload?.audio_available !== false
+
 const reviewRowsBase = computed(() => {
   // 复习范围跟左侧“总学习项”一致，不受当前书架筛选影响；
   // 否则停在空书架（如例句 0 条）时点“开始今日复习”会直接无内容可复习。
-  return allRows.value.filter(matchesKeyword).filter((row) => {
+  return allRows.value.filter(matchesKeyword).filter(isReviewableRow).filter((row) => {
     const now = Date.now()
     const createdTs = row.createdAt ? new Date(row.createdAt).getTime() : 0
     const lastReviewedTs = row.lastReviewedAt ? new Date(row.lastReviewedAt).getTime() : 0
@@ -3619,6 +3639,7 @@ const reviewRowsBase = computed(() => {
   })
 })
 
+// 类型栏常驻显示，空类型也保留标签，避免 0 条时无处切换。
 const reviewTypeOptions = [
   { label: '混合', value: 'mixed' },
   { label: '单词', value: 'word' },
@@ -3715,7 +3736,14 @@ const gradeAndNext = (result) => {
 }
 
 const startReviewFromSelection = async () => {
+  const alreadyInReview = activeTab.value === 'review'
   await goToReview()
+  if (!alreadyInReview) return
+  if (reviewRows.value.length) {
+    message.info(`已应用筛选：共 ${reviewRows.value.length} 张卡片`)
+  } else {
+    message.warning('当前筛选下没有可复习的内容')
+  }
 }
 
 const toggleReviewDictation = () => {
@@ -4604,7 +4632,7 @@ const chunkByThree = (list) => {
 
 const drawRandomCards = () => {
   stopRandomCardAudio()
-  const candidates = filteredRows.value
+  const candidates = filteredRows.value.filter(isReviewableRow)
   if (!candidates.length) {
     randomDecks.value = []
     randomDeckIndex.value = 0
@@ -4666,6 +4694,50 @@ const openRandomCheckBoard = () => {
   }
 }
 
+const randomCardTimelineFor = (card) => {
+  const cardId = String(card?.id || '')
+  return cardId && cardId === randomCardTimelineCardId.value ? randomCardTimeline.value : []
+}
+
+const isRandomTranscriptLineActive = (card, idx) => {
+  const cardId = String(card?.id || '')
+  return cardId === randomCardTimelineCardId.value && Number(idx) === randomCardActiveLineIndex.value
+}
+
+const syncRandomCardTranscriptHighlight = (player) => {
+  const timeline = randomCardTimeline.value
+  if (!timeline.length) return
+  const idx = resolveTranscriptHighlightIndex(timeline, Number(player?.currentTime || 0), -0.03)
+  if (idx === randomCardActiveLineIndex.value) return
+  randomCardActiveLineIndex.value = idx
+  nextTick(() => {
+    const el = document.querySelector('.random-transcript-line.active')
+    if (el && typeof el.scrollIntoView === 'function') {
+      el.scrollIntoView({ block: 'nearest' })
+    }
+  })
+}
+
+const loadRandomCardTimelineFor = async (card) => {
+  const cardId = String(card?.id || '')
+  const payload = card?.payload || {}
+  let timeline = []
+  const syncPath = sanitizeMediaUri(payload.sync_json_uri || '')
+  if (syncPath) {
+    timeline = await loadSyncTimelineByJsonPath(syncPath)
+  }
+  if (!timeline.length) {
+    timeline = buildTranscriptTimeline(String(payload.transcript || ''), Number(payload.duration_sec || 0))
+  }
+  timeline = timeline.filter((line) => String(line?.text || '').trim())
+  // 加载期间可能已经切到别的卡片/停止了播放。
+  if (randomCardTimelineCardId.value !== cardId) return
+  randomCardTimeline.value = timeline
+  if (randomCardAudioPlayer && randomCardAudioPlayingId.value === cardId) {
+    syncRandomCardTranscriptHighlight(randomCardAudioPlayer)
+  }
+}
+
 const playRandomCardAudio = (card) => {
   if (String(card?.rowType || '') !== 'listening') return
   if (card?.payload?.audio_available === false) return
@@ -4678,6 +4750,7 @@ const playRandomCardAudio = (card) => {
       return
     }
     randomCardAudioPlayer.currentTime = 0
+    randomCardActiveLineIndex.value = -1
     randomCardAudioPaused.value = false
     randomCardAudioPlayer.play().catch(() => {
       stopRandomCardAudio()
@@ -4693,6 +4766,13 @@ const playRandomCardAudio = (card) => {
         randomCardAudioPlayer = player
         randomCardAudioPlayingId.value = cardId
         randomCardAudioPaused.value = false
+        randomCardTimelineCardId.value = cardId
+        randomCardTimeline.value = []
+        randomCardActiveLineIndex.value = -1
+        loadRandomCardTimelineFor(card)
+        player.ontimeupdate = () => {
+          syncRandomCardTranscriptHighlight(player)
+        }
         player.onended = () => {
           stopRandomCardAudio()
         }
@@ -4709,6 +4789,7 @@ const playRandomCardAudio = (card) => {
 
 const stopRandomCardAudio = () => {
   if (randomCardAudioPlayer) {
+    randomCardAudioPlayer.ontimeupdate = null
     randomCardAudioPlayer.onended = null
     randomCardAudioPlayer.onerror = null
     randomCardAudioPlayer.pause()
@@ -4716,6 +4797,9 @@ const stopRandomCardAudio = () => {
   }
   randomCardAudioPlayingId.value = ''
   randomCardAudioPaused.value = false
+  randomCardTimelineCardId.value = ''
+  randomCardTimeline.value = []
+  randomCardActiveLineIndex.value = -1
 }
 
 const isRandomCardAudioActive = (card) => String(card?.id || '') === randomCardAudioPlayingId.value
@@ -7858,14 +7942,17 @@ kbd {
 }
 
 .random-cards-grid {
+  flex: 1 1 auto;
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 12px;
+  grid-auto-rows: minmax(0, 1fr);
+  gap: 16px;
   min-height: 0;
 }
 
 .random-board-card {
-  min-height: 460px;
+  display: flex;
+  min-height: 480px;
   perspective: 1400px;
   animation: cardPop 0.2s ease;
 }
@@ -7878,7 +7965,8 @@ kbd {
 .random-card-flip {
   position: relative;
   width: 100%;
-  min-height: 460px;
+  height: 100%;
+  min-height: 480px;
   transform-style: preserve-3d;
   transition: transform 0.38s cubic-bezier(0.2, 0.7, 0.2, 1);
 }
@@ -7892,8 +7980,8 @@ kbd {
   inset: 0;
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding: 15px;
+  gap: 12px;
+  padding: 20px;
   border: 1px solid var(--ll-border);
   border-radius: 12px;
   backface-visibility: hidden;
@@ -7914,34 +8002,34 @@ kbd {
 }
 
 .random-card-type {
-  font-size: 9px;
+  font-size: 10px;
   letter-spacing: 0.14em;
   text-transform: uppercase;
   color: var(--ll-muted);
 }
 
 .random-card-word {
-  font-size: 28px;
+  font-size: 30px;
   line-height: 1.15;
   word-break: break-word;
 }
 
 .random-card-phonetic {
-  font-size: 11px;
+  font-size: 12.5px;
   color: var(--ll-muted);
 }
 
 .random-card-text {
-  font-size: 11.5px;
-  line-height: 1.6;
-  color: var(--ll-muted);
+  font-size: 14px;
+  line-height: 1.7;
+  color: color-mix(in srgb, var(--ll-text) 84%, transparent);
   white-space: pre-wrap;
   word-break: break-word;
 }
 
 .random-card-text.clamped {
   display: -webkit-box;
-  -webkit-line-clamp: 6;
+  -webkit-line-clamp: 7;
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
@@ -7963,12 +8051,18 @@ kbd {
 .random-card-section {
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: 6px;
+}
+
+.random-card-section.grow {
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 .random-card-content {
-  font-size: 11.5px;
-  line-height: 1.65;
+  font-size: 14px;
+  line-height: 1.75;
+  color: color-mix(in srgb, var(--ll-text) 84%, transparent);
   white-space: pre-wrap;
   word-break: break-word;
 }
@@ -7977,6 +8071,34 @@ kbd {
   max-height: 180px;
   overflow: auto;
   padding-right: 4px;
+}
+
+.random-card-section.grow .random-card-content.scrollable,
+.random-card-section.grow .random-card-transcript {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
+}
+
+.random-card-transcript {
+  overflow: auto;
+  padding-right: 4px;
+  scroll-behavior: smooth;
+}
+
+.random-transcript-line {
+  padding: 5px 9px;
+  border-radius: 6px;
+  font-size: 14.5px;
+  line-height: 1.75;
+  color: color-mix(in srgb, var(--ll-text) 78%, transparent);
+  transition: color 0.15s ease, background-color 0.15s ease;
+}
+
+.random-transcript-line.active {
+  color: var(--ll-text);
+  background: var(--ll-accent-wash);
+  box-shadow: inset 2px 0 0 var(--ll-accent);
 }
 
 .random-card-audio-row {

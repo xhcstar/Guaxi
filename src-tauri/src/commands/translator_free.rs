@@ -122,6 +122,13 @@ pub async fn translate_text_free(
             None => pending.push(idx),
         }
     }
+    let offline_hits = clean.len() - pending.len();
+    if offline_hits > 0 {
+        info!(
+            "[Translate] 离线词典命中 {} / {} 条 (from={}, to={})",
+            offline_hits, clean.len(), from, to
+        );
+    }
     if pending.is_empty() {
         info!("[Translate] {} 条 (from={}, to={}) 由 OfflineDict 完成", clean.len(), from, to);
         return Ok(TranslationResult {
