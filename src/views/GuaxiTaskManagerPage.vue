@@ -113,11 +113,12 @@
                 class="tm-capture-input"
                 placeholder="记一件…  支持 明天 / @生活 / !A / #习惯"
               />
-              <select v-model="captureCategory" class="tm-capture-sel">
-                <option value="work">工作</option>
-                <option value="life">生活</option>
-                <option value="study">学习</option>
-              </select>
+              <n-select
+                v-model:value="captureCategory"
+                size="small"
+                :options="categoryOptions"
+                class="tm-capture-select"
+              />
               <button class="tm-capture-btn" :disabled="!captureText.trim() || capturing">
                 {{ capturing ? '…' : '记下' }}
               </button>
@@ -262,11 +263,12 @@
               <n-button :type="planMode === 'calendar' ? 'primary' : 'default'" @click="setPlanMode('calendar')">日历</n-button>
               <n-button :type="planMode === 'goals' ? 'primary' : 'default'" @click="setPlanMode('goals')">目标</n-button>
             </n-button-group>
-            <select v-model="captureCategory" class="tm-capture-sel" title="新建分类">
-              <option value="work">工作</option>
-              <option value="life">生活</option>
-              <option value="study">学习</option>
-            </select>
+            <n-select
+              v-model:value="captureCategory"
+              size="small"
+              :options="categoryOptions"
+              class="tm-capture-select"
+            />
             <input
               v-model="captureText"
               class="tm-plan-capture"
@@ -2081,7 +2083,6 @@ onUnmounted(() => {
 }
 .tm-date-clear:hover { color: #d03050; }
 /* 原生控件的展开面板（select 下拉、date 日历）由 color-scheme 决定明暗，不跟随 CSS 变量。 */
-.tm-dark .tm-capture-sel,
 .tm-dark .tm-status-overlay,
 .tm-dark .tm-date-overlay { color-scheme: dark; }
 .tm-type { font-size: 11px; padding: 0 6px; border-radius: 8px; color: #fff; }
@@ -2275,7 +2276,7 @@ onUnmounted(() => {
 .tm-capture-plus { color: var(--guaxi-text-secondary); font-size: 18px; line-height: 1; }
 .tm-capture-input { flex: 1; min-width: 0; border: none; outline: none; background: transparent; color: var(--guaxi-text-primary); font: inherit; font-size: 15px; padding: 4px 0; }
 .tm-capture-input::placeholder { color: var(--guaxi-text-secondary); opacity: 0.75; }
-.tm-capture-sel { border: 1px solid var(--guaxi-border); border-radius: 8px; background: transparent; color: var(--guaxi-text-secondary); font: inherit; font-size: 12px; padding: 3px 6px; color-scheme: light; }
+.tm-capture-select { width: 92px; flex: 0 0 auto; }
 .tm-capture-btn { border: none; border-radius: 8px; background: var(--tm-accent); color: #fff; font: inherit; font-size: 13px; padding: 6px 14px; cursor: pointer; }
 .tm-capture-btn:disabled { opacity: 0.45; cursor: default; }
 .tm-capture-hint { margin: 6px 2px 0; font-size: 11px; color: var(--guaxi-text-secondary); }
