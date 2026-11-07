@@ -457,6 +457,295 @@ async fn ft_ping() -> impl Responder {
     }))
 }
 
+/// 接收服务的浏览器入口页：其他设备直接用浏览器打开 `http://本机IP:端口/` 即可发文件。
+/// 页面只依赖下方这几个 `/ft/upload/*` 接口，不引入外部静态资源（离线、跨网段都能用）。
+const RECEIVER_HOME_HTML: &str = r##"<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Guaxi 文件接收</title>
+<style>
+:root {
+  color-scheme: light dark;
+  --bg: #f5f7fa; --panel: #ffffff; --text: #1f2328; --muted: #6b7280;
+  --border: #e3e8ef; --accent: #5fb3a1; --accent-text: #0d1512;
+  --danger: #d9534f; --bar: rgba(15, 23, 42, 0.08); --shadow: rgba(15, 23, 42, 0.08);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #282c34; --panel: #21252b; --text: #d8e0eb; --muted: #9da5b4;
+    --border: #3e4451; --danger: #e05b5b; --bar: rgba(255, 255, 255, 0.1);
+    --shadow: rgba(0, 0, 0, 0.35);
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; min-height: 100vh; background: var(--bg); color: var(--text);
+  font: 14px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
+}
+.card {
+  max-width: 720px; margin: 8vh auto 40px; padding: 28px;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
+  box-shadow: 0 12px 32px var(--shadow);
+}
+h1 { margin: 0; font-size: 20px; font-weight: 650; letter-spacing: 0.01em; }
+.sub { margin-top: 6px; color: var(--muted); font-size: 12.5px; }
+.status { display: flex; align-items: center; gap: 7px; margin-top: 14px; font-size: 12px; color: var(--muted); }
+.dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
+.status.ok .dot { background: var(--accent); box-shadow: 0 0 0 3px rgba(95, 179, 161, 0.18); }
+.status.bad .dot { background: var(--danger); }
+.drop {
+  margin-top: 18px; padding: 34px 20px; text-align: center;
+  border: 1px dashed var(--border); border-radius: 12px; transition: border-color .18s, background .18s;
+}
+.drop.over { border-color: var(--accent); background: rgba(95, 179, 161, 0.08); }
+.drop p { margin: 0; font-weight: 600; }
+.drop small { display: block; margin-top: 4px; color: var(--muted); font-size: 12px; }
+.actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 14px; }
+button {
+  height: 32px; padding: 0 14px; border-radius: 7px; cursor: pointer;
+  border: 1px solid var(--border); background: transparent; color: var(--text); font-size: 12.5px;
+}
+button:hover:not(:disabled) { background: var(--bar); }
+button:disabled { opacity: .5; cursor: default; }
+button.primary { border-color: transparent; background: var(--accent); color: var(--accent-text); font-weight: 600; }
+.token { display: flex; flex-direction: column; gap: 5px; margin-top: 16px; color: var(--muted); font-size: 12px; }
+.token input {
+  height: 32px; padding: 0 10px; border-radius: 7px; font: inherit; font-size: 13px;
+  border: 1px solid var(--border); background: transparent; color: var(--text);
+}
+.token input:focus { outline: none; border-color: var(--accent); }
+.list { list-style: none; margin: 16px 0 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.item { padding: 9px 11px; border: 1px solid var(--border); border-radius: 9px; }
+.item .row { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.item .name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; }
+.item .meta { flex: 0 0 auto; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.item .bar { height: 3px; margin-top: 7px; border-radius: 2px; background: var(--bar); overflow: hidden; }
+.item .bar > span { display: block; width: 0; height: 100%; background: var(--accent); transition: width .18s ease; }
+.item.ok .bar > span { background: #63b37a; }
+.item.bad .bar > span { background: var(--danger); }
+.item.bad .meta { color: var(--danger); }
+.hint { margin: 16px 0 0; color: var(--muted); font-size: 11.5px; }
+</style>
+</head>
+<body>
+<main class="card">
+  <h1>Guaxi 文件接收</h1>
+  <div class="sub">发往这台电脑 · 局域网直连 · 支持断点续传</div>
+  <div id="status" class="status"><span class="dot"></span><span id="statusText">正在连接接收服务…</span></div>
+
+  <div id="drop" class="drop">
+    <p>拖入文件，或点击下方按钮选择</p>
+    <small>选择文件可多选；文件夹会保留目录结构</small>
+    <div class="actions">
+      <button type="button" class="primary" id="pickFiles">选择文件</button>
+      <button type="button" id="pickFolder">选择文件夹</button>
+    </div>
+  </div>
+
+  <label class="token">
+    <span>配对码（接收端开启时需要）</span>
+    <input id="token" type="password" autocomplete="off" placeholder="未设置可留空"/>
+  </label>
+
+  <ul id="list" class="list"></ul>
+  <p class="hint">同名文件会自动改名，不覆盖已有文件。</p>
+
+  <input id="fileInput" type="file" multiple hidden/>
+  <input id="dirInput" type="file" webkitdirectory hidden/>
+</main>
+<script>
+(function () {
+  var statusEl = document.getElementById('status')
+  var statusText = document.getElementById('statusText')
+  var tokenEl = document.getElementById('token')
+  var listEl = document.getElementById('list')
+  var dropEl = document.getElementById('drop')
+  var fileInput = document.getElementById('fileInput')
+  var dirInput = document.getElementById('dirInput')
+  var pickFiles = document.getElementById('pickFiles')
+  var pickFolder = document.getElementById('pickFolder')
+  var busy = false
+
+  function wait(ms) { return new Promise(function (r) { setTimeout(r, ms) }) }
+
+  function headers(json) {
+    var h = {}
+    if (json) h['Content-Type'] = 'application/json'
+    var token = tokenEl.value.trim()
+    if (token) h['x-guaxi-token'] = token
+    return h
+  }
+
+  async function request(url, options) {
+    var res = await fetch(url, options || {})
+    if (res.status === 401) throw new Error('配对码不正确')
+    if (!res.ok) {
+      var msg = 'HTTP ' + res.status
+      try {
+        var data = await res.json()
+        if (data && data.error) msg = data.error
+      } catch (e) {}
+      throw new Error(msg)
+    }
+    return res
+  }
+
+  function ping() {
+    fetch('/ft/ping', { cache: 'no-store' })
+      .then(function (res) { return res.json() })
+      .then(function (data) {
+        statusEl.className = 'status ok'
+        var id = String((data && data.peer_id) || '').slice(0, 8)
+        statusText.textContent = id ? '已连接接收服务 · ' + id : '已连接接收服务'
+      })
+      .catch(function () {
+        statusEl.className = 'status bad'
+        statusText.textContent = '未连接接收服务，请确认已在本机开启 HTTP 服务'
+      })
+  }
+
+  function newUploadId() {
+    var bytes = crypto.getRandomValues(new Uint8Array(16))
+    var out = ''
+    for (var i = 0; i < bytes.length; i += 1) out += bytes[i].toString(16).padStart(2, '0')
+    return out
+  }
+
+  function addRow(name) {
+    var li = document.createElement('li')
+    li.className = 'item'
+    var row = document.createElement('div')
+    row.className = 'row'
+    var nameEl = document.createElement('span')
+    nameEl.className = 'name'
+    nameEl.textContent = name
+    var meta = document.createElement('span')
+    meta.className = 'meta'
+    meta.textContent = '等待中'
+    row.appendChild(nameEl)
+    row.appendChild(meta)
+    var bar = document.createElement('div')
+    bar.className = 'bar'
+    var fill = document.createElement('span')
+    bar.appendChild(fill)
+    li.appendChild(row)
+    li.appendChild(bar)
+    listEl.insertBefore(li, listEl.firstChild)
+    return {
+      progress: function (ratio) {
+        var p = Math.max(0, Math.min(1, ratio))
+        fill.style.width = (p * 100).toFixed(1) + '%'
+        meta.textContent = (p * 100).toFixed(0) + '%'
+      },
+      done: function (text) { li.classList.add('ok'); fill.style.width = '100%'; meta.textContent = text },
+      fail: function (text) { li.classList.add('bad'); meta.textContent = text }
+    }
+  }
+
+  async function uploadOne(file, relativePath, row) {
+    var uploadId = newUploadId()
+    var initRes = await request('/ft/upload/init', {
+      method: 'POST',
+      headers: headers(true),
+      body: JSON.stringify({
+        upload_id: uploadId,
+        file_name: file.name,
+        file_size: file.size,
+        mtime_ms: file.lastModified || Date.now(),
+        relative_path: relativePath || ''
+      })
+    })
+    var init = await initRes.json()
+    var offset = Number((init && init.received_bytes) || 0)
+    var chunkSize = 128 * 1024
+    while (offset < file.size) {
+      var blob = file.slice(offset, Math.min(file.size, offset + chunkSize))
+      await request('/ft/upload/chunk?upload_id=' + encodeURIComponent(uploadId) + '&offset=' + offset, {
+        method: 'POST',
+        headers: headers(false),
+        body: blob
+      })
+      offset += blob.size
+      row.progress(file.size ? offset / file.size : 1)
+    }
+    await request('/ft/upload/complete', {
+      method: 'POST',
+      headers: headers(true),
+      body: JSON.stringify({ upload_id: uploadId })
+    })
+    row.done('已完成')
+  }
+
+  async function sendFiles(items) {
+    if (busy || !items.length) return
+    busy = true
+    pickFiles.disabled = true
+    pickFolder.disabled = true
+    try {
+      for (var i = 0; i < items.length; i += 1) {
+        var item = items[i]
+        var name = item.relative || item.file.name
+        var row = addRow(name)
+        try {
+          await uploadOne(item.file, item.relative, row)
+        } catch (error) {
+          row.fail(String((error && error.message) || error || '发送失败'))
+        }
+      }
+    } finally {
+      busy = false
+      pickFiles.disabled = false
+      pickFolder.disabled = false
+    }
+  }
+
+  function fromFileList(files, folder) {
+    return Array.prototype.map.call(files || [], function (file) {
+      return { file: file, relative: folder ? (file.webkitRelativePath || '') : '' }
+    })
+  }
+
+  pickFiles.addEventListener('click', function () { fileInput.click() })
+  pickFolder.addEventListener('click', function () { dirInput.click() })
+
+  fileInput.addEventListener('change', function () {
+    var items = fromFileList(fileInput.files, false)
+    fileInput.value = ''
+    sendFiles(items)
+  })
+
+  dirInput.addEventListener('change', function () {
+    var items = fromFileList(dirInput.files, true)
+    dirInput.value = ''
+    sendFiles(items)
+  })
+
+  dropEl.addEventListener('dragover', function (ev) {
+    ev.preventDefault()
+    dropEl.classList.add('over')
+  })
+  dropEl.addEventListener('dragleave', function () { dropEl.classList.remove('over') })
+  dropEl.addEventListener('drop', function (ev) {
+    ev.preventDefault()
+    dropEl.classList.remove('over')
+    sendFiles(fromFileList(ev.dataTransfer && ev.dataTransfer.files, false))
+  })
+
+  ping()
+})()
+</script>
+</body>
+</html>"##;
+
+async fn ft_home() -> impl Responder {
+    HttpResponse::Ok()
+        .content_type("text/html; charset=utf-8")
+        .insert_header(("Cache-Control", "no-store"))
+        .body(RECEIVER_HOME_HTML)
+}
+
 #[derive(Default)]
 struct SignalState {
     rooms: HashMap<String, HashMap<String, actix::Recipient<SignalServerPush>>>,
@@ -1517,6 +1806,8 @@ pub async fn filetransfer_start_receiver(
         App::new()
             .app_data(web::Data::new(store.clone()))
             .app_data(web::Data::new(server_app.clone()))
+            .route("/", web::get().to(ft_home))
+            .route("/index.html", web::get().to(ft_home))
             .route("/ft/ping", web::get().to(ft_ping))
             .route("/ft/signal", web::get().to(ft_signal_ws))
             .route("/ft/upload/init", web::post().to(ft_upload_init))
