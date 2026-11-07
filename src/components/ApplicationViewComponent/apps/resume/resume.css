@@ -293,13 +293,36 @@
 
 /* ── 简历库 ──────────────────────────────────────────── */
 .rs-rail {
+  grid-column: 1;
+  position: relative;
   display: flex;
   flex-direction: column;
   min-height: 0;
   border-right: 1px solid var(--rs-line);
   background: color-mix(in srgb, var(--rs-surface) 55%, transparent);
-  overflow: hidden;
+  overflow: visible;
 }
+.rs-rail-resizer {
+  position: absolute;
+  top: 0;
+  right: -3px;
+  bottom: 0;
+  width: 6px;
+  z-index: 7;
+  cursor: col-resize;
+}
+.rs-rail-resizer::after {
+  content: '';
+  position: absolute;
+  left: 2px;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: transparent;
+  transition: background .14s ease;
+}
+.rs-rail-resizer:hover::after { background: var(--rs-accent); }
+.rs-rail.is-resizing .rs-rail-resizer::after { background: var(--rs-accent); }
 .rs-body.no-rail .rs-rail { border-right: 0; visibility: hidden; }
 .rs-rail-head { padding: 14px 14px 10px; display: flex; flex-direction: column; gap: 10px; }
 .rs-rail-title-row { display: flex; align-items: baseline; gap: 8px; }
@@ -379,6 +402,7 @@
 .rs-doc.is-active .rs-doc-spine { width: 3px; background: var(--rs-accent); }
 .rs-doc-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
 .rs-doc-title {
+  padding-right: 66px;
   font-family: var(--rs-serif);
   font-size: 14px;
   color: var(--rs-ink);
@@ -465,6 +489,8 @@
 
 /* ── 编辑器 ──────────────────────────────────────────── */
 .rs-editor {
+  grid-column: 2;
+  min-width: 0;
   min-height: 0;
   overflow: auto;
   scroll-behavior: smooth;
@@ -718,6 +744,7 @@
 
 /* ── 预览 ────────────────────────────────────────────── */
 .rs-split {
+  grid-column: 3;
   cursor: col-resize;
   background: transparent;
   position: relative;
@@ -735,6 +762,7 @@
 .rs-split:hover::after, .rs-body.is-resizing .rs-split::after { background: var(--rs-accent); }
 
 .rs-preview {
+  grid-column: 4;
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -943,6 +971,22 @@
   background: var(--rs-accent);
   border-radius: 2px;
 }
+.rs-template-card-actions {
+  position: absolute;
+  top: 7px;
+  left: 7px;
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--rs-line);
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--rs-surface) 90%, transparent);
+  box-shadow: var(--rs-shadow);
+  opacity: 0;
+  transition: opacity .12s ease;
+}
+.rs-template-card:hover .rs-template-card-actions,
+.rs-template-card:focus-within .rs-template-card-actions { opacity: 1; }
 
 .rs-vars {
   margin-top: 16px;

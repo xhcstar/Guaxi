@@ -102,7 +102,12 @@
       :class="{ 'no-rail': !railOpen, 'no-preview': !previewOpen, 'is-resizing': resizing }"
       :style="bodyStyle"
     >
-      <ResumeLibrary v-show="railOpen" @import="io.importBundleFile" />
+      <ResumeLibrary
+        v-show="railOpen"
+        @import="io.importBundleFile"
+        @resize="onRailResize"
+        @resize-end="persistRailWidth"
+      />
 
       <ResumeEditor :theme="theme" />
 
@@ -166,6 +171,8 @@ const templateAccent = computed(() => store.activeTemplate.accent || '#8a6d4b')
 
 const railOpen = ref(localStorage.getItem('guaxi.resume.railOpen') !== '0')
 const previewOpen = ref(localStorage.getItem('guaxi.resume.previewOpen') !== '0')
+const storedRailWidth = Number(localStorage.getItem('guaxi.resume.railWidth'))
+const railWidth = ref(storedRailWidth >= 210 && storedRailWidth <= 520 ? storedRailWidth : 266)
 const previewWidth = ref(Number(localStorage.getItem('guaxi.resume.previewWidth')) || 560)
 const templateOpen = ref(false)
 const versionOpen = ref(false)
@@ -183,12 +190,20 @@ const saveLabel = computed(() => {
 })
 
 const bodyStyle = computed(() => {
-  const rail = railOpen.value ? '266px' : '0px'
+  const rail = railOpen.value ? `${railWidth.value}px` : '0px'
   if (!previewOpen.value) {
     return { gridTemplateColumns: `${rail} minmax(0, 1fr)` }
   }
   return { gridTemplateColumns: `${rail} minmax(360px, 1fr) 5px ${previewWidth.value}px` }
 })
+
+function onRailResize(width) {
+  railWidth.value = width
+}
+
+function persistRailWidth() {
+  localStorage.setItem('guaxi.resume.railWidth', String(Math.round(railWidth.value)))
+}
 
 function toggleRail() {
   railOpen.value = !railOpen.value

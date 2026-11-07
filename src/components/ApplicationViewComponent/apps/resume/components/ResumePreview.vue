@@ -21,13 +21,16 @@
       <div
         v-if="store.doc"
         class="rs-paper"
-        :style="{ width: `${794 * scale}px`, minHeight: `${1123 * scale}px` }"
+        :style="{ '--rs-scale': scale, height: `${frameHeight * scale}px` }"
       >
         <iframe
           :key="frameKey"
+          ref="frame"
           :srcdoc="html"
+          :style="{ height: `${frameHeight}px` }"
           sandbox="allow-same-origin"
           title="简历预览"
+          @load="measureFrame"
         />
       </div>
       <div v-else class="rs-preview-empty">打开一份简历后，这里会实时预览排版</div>
@@ -46,9 +49,11 @@ import { renderResumeHtml, stripScriptsForPreview } from '../render/renderResume
 
 const store = useResumeStore()
 const stage = ref(null)
+const frame = ref(null)
 const scale = ref(0.8)
 const autoFit = ref(true)
 const renderedHtml = ref('')
+const frameHeight = ref(1123)
 let renderTimer = null
 let observer = null
 
@@ -63,6 +68,19 @@ function computeHtml() {
   renderedHtml.value = stripScriptsForPreview(
     renderResumeHtml(store.doc, store.activeTemplateHtml),
   )
+}
+
+function measureFrame() {
+  const el = frame.value
+  const doc = el?.contentDocument
+  if (!doc) return
+  const apply = () => {
+    if (frame.value !== el) return
+    const height = Math.max(doc.documentElement?.scrollHeight || 0, doc.body?.scrollHeight || 0)
+    frameHeight.value = Math.max(1123, Math.ceil(height))
+  }
+  apply()
+  doc.fonts?.ready?.then(apply).catch(() => {})
 }
 
 watch(

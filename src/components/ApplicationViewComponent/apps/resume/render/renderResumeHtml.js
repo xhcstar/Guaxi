@@ -23,11 +23,12 @@ export function toLines(text) {
 
 const hasText = (value) => String(value ?? '').trim().length > 0
 
+const ITEM_TEXT_KEYS = ['period', 'school', 'college', 'major', 'degree', 'company', 'department', 'role', 'name', 'description', 'details']
+
 function isItemEmpty(type, item) {
   if (!item) return true
   if (type === 'skills') return !hasText(item.text)
-  return ['period', 'school', 'college', 'major', 'degree', 'company', 'department', 'role', 'name', 'description', 'details']
-    .some((key) => hasText(item[key]))
+  return !ITEM_TEXT_KEYS.some((key) => hasText(item[key]))
 }
 
 function renderList(lines, className = 'resume-list') {
@@ -181,9 +182,33 @@ ${content}
 }
 
 export function stripScriptsForPreview(html) {
-  return String(html || '')
-    .replace(/<script[^>]*>[^]*?<\/script>/gi, '')
-    .replace(/<script[^>]*\/>/gi, '')
+  const content = String(html || '')
+  if (!content) return ''
+  const cleanup = (root) => {
+    root.querySelectorAll('script').forEach((node) => node.remove())
+    root.querySelectorAll('*').forEach((node) => {
+      for (const attr of Array.from(node.attributes)) {
+        if (/^on/i.test(attr.name)) node.removeAttribute(attr.name)
+      }
+    })
+    return root
+  }
+  // srcdoc 的 sandbox 不含 allow-scripts，模板里残留的脚本会在控制台刷
+  // "Blocked script execution" 报错；这里按 DOM 解析后再剥除，避免正则漏掉
+  // 带属性或非标准写法的 <script>。
+  if (typeof DOMParser !== 'undefined') {
+    try {
+      const doc = new DOMParser().parseFromString(content, 'text/html')
+      cleanup(doc)
+      const doctype = /^\s*<!doctype/i.test(content) ? '<!doctype html>\n' : ''
+      return doctype + doc.documentElement.outerHTML
+    } catch {
+      // 解析失败时退回正则清理。
+    }
+  }
+  return content
+    .replace(/<script\b[^>]*>[^]*?<\/script\s*>/gi, '')
+    .replace(/<script\b[^>]*\/\s*>/gi, '')
     .replace(/\son[a-z]+\s*=\s*"[^"]*"/gi, '')
     .replace(/\son[a-z]+\s*=\s*'[^']*'/gi, '')
 }

@@ -1,5 +1,5 @@
 <template>
-  <aside class="rs-rail">
+  <aside class="rs-rail" :class="{ 'is-resizing': resizing }">
     <div class="rs-rail-head">
       <div class="rs-rail-title-row">
         <span class="rs-rail-title">{{ trashMode ? '回收站' : '简历库' }}</span>
@@ -101,11 +101,18 @@
         {{ store.storagePath ? `本地存储 · ${store.storagePath}` : '本地 SQLite 存储' }}
       </span>
     </div>
+
+    <div
+      class="rs-rail-resizer"
+      title="拖动调整简历库宽度，双击恢复默认"
+      @mousedown="startResize"
+      @dblclick="emit('resize', DEFAULT_RAIL_WIDTH); emit('resize-end')"
+    />
   </aside>
 </template>
 
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, onBeforeUnmount, ref } from 'vue'
 import { Icon } from '@iconify/vue'
 import searchIcon from '@iconify-icons/lucide/search'
 import xIcon from '@iconify-icons/lucide/x'
@@ -120,13 +127,51 @@ import { useResumeStore, relativeTime } from '../store/resumeStore'
 import { askConfirm } from '../ui'
 import { BUILTIN_TEMPLATES } from '../render/templates'
 
-defineEmits(['import'])
+const DEFAULT_RAIL_WIDTH = 266
+const emit = defineEmits(['import', 'resize', 'resize-end'])
 
 const store = useResumeStore()
 const keyword = ref('')
 const trashMode = ref(false)
 const restoreIcon = rotateCcwIcon
 const backIcon = arrowLeftIcon
+
+let resizeStartX = 0
+let resizeStartWidth = 0
+const resizing = ref(false)
+
+function onResizeMove(event) {
+  if (!resizing.value) return
+  const next = resizeStartWidth + (event.clientX - resizeStartX)
+  const max = Math.min(520, Math.round(window.innerWidth * 0.45))
+  emit('resize', Math.max(210, Math.min(next, max)))
+}
+
+function stopResize() {
+  if (!resizing.value) return
+  resizing.value = false
+  document.body.style.cursor = ''
+  document.body.style.userSelect = ''
+  document.removeEventListener('mousemove', onResizeMove)
+  document.removeEventListener('mouseup', stopResize)
+  emit('resize-end')
+}
+
+function startResize(event) {
+  event.preventDefault()
+  resizing.value = true
+  resizeStartX = event.clientX
+  resizeStartWidth = event.currentTarget.parentElement.getBoundingClientRect().width
+  document.body.style.cursor = 'col-resize'
+  document.body.style.userSelect = 'none'
+  document.addEventListener('mousemove', onResizeMove)
+  document.addEventListener('mouseup', stopResize)
+}
+
+onBeforeUnmount(() => {
+  document.removeEventListener('mousemove', onResizeMove)
+  document.removeEventListener('mouseup', stopResize)
+})
 
 const sourceList = computed(() => (trashMode.value ? store.deletedDocs : store.docs))
 
