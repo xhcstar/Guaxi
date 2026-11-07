@@ -593,13 +593,13 @@
     </n-drawer>
 
     <!-- 导出抽屉 -->
-    <n-drawer v-model:show="showExport" :width="640" placement="right">
+    <n-drawer v-model:show="showExport" :width="760" placement="right">
       <n-drawer-content
         title="导出报表"
         closable
         :body-content-style="exportBodyStyle"
       >
-        <n-form label-placement="left" label-width="64" size="small" class="tm-export-form">
+        <n-form label-placement="left" label-width="80" size="small" class="tm-export-form">
           <div class="tm-export-fields">
             <n-form-item label="报表范围">
               <n-select v-model:value="exportForm.scope" :options="reportScopeOptions" style="width:100%" @update:value="genPreview" />
@@ -2197,6 +2197,7 @@ onUnmounted(() => {
 .tm-chart-wide { grid-column: 1 / -1; }
 .tm-export-form { flex: 0 0 auto; margin-bottom: 4px; }
 .tm-export-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 16px; }
+.tm-export-fields :deep(.n-form-item-label) { white-space: nowrap; }
 .tm-export-preview-wrap { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
 .tm-export-preview-label { font-size: 12px; color: var(--guaxi-text-secondary); margin-bottom: 6px; }
 .tm-export-textarea {
