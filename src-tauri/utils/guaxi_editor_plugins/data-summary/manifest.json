@@ -1,0 +1,17 @@
+{
+  "id": "data-summary",
+  "name": "数据摘要",
+  "description": "选中一组数字:在下方追加计数/求和/均值/中位数/极值/标准差摘要表",
+  "entry": "main.py",
+  "capabilities": [
+    "transform"
+  ],
+  "surfaces": [
+    "editor"
+  ],
+  "scope": "selection",
+  "args": [],
+  "clipboard": false,
+  "allow_empty_selection": false,
+  "needs_kb": false
+}

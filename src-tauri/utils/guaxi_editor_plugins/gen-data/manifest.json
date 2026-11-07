@@ -1,0 +1,48 @@
+{
+  "id": "gen-data",
+  "name": "生成示例数据",
+  "description": "按列规格生成 Markdown / CSV / JSON 示例数据,插入光标处",
+  "entry": "main.py",
+  "capabilities": [
+    "transform"
+  ],
+  "surfaces": [
+    "editor"
+  ],
+  "scope": "insert",
+  "args": [
+    {
+      "key": "rows",
+      "label": "行数",
+      "type": "number",
+      "default": 20
+    },
+    {
+      "key": "columns",
+      "label": "列规格",
+      "type": "text",
+      "default": "姓名:name,邮箱:email,金额:amount",
+      "placeholder": "列名:类型, 类型可选 name/email/phone/date/amount/int/status/bool"
+    },
+    {
+      "key": "format",
+      "label": "输出格式",
+      "type": "select",
+      "options": [
+        "Markdown",
+        "CSV",
+        "JSON"
+      ],
+      "default": "Markdown"
+    },
+    {
+      "key": "seed",
+      "label": "随机种子",
+      "type": "number",
+      "default": 42
+    }
+  ],
+  "clipboard": false,
+  "allow_empty_selection": true,
+  "needs_kb": false
+}

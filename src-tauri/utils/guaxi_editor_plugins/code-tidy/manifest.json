@@ -1,0 +1,17 @@
+{
+  "id": "code-tidy",
+  "name": "代码块整理",
+  "description": "选中含 ``` 围栏的文本:去行尾空白、Tab 转空格,JSON 块自动美化缩进",
+  "entry": "main.py",
+  "capabilities": [
+    "transform"
+  ],
+  "surfaces": [
+    "editor"
+  ],
+  "scope": "selection",
+  "args": [],
+  "clipboard": false,
+  "allow_empty_selection": false,
+  "needs_kb": false
+}

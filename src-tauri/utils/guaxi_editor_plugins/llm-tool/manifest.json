@@ -1,0 +1,45 @@
+{
+  "id": "llm-tool",
+  "name": "模型润色 / 翻译",
+  "description": "选中文本:按设置的模型做润色、精简、扩写、翻译、摘要或纠错",
+  "entry": "main.py",
+  "capabilities": [
+    "transform"
+  ],
+  "surfaces": [
+    "editor"
+  ],
+  "scope": "selection",
+  "args": [
+    {
+      "key": "mode",
+      "label": "处理方式",
+      "type": "select",
+      "options": [
+        "润色",
+        "精简",
+        "扩写",
+        "翻译",
+        "摘要",
+        "纠错"
+      ],
+      "default": "润色"
+    },
+    {
+      "key": "target_lang",
+      "label": "翻译目标语言",
+      "type": "text",
+      "default": "英文"
+    },
+    {
+      "key": "instruction",
+      "label": "额外要求",
+      "type": "text",
+      "default": "",
+      "placeholder": "可选,例如:保留术语"
+    }
+  ],
+  "clipboard": false,
+  "allow_empty_selection": false,
+  "needs_kb": false
+}

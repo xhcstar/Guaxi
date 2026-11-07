@@ -1,0 +1,45 @@
+{
+  "id": "import-table",
+  "name": "导入表格文件",
+  "description": "读取 CSV / TSV / XLSX / JSON,在光标处生成 Markdown 表格",
+  "entry": "main.py",
+  "capabilities": [
+    "transform"
+  ],
+  "surfaces": [
+    "editor"
+  ],
+  "scope": "insert",
+  "args": [
+    {
+      "key": "path",
+      "label": "文件路径",
+      "type": "file",
+      "accept": [
+        "csv",
+        "tsv",
+        "xlsx",
+        "xlsm",
+        "xls",
+        "json"
+      ],
+      "default": "",
+      "placeholder": "选择 CSV/TSV/XLSX/JSON 文件;留空则读剪贴板路径"
+    },
+    {
+      "key": "sheet",
+      "label": "工作表(Excel)",
+      "type": "text",
+      "default": ""
+    },
+    {
+      "key": "max_rows",
+      "label": "最大行数",
+      "type": "number",
+      "default": 200
+    }
+  ],
+  "clipboard": true,
+  "allow_empty_selection": true,
+  "needs_kb": false
+}

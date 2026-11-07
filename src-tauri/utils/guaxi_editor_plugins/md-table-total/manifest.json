@@ -1,0 +1,17 @@
+{
+  "id": "md-table-total",
+  "name": "表格合计与对齐",
+  "description": "选中 Markdown 表格:规范对齐,并为纯数值列自动追加「合计」行",
+  "entry": "main.py",
+  "capabilities": [
+    "transform"
+  ],
+  "surfaces": [
+    "editor"
+  ],
+  "scope": "selection",
+  "args": [],
+  "clipboard": false,
+  "allow_empty_selection": false,
+  "needs_kb": false
+}

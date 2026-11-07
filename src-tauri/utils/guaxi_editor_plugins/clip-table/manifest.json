@@ -1,0 +1,36 @@
+{
+  "id": "clip-table",
+  "name": "剪贴板表格 → Markdown",
+  "description": "在 Excel / 网页表格复制区域:在光标处生成 Markdown 表格(数值列右对齐)",
+  "entry": "main.py",
+  "capabilities": [
+    "transform"
+  ],
+  "surfaces": [
+    "editor"
+  ],
+  "scope": "insert",
+  "args": [
+    {
+      "key": "header",
+      "label": "首行作为表头",
+      "type": "bool",
+      "default": true
+    },
+    {
+      "key": "numeric_align",
+      "label": "数值列右对齐",
+      "type": "bool",
+      "default": true
+    },
+    {
+      "key": "first_col_label",
+      "label": "无表头时列名前缀",
+      "type": "text",
+      "default": "列"
+    }
+  ],
+  "clipboard": true,
+  "allow_empty_selection": true,
+  "needs_kb": false
+}

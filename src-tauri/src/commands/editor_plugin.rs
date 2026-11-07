@@ -1194,8 +1194,9 @@ fn builtin_args(b: &BuiltinPlugin) -> serde_json::Value {
         .unwrap_or_else(|_| serde_json::json!([]))
 }
 
-/// 把内置插件写入插件目录。用 `_builtins.json` 记录"已供给过"的 id,保证每个内置插件
-/// 一生只写入一次:用户此后可自由编辑或删除,不会被重新生成;将来新增的内置插件会补写。
+/// 把内置插件写入插件目录。用 `_builtins.json` 记录"已供给过"的 id,
+/// 避免覆盖用户对 manifest/main.py 的修改;但文件缺失时会补回,防止目录被清空后插件消失。
+/// 将来新增的内置插件会补写。
 fn provision_builtin_plugins(dir: &Path) {
     let marker = dir.join("_builtins.json");
     let state: serde_json::Value = fs::read_to_string(&marker)
@@ -1209,37 +1210,47 @@ fn provision_builtin_plugins(dir: &Path) {
     for b in BUILTIN_PLUGINS {
         let pdir = dir.join(b.id);
         let known = done.iter().any(|d| d == b.id);
+        let manifest_path = pdir.join("manifest.json");
+        let main_path = pdir.join("main.py");
+
+        if fs::create_dir_all(&pdir).is_err() {
+            continue;
+        }
+
+        // 供给标记只说明「曾经写过」,文件可能被手动删掉或同步丢失;
+        // 缺失时补回,已存在的文件不动,避免覆盖用户修改。
+        if !manifest_path.is_file() {
+            let manifest = serde_json::json!({
+                "id": b.id,
+                "name": b.name,
+                "description": b.description,
+                "entry": "main.py",
+                "capabilities": [b.capability],
+                "surfaces": [b.surface],
+                "scope": b.scope,
+                "args": builtin_args(b),
+                "clipboard": b.clipboard,
+                "allow_empty_selection": b.allow_empty_selection,
+                "needs_kb": b.needs_kb,
+            });
+            let _ = fs::write(
+                &manifest_path,
+                serde_json::to_string_pretty(&manifest).unwrap_or_default(),
+            );
+        }
+        if !main_path.is_file() {
+            let _ = fs::write(&main_path, b.main);
+        }
 
         if !known {
-            if !pdir.exists() && fs::create_dir_all(&pdir).is_ok() {
-                let manifest = serde_json::json!({
-                    "id": b.id,
-                    "name": b.name,
-                    "description": b.description,
-                    "entry": "main.py",
-                    "capabilities": [b.capability],
-                    "surfaces": [b.surface],
-                    "scope": b.scope,
-                    "args": builtin_args(b),
-                    "clipboard": b.clipboard,
-                    "allow_empty_selection": b.allow_empty_selection,
-                    "needs_kb": b.needs_kb,
-                });
-                let _ = fs::write(
-                    pdir.join("manifest.json"),
-                    serde_json::to_string_pretty(&manifest).unwrap_or_default(),
-                );
-                let _ = fs::write(pdir.join("main.py"), b.main);
-            }
             done.push(b.id.to_string());
             changed = true;
             continue;
         }
 
         // 已供给过:版本升级时只刷新参数/作用面等声明式字段,保留用户内容。
-        if rev < BUILTIN_REV && pdir.is_dir() {
-            let mpath = pdir.join("manifest.json");
-            let manifest_text = match fs::read_to_string(&mpath) {
+        if rev < BUILTIN_REV {
+            let manifest_text = match fs::read_to_string(&manifest_path) {
                 Ok(text) => text,
                 Err(_) => continue,
             };
@@ -1261,7 +1272,7 @@ fn provision_builtin_plugins(dir: &Path) {
                 obj.insert("needs_kb".to_string(), serde_json::json!(b.needs_kb));
             }
             if fs::write(
-                &mpath,
+                &manifest_path,
                 serde_json::to_string_pretty(&manifest).unwrap_or_default(),
             )
             .is_ok()
@@ -1413,11 +1424,15 @@ fn merge_arg_values(
 }
 
 fn seed_example_plugin_if_empty(dir: &Path) {
+    // 以「存在可用的插件」为准,而不是「存在子目录」:目录被清空但空壳还在时
+    // 仍需补回示例插件。
+    let state = read_state(dir);
     let has_any = fs::read_dir(dir)
         .map(|rd| {
             rd.filter_map(|e| e.ok()).any(|e| {
-                e.path().is_dir()
-                    && e.file_name().to_str().map(|n| !n.starts_with('_')).unwrap_or(false)
+                let p = e.path();
+                e.file_name().to_str().map(|n| !n.starts_with('_')).unwrap_or(false)
+                    && read_plugin_info(&p, &state).is_some()
             })
         })
         .unwrap_or(false);

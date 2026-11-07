@@ -1,0 +1,36 @@
+{
+  "id": "url-to-md",
+  "name": "链接抓正文",
+  "description": "选中网址:抓取网页正文并转成 Markdown(替换选区)",
+  "entry": "main.py",
+  "capabilities": [
+    "transform"
+  ],
+  "surfaces": [
+    "editor"
+  ],
+  "scope": "selection",
+  "args": [
+    {
+      "key": "max_chars",
+      "label": "最大字符数(0=不限)",
+      "type": "number",
+      "default": 20000
+    },
+    {
+      "key": "keep_links",
+      "label": "保留链接",
+      "type": "bool",
+      "default": true
+    },
+    {
+      "key": "keep_images",
+      "label": "保留图片",
+      "type": "bool",
+      "default": false
+    }
+  ],
+  "clipboard": false,
+  "allow_empty_selection": false,
+  "needs_kb": false
+}

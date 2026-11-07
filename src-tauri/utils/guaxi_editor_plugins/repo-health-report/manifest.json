@@ -1,0 +1,9 @@
+{
+  "id": "repo-health-report",
+  "name": "库健康报告",
+  "description": "统计当前库的资源数、类型分布、标签覆盖(只读示例)",
+  "entry": "main.py",
+  "capabilities": ["batch"],
+  "surfaces": ["repo"],
+  "scope": "library"
+}

@@ -1,0 +1,48 @@
+{
+  "id": "form-fill",
+  "name": "表单填充助手",
+  "description": "从笔记/任务提取字段,生成预填好的表单链接(默认只预览不提交)",
+  "entry": "main.py",
+  "capabilities": [
+    "transform"
+  ],
+  "surfaces": [
+    "editor"
+  ],
+  "scope": "insert",
+  "args": [
+    {
+      "key": "url_template",
+      "label": "表单链接模板",
+      "type": "text",
+      "default": "",
+      "placeholder": "https://example.com/new?title={{title}}&body={{content}}",
+      "required": true
+    },
+    {
+      "key": "source",
+      "label": "字段来源",
+      "type": "select",
+      "options": [
+        "选中文本/当前笔记",
+        "任务查询"
+      ],
+      "default": "选中文本/当前笔记"
+    },
+    {
+      "key": "task_keyword",
+      "label": "任务关键词(仅任务查询)",
+      "type": "text",
+      "default": ""
+    },
+    {
+      "key": "auto_open",
+      "label": "生成后在浏览器打开",
+      "type": "bool",
+      "default": false
+    }
+  ],
+  "clipboard": false,
+  "allow_empty_selection": true,
+  "needs_kb": false
+}

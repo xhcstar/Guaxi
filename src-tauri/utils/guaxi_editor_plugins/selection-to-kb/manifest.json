@@ -1,0 +1,36 @@
+{
+  "id": "selection-to-kb",
+  "name": "存入知识库并双链",
+  "description": "选中内容:写入当前知识库笔记,并按标签/标题重叠补 [[相关链接]]",
+  "entry": "main.py",
+  "capabilities": [
+    "transform"
+  ],
+  "surfaces": [
+    "editor"
+  ],
+  "scope": "selection",
+  "args": [
+    {
+      "key": "folder",
+      "label": "子目录",
+      "type": "text",
+      "default": "收集"
+    },
+    {
+      "key": "tags",
+      "label": "标签(逗号分隔)",
+      "type": "text",
+      "default": ""
+    },
+    {
+      "key": "title",
+      "label": "笔记标题(留空取首个标题)",
+      "type": "text",
+      "default": ""
+    }
+  ],
+  "clipboard": false,
+  "allow_empty_selection": false,
+  "needs_kb": true
+}

@@ -1,0 +1,9 @@
+{
+  "id": "kb-stats",
+  "name": "知识库统计",
+  "description": "统计知识库文件数与 Markdown 字数(只读示例,读 kb_location)",
+  "entry": "main.py",
+  "capabilities": ["generator"],
+  "surfaces": ["knowledge-base"],
+  "scope": "kb"
+}

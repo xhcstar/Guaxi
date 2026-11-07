@@ -1,0 +1,9 @@
+{
+  "id": "pangu-spacing",
+  "name": "中英文加空格",
+  "description": "在中文与英文/数字之间自动插入空格,让排版更整齐(示例插件,可复制修改)",
+  "entry": "main.py",
+  "capabilities": ["transform"],
+  "surfaces": ["editor"],
+  "scope": "selection"
+}

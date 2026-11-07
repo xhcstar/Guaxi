@@ -1,0 +1,17 @@
+{
+  "id": "frontmatter-doctor",
+  "name": "frontmatter 体检",
+  "description": "遍历知识库 .md:报告缺失 title/date/tags 与非法日期格式的笔记",
+  "entry": "main.py",
+  "capabilities": [
+    "generator"
+  ],
+  "surfaces": [
+    "knowledge-base"
+  ],
+  "scope": "kb",
+  "args": [],
+  "clipboard": false,
+  "allow_empty_selection": false,
+  "needs_kb": false
+}
