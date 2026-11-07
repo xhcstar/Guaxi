@@ -20,5 +20,10 @@ import SidebarList from "./SidebarList.vue";
   height: 100%;
   box-sizing: border-box;
   overflow-y: auto;
+  /* 必须是 block：仓库里 GuaxiSidbarTreeRepoView 等组件把 <style scoped> 写成了
+     <style scope>，其 .tree-column{display:flex;flex-direction:column} 会全局生效，
+     把菜单当成 flex 子项压缩到可视高度，菜单内部再 overflow:hidden 藏掉剩余条目，
+     于是本列认为没有溢出、永远不出现滚动条。 */
+  display: block;
 }
 </style>

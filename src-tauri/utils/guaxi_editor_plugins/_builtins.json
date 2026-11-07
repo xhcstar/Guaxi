@@ -4,6 +4,14 @@
     "code-tidy",
     "cite-tidy",
     "data-summary",
-    "frontmatter-doctor"
-  ]
+    "frontmatter-doctor",
+    "llm-tool",
+    "clip-table",
+    "url-to-md",
+    "selection-to-kb",
+    "gen-data",
+    "import-table",
+    "form-fill"
+  ],
+  "rev": 2
 }
