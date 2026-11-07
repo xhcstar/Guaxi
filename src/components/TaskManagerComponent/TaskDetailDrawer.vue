@@ -1,10 +1,36 @@
 <template>
-  <n-drawer :show="show" :width="520" placement="right" @update:show="(v) => emit('update:show', v)">
-    <n-drawer-content v-if="form" closable>
+  <n-drawer
+    :show="show"
+    :width="drawerWidth"
+    placement="right"
+    class="guaxi-task-detail"
+    @update:show="(v) => emit('update:show', v)"
+  >
+    <n-drawer-content v-if="form">
       <template #header>
         <div class="td-head">
           <span class="td-kind" :class="'k-' + form.kind">{{ kindLabel(form.kind) }}</span>
-          <span class="td-title">{{ form.title || '(无标题)' }}</span>
+          <n-ellipsis :line-clamp="1" :tooltip="!!form.title" class="td-title">
+            {{ form.title || '(无标题)' }}
+          </n-ellipsis>
+          <div class="td-head-acts">
+            <n-tooltip trigger="hover" placement="bottom">
+              <template #trigger>
+                <n-button quaternary circle size="small" @click="openSource">
+                  <template #icon><n-icon :component="WindowNew20Regular" /></template>
+                </n-button>
+              </template>
+              在源文件中打开
+            </n-tooltip>
+            <n-tooltip trigger="hover" placement="bottom">
+              <template #trigger>
+                <n-button quaternary circle size="small" @click="emit('update:show', false)">
+                  <template #icon><n-icon :component="Dismiss20Regular" /></template>
+                </n-button>
+              </template>
+              关闭（Esc）
+            </n-tooltip>
+          </div>
         </div>
       </template>
 
@@ -111,8 +137,9 @@
 import { computed, reactive, ref, watch } from 'vue'
 import {
   NDrawer, NDrawerContent, NForm, NFormItem, NInput, NInputNumber, NSelect,
-  NDatePicker, NButton, useMessage,
+  NDatePicker, NButton, NEllipsis, NTooltip, NIcon, useMessage,
 } from 'naive-ui'
+import { WindowNew20Regular, Dismiss20Regular } from '@vicons/fluent'
 import { invoke } from '@tauri-apps/api/core'
 
 const props = defineProps({
@@ -122,6 +149,8 @@ const props = defineProps({
 })
 const emit = defineEmits(['update:show', 'saved', 'deleted', 'open-source'])
 const message = useMessage()
+
+const drawerWidth = 'min(680px, 94vw)'
 
 const KIND_OPTIONS = [
   { label: '任务', value: 'task' }, { label: '习惯', value: 'habit' },
@@ -277,15 +306,25 @@ const openSource = async () => {
 </script>
 
 <style scoped>
-.td-head { display: flex; align-items: center; gap: 10px; min-width: 0; }
-.td-kind { font-size: 11px; padding: 2px 8px; border-radius: 10px; background: var(--guaxi-header-bg); color: var(--guaxi-text-secondary); }
+:global(.n-drawer.guaxi-task-detail) { max-width: 94vw; }
+/* naive 的 header 主区是 flex 子项，默认 min-width:auto，
+   长标题会把整块内容撑出抽屉、压出横向滚动并把标题裁掉。 */
+:global(.guaxi-task-detail .n-drawer-header__main) { min-width: 0; }
+:global(.guaxi-task-detail .n-drawer-header) { gap: 8px; }
+
+.td-head { display: flex; align-items: center; gap: 10px; min-width: 0; width: 100%; }
+.td-kind { flex: 0 0 auto; font-size: 11px; padding: 2px 8px; border-radius: 10px; background: var(--guaxi-header-bg); color: var(--guaxi-text-secondary); }
 .td-kind.k-habit { color: #b07a12; background: rgba(240, 160, 32, 0.14); }
 .td-kind.k-goal { color: #3f6ea8; background: rgba(63, 110, 168, 0.14); }
 .td-kind.k-review { color: #7a5aa8; background: rgba(122, 90, 168, 0.14); }
-.td-title { font-size: 16px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.td-title { flex: 1 1 auto; min-width: 0; font-size: 16px; font-weight: 700; line-height: 1.4; }
+.td-head-acts { flex: 0 0 auto; display: flex; align-items: center; gap: 2px; margin-left: auto; }
 .td-body { display: flex; flex-direction: column; gap: 14px; }
 .td-form { display: flex; flex-direction: column; gap: 4px; }
-.td-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 12px; }
+.td-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 12px; }
+@media (max-width: 560px) {
+  .td-grid { grid-template-columns: minmax(0, 1fr); }
+}
 .td-habit { border: 1px solid var(--guaxi-border); border-radius: 10px; padding: 10px 12px; background: var(--guaxi-panel-bg); }
 .td-habit-head { display: flex; align-items: center; justify-content: space-between; font-size: 13px; margin-bottom: 8px; }
 .td-checkins { display: flex; flex-wrap: wrap; gap: 6px; max-height: 132px; overflow: auto; }

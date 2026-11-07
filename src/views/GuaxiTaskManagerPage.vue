@@ -13,7 +13,7 @@
         </n-tabs>
       </div>
       <div class="tm-toolbar-right">
-        <span class="tm-sync" :title="'最后同步 ' + (lastSync || '—')">已同步 {{ lastSync || '—' }}</span>
+        <span class="tm-sync">已同步 {{ lastSync || '—' }}</span>
         <n-input ref="searchInputRef" v-model:value="keyword" placeholder="搜索任务…" clearable size="small" class="tm-search" @update:value="onSearchInput">
           <template #prefix><n-icon :component="Search20Regular" /></template>
         </n-input>
@@ -31,11 +31,23 @@
             年轮
           </n-button>
         </n-button-group>
+        <span class="tm-toolbar-sep" />
         <n-popover trigger="click" placement="bottom-end" :show-arrow="false">
           <template #trigger>
-            <n-button size="small" circle :type="reminderEnabled ? 'primary' : 'default'" title="每日摘要提醒">
-              <template #icon><n-icon :component="Alert20Regular" /></template>
-            </n-button>
+            <n-tooltip trigger="hover" placement="bottom">
+              <template #trigger>
+                <n-button
+                  size="small"
+                  quaternary
+                  circle
+                  :type="reminderEnabled ? 'primary' : 'default'"
+                  aria-label="每日摘要提醒"
+                >
+                  <template #icon><n-icon :component="Alert20Regular" /></template>
+                </n-button>
+              </template>
+              {{ reminderEnabled ? '每日摘要提醒：已开启' : '每日摘要提醒：已关闭' }}
+            </n-tooltip>
           </template>
           <div class="tm-reminder-pop">
             <div class="tm-reminder-row">
@@ -56,12 +68,22 @@
             <div class="tm-reminder-hint">逾期与今天到期的任务会合成一条通知，每天只发一次。</div>
           </div>
         </n-popover>
-        <n-button size="small" circle title="导入任务" @click="showImport = true">
-          <template #icon><n-icon :component="ArrowImport20Regular" /></template>
-        </n-button>
-        <n-button size="small" circle title="导出报表" @click="openExport">
-          <template #icon><n-icon :component="ArrowExportLtr20Regular" /></template>
-        </n-button>
+        <n-tooltip trigger="hover" placement="bottom">
+          <template #trigger>
+            <n-button size="small" quaternary circle aria-label="导入任务" @click="showImport = true">
+              <template #icon><n-icon :component="ArrowImport20Regular" /></template>
+            </n-button>
+          </template>
+          导入任务
+        </n-tooltip>
+        <n-tooltip trigger="hover" placement="bottom">
+          <template #trigger>
+            <n-button size="small" quaternary circle aria-label="导出报表" @click="openExport">
+              <template #icon><n-icon :component="ArrowExportLtr20Regular" /></template>
+            </n-button>
+          </template>
+          导出报表
+        </n-tooltip>
       </div>
     </header>
 
@@ -710,7 +732,7 @@ import { useRoute } from 'vue-router'
 import {
   NTabs, NTab, NInput, NButton, NButtonGroup, NIcon, NTag, NSpin, NDrawer, NDrawerContent,
   NForm, NFormItem, NSelect, NDatePicker, NSpace, NRadioGroup, NRadio, useMessage,
-  NPopover, NSwitch, NTimePicker,
+  NPopover, NSwitch, NTimePicker, NTooltip,
 } from 'naive-ui'
 import {
   ClipboardTaskListLtr20Filled, Search20Regular, Board20Regular,
@@ -1953,8 +1975,23 @@ onUnmounted(() => {
 .tm-logo { color: var(--n-color-primary, #2080f0); }
 .tm-title { font-weight: 600; font-size: 15px; white-space: nowrap; }
 .tm-cat-tabs { width: 280px; }
-.tm-toolbar-right { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
-.tm-search { width: 180px; }
+.tm-toolbar-right { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
+.tm-sync {
+  font-size: 12px; color: var(--guaxi-text-secondary); white-space: nowrap;
+  line-height: 1; padding: 0 2px; flex: 0 0 auto;
+}
+.tm-search { width: 180px; flex: 0 1 180px; min-width: 120px; }
+.tm-view-switch { flex: 0 0 auto; }
+.tm-toolbar-sep {
+  width: 1px; height: 18px; background: var(--guaxi-border);
+  flex: 0 0 auto; margin: 0 2px;
+}
+/* 右侧图标按钮统一 28px 命中区，与搜索框、分段按钮同高同轴。 */
+.tm-toolbar-right :deep(.n-button) { flex: 0 0 auto; }
+@media (max-width: 1120px) {
+  .tm-sync { display: none; }
+  .tm-cat-tabs { width: 220px; }
+}
 .tm-body {
   flex: 1 1 auto; min-height: 0; overflow: hidden; position: relative;
   display: flex; flex-direction: column;
