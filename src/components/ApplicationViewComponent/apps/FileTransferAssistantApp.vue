@@ -98,7 +98,8 @@
             type="button"
             class="ftc-addr"
             :class="{ 'is-active': selectedLocalIp === ip.address }"
-            @click="selectedLocalIp = ip.address"
+            title="在系统浏览器中打开"
+            @click="openLocalIp(ip)"
           >
             <span class="ftc-addr-ip">{{ ip.address }}</span>
             <span class="ftc-addr-name">{{ ip.name }}</span>
@@ -332,6 +333,7 @@ import { createDiscreteApi } from 'naive-ui'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { open } from '@tauri-apps/plugin-dialog'
+import { openUrl } from '@tauri-apps/plugin-opener'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 
 const logger = createLogger('FileTransferAssistantApp')
@@ -696,6 +698,25 @@ const toggleHttpServer = async () => {
     await startReceiver()
   }
   await refreshAll()
+}
+
+const openLocalIp = async (ip) => {
+  selectedLocalIp.value = ip.address
+  if (!receiverStatus.value?.running) {
+    transferNotice.value = '先开启 HTTP 服务，再在浏览器打开'
+    return
+  }
+  const url = selectedLocalUrl.value
+  if (!url) {
+    transferNotice.value = '没有可用的本机地址'
+    return
+  }
+  try {
+    await openUrl(url)
+  } catch (error) {
+    logger.error('[FTA] open local url failed:', error)
+    transferNotice.value = String(error?.message || error || '打开浏览器失败')
+  }
 }
 
 const copyMyUrl = async () => {
@@ -2172,7 +2193,9 @@ onUnmounted(async () => {
 .ftc-task-actions button:hover { color: var(--guaxi-text-primary); background: var(--guaxi-hover-bg); }
 .ftc-task-actions button.is-danger:hover { color: #e05b5b; border-color: rgba(224, 91, 91, 0.4); }
 
-.ftc-adv { display: flex; flex-direction: column; gap: 8px; font-size: 12px; }
+/* 抽屉/弹窗被 teleport 到 body，继承不到 .ftc-root 上的 --ftc-accent，
+   主按钮会退化成「透明底 + 深色字」，暗色模式下几乎看不见。 */
+.ftc-adv { --ftc-accent: #5fb3a1; display: flex; flex-direction: column; gap: 8px; font-size: 12px; }
 .ftc-adv h4 {
   margin: 16px 0 2px;
   color: var(--guaxi-text-secondary);
