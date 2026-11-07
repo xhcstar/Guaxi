@@ -1,5 +1,5 @@
 <template>
-  <div class="task-manager-page">
+  <div class="task-manager-page" :class="{ 'tm-dark': isDark }">
     <!-- 顶部工具栏 -->
     <header class="tm-toolbar">
       <div class="tm-toolbar-left">
@@ -71,7 +71,7 @@
         <n-tooltip trigger="hover" placement="bottom">
           <template #trigger>
             <n-button size="small" quaternary circle aria-label="导入任务" @click="showImport = true">
-              <template #icon><n-icon :component="ArrowImport20Regular" /></template>
+              <template #icon><n-icon :component="ArrowDownload20Regular" /></template>
             </n-button>
           </template>
           导入任务
@@ -79,7 +79,7 @@
         <n-tooltip trigger="hover" placement="bottom">
           <template #trigger>
             <n-button size="small" quaternary circle aria-label="导出报表" @click="openExport">
-              <template #icon><n-icon :component="ArrowExportLtr20Regular" /></template>
+              <template #icon><n-icon :component="ArrowUpload20Regular" /></template>
             </n-button>
           </template>
           导出报表
@@ -464,11 +464,13 @@
               · 长期记录与成长
             </span>
             <span class="tm-spacer2" />
-            <n-button size="small" type="primary" ghost @click="openFieldExport">
-              <template #icon><n-icon :component="ArrowExportLtr20Regular" /></template>
-              按字段筛选导出
-            </n-button>
-            <n-button size="small" @click="openExport">生成报表</n-button>
+            <div class="tm-year-actions">
+              <n-button size="small" type="primary" ghost @click="openFieldExport">
+                <template #icon><n-icon :component="ArrowUpload20Regular" /></template>
+                按字段筛选导出
+              </n-button>
+              <n-button size="small" @click="openExport">生成报表</n-button>
+            </div>
           </div>
 
           <div class="tm-year-grid">
@@ -592,20 +594,26 @@
 
     <!-- 导出抽屉 -->
     <n-drawer v-model:show="showExport" :width="640" placement="right">
-      <n-drawer-content title="导出报表" closable>
-        <n-form label-placement="left" label-width="auto" size="small" class="tm-export-form">
-          <n-form-item label="报表范围">
-            <n-select v-model:value="exportForm.scope" :options="reportScopeOptions" style="width:160px" @update:value="genPreview" />
-          </n-form-item>
-          <n-form-item label="报表类型">
-            <n-select v-model:value="exportForm.kind" :options="reportKindOptions" style="width:160px" @update:value="genPreview" />
-          </n-form-item>
-          <n-form-item label="开始日期">
-            <n-date-picker v-model:formatted-value="exportForm.from" value-format="yyyy-MM-dd" type="date" clearable style="width:200px" placeholder="默认按类型回溯" @update:formatted-value="genPreview" />
-          </n-form-item>
-          <n-form-item label="结束日期">
-            <n-date-picker v-model:formatted-value="exportForm.to" value-format="yyyy-MM-dd" type="date" clearable style="width:200px" placeholder="默认今天" @update:formatted-value="genPreview" />
-          </n-form-item>
+      <n-drawer-content
+        title="导出报表"
+        closable
+        :body-content-style="exportBodyStyle"
+      >
+        <n-form label-placement="left" label-width="64" size="small" class="tm-export-form">
+          <div class="tm-export-fields">
+            <n-form-item label="报表范围">
+              <n-select v-model:value="exportForm.scope" :options="reportScopeOptions" style="width:100%" @update:value="genPreview" />
+            </n-form-item>
+            <n-form-item label="报表类型">
+              <n-select v-model:value="exportForm.kind" :options="reportKindOptions" style="width:100%" @update:value="genPreview" />
+            </n-form-item>
+            <n-form-item label="开始日期">
+              <n-date-picker v-model:formatted-value="exportForm.from" value-format="yyyy-MM-dd" type="date" clearable style="width:100%" placeholder="默认按类型回溯" @update:formatted-value="genPreview" />
+            </n-form-item>
+            <n-form-item label="结束日期">
+              <n-date-picker v-model:formatted-value="exportForm.to" value-format="yyyy-MM-dd" type="date" clearable style="width:100%" placeholder="默认今天" @update:formatted-value="genPreview" />
+            </n-form-item>
+          </div>
         </n-form>
         <div class="tm-export-preview-wrap">
           <div class="tm-export-preview-label">报表内容（纯文本，可编辑）</div>
@@ -736,7 +744,7 @@ import {
 } from 'naive-ui'
 import {
   ClipboardTaskListLtr20Filled, Search20Regular, Board20Regular,
-  DataPie20Regular, ArrowImport20Regular, ArrowExportLtr20Regular, Alert20Regular,
+  DataPie20Regular, ArrowDownload20Regular, ArrowUpload20Regular, Alert20Regular,
   Flag16Regular,
 } from '@vicons/fluent'
 import { invoke } from '@tauri-apps/api/core'
@@ -1483,6 +1491,8 @@ const showExport = ref(false)
 const exporting = ref(false)
 const exportPreview = ref('')
 const exportForm = reactive({ kind: 'weekly', from: null, to: null, scope: 'work' })
+// 导出抽屉固定高度：表单和底栏不滚动，只让预览文本域自己滚动。
+const exportBodyStyle = { height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }
 const reportKindOptions = [
   { label: '日报', value: 'daily' },
   { label: '周报', value: 'weekly' },
@@ -2070,8 +2080,10 @@ onUnmounted(() => {
   font-size: 12px; line-height: 1; padding: 0 2px;
 }
 .tm-date-clear:hover { color: #d03050; }
-:global([data-guaxi-theme="dark"]) .tm-date-overlay,
-:global([data-guaxi-theme="dark"]) .tm-status-overlay { color-scheme: dark; }
+/* 原生控件的展开面板（select 下拉、date 日历）由 color-scheme 决定明暗，不跟随 CSS 变量。 */
+.tm-dark .tm-capture-sel,
+.tm-dark .tm-status-overlay,
+.tm-dark .tm-date-overlay { color-scheme: dark; }
 .tm-type { font-size: 11px; padding: 0 6px; border-radius: 8px; color: #fff; }
 .tm-type.tt-bug { background: #d03050; } .tm-type.tt-task { background: #2080f0; } .tm-type.tt-other { background: #8a8f99; }
 .tm-did { font-size: 11px; color: var(--guaxi-text-secondary); opacity: 0.85; }
@@ -2183,8 +2195,9 @@ onUnmounted(() => {
 .tm-charts { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .tm-chart-box { background: var(--guaxi-panel-bg); border: 1px solid var(--guaxi-border); border-radius: 10px; height: 300px; padding: 8px; }
 .tm-chart-wide { grid-column: 1 / -1; }
-.tm-export-form { margin-bottom: 10px; }
-.tm-export-preview-wrap { display: flex; flex-direction: column; height: calc(100% - 60px); min-height: 360px; }
+.tm-export-form { flex: 0 0 auto; margin-bottom: 4px; }
+.tm-export-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 16px; }
+.tm-export-preview-wrap { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
 .tm-export-preview-label { font-size: 12px; color: var(--guaxi-text-secondary); margin-bottom: 6px; }
 .tm-export-textarea {
   flex: 1 1 auto; width: 100%; box-sizing: border-box; resize: vertical; min-height: 340px;
@@ -2193,6 +2206,8 @@ onUnmounted(() => {
   font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace;
   font-size: 13.5px; line-height: 1.7; white-space: pre; overflow: auto;
 }
+/* 导出抽屉里让文本域独占剩余高度：只保留它自己的滚动条，避免抽屉和文本域两条并排。 */
+.tm-export-preview-wrap .tm-export-textarea { min-height: 160px; resize: none; }
 .tm-export-textarea:focus { outline: none; border-color: #2080f0; box-shadow: 0 0 0 2px rgba(32,128,240,0.18); }
 .tm-edit-info { margin-top: 4px; }
 
@@ -2259,7 +2274,7 @@ onUnmounted(() => {
 .tm-capture-plus { color: var(--guaxi-text-secondary); font-size: 18px; line-height: 1; }
 .tm-capture-input { flex: 1; min-width: 0; border: none; outline: none; background: transparent; color: var(--guaxi-text-primary); font: inherit; font-size: 15px; padding: 4px 0; }
 .tm-capture-input::placeholder { color: var(--guaxi-text-secondary); opacity: 0.75; }
-.tm-capture-sel { border: 1px solid var(--guaxi-border); border-radius: 8px; background: transparent; color: var(--guaxi-text-secondary); font: inherit; font-size: 12px; padding: 3px 6px; }
+.tm-capture-sel { border: 1px solid var(--guaxi-border); border-radius: 8px; background: transparent; color: var(--guaxi-text-secondary); font: inherit; font-size: 12px; padding: 3px 6px; color-scheme: light; }
 .tm-capture-btn { border: none; border-radius: 8px; background: var(--tm-accent); color: #fff; font: inherit; font-size: 13px; padding: 6px 14px; cursor: pointer; }
 .tm-capture-btn:disabled { opacity: 0.45; cursor: default; }
 .tm-capture-hint { margin: 6px 2px 0; font-size: 11px; color: var(--guaxi-text-secondary); }
@@ -2385,6 +2400,7 @@ onUnmounted(() => {
 /* ── 年轮 ── */
 .tm-year { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 16px 18px 32px; box-sizing: border-box; }
 .tm-year-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 14px; }
+.tm-year-actions { display: flex; align-items: center; gap: 8px; align-self: center; flex: 0 0 auto; }
 .tm-year-sub { font-size: 12px; color: var(--guaxi-text-secondary); display: inline-flex; align-items: center; gap: 4px; }
 .tm-year-sub b { color: var(--guaxi-text-primary); font-size: 13px; }
 .tm-year-nav { border: 1px solid var(--guaxi-border); background: transparent; color: var(--guaxi-text-secondary); cursor: pointer; font: inherit; font-size: 13px; line-height: 1; padding: 1px 6px; border-radius: 6px; }
