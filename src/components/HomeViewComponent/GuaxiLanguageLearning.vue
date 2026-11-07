@@ -3166,12 +3166,6 @@ const refreshActiveWordOffline = async () => {
   }
 }
 
-watch(
-  () => activeWordRecord.value?.word || activeWordRecord.value?.source_text || '',
-  () => { refreshActiveWordOffline() },
-  { immediate: true }
-)
-
 const asrJobFor = (id) => asrJobs.value[String(id || '')] || null
 
 const asrRunning = computed(() => {
@@ -5651,6 +5645,7 @@ watch(activeRow, (row) => {
   if (!row || row.sourceType !== 'audio') {
     if (listeningImmersiveMode.value) listeningImmersiveMode.value = false
   }
+  refreshActiveWordOffline()
 })
 
 watch([isListeningImmersive, activeAudio], ([immersive, audio]) => {
