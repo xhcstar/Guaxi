@@ -391,7 +391,7 @@ let flashTimer = 0
 let copiedTimer = 0
 let listenersAttached = false
 
-const manualImages = import.meta.glob('../../assets/manual/*.png', {
+const manualImages = import.meta.glob('../../assets/manual/*.{png,gif}', {
   eager: true,
   query: '?url',
   import: 'default',
@@ -408,8 +408,8 @@ const isDarkTheme = computed(() => {
 const figureUrl = (key) => {
   const base = `../../assets/manual/${key}`
   const candidates = isDarkTheme.value
-    ? [`${base}-dark.png`, `${base}.png`, `${base}-light.png`]
-    : [`${base}.png`, `${base}-light.png`]
+    ? [`${base}-dark.gif`, `${base}.gif`, `${base}-dark.png`, `${base}.png`, `${base}-light.png`]
+    : [`${base}.gif`, `${base}.png`, `${base}-light.png`]
   for (const candidate of candidates) {
     if (manualImages[candidate]) return manualImages[candidate]
   }
@@ -1846,7 +1846,7 @@ onBeforeUnmount(() => {
 .m-figure-frame img {
   display: block;
   width: 100%;
-  max-height: 480px;
+  max-height: 620px;
   object-fit: contain;
   border-radius: 8px;
   background: var(--m-surface-2);

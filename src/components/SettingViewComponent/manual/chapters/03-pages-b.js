@@ -107,6 +107,7 @@ export const pageChaptersB = [
               '右侧面板提供节点信息、搜索、类型筛选、标签筛选和结果列表。',
             ],
           },
+          { type: 'figure', image: 'page-graph', caption: '知识图谱：左侧知识库树、中间 3D 网络与底部时间轴。' },
         ],
       },
       {
@@ -322,6 +323,7 @@ export const pageChaptersB = [
             type: 'p',
             text: '看板视图按待办、进行中、暂停、已完成展示任务，可拖拽变更状态；日历视图按截止日期或创建日期展示，悬停可查看状态、分类、类型、优先级和时间信息。',
           },
+          { type: 'figure', image: 'window-task', caption: '任务管理：今日视图、快速记录与本周统计。' },
         ],
       },
       {

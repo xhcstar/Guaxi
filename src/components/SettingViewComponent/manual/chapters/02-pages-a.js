@@ -19,7 +19,9 @@ export const pageChaptersA = [
             type: 'p',
             text: '首页是主要工作台。左侧栏可在知识库树、任务目录、普通目录和打开历史之间工作；中间是编辑器；右侧栏承载大纲、智能助手、搜索结果和数学工作区等辅助面板。',
           },
-          { type: 'figure', image: 'page-home', caption: '知识编辑：顶栏工具、左栏文件树与中间编辑器。' },
+          { type: 'figure', image: 'home-editor', caption: '知识编辑：顶栏工具、左栏文件树、Markdown 编辑器与右侧缩略图。' },
+          { type: 'figure', image: 'home-split', caption: '分屏预览：左侧渲染、右侧源码，适合边写边看排版。' },
+          { type: 'figure', image: 'home-outline', caption: '右侧大纲：按标题层级快速跳转当前文档。' },
           {
             type: 'defs',
             items: [
@@ -63,6 +65,8 @@ export const pageChaptersA = [
             type: 'p',
             text: '左右两端还有侧栏开关：<kbd>Alt</kbd>+<kbd>[</kbd> 展开 / 收起左侧栏，<kbd>Alt</kbd>+<kbd>]</kbd> 展开 / 收起右侧栏。主窗口最小化时，<kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>A</kbd> 是系统级唤醒键，会把窗口拉到前台并打开助手。',
           },
+          { type: 'figure', image: 'window-new-kb', caption: '新建知识库：名称、标签与描述在同一个窗口内完成。' },
+          { type: 'figure', image: 'window-diff', caption: '差异对比：选择左右文件或目录后开始比较。' },
         ],
       },
       {
@@ -85,6 +89,7 @@ export const pageChaptersA = [
             title: '工具栏与面包屑可以藏起来',
             text: '格式工具栏和面包屑会占两行高度。打开 PDF、电子书、图片这类只读内容时，点 Guaxi 标志右侧的收起图标或按 Alt+G，把高度让给正文；再点一次恢复，状态按窗口记住。',
           },
+          { type: 'figure', image: 'window-git', caption: 'Git 面板：更改、暂存区、提交与提交历史。' },
         ],
       },
       {
@@ -124,6 +129,8 @@ export const pageChaptersA = [
               },
             ],
           },
+          { type: 'figure', image: 'home-modes', caption: '知识编辑：编辑 / 分屏 / 大纲 / 助手状态切换（动图）。' },
+          { type: 'figure', image: 'home-assistant', caption: '右侧智能助手：会话列表与输入区。' },
         ],
       },
       {
@@ -254,6 +261,7 @@ export const pageChaptersA = [
               '右侧结果面板：<kbd>Alt</kbd>+<kbd>1</kbd> / <kbd>Alt</kbd>+<kbd>2</kbd> / <kbd>Alt</kbd>+<kbd>3</kbd> 切到文件 / 内容 / 摘录，<kbd>←</kbd><kbd>→</kbd> 顺次换标签，<kbd>Enter</kbd> 打开。',
             ],
           },
+          { type: 'figure', image: 'search-results', caption: '全局搜索：输入 Markdown 后同时列出文件、内容与摘录结果。' },
         ],
       },
       {
@@ -469,6 +477,8 @@ export const pageChaptersA = [
               '独立阅读窗口支持逐句朗读与整篇对照翻译；朗读能力在设置 → 语音能力里配置。',
             ],
           },
+          { type: 'figure', image: 'reader-pdf', caption: 'PDF 阅读器：分页、缩放、页内搜索与右侧译文 / 笔记。' },
+          { type: 'figure', image: 'reader-markdown', caption: 'Markdown 阅读器：左侧原文、右侧渲染，共用同一套阅读器外壳。' },
         ],
       },
       {
