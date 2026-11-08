@@ -1,6 +1,7 @@
 // 行程硬约束校验：地点必须来自候选池，且落在用户要求的半径、日期与出发时间内。
 // 模型输出先过这里，不过关就退回确定性编排；装配完成后再整体校验一次，避免把错误计划交给用户。
 
+import { distanceKm, homeGuardKm, tooCloseToHome } from './travelEngine.js'
 import { haversineKm, timeToMinutes } from './travelUtils.js'
 
 const POI_KINDS = new Set(['sight', 'food', 'hotel'])
@@ -14,7 +15,7 @@ function distanceText(km) {
 
 export function validateDayBlocks(
   day,
-  { center, radiusKm = 0, notBeforeMinutes = null, allowHotel = true } = {},
+  { center, radiusKm = 0, notBeforeMinutes = null, allowHotel = true, home = null, homeGuard = 0 } = {},
 ) {
   const problems = []
   const blocks = Array.isArray(day?.blocks) ? day.blocks : []
@@ -26,6 +27,9 @@ export function validateDayBlocks(
   if (day?.weather && day.weather.date !== day?.date) {
     problems.push('天气日期与行程日期不一致')
   }
+
+  const foodBlocks = []
+  const otherPois = []
 
   const first = blocks[0]
   if (notBeforeMinutes != null) {
@@ -78,7 +82,15 @@ export function validateDayBlocks(
       return
     }
     const poi = block?.poi
-    if (!poi || !center || !(radiusKm > 0)) return
+    if (!poi) return
+    if (block.kind === 'food') foodBlocks.push({ label, poi })
+    else otherPois.push(poi)
+    if (homeGuard > 0 && tooCloseToHome(poi, home, homeGuard)) {
+      problems.push(
+        `「${poi.name || label}」离出发点不到 ${Math.round(homeGuard)} km，不像出游安排`,
+      )
+    }
+    if (!center || !(radiusKm > 0)) return
     const km = haversineKm(center, poi)
     if (!Number.isFinite(km)) {
       problems.push(`「${poi.name || label}」缺少坐标，无法核对距离`)
@@ -90,6 +102,16 @@ export function validateDayBlocks(
       )
     }
   })
+
+  // 午餐/晚餐要落在当天行程附近，不能人在 30 km 外却回家门口吃饭。
+  if (foodBlocks.length && otherPois.length) {
+    for (const { label, poi } of foodBlocks) {
+      const nearest = Math.min(...otherPois.map((other) => distanceKm(other, poi)))
+      if (Number.isFinite(nearest) && nearest > 12) {
+        problems.push(`「${poi.name || label}」离当天其他安排超过 12 km，用餐不顺路`)
+      }
+    }
+  }
 
   return problems
 }
@@ -132,12 +154,20 @@ export function validatePlan(plan, { center, radiusKm = 0, expectedDates = [] } 
   const sameDay = !plan?.startDate || !plan?.endDate || plan.startDate === plan.endDate
   const allowHotel = !sameDay && days.length > 1
   const notBeforeMinutes = timeToMinutes(plan?.startTime)
+  const homeGuard = homeGuardKm(plan)
   days.forEach((day, index) => {
     const prefix = `第 ${index + 1} 天`
     if (expectedDates[index] && day?.date !== expectedDates[index]) {
       problems.push(`${prefix}日期应为 ${expectedDates[index]}，实际 ${day?.date || '缺失'}`)
     }
-    validateDayBlocks(day, { center, radiusKm, notBeforeMinutes, allowHotel }).forEach((item) => {
+    validateDayBlocks(day, {
+      center,
+      radiusKm,
+      notBeforeMinutes,
+      allowHotel,
+      home: plan?.origin,
+      homeGuard,
+    }).forEach((item) => {
       problems.push(`${prefix}：${item}`)
     })
   })

@@ -55,13 +55,22 @@ export const BUDGET_DEFAULTS = {
   shopping: { economy: 30, comfort: 80, premium: 180 },
 }
 
-const TICKET_DEFAULTS = [
-  { match: ['博物馆', '美术馆', '纪念馆'], price: 30 },
-  { match: ['公园', '广场', '湿地', '湖'], price: 20 },
-  { match: ['古镇', '古城'], price: 50 },
-  { match: ['乐园', '游乐'], price: 120 },
-  { match: ['寺', '庙', '观'], price: 40 },
-  { match: ['山', '峰', '峡谷'], price: 60 },
+// 只有明确的“收费体验类”场馆才把高德的人均消费当作票价参考；
+// 公园、古镇、山野、寺庙等大多数免费或票价不公开，不能凭空加门票。
+const PAID_TICKET_HINTS = [
+  '乐园',
+  '游乐',
+  '温泉',
+  '演出',
+  '剧场',
+  '索道',
+  '游船',
+  '影视城',
+  '野生动物园',
+  '海洋馆',
+  '水族馆',
+  '滑雪',
+  '漂流',
 ]
 
 function budgetValue(level) {
@@ -70,13 +79,11 @@ function budgetValue(level) {
 
 function defaultTicket(poi) {
   if (!poi) return 0
-  const cost = Number(poi.cost)
-  if (Number.isFinite(cost) && cost > 0) return cost
   const haystack = `${poi.name || ''} ${poi.category || ''} ${(poi.tags || []).join(' ')}`
-  for (const rule of TICKET_DEFAULTS) {
-    if (rule.match.some((keyword) => haystack.includes(keyword))) return rule.price
-  }
-  return 45
+  if (!PAID_TICKET_HINTS.some((keyword) => haystack.includes(keyword))) return 0
+  const cost = Number(poi.cost)
+  if (!Number.isFinite(cost) || cost < 15 || cost > 500) return 0
+  return cost
 }
 
 /** 同一地点 3 小时内只保留第一次（共享端点、到达与离开）；返程等相隔较久仍保留。 */
@@ -195,7 +202,10 @@ export function computeBudget({ form, days, facts }) {
       category: '门票',
       label: '景点门票 / 体验',
       amount: Math.round(tickets),
-      note: ticketNotes.slice(0, 4).join(' · ') || '未选择收费景点',
+      note:
+        ticketNotes.length > 0
+          ? `参考票价：${ticketNotes.slice(0, 4).join(' · ')}；以景区公示为准`
+          : '自然景区、公园多为免费或现场购票，未计入预算',
     },
     {
       category: '餐饮',

@@ -9,6 +9,7 @@
           <span class="tr-badge">{{ plan.kind === 'weekend' ? '周末班次' : '长假出游' }}</span>
           <span class="tr-badge is-quiet">{{ mapSourceLabel(plan.source) }}</span>
           <span v-if="plan.detailLevel === 'draft'" class="tr-badge is-warn">待细化</span>
+          <span v-if="plan.adoptedAt" class="tr-badge is-ok">已采纳</span>
           <span v-if="plan.locked" class="tr-badge is-lock"><TravelIcon name="lock" :size="12" /> 已锁定</span>
         </div>
       </div>
@@ -31,7 +32,17 @@
         </div>
         <div class="tr-ticket-heading">
           <div class="tr-eyebrow"><span></span> {{ dateText }}</div>
-          <h1>{{ plan.title }}</h1>
+          <input
+            v-if="renaming"
+            ref="titleInput"
+            v-model="titleDraft"
+            class="tr-title-input"
+            maxlength="60"
+            @keydown.enter="commitRename"
+            @keydown.esc="cancelRename"
+            @blur="commitRename"
+          />
+          <h1 v-else @dblclick="startRename">{{ plan.title }}</h1>
           <p v-if="plan.subtitle">{{ plan.subtitle }}</p>
         </div>
         <div class="tr-ticket-actions">
@@ -44,6 +55,16 @@
           <details class="tr-more">
             <summary class="tr-icon-btn" title="更多操作"><TravelIcon name="settings" :size="16" /></summary>
             <div class="tr-more-menu">
+              <button type="button" @click="startRename">
+                <TravelIcon name="pencil" :size="14" /> 重命名
+              </button>
+              <button type="button" @click="$emit('duplicate-plan', plan.id)">
+                <TravelIcon name="copy" :size="14" /> 复制一份
+              </button>
+              <button type="button" @click="$emit('adopt-plan', plan.id)">
+                <TravelIcon name="check" :size="14" />
+                {{ plan.adoptedAt ? '再记录一次版本' : '采纳并记录历史' }}
+              </button>
               <button type="button" @click="$emit('regenerate', plan)">
                 <TravelIcon name="refresh" :size="14" /> 重新拉取资料并生成
               </button>
@@ -220,7 +241,7 @@
 </template>
 
 <script setup>
-import { computed, ref, watch } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import TravelIcon from './TravelIcon.vue'
 import DayTimeline from './DayTimeline.vue'
 import PlanMap from './PlanMap.vue'
@@ -236,7 +257,7 @@ const props = defineProps({
   refining: Boolean,
 })
 
-defineEmits([
+const emit = defineEmits([
   'back',
   'update-budget',
   'update-plan',
@@ -247,8 +268,37 @@ defineEmits([
   'refine-weekend',
   'replace-weekend',
   'toggle-lock',
+  'rename-plan',
+  'duplicate-plan',
+  'adopt-plan',
   'toast',
 ])
+
+const renaming = ref(false)
+const titleDraft = ref('')
+const titleInput = ref(null)
+
+function startRename() {
+  titleDraft.value = props.plan.title || ''
+  renaming.value = true
+  nextTick(() => {
+    titleInput.value?.focus()
+    titleInput.value?.select?.()
+  })
+}
+
+function commitRename() {
+  if (!renaming.value) return
+  renaming.value = false
+  const title = titleDraft.value.trim()
+  if (title && title !== props.plan.title) {
+    emit('rename-plan', { id: props.plan.id, title })
+  }
+}
+
+function cancelRename() {
+  renaming.value = false
+}
 
 const activeTab = ref('itinerary')
 const activeDay = ref(0)

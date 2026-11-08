@@ -106,6 +106,7 @@
         <TravelHome
           v-if="state.view === 'home'"
           :plans="state.plans"
+          :snapshots="state.snapshots"
           :settings="state.settings"
           :preferences="state.preferences"
           :is-mock="api.isMock"
@@ -115,6 +116,7 @@
           @load-demo="store.loadDemo"
           @open-weekend="openWeekend"
           @open-settings="state.view = 'settings'"
+          @restore-snapshot="store.restoreSnapshot"
         />
 
         <TravelWizard
@@ -147,6 +149,9 @@
           @refine-weekend="store.refineWeekend"
           @replace-weekend="store.replaceWeekend"
           @toggle-lock="store.toggleWeekendLock"
+          @rename-plan="handleRenamePlan"
+          @duplicate-plan="store.duplicatePlan"
+          @adopt-plan="store.adoptPlan"
         />
 
         <WeekendBoard
@@ -389,6 +394,10 @@ function handleRegenerate(plan) {
     pace: plan.pace || 'balanced',
     source: plan.source === 'osm' ? 'osm' : 'auto',
   })
+}
+
+function handleRenamePlan({ id, title } = {}) {
+  if (id && title) store.renamePlan(id, title)
 }
 
 async function handlePrint(plan) {

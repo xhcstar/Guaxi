@@ -4,6 +4,7 @@
 import { computed, reactive } from 'vue'
 import { api, createLocalDraft, createWeekendDraft } from './travelApi.js'
 import { createDemoPlan } from './travelData.js'
+import { homeGuardKm, orderSights, pickNearAnchor, tooCloseToHome } from './travelEngine.js'
 import { assemblePlan, computeBudget, defaultPlanTitle } from './travelPlan.js'
 import { formatProblems, validatePlan } from './travelValidate.js'
 import {
@@ -74,6 +75,7 @@ const state = reactive({
     refiningId: '',
     lastRun: '',
   },
+  snapshots: [],
   busy: false,
   stage: { key: '', label: '', detail: '', percent: 0 },
   error: '',
@@ -174,7 +176,9 @@ export function useTravelStore() {
 
   async function refreshPlans() {
     try {
-      state.plans = await api.listPlans()
+      const list = await api.listPlans()
+      state.plans = list.filter((item) => item.kind !== 'snapshot')
+      state.snapshots = list.filter((item) => item.kind === 'snapshot')
       state.settings.planCount = state.plans.length
     } catch (error) {
       state.error = friendlyError(error)
@@ -989,21 +993,21 @@ ${weather || '（暂无）'}
               poi &&
               poi.kind !== 'food' &&
               poi.kind !== 'hotel' &&
+              poi.id !== base?.id &&
               // 目的地离出发点十几公里，就别把家门口的公园排进同一天。
               (!base || haversineKm(base, poi) <= Math.max(15, ring.min)),
           )
           .slice(0, 2)
-      let stops1 = pickSights(source.stops1)
-      let stops2 = pickSights(source.stops2)
+      let stops1 = orderSights(pickSights(source.stops1), base)
+      let stops2 = orderSights(pickSights(source.stops2), base)
       if (!stops1.length && base) stops1 = [base]
       if (!stops2.length) {
-        const next =
-          attractions.find(
-            (poi) =>
-              !used.has(poi.id) &&
-              poi.id !== base?.id &&
-              (!base || haversineKm(base, poi) <= Math.max(15, ring.min)),
-          ) || attractions.find((poi) => !used.has(poi.id) && poi.id !== base?.id)
+        const next = attractions.find(
+          (poi) =>
+            !used.has(poi.id) &&
+            poi.id !== base?.id &&
+            (!base || haversineKm(base, poi) <= Math.max(15, ring.min)),
+        )
         if (next) {
           stops2 = [next]
           used.add(next.id)
@@ -1011,49 +1015,25 @@ ${weather || '（暂无）'}
           stops2 = [base]
         }
       }
-      const nearBase = (poi, limit = Math.max(12, ring.min)) =>
-        !base || !poi || haversineKm(base, poi) <= limit
-      const foodNearBase = (poi) => nearBase(poi, Math.max(15, ring.min))
-      // 没有“目的地附近”的候选时，退而求其次选离目的地最近的一个，避免把家附近的店排进去。
-      const closestToBase = (list, excludeId) => {
-        if (!base) return null
-        return (
-          [...list]
-            .filter(
-              (poi) =>
-                !used.has(poi.id) &&
-                poi.id !== excludeId &&
-                Number.isFinite(haversineKm(base, poi)),
-            )
-            .sort((a, b) => haversineKm(base, a) - haversineKm(base, b))[0] || null
-        )
-      }
-      // 模型点名但离目的地太远的餐饮/住宿一律不采纳，换成本地候选。
-      const pickFood = (rawId, excludeId, fallbackIndex = 0) => {
+      // 餐饮/住宿只取目的地附近：宁可不推荐，也不要让人开回几十公里外的家门口吃饭。
+      const pickMeal = (rawId, exclude) => {
         const named = map.get(safeText(rawId))
-        return (
-          (named && foodNearBase(named) ? named : null) ||
-          food.find((poi) => !used.has(poi.id) && poi.id !== excludeId && foodNearBase(poi)) ||
-          closestToBase(food, excludeId) ||
-          food.find((poi) => !used.has(poi.id) && poi.id !== excludeId) ||
-          named ||
-          food[fallbackIndex] ||
-          food[0] ||
-          null
-        )
+        if (named && base && haversineKm(base, named) <= 12 && !exclude.has(named.id)) return named
+        return pickNearAnchor(food, base, { maxKm: 12, exclude, kind: 'food' })
       }
-      const food1 = pickFood(source.food1, '', 0)
-      const food2 = pickFood(source.food2, food1?.id, 1)
-      if (food1) used.add(food1.id)
+      const food1 = pickMeal(source.food1, used)
+      const foodUsed = new Set(used)
+      if (food1) {
+        foodUsed.add(food1.id)
+        used.add(food1.id)
+      }
+      const food2 = pickMeal(source.food2, foodUsed)
       if (food2) used.add(food2.id)
       const namedHotel = map.get(safeText(source.hotelId))
       const hotel =
-        (namedHotel && foodNearBase(namedHotel) ? namedHotel : null) ||
-        hotels.find((poi) => !used.has(poi.id) && foodNearBase(poi)) ||
-        closestToBase(hotels, '') ||
-        hotels.find((poi) => !used.has(poi.id)) ||
-        namedHotel ||
-        hotels[0]
+        (namedHotel && base && haversineKm(base, namedHotel) <= 15 && !used.has(namedHotel.id)
+          ? namedHotel
+          : null) || pickNearAnchor(hotels, base, { maxKm: 15, exclude: used, kind: 'hotel' })
       if (hotel) used.add(hotel.id)
       return {
         date,
@@ -1389,19 +1369,52 @@ ${weather || '（暂无）'}
       const facts = await api.collectFacts(toRequest(form))
       const map = poiMap(facts)
       const days = plan.days || []
+      // 旧计划里可能存在“家门口的公园/餐厅”，细化时先剔掉，再用目的地附近的候选补齐。
+      const guard = homeGuardKm({ ...form, mode: 'weekend' })
       const outline = {
         title: plan.title,
         subtitle: plan.subtitle,
-        days: days.map((day) => ({
-          date: day.date,
-          weekday: day.weekday,
-          theme: day.theme,
-          area: day.area || '',
-          stops: (day.blocks || [])
-            .filter((block) => block.poi && (block.kind === 'sight' || block.kind === 'food'))
-            .map((block) => ({ poiId: block.poiId, kind: block.kind })),
-          hotelId: (day.blocks || []).find((block) => block.kind === 'hotel')?.poiId || '',
-        })),
+        days: days.map((day) => {
+          const blocks = day.blocks || []
+          const sights = orderSights(
+            blocks
+              .filter((block) => block.poi && (block.kind === 'sight' || block.kind === 'activity'))
+              .filter((block) => !tooCloseToHome(block.poi, plan.origin, guard))
+              .map((block) => map.get(block.poiId))
+              .filter(Boolean),
+            plan.destination,
+          ).map((poi) => ({ poiId: poi.id, kind: 'sight' }))
+          if (!sights.length) {
+            const nearby = pickNearAnchor(facts.attractions || [], plan.destination, { maxKm: 20 })
+            if (nearby) sights.push({ poiId: nearby.id, kind: 'sight' })
+          }
+          // 一天只排一个点太单薄：从目的地附近再补一个，避免 13 点就返程。
+          if (sights.length === 1) {
+            const extra = pickNearAnchor(
+              (facts.attractions || []).filter((poi) => poi.id !== sights[0].poiId),
+              plan.destination,
+              { maxKm: 20 },
+            )
+            if (extra) sights.push({ poiId: extra.id, kind: 'sight' })
+          }
+          const hasFood = blocks.some(
+            (block) =>
+              block.poi && block.kind === 'food' && !tooCloseToHome(block.poi, plan.origin, guard),
+          )
+          const meal = hasFood
+            ? null
+            : pickNearAnchor(facts.food || [], plan.destination, { maxKm: 12, kind: 'food' })
+          const stops = [...sights]
+          if (meal) stops.splice(Math.min(1, stops.length), 0, { poiId: meal.id, kind: 'food' })
+          return {
+            date: day.date,
+            weekday: day.weekday,
+            theme: day.theme,
+            area: day.area || '',
+            stops,
+            hotelId: blocks.find((block) => block.kind === 'hotel')?.poiId || '',
+          }
+        }),
         advice: plan.advice || [],
         mustKnow: plan.mustKnow || [],
       }
@@ -1510,18 +1523,32 @@ ${weather || '（暂无）'}
         ...toRequest({ ...form, destination: origin }),
         radiusKm: 60,
       })
-      const candidates = (facts.attractions || []).filter((poi) => !usedNames.has(poi.name))
-      const base = candidates[Math.floor(Math.random() * Math.max(1, candidates.length))] || facts.attractions?.[0]
+      const ring = weekendRing({ ...form, radiusKm: 60 })
+      const candidates = (facts.attractions || []).filter(
+        (poi) =>
+          !usedNames.has(poi.name) &&
+          Number(poi.distance) / 1000 >= ring.min,
+      )
+      const pool = candidates.length ? candidates : (facts.attractions || []).filter((poi) => !usedNames.has(poi.name))
+      const base = pool[Math.floor(Math.random() * Math.max(1, pool.length))] || facts.attractions?.[0]
       if (!base) {
         showToast('周边暂时没有新的候选地点', 'error')
         return
       }
       const map = poiMap(facts)
-      const nearby = (facts.attractions || [])
-        .filter((poi) => poi.id !== base.id)
-        .slice(0, 3)
-      const food = facts.food?.[0]
-      const hotel = facts.hotels?.[0]
+      const nearby = orderSights(
+        (facts.attractions || []).filter(
+          (poi) => poi.id !== base.id && haversineKm(base, poi) <= Math.max(15, ring.min),
+        ),
+        base,
+      ).slice(0, 3)
+      const food = pickNearAnchor(facts.food || [], base, { maxKm: 12, kind: 'food' })
+      const food2 = pickNearAnchor(facts.food || [], base, {
+        maxKm: 12,
+        kind: 'food',
+        exclude: new Set(food ? [food.id] : []),
+      })
+      const hotel = pickNearAnchor(facts.hotels || [], base, { maxKm: 15, kind: 'hotel' })
       const item = {
         date: plan.weekendStart || plan.startDate,
         basePoiId: base.id,
@@ -1529,7 +1556,7 @@ ${weather || '（暂无）'}
         stops1: nearby.slice(0, 2).map((poi) => poi.id),
         stops2: nearby.slice(2, 3).map((poi) => poi.id),
         food1: food?.id || '',
-        food2: facts.food?.[1]?.id || food?.id || '',
+        food2: food2?.id || food?.id || '',
         hotelId: hotel?.id || '',
         note: '换一个目的地后，时间与路线已重新计算。',
       }
@@ -1612,6 +1639,7 @@ ${weather || '（暂无）'}
     try {
       await api.deletePlan(planId)
       state.plans = state.plans.filter((item) => item.id !== planId)
+      state.snapshots = state.snapshots.filter((item) => item.id !== planId)
       state.weekend.plans = state.weekend.plans.filter((item) => item.id !== planId)
       if (state.plan?.id === planId) {
         state.plan = null
@@ -1620,6 +1648,103 @@ ${weather || '（暂无）'}
       showToast('计划已删除', 'success')
     } catch (error) {
       showToast(friendlyError(error), 'error')
+    }
+  }
+
+  async function renamePlan(planId, title) {
+    const nextTitle = String(title || '').trim()
+    if (!nextTitle) return false
+    try {
+      const plan = await api.getPlan(planId)
+      plan.title = nextTitle
+      const saved = await api.savePlan(plan)
+      if (state.plan?.id === planId) state.plan = saved
+      await refreshPlans()
+      showToast('已重命名', 'success')
+      return true
+    } catch (error) {
+      showToast(`重命名失败：${friendlyError(error)}`, 'error')
+      return false
+    }
+  }
+
+  async function duplicatePlan(planId) {
+    try {
+      const plan = await api.getPlan(planId)
+      const copy = deepClone(plan)
+      const now = new Date().toISOString()
+      copy.id = uid('trp')
+      copy.title = `${plan.title || '未命名行程'} · 副本`
+      copy.createdAt = now
+      copy.updatedAt = now
+      copy.adoptedAt = ''
+      copy.snapshotOf = ''
+      copy.originalKind = ''
+      const saved = await api.savePlan(copy)
+      await refreshPlans()
+      state.plan = saved
+      state.view = 'plan'
+      showToast('已复制一份计划', 'success')
+      return saved
+    } catch (error) {
+      showToast(`复制失败：${friendlyError(error)}`, 'error')
+      return null
+    }
+  }
+
+  // 采纳：给当前版本打上采纳时间，并留一份不可变快照；之后的修改不会覆盖历史。
+  async function adoptPlan(planId) {
+    try {
+      const plan = await api.getPlan(planId)
+      const now = new Date().toISOString()
+      const snapshot = {
+        ...deepClone(plan),
+        id: uid('hist'),
+        kind: 'snapshot',
+        originalKind: plan.kind || 'trip',
+        snapshotOf: plan.id,
+        adoptedAt: now,
+        createdAt: now,
+        updatedAt: now,
+      }
+      await api.savePlan(snapshot)
+      plan.adoptedAt = now
+      const saved = await api.savePlan(plan)
+      if (state.plan?.id === planId) state.plan = saved
+      await refreshPlans()
+      showToast('已采纳，并记录了一份历史版本', 'success')
+      return saved
+    } catch (error) {
+      showToast(`采纳失败：${friendlyError(error)}`, 'error')
+      return null
+    }
+  }
+
+  async function restoreSnapshot(snapshotId) {
+    try {
+      const snapshot = await api.getPlan(snapshotId)
+      const now = new Date().toISOString()
+      const restored = {
+        ...deepClone(snapshot),
+        id: uid('trp'),
+        kind: snapshot.originalKind || 'trip',
+        originalKind: '',
+        snapshotOf: '',
+        adoptedAt: '',
+        title: `${snapshot.title || '行程'} · 恢复`,
+        createdAt: now,
+        updatedAt: now,
+        createdFromHistory: snapshot.id,
+      }
+      const saved = await api.savePlan(restored)
+      await refreshPlans()
+      state.plan = saved
+      state.view = 'plan'
+      showToast('历史版本已恢复为新的计划', 'success')
+      return saved
+    } catch (error) {
+      showToast(`恢复失败：${friendlyError(error)}`, 'error')
+      return null
     }
   }
 
@@ -1734,6 +1859,10 @@ ${weather || '（暂无）'}
     updateBudget,
     toggleChecklist,
     deletePlan,
+    renamePlan,
+    duplicatePlan,
+    adoptPlan,
+    restoreSnapshot,
     loadDemo,
     saveSettings,
     savePreferences,

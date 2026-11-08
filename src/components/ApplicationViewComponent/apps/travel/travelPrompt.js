@@ -16,6 +16,7 @@ import {
   weekdayCn,
 } from './travelUtils.js'
 import { PACE_OPTIONS, TRANSPORT_OPTIONS } from './travelPlan.js'
+import { homeGuardKm } from './travelEngine.js'
 import { validateDayBlocks } from './travelValidate.js'
 
 const SYSTEM_PROMPT = `你是一名资深中文旅行规划师，擅长把真实 POI 与真实路线编排成可执行的行程。
@@ -546,6 +547,8 @@ export function normalizeDay(raw, { form, facts, outlineDay, dayIndex, legs, sto
       radiusKm: Number(form.radiusKm) || 20,
       notBeforeMinutes: timeToMinutes(form.startTime),
       allowHotel: form.startDate !== form.endDate,
+      home: facts.origin,
+      homeGuard: homeGuardKm(form),
     },
   )
   if (problems.length) {

@@ -54,6 +54,8 @@ import heart from '@iconify-icons/lucide/heart'
 import globe from '@iconify-icons/lucide/globe'
 import trainFront from '@iconify-icons/lucide/train-front'
 import receipt from '@iconify-icons/lucide/receipt'
+import pencil from '@iconify-icons/lucide/pencil'
+import search from '@iconify-icons/lucide/search'
 
 const icons = {
   compass,
@@ -106,6 +108,8 @@ const icons = {
   heart,
   globe,
   receipt,
+  pencil,
+  search,
 }
 
 defineProps({
