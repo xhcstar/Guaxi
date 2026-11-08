@@ -100,6 +100,32 @@ function routeLeg(from, to, mode, distance, duration, extra = {}) {
     `${(from.lng + to.lng) / 2},${(from.lat + to.lat) / 2}`,
     `${to.lng},${to.lat}`,
   ].join(';')
+  const summary =
+    extra.summary ||
+    `${mode === 'walking' ? '步行' : mode === 'transit' ? '公共交通' : '驾车'} · ${distance.toFixed(1)} km · 约 ${Math.round(duration / 60)} 分钟`
+  const alternatives = [
+    { label: '推荐', summary, distance, duration, tolls: extra.tolls || 0, fare: extra.fare || 0, traffic: extra.traffic || '', polyline: points },
+    {
+      label: '躲避拥堵',
+      summary: `${summary} · 绕行`,
+      distance: Number((distance * 1.06).toFixed(1)),
+      duration: Math.round(duration * 1.12),
+      tolls: extra.tolls || 0,
+      fare: extra.fare || 0,
+      traffic: '缓行 1 段',
+      polyline: points,
+    },
+    {
+      label: '距离优先',
+      summary: `${summary} · 更短`,
+      distance: Number((distance * 0.96).toFixed(1)),
+      duration: Math.round(duration * 1.08),
+      tolls: Math.max(0, Number(extra.tolls || 0) - 10),
+      fare: extra.fare || 0,
+      traffic: '',
+      polyline: points,
+    },
+  ]
   return {
     mode,
     distance,
@@ -107,14 +133,17 @@ function routeLeg(from, to, mode, distance, duration, extra = {}) {
     tolls: extra.tolls || 0,
     fare: extra.fare || 0,
     traffic: extra.traffic || '',
-    summary:
-      extra.summary ||
-      `${mode === 'walking' ? '步行' : mode === 'transit' ? '公共交通' : '驾车'} · ${distance.toFixed(1)} km · 约 ${Math.round(duration / 60)} 分钟`,
+    summary,
     steps: stepList,
     polyline: points,
-    warning: extra.warning || '',
+    alternatives,
+    fromLng: from.lng,
+    fromLat: from.lat,
+    toLng: to.lng,
+    toLat: to.lat,
     fromName: from.name,
     toName: to.name,
+    warning: extra.warning || '',
   }
 }
 

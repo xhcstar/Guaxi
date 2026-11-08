@@ -15,6 +15,12 @@ import {
   parseModelJson,
 } from './travelPrompt.js'
 import {
+  applyPreferencesToForm,
+  learnFromForm,
+  mergePreferences,
+  webProviderLabel,
+} from './travelPreferences.js'
+import {
   addDays,
   deepClone,
   enumerateDates,
@@ -46,6 +52,7 @@ const state = reactive({
     preview: false,
   },
   defaultOrigin: null,
+  preferences: mergePreferences({}),
   preferOsm: false,
   wizard: null,
   weekend: {
@@ -123,6 +130,14 @@ export function useTravelStore() {
     state.defaultOrigin = readJson(STORAGE_ORIGIN, null)
     const defaults = readJson(STORAGE_DEFAULTS, {})
     try {
+      state.preferences = mergePreferences(await api.getPreferences())
+      if (state.preferences.home || state.preferences.lastOrigin) {
+        state.defaultOrigin = state.preferences.home || state.preferences.lastOrigin
+      }
+    } catch {
+      state.preferences = mergePreferences({})
+    }
+    try {
       state.settings = await api.getSettings()
     } catch {
       /* 设置读取失败不阻断计划库 */
@@ -173,7 +188,8 @@ export function useTravelStore() {
             origin: state.defaultOrigin || defaults.origin || createLocalDraft().origin,
           })
     draft.mode = mode
-    state.wizard = draft
+    state.wizard = applyPreferencesToForm(draft, state.preferences)
+    state.defaultOrigin = state.wizard.origin
     state.view = 'wizard'
     state.error = ''
     state.warning = ''
@@ -276,6 +292,7 @@ export function useTravelStore() {
       mustVisit: splitList(form.mustVisit),
       avoid: splitList(form.avoid),
       source: state.preferOsm ? 'osm' : form.source || 'auto',
+      mapProvider: form.mapProvider || state.preferences.mapProvider || 'auto',
     }
   }
 
@@ -362,7 +379,7 @@ export function useTravelStore() {
     }
   }
 
-  async function buildRoutesForOutline({ form, facts, outline, totalDays, map }) {
+  async function buildRoutesForOutline({ form, facts, outline, totalDays, map, alternatives = true }) {
     const days = outline.days.map((outlineDay, index) =>
       buildStopsForDay({ form, facts, outline, outlineDay, dayIndex: index, totalDays, map }),
     )
@@ -370,6 +387,8 @@ export function useTravelStore() {
     try {
       routeDays = await api.buildRoutes({
         transport: form.transport,
+        provider: facts.source,
+        alternatives,
         days: days.map((item, index) => ({
           date: outline.days[index].date,
           stops: item.routeStops,
@@ -403,7 +422,7 @@ export function useTravelStore() {
   async function createOutline({ form, facts }) {
     try {
       const { system, prompt } = buildOutlinePrompt({ form, facts })
-      const response = await api.llmComplete({
+      const response = await completeLlm({
         prompt,
         system,
         temperature: 0.35,
@@ -427,6 +446,21 @@ export function useTravelStore() {
     }
   }
 
+  async function completeLlm(payload) {
+    if (state.preferences.aiSource === 'web') {
+      const response = await api.webLlmComplete({
+        provider: state.preferences.webProvider,
+        prompt: payload.prompt,
+        system: payload.system,
+      })
+      return {
+        text: response.text,
+        provider: `网页 · ${webProviderLabel(state.preferences.webProvider)}`,
+      }
+    }
+    return api.llmComplete(payload)
+  }
+
   async function createDay({ form, facts, outlineDay, dayIndex, totalDays, legs, stopRefs, startName }) {
     try {
       const { system, prompt } = buildDayPrompt({
@@ -438,7 +472,7 @@ export function useTravelStore() {
         legs,
         startName,
       })
-      const response = await api.llmComplete({
+      const response = await completeLlm({
         prompt,
         system,
         temperature: 0.3,
@@ -545,6 +579,7 @@ export function useTravelStore() {
       if (token !== state.generationToken) return null
       state.plan = saved
       await refreshPlans()
+      await learnPreferences(form)
       state.view = 'plan'
       state.stage = { key: 'done', label: '行程已生成', detail: '', percent: 100 }
       showToast('行程已生成，可以查看地图、预算和分享', 'success')
@@ -752,6 +787,7 @@ ${weather || '（暂无）'}
       outline,
       totalDays,
       map,
+      alternatives: index === 0,
     })
     const detailed = index === 0
     const days = []
@@ -849,7 +885,7 @@ ${weather || '（暂无）'}
       let usedFallback = false
       try {
         const { system, prompt } = buildWeekendPrompt({ form: baseForm, facts, dates })
-        const response = await api.llmComplete({ prompt, system, temperature: 0.5, maxTokens: 4096 })
+        const response = await completeLlm({ prompt, system, temperature: 0.5, maxTokens: 4096 })
         const raw = parseModelJson(response.text)
         outlineItems = normalizeWeekendOutline(raw, { form: baseForm, facts, dates })
       } catch {
@@ -890,6 +926,7 @@ ${weather || '（暂无）'}
       state.weekend.plans = plans
       state.weekend.lastRun = new Date().toISOString()
       await refreshPlans()
+      await learnPreferences(form)
       state.view = 'weekend'
       if (plans[0]) {
         state.plan = plans[0]
@@ -1204,6 +1241,46 @@ ${weather || '（暂无）'}
     }
   }
 
+  async function savePreferences(next) {
+    try {
+      const merged = mergePreferences(next)
+      state.preferences = mergePreferences(await api.setPreferences(merged))
+      state.defaultOrigin =
+        state.preferences.home || state.preferences.lastOrigin || state.defaultOrigin
+      if (state.wizard && state.view === 'wizard') {
+        state.wizard = applyPreferencesToForm(state.wizard, state.preferences)
+      }
+      showToast('个人偏好已保存，本次规划会自动使用', 'success')
+      return state.preferences
+    } catch (error) {
+      showToast(`保存偏好失败：${friendlyError(error)}`, 'error')
+      return state.preferences
+    }
+  }
+
+  async function resetPreferences() {
+    try {
+      await api.resetPreferences()
+      state.preferences = mergePreferences({})
+      showToast('已清空个人偏好与学习记录', 'success')
+      return state.preferences
+    } catch (error) {
+      showToast(`清空偏好失败：${friendlyError(error)}`, 'error')
+      return state.preferences
+    }
+  }
+
+  async function learnPreferences(form) {
+    if (!state.preferences.autoLearn) return
+    try {
+      const next = learnFromForm(state.preferences, form)
+      state.preferences = next
+      await api.setPreferences(next)
+    } catch {
+      /* 学习失败不阻断行程生成 */
+    }
+  }
+
   function setPreferOsm(value) {
     state.preferOsm = Boolean(value)
     localStorage.setItem(STORAGE_PREFER_OSM, state.preferOsm ? '1' : '0')
@@ -1249,6 +1326,8 @@ ${weather || '（暂无）'}
     deletePlan,
     loadDemo,
     saveSettings,
+    savePreferences,
+    resetPreferences,
     setPreferOsm,
     resetShare,
     showToast,

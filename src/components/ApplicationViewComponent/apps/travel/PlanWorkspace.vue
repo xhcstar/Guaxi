@@ -7,7 +7,7 @@
         </button>
         <div class="tr-plan-badges">
           <span class="tr-badge">{{ plan.kind === 'weekend' ? '周末班次' : '长假出游' }}</span>
-          <span class="tr-badge is-quiet">{{ plan.source === 'amap' ? '高德数据' : 'OSM 数据' }}</span>
+          <span class="tr-badge is-quiet">{{ mapSourceLabel(plan.source) }}</span>
           <span v-if="plan.detailLevel === 'draft'" class="tr-badge is-warn">待细化</span>
           <span v-if="plan.locked" class="tr-badge is-lock"><TravelIcon name="lock" :size="12" /> 已锁定</span>
         </div>
@@ -178,7 +178,7 @@ import PlanMap from './PlanMap.vue'
 import BudgetPanel from './BudgetPanel.vue'
 import PrepPanel from './PrepPanel.vue'
 import SharePanel from './SharePanel.vue'
-import { cityCode, peopleCount, ticketCities, transportLabel } from './travelShare.js'
+import { cityCode, mapSourceLabel, peopleCount, ticketCities, transportLabel } from './travelShare.js'
 import { durationText, money, shortDate, weekdayCn } from './travelUtils.js'
 
 const props = defineProps({

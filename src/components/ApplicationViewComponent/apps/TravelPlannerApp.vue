@@ -1,6 +1,6 @@
 <template>
-  <div class="tr-app" :class="{ 'is-busy': state.busy, 'is-preview': api.isMock }">
-    <aside class="tr-rail">
+  <div class="tr-app" :class="{ 'is-busy': state.busy, 'is-preview': api.isMock, 'is-rail-collapsed': railCollapsed }">
+    <aside class="tr-rail" :style="railStyle">
       <div class="tr-rail-texture" aria-hidden="true"></div>
       <header class="tr-brand" @click="store.showHome()">
         <span class="tr-seal">行迹</span>
@@ -9,6 +9,7 @@
           <small>XINGJI · TRAVEL JOURNAL</small>
         </div>
       </header>
+      <div v-if="!railCollapsed" class="tr-rail-resize" title="拖动调整侧栏宽度" @mousedown="startRailResize"></div>
 
       <div class="tr-rail-actions">
         <button type="button" class="tr-btn is-primary" @click="store.newTrip('trip')">
@@ -68,8 +69,8 @@
 
       <footer class="tr-rail-foot">
         <button type="button" class="tr-source-pill" @click="state.view = 'settings'">
-          <span class="tr-source-dot" :class="state.settings.source === 'amap' ? 'is-amap' : 'is-osm'"></span>
-          <span>{{ state.settings.source === 'amap' ? '高德数据' : '免费 OSM 数据' }}</span>
+          <span class="tr-source-dot" :class="state.preferences.mapProvider === 'osm' ? 'is-osm' : 'is-amap'"></span>
+          <span>{{ mapProviderLabel(state.preferences.mapProvider) }}</span>
         </button>
         <small>{{ state.settings.providerLabel || '模型未配置' }}</small>
       </footer>
@@ -85,6 +86,14 @@
         </div>
         <div class="tr-topbar-actions">
           <span v-if="api.isMock" class="tr-preview-pill">浏览器预览 · 内置数据</span>
+          <button
+            type="button"
+            class="tr-icon-btn tr-rail-toggle-btn"
+            :title="railCollapsed ? '展开侧栏' : '折叠侧栏'"
+            @click="toggleRail"
+          >
+            <TravelIcon :name="railCollapsed ? 'chevronRight' : 'chevronLeft'" :size="16" />
+          </button>
           <button type="button" class="tr-icon-btn" title="设置" @click="state.view = 'settings'">
             <TravelIcon name="settings" :size="16" />
           </button>
@@ -96,6 +105,7 @@
           v-if="state.view === 'home'"
           :plans="state.plans"
           :settings="state.settings"
+          :preferences="state.preferences"
           :is-mock="api.isMock"
           @new-trip="store.newTrip('trip')"
           @new-weekend="store.newTrip('weekend')"
@@ -112,6 +122,7 @@
           :is-mock="api.isMock"
           :busy="state.busy"
           :search="store.searchPlaces"
+          :preferences="state.preferences"
           @update="store.editWizard"
           @locate="store.locateOrigin"
           @submit="handleSubmit"
@@ -155,8 +166,11 @@
           :settings="state.settings"
           :prefer-osm="state.preferOsm"
           :is-mock="api.isMock"
+          :preferences="state.preferences"
           @save-key="store.saveSettings"
           @set-prefer-osm="store.setPreferOsm"
+          @save-preferences="store.savePreferences"
+          @reset-preferences="store.resetPreferences"
           @home="store.showHome()"
         />
       </div>
@@ -215,9 +229,10 @@
 </template>
 
 <script setup>
-import { computed, nextTick, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { api } from './travel/travelApi.js'
 import { useTravelStore } from './travel/travelStore.js'
+import { mapProviderLabel } from './travel/travelPreferences.js'
 import { shortDate, todayString } from './travel/travelUtils.js'
 import TravelIcon from './travel/TravelIcon.vue'
 import TravelHome from './travel/TravelHome.vue'
@@ -230,6 +245,53 @@ import './travel/travel.css'
 const store = useTravelStore()
 const { state } = store
 const scrollEl = ref(null)
+
+const RAIL_WIDTH_KEY = 'guaxi.travel.railWidth.v1'
+const RAIL_COLLAPSED_KEY = 'guaxi.travel.railCollapsed.v1'
+const RAIL_MIN = 220
+const RAIL_MAX = 420
+const railWidth = ref(Number(localStorage.getItem(RAIL_WIDTH_KEY)) || 274)
+const railCollapsed = ref(localStorage.getItem(RAIL_COLLAPSED_KEY) === '1')
+const railStyle = computed(() =>
+  railCollapsed.value
+    ? { flex: '0 0 64px', width: '64px' }
+    : { flex: `0 0 ${railWidth.value}px`, width: `${railWidth.value}px` },
+)
+let railResizing = false
+let railStartX = 0
+let railStartWidth = 0
+
+function toggleRail() {
+  railCollapsed.value = !railCollapsed.value
+  localStorage.setItem(RAIL_COLLAPSED_KEY, railCollapsed.value ? '1' : '0')
+}
+
+function startRailResize(event) {
+  if (railCollapsed.value) return
+  railResizing = true
+  railStartX = event.clientX
+  railStartWidth = railWidth.value
+  document.addEventListener('mousemove', onRailResize)
+  document.addEventListener('mouseup', stopRailResize)
+  document.body.style.cursor = 'col-resize'
+  document.body.style.userSelect = 'none'
+  event.preventDefault()
+}
+
+function onRailResize(event) {
+  if (!railResizing) return
+  railWidth.value = Math.min(RAIL_MAX, Math.max(RAIL_MIN, railStartWidth + event.clientX - railStartX))
+}
+
+function stopRailResize() {
+  if (!railResizing) return
+  railResizing = false
+  document.removeEventListener('mousemove', onRailResize)
+  document.removeEventListener('mouseup', stopRailResize)
+  document.body.style.cursor = ''
+  document.body.style.userSelect = ''
+  localStorage.setItem(RAIL_WIDTH_KEY, String(railWidth.value))
+}
 
 const viewTitle = computed(() => {
   if (state.view === 'wizard') return state.wizard?.mode === 'weekend' ? '生成周末班次' : '规划新行程'
@@ -350,5 +412,12 @@ onMounted(async () => {
       store.showToast(`${upcoming[0].title || '下一趟行程'}还有 ${Math.max(0, days)} 天出发`, 'info', 4200)
     }
   }
+})
+
+onBeforeUnmount(() => {
+  document.removeEventListener('mousemove', onRailResize)
+  document.removeEventListener('mouseup', stopRailResize)
+  document.body.style.cursor = ''
+  document.body.style.userSelect = ''
 })
 </script>

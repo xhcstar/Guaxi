@@ -6,7 +6,7 @@
         <h2>分享与带走</h2>
         <p>长图、PDF、局域网链接三种方式，覆盖“在微信里看”和“到了当地离线看”。</p>
       </div>
-      <span class="tr-share-source">{{ plan.source === 'amap' ? '高德数据' : 'OSM 数据' }}</span>
+      <span class="tr-share-source">{{ mapSourceLabel(plan.source) }}</span>
     </div>
 
     <div class="tr-share-layout">
@@ -107,7 +107,7 @@ import { toPng } from 'html-to-image'
 import TravelIcon from './TravelIcon.vue'
 import PlanPoster from './PlanPoster.vue'
 import { api } from './travelApi.js'
-import { buildShareHtml } from './travelShare.js'
+import { buildShareHtml, mapSourceLabel } from './travelShare.js'
 
 const props = defineProps({
   plan: { type: Object, required: true },
@@ -335,6 +335,11 @@ async function copyLink() {
 
 async function refreshPosterMap() {
   if (posterBusy.value) return
+  const coordSystem = props.plan.coordSystem || (props.plan.source === 'amap' ? 'gcj02' : 'wgs84')
+  if (coordSystem !== 'gcj02') {
+    notify('当前地图服务商没有接入静态地图，长图使用装饰路线图', 'info')
+    return
+  }
   posterBusy.value = true
   try {
     const day = (props.plan.days || []).find((item) =>

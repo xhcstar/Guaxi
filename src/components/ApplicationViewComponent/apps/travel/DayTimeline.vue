@@ -68,16 +68,34 @@
             <div v-if="block.route.warning" class="tr-route-warning">
               <TravelIcon name="warning" :size="13" /> {{ block.route.warning }}
             </div>
-            <details class="tr-route-steps">
-              <summary>展开逐段路线 · {{ (block.route.steps || []).length }} 段</summary>
-              <ol>
-                <li v-for="(step, stepIndex) in block.route.steps" :key="stepIndex">
-                  <span class="tr-step-index">{{ stepIndex + 1 }}</span>
-                  <span>{{ step.instruction || step.road || '继续前行' }}</span>
-                  <small v-if="step.distance">{{ distanceText(step.distance / 1000) }}</small>
-                </li>
-              </ol>
-            </details>
+            <div class="tr-route-options">
+              <div
+                v-for="(option, optionIndex) in routeOptions(block)"
+                :key="optionIndex"
+                class="tr-route-option"
+                :class="{ 'is-primary': optionIndex === 0 }"
+              >
+                <div class="tr-route-option-head">
+                  <span>{{ option.label || (optionIndex === 0 ? '推荐' : `备选 ${optionIndex}`) }}</span>
+                  <strong>{{ durationText(option.duration) || '—' }}</strong>
+                </div>
+                <div class="tr-route-option-meta">
+                  <span>{{ distanceText(option.distance) }}</span>
+                  <span v-if="option.traffic">{{ option.traffic }}</span>
+                  <span v-if="option.tolls">过路费 ¥{{ money(option.tolls) }}</span>
+                  <span v-if="option.fare">票价 ¥{{ money(option.fare) }}</span>
+                </div>
+              </div>
+            </div>
+            <button
+              v-if="canNavigate(block)"
+              type="button"
+              class="tr-route-nav"
+              @click="openNavigation(block)"
+            >
+              <TravelIcon name="navigation" :size="12" />
+              用手机导航这段
+            </button>
           </div>
 
           <ul v-if="block.tips?.length" class="tr-block-tips">
@@ -106,7 +124,18 @@
 <script setup>
 import { computed } from 'vue'
 import TravelIcon from './TravelIcon.vue'
-import { distanceText, durationText, friendlyDate, money, shortDate, weekdayCn } from './travelUtils.js'
+import {
+  bd09ToGcj02,
+  bd09ToWgs84,
+  distanceText,
+  durationText,
+  friendlyDate,
+  gcj02ToWgs84,
+  money,
+  shortDate,
+  wgs84ToGcj02,
+  weekdayCn,
+} from './travelUtils.js'
 
 const props = defineProps({
   day: { type: Object, required: true },
@@ -160,4 +189,69 @@ function weatherIcon(item) {
             ? 'fog'
             : 'cloud'
 }
+
+function routeOptions(block) {
+  const list = block?.route?.alternatives
+  if (Array.isArray(list) && list.length) return list.slice(0, 3)
+  return block?.route ? [block.route] : []
+}
+
+function canNavigate(block) {
+  const route = block?.route
+  return Boolean(
+    route &&
+      Number.isFinite(Number(route.fromLng)) &&
+      Number.isFinite(Number(route.fromLat)) &&
+      Number.isFinite(Number(route.toLng)) &&
+      Number.isFinite(Number(route.toLat)),
+  )
+}
+
+async function openUrl(url) {
+  try {
+    const { openUrl: openExternal } = await import('@tauri-apps/plugin-opener')
+    await openExternal(url)
+  } catch {
+    window.open(url, '_blank', 'noopener')
+  }
+}
+
+async function openNavigation(block) {
+  const route = block.route
+  if (!route) return
+  const source = props.plan?.source || 'osm'
+  const toWgs = (lng, lat) => {
+    if (source === 'amap' || source === 'tencent') return gcj02ToWgs84(lng, lat)
+    if (source === 'baidu') return bd09ToWgs84(lng, lat)
+    return [lng, lat]
+  }
+  const toGcj = (lng, lat) => {
+    if (source === 'amap' || source === 'tencent') return [lng, lat]
+    if (source === 'baidu') return bd09ToGcj02(lng, lat)
+    return wgs84ToGcj02(lng, lat)
+  }
+  const fromLng = Number(route.fromLng)
+  const fromLat = Number(route.fromLat)
+  const toLng = Number(route.toLng)
+  const toLat = Number(route.toLat)
+  const inChina = fromLng > 72 && fromLng < 138 && fromLat > 0.8 && fromLat < 56
+  const [wFromLng, wFromLat] = toWgs(fromLng, fromLat)
+  const [wToLng, wToLat] = toWgs(toLng, toLat)
+  if (inChina) {
+    const [gFromLng, gFromLat] = toGcj(fromLng, fromLat)
+    const [gToLng, gToLat] = toGcj(toLng, toLat)
+    const mode = route.mode === 'walking' ? 'walk' : route.mode === 'transit' ? 'bus' : 'car'
+    const url =
+      `https://uri.amap.com/navigation?from=${gFromLng},${gFromLat},${encodeURIComponent(route.fromName || '起点')}` +
+      `&to=${gToLng},${gToLat},${encodeURIComponent(route.toName || '终点')}` +
+      `&mode=${mode}&policy=1&src=guaxi&coordinate=gaode&callnative=1`
+    await openUrl(url)
+    return
+  }
+  const travelMode = route.mode === 'walking' ? 'walking' : route.mode === 'transit' ? 'transit' : 'driving'
+  await openUrl(
+    `https://www.google.com/maps/dir/?api=1&origin=${wFromLat},${wFromLng}&destination=${wToLat},${wToLng}&travelmode=${travelMode}`,
+  )
+}
+
 </script>

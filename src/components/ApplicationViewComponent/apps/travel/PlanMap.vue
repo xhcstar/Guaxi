@@ -14,7 +14,7 @@
         </button>
       </div>
       <div class="tr-map-tools">
-        <span class="tr-map-source">{{ plan.source === 'amap' ? '高德瓦片' : 'OpenStreetMap' }}</span>
+        <span class="tr-map-source">{{ mapSourceLabel(plan.source) }}</span>
         <button type="button" class="tr-btn is-small is-outline" @click="openInAmap">在高德打开</button>
       </div>
     </div>
@@ -44,7 +44,8 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 import TravelIcon from './TravelIcon.vue'
-import { escapeHtml } from './travelUtils.js'
+import { escapeHtml, bd09ToGcj02, bd09ToWgs84, wgs84ToGcj02 } from './travelUtils.js'
+import { mapSourceLabel } from './travelShare.js'
 
 const props = defineProps({
   plan: { type: Object, required: true },
@@ -69,6 +70,19 @@ const hasPoints = computed(() =>
 
 function dayColor(index) {
   return DAY_COLORS[index % DAY_COLORS.length]
+}
+
+function coordSystem() {
+  const plan = props.plan || {}
+  if (plan.coordSystem) return plan.coordSystem
+  if (plan.source === 'amap' || plan.source === 'tencent') return 'gcj02'
+  if (plan.source === 'baidu') return 'bd09'
+  return 'wgs84'
+}
+
+function mapCoords(lng, lat) {
+  if (coordSystem() === 'bd09') return bd09ToWgs84(lng, lat)
+  return [lng, lat]
 }
 
 function parsePolyline(value) {
@@ -104,7 +118,7 @@ function initMap() {
     preferCanvas: true,
   }).setView([30.24, 120.13], 11)
   L.control.zoom({ position: 'bottomright' }).addTo(map)
-  const amap = props.plan.source === 'amap'
+  const amap = coordSystem() === 'gcj02'
   const url = amap
     ? 'https://webrd0{s}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}'
     : 'https://tile.openstreetmap.org/{z}/{x}/{y}.png'
@@ -146,6 +160,10 @@ function render() {
     ;(day.blocks || []).forEach((block) => {
       if (block.route?.polyline) {
         const points = parsePolyline(block.route.polyline)
+          .map(([lat, lng]) => {
+            const [mappedLng, mappedLat] = mapCoords(lng, lat)
+            return [mappedLat, mappedLng]
+          })
         if (points.length > 1) {
           L.polyline(points, {
             color: '#fffaf0',
@@ -173,13 +191,14 @@ function render() {
       order += 1
       const label =
         block.kind === 'hotel' ? 'H' : block.kind === 'food' ? 'F' : String(order)
-      const marker = L.marker([Number(poi.lat), Number(poi.lng)], {
+      const [poiLng, poiLat] = mapCoords(Number(poi.lng), Number(poi.lat))
+      const marker = L.marker([poiLat, poiLng], {
         icon: markerIcon(label, color, block.kind),
         keyboard: false,
       })
       marker.bindPopup(popupHtml(poi), { closeButton: false })
       marker.addTo(layerGroup)
-      bounds.push([Number(poi.lat), Number(poi.lng)])
+      bounds.push([poiLat, poiLng])
     })
   })
   if (bounds.length) {
@@ -195,7 +214,15 @@ function setDay(value) {
 async function openInAmap() {
   const destination = props.plan.destination
   if (!destination?.lng || !destination?.lat) return
-  const url = `https://uri.amap.com/marker?position=${destination.lng},${destination.lat}&name=${encodeURIComponent(destination.name || '目的地')}&src=guaxi&coordinate=gaode&callnative=0`
+  const system = coordSystem()
+  let lng = Number(destination.lng)
+  let lat = Number(destination.lat)
+  if (system === 'bd09') {
+    [lng, lat] = bd09ToGcj02(lng, lat)
+  } else if (system === 'wgs84') {
+    [lng, lat] = wgs84ToGcj02(lng, lat)
+  }
+  const url = `https://uri.amap.com/marker?position=${lng},${lat}&name=${encodeURIComponent(destination.name || '目的地')}&src=guaxi&coordinate=gaode&callnative=0`
   try {
     const { openUrl } = await import('@tauri-apps/plugin-opener')
     await openUrl(url)

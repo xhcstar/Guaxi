@@ -55,6 +55,19 @@ export function transportLabel(value) {
   return TRANSPORT_OPTIONS.find((item) => item.value === value)?.label || '自驾'
 }
 
+export function mapSourceLabel(source) {
+  return (
+    {
+      amap: '高德数据',
+      osm: 'OSM 数据',
+      baidu: '百度数据',
+      tencent: '腾讯数据',
+      google: 'Google 数据',
+      mapbox: 'Mapbox 数据',
+    }[source] || '地图数据'
+  )
+}
+
 export function peopleCount(plan) {
   if (!plan) return 0
   if (Number(plan.people) > 0) return Number(plan.people)
@@ -87,11 +100,25 @@ function dateLabel(value) {
 function renderRoute(block) {
   const leg = block.route
   if (!leg) return ''
-  const steps = (leg.steps || [])
-    .slice(0, 20)
-    .map((step) => `<li>${escapeHtml(step.instruction || step.road || '继续前行')}</li>`)
+  const options =
+    Array.isArray(leg.alternatives) && leg.alternatives.length
+      ? leg.alternatives.slice(0, 3)
+      : [leg]
+  const optionHtml = options
+    .map((option, index) => {
+      const minutes = Number(option.duration) ? Math.round(Number(option.duration) / 60) : null
+      const distance = Number(option.distance) ? Number(option.distance).toFixed(1) : ''
+      const extra = [
+        option.traffic,
+        option.tolls ? `过路费 ¥${money(option.tolls)}` : '',
+        option.fare ? `票价 ¥${money(option.fare)}` : '',
+      ]
+        .filter(Boolean)
+        .join(' · ')
+      return `<div class="route-option${index === 0 ? ' is-primary' : ''}"><div><span>${escapeHtml(option.label || (index === 0 ? '推荐' : `备选 ${index}`))}</span><strong>${minutes ? `${minutes} 分钟` : '—'}</strong></div><small>${escapeHtml(distance ? `${distance} km` : '')}${extra ? ` · ${escapeHtml(extra)}` : ''}</small></div>`
+    })
     .join('')
-  return `<details class="route"><summary>${escapeHtml(leg.summary || '查看路线')}${leg.traffic ? ` · ${escapeHtml(leg.traffic)}` : ''}</summary><ol>${steps}</ol></details>`
+  return `<div class="route"><div class="route-title">${escapeHtml(leg.summary || '路线方案')}</div><div class="route-options">${optionHtml}</div>${leg.warning ? `<div class="route-warning">${escapeHtml(leg.warning)}</div>` : ''}</div>`
 }
 
 function renderBlock(block) {
@@ -193,7 +220,7 @@ function mapBlock(plan) {
 export function buildShareHtml(plan, options = {}) {
   const cities = ticketCities(plan)
   const shareUrl = options.shareUrl || ''
-  const source = plan.source === 'amap' ? '高德地图数据' : 'OpenStreetMap 数据'
+  const source = mapSourceLabel(plan.source)
   const title = plan.title || '旅行计划'
   const meta = `${dateRangeText(plan)} · ${peopleCount(plan)} 人 · ${transportLabel(plan.transport)} · 人均 ¥${money(plan.budget?.perPerson)}`
   const days = (plan.days || []).map(renderDay).join('')
@@ -251,8 +278,15 @@ body{font-family:"PingFang SC","Microsoft YaHei",system-ui,sans-serif;line-heigh
 .tips li{margin:2px 0}
 .booking{margin-top:7px;font-size:12px;background:#f3e7d6;border-left:3px solid #c4552d;padding:6px 9px;border-radius:4px}
 .route{margin-top:8px;font-size:12px;overflow-wrap:anywhere}
-.route summary{cursor:pointer;color:#4f6b57;overflow-wrap:anywhere}
-.route ol{margin:6px 0 0;padding-left:18px;color:#4a5a55;overflow-wrap:anywhere}
+.route-title{color:#4f6b57;font-size:11px;font-weight:600;overflow-wrap:anywhere}
+.route-options{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;margin-top:6px}
+.route-option{min-width:0;padding:7px 8px;border:1px solid rgba(29,42,40,.14);border-radius:7px;background:#efe7d7}
+.route-option.is-primary{border-color:rgba(196,85,45,.42);background:#f3e2d6}
+.route-option>div{display:flex;align-items:baseline;justify-content:space-between;gap:5px}
+.route-option span{font-size:9px;color:#7c8a83;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.route-option strong{font-family:ui-monospace,Consolas,monospace;font-size:10px;white-space:nowrap}
+.route-option small{display:block;margin-top:2px;font-size:8.5px;line-height:1.5;color:#7c8a83;overflow-wrap:anywhere}
+.route-warning{margin-top:5px;font-size:10px;line-height:1.5;color:#c4552d;overflow-wrap:anywhere}
 .block-transit h3{font-size:14px;color:#4f6b57}
 .block-transit .time{color:#4f6b57}
 .block-food h3{color:#8a4a2a}
@@ -279,7 +313,8 @@ body{font-family:"PingFang SC","Microsoft YaHei",system-ui,sans-serif;line-heigh
 @media(max-width:420px){
   .route b{font-size:28px}
   .ticket h1{font-size:22px}
-  .block{grid-template-columns:52px 1fr;gap:8px}
+  .block{grid-template-columns:52px minmax(0,1fr);gap:8px}
+  .route-options{grid-template-columns:1fr}
   .page{padding:12px 10px 30px}
 }
 @media print{

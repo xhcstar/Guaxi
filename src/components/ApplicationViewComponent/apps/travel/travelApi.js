@@ -12,6 +12,7 @@ export const isMock = !isTauriRuntime()
 
 const STORAGE_KEY = 'guaxi.travel.plans.v1'
 const SETTINGS_KEY = 'guaxi.travel.settings.v1'
+const PREFERENCES_KEY = 'guaxi.travel.preferences.v1'
 
 function readLocalPlans() {
   try {
@@ -63,6 +64,16 @@ function mockSettings() {
   }
 }
 
+function mockMapKeys(keys = {}) {
+  const local = readLocalSettings()
+  const out = {}
+  for (const provider of ['amap', 'baidu', 'tencent', 'google', 'mapbox']) {
+    const key = String(keys[provider] || (provider === 'amap' ? local.amapKey : '') || '')
+    out[provider] = { set: Boolean(key), tail: key ? key.slice(-4) : '' }
+  }
+  return out
+}
+
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 function haversineKm(a, b) {
@@ -106,14 +117,15 @@ function mockLeg(from, to, index) {
   const mode = distance > 25 ? 'driving' : index % 3 === 1 ? 'walking' : 'driving'
   const speed = mode === 'walking' ? 4.5 : 38
   const duration = (distance / speed) * 3600
-  return {
+  const summary = `${mode === 'walking' ? '步行' : '驾车'} · ${distance.toFixed(1)} km · 约 ${Math.round(duration / 60)} 分钟`
+  const base = {
     mode,
     distance,
     duration,
     tolls: distance > 60 ? Math.round(distance * 0.4) : 0,
     fare: 0,
     traffic: distance > 30 ? '缓行 1 段' : '畅通',
-    summary: `${mode === 'walking' ? '步行' : '驾车'} · ${distance.toFixed(1)} km · 约 ${Math.round(duration / 60)} 分钟`,
+    summary,
     steps: [
       {
         instruction: `从 ${from.name} 出发，向 ${to.name} 方向行驶`,
@@ -136,9 +148,37 @@ function mockLeg(from, to, index) {
     ],
     polyline: `${from.lng},${from.lat};${(from.lng + to.lng) / 2},${(from.lat + to.lat) / 2};${to.lng},${to.lat}`,
     warning: '',
+    fromLng: from.lng,
+    fromLat: from.lat,
+    toLng: to.lng,
+    toLat: to.lat,
     fromName: from.name,
     toName: to.name,
   }
+  base.alternatives = [
+    { label: '推荐', summary, distance, duration, tolls: base.tolls, fare: 0, traffic: base.traffic, polyline: base.polyline },
+    {
+      label: '躲避拥堵',
+      summary: `${summary} · 绕行`,
+      distance: Number((distance * 1.07).toFixed(1)),
+      duration: Math.round(duration * 1.1),
+      tolls: base.tolls,
+      fare: 0,
+      traffic: '缓行 1 段',
+      polyline: base.polyline,
+    },
+    {
+      label: '距离优先',
+      summary: `${summary} · 更短`,
+      distance: Number((distance * 0.95).toFixed(1)),
+      duration: Math.round(duration * 1.06),
+      tolls: Math.max(0, base.tolls - 10),
+      fare: 0,
+      traffic: '',
+      polyline: base.polyline,
+    },
+  ]
+  return base
 }
 
 function mockCollectFacts(args) {
@@ -241,7 +281,7 @@ export const api = {
     return invoke('travel_collect_facts', { request })
   },
 
-  async buildRoutes({ transport, days }) {
+  async buildRoutes({ transport, days, provider, alternatives = true }) {
     if (!isTauriRuntime()) {
       await delay(380)
       return days.map((day) => ({
@@ -249,7 +289,9 @@ export const api = {
         legs: (day.stops || []).slice(1).map((stop, index) => mockLeg(day.stops[index], stop, index)),
       }))
     }
-    return invoke('travel_build_routes', { request: { transport, days } })
+    return invoke('travel_build_routes', {
+      request: { transport, days, provider: provider || 'auto', alternatives },
+    })
   },
 
   async llmComplete(request) {
@@ -258,6 +300,22 @@ export const api = {
       throw new Error('浏览器预览不调用模型')
     }
     return invoke('travel_llm_complete', { request })
+  },
+
+  async webLlmComplete(request) {
+    if (!isTauriRuntime()) {
+      await delay(300)
+      throw new Error('浏览器预览不调用网页模型')
+    }
+    return invoke('travel_llm_web_complete', { request })
+  },
+
+  async openWebModelWindow(provider) {
+    if (!isTauriRuntime()) {
+      await delay(120)
+      return { preview: true }
+    }
+    return invoke('open_web_model_window', { provider })
   },
 
   async staticMap(request) {
@@ -300,6 +358,61 @@ export const api = {
       return
     }
     return invoke('travel_delete_plan', { planId })
+  },
+
+  async setMapKey(provider, key) {
+    if (!isTauriRuntime()) {
+      const local = readLocalSettings()
+      const keys = { ...(local.mapKeys || {}) }
+      if (String(key || '').trim()) keys[provider] = String(key).trim()
+      else delete keys[provider]
+      writeLocalSettings({ ...local, mapKeys: keys })
+      return mockMapKeys(keys)
+    }
+    return invoke('travel_set_map_key', { provider, key })
+  },
+
+  async getMapKeys() {
+    if (!isTauriRuntime()) {
+      const local = readLocalSettings()
+      return mockMapKeys(local.mapKeys || {})
+    }
+    return invoke('travel_get_map_keys')
+  },
+
+  async getPreferences() {
+    if (!isTauriRuntime()) {
+      try {
+        return JSON.parse(localStorage.getItem(PREFERENCES_KEY) || '{}')
+      } catch {
+        return {}
+      }
+    }
+    return invoke('travel_get_preferences')
+  },
+
+  async setPreferences(preferences) {
+    if (!isTauriRuntime()) {
+      try {
+        localStorage.setItem(PREFERENCES_KEY, JSON.stringify(preferences || {}))
+      } catch {
+        /* ignore */
+      }
+      return preferences
+    }
+    return invoke('travel_set_preferences', { preferences })
+  },
+
+  async resetPreferences() {
+    if (!isTauriRuntime()) {
+      try {
+        localStorage.removeItem(PREFERENCES_KEY)
+      } catch {
+        /* ignore */
+      }
+      return {}
+    }
+    return invoke('travel_reset_preferences')
   },
 
   async shareStart(planId, html) {
@@ -362,6 +475,7 @@ export function createLocalDraft(overrides = {}) {
     avoid: '',
     radiusKm: 60,
     source: 'auto',
+    mapProvider: 'auto',
     ...overrides,
   }
 }

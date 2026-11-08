@@ -46,11 +46,7 @@ struct WebModelChatPushRequest {
 }
 
 fn provider_to_model_id(provider: &str) -> Option<i32> {
-    match provider {
-        "yuanbao" => Some(7),
-        "chatgpt" => Some(8),
-        _ => None,
-    }
+    crate::commands::chatview::web_provider_model_id(provider)
 }
 
 async fn web_model_chat_push(

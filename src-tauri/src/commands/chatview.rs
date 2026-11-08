@@ -4210,6 +4210,26 @@ fn web_model_url(provider: &str) -> Option<&'static str> {
     match provider {
         "yuanbao" => Some("https://yuanbao.tencent.com"),
         "chatgpt" => Some("https://chatgpt.com"),
+        "deepseek" => Some("https://chat.deepseek.com"),
+        "kimi" => Some("https://kimi.moonshot.cn"),
+        "qwen" => Some("https://tongyi.aliyun.com/qianwen/"),
+        "doubao" => Some("https://www.doubao.com/chat/"),
+        "claude" => Some("https://claude.ai/new"),
+        _ => None,
+    }
+}
+
+/// 网页模型窗口和 web-model-chat-push 事件使用的 model_id。
+/// 这些 id 只用于网页会话，不会进入普通对话的 ChatModel 分发。
+pub fn web_provider_model_id(provider: &str) -> Option<i32> {
+    match provider.trim().to_lowercase().as_str() {
+        "yuanbao" => Some(7),
+        "chatgpt" => Some(8),
+        "deepseek" => Some(21),
+        "kimi" => Some(22),
+        "qwen" => Some(23),
+        "doubao" => Some(24),
+        "claude" => Some(25),
         _ => None,
     }
 }
@@ -4250,13 +4270,13 @@ async fn ensure_web_model_window(app: &tauri::AppHandle, provider_key: &str) -> 
 
 #[derive(Deserialize)]
 pub struct WebModelSendRequest {
-    provider: String,
-    model_id: i32,
-    topic_id: i32,
-    session_id: String,
-    content: String,
+    pub provider: String,
+    pub model_id: i32,
+    pub topic_id: i32,
+    pub session_id: String,
+    pub content: String,
     #[serde(default)]
-    attachments: Vec<String>,
+    pub attachments: Vec<String>,
 }
 
 #[tauri::command]

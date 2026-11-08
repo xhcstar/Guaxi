@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use super::{
     cached_json, coalesce_polyline, haversine_km, truncate, val_f64, val_text, Place, Poi,
-    RouteLeg, RouteStep, RouteStop, WeatherDay, GEO_TTL, POI_TTL, WEATHER_TTL,
+    RouteLeg, RouteOption, RouteStep, RouteStop, WeatherDay, GEO_TTL, POI_TTL, WEATHER_TTL,
 };
 
 const AMAP_BASE: &str = "https://restapi.amap.com";
@@ -469,7 +469,199 @@ fn path_summary(path: &Value, mode: &str) -> String {
     }
 }
 
-pub async fn route(key: &str, mode: &str, from: &RouteStop, to: &RouteStop) -> Result<RouteLeg, String> {
+fn option_from_path(path: &Value, mode: &str, label: &str) -> RouteOption {
+    let steps_json = path
+        .get("steps")
+        .and_then(|item| item.as_array())
+        .cloned()
+        .unwrap_or_default();
+    RouteOption {
+        label: label.to_string(),
+        summary: path_summary(path, mode),
+        distance: val_f64(path.get("distance")).unwrap_or(0.0) / 1000.0,
+        duration: val_f64(path.get("duration")).unwrap_or(0.0),
+        tolls: val_f64(path.get("tolls")).unwrap_or(0.0),
+        fare: 0.0,
+        traffic: if mode == "driving" {
+            summarize_traffic(&steps_json)
+        } else {
+            String::new()
+        },
+        polyline: polyline_from_steps(path),
+    }
+}
+
+async fn driving_one(
+    key: &str,
+    origin: &str,
+    destination: &str,
+    strategy: &str,
+    label: &str,
+) -> Result<(RouteOption, Vec<RouteStep>), String> {
+    let url = build_url(
+        "/v3/direction/driving",
+        &[
+            ("key", key.to_string()),
+            ("origin", origin.to_string()),
+            ("destination", destination.to_string()),
+            ("strategy", strategy.to_string()),
+            ("extensions", "all".to_string()),
+        ],
+    )?;
+    let value = cached_json(&url, super::POI_TTL).await?;
+    ensure_ok(&value)?;
+    let path = value
+        .pointer("/route/paths/0")
+        .ok_or_else(|| "高德没有返回驾车路线".to_string())?;
+    Ok((
+        option_from_path(path, "driving", label),
+        steps_from_path(path),
+    ))
+}
+
+fn transit_option(
+    transit: &Value,
+    label: &str,
+    from: &RouteStop,
+    to: &RouteStop,
+) -> (RouteOption, Vec<RouteStep>) {
+    let mut steps = Vec::new();
+    let mut polylines = Vec::new();
+    let mut lines: Vec<String> = Vec::new();
+    if let Some(segments) = transit.get("segments").and_then(|item| item.as_array()) {
+        for segment in segments {
+            if let Some(walking) = segment.get("walking") {
+                if let Some(items) = walking.get("steps").and_then(|item| item.as_array()) {
+                    for step in items {
+                        steps.push(RouteStep {
+                            instruction: val_text(step.get("instruction")),
+                            road: val_text(step.get("road")),
+                            distance: val_f64(step.get("distance")).unwrap_or(0.0),
+                            duration: val_f64(step.get("duration")).unwrap_or(0.0),
+                        });
+                        let polyline = val_text(step.get("polyline"));
+                        if !polyline.trim().is_empty() {
+                            polylines.push(polyline.trim_matches(';').to_string());
+                        }
+                    }
+                }
+            }
+            if let Some(bus) = segment.get("bus") {
+                if let Some(buslines) = bus.get("buslines").and_then(|item| item.as_array()) {
+                    if let Some(line) = buslines.first() {
+                        let name = val_text(line.get("name"));
+                        let departure = line
+                            .get("departure_stop")
+                            .map(|item| val_text(item.get("name")))
+                            .unwrap_or_default();
+                        let arrival = line
+                            .get("arrival_stop")
+                            .map(|item| val_text(item.get("name")))
+                            .unwrap_or_default();
+                        let via = val_f64(line.get("via_num")).unwrap_or(0.0);
+                        let duration = val_f64(line.get("duration")).unwrap_or(0.0);
+                        if !name.trim().is_empty() {
+                            lines.push(name.clone());
+                        }
+                        steps.push(RouteStep {
+                            instruction: format!(
+                                "乘坐 {name}，从 {departure} 上车，{arrival} 下车（{via:.0} 站，约 {:.0} 分钟）",
+                                duration / 60.0
+                            ),
+                            road: name,
+                            distance: val_f64(line.get("distance")).unwrap_or(0.0),
+                            duration,
+                        });
+                        let polyline = val_text(line.get("polyline"));
+                        if !polyline.trim().is_empty() {
+                            polylines.push(polyline.trim_matches(';').to_string());
+                        }
+                    }
+                }
+            }
+            if let Some(railway) = segment.get("railway") {
+                let name = val_text(railway.get("name"));
+                if !name.trim().is_empty() {
+                    lines.push(name.clone());
+                    steps.push(RouteStep {
+                        instruction: format!(
+                            "乘坐 {}，从 {} 到 {}",
+                            name,
+                            railway
+                                .get("departure_stop")
+                                .map(|item| val_text(item.get("name")))
+                                .unwrap_or_default(),
+                            railway
+                                .get("arrival_stop")
+                                .map(|item| val_text(item.get("name")))
+                                .unwrap_or_default()
+                        ),
+                        road: name,
+                        distance: val_f64(railway.get("distance")).unwrap_or(0.0),
+                        duration: val_f64(railway.get("time")).unwrap_or(0.0),
+                    });
+                }
+                let polyline = val_text(railway.get("polyline"));
+                if !polyline.trim().is_empty() {
+                    polylines.push(polyline.trim_matches(';').to_string());
+                }
+            }
+            if let Some(taxi) = segment.get("taxi") {
+                let distance = val_f64(taxi.get("distance")).unwrap_or(0.0);
+                steps.push(RouteStep {
+                    instruction: format!(
+                        "打车约 {:.1} km，约 {:.0} 分钟",
+                        distance / 1000.0,
+                        val_f64(taxi.get("drivetime")).unwrap_or(0.0) / 60.0
+                    ),
+                    road: "出租车".to_string(),
+                    distance,
+                    duration: val_f64(taxi.get("drivetime")).unwrap_or(0.0),
+                });
+            }
+        }
+    }
+    let distance = val_f64(transit.get("distance"))
+        .map(|value| value / 1000.0)
+        .unwrap_or_else(|| haversine_km(from.lng, from.lat, to.lng, to.lat) * 1.2);
+    let duration = val_f64(transit.get("duration")).unwrap_or(0.0);
+    let fare = val_f64(transit.get("cost")).unwrap_or(0.0);
+    let line_text = if lines.is_empty() {
+        "公共交通".to_string()
+    } else {
+        format!("公共交通 · {}", lines.join(" → "))
+    };
+    let summary = format!(
+        "{line_text} · {distance:.1} km · 约 {:.0} 分钟{}",
+        duration / 60.0,
+        if fare > 0.0 {
+            format!(" · 票价 {fare:.0} 元")
+        } else {
+            String::new()
+        }
+    );
+    (
+        RouteOption {
+            label: label.to_string(),
+            summary,
+            distance,
+            duration,
+            tolls: 0.0,
+            fare,
+            traffic: String::new(),
+            polyline: coalesce_polyline(&polylines),
+        },
+        steps,
+    )
+}
+
+pub async fn route(
+    key: &str,
+    mode: &str,
+    from: &RouteStop,
+    to: &RouteStop,
+    with_alternatives: bool,
+) -> Result<RouteLeg, String> {
     let origin = format!("{:.6},{:.6}", from.lng, from.lat);
     let destination = format!("{:.6},{:.6}", to.lng, to.lat);
     match mode {
@@ -487,17 +679,19 @@ pub async fn route(key: &str, mode: &str, from: &RouteStop, to: &RouteStop) -> R
             let path = value
                 .pointer("/route/paths/0")
                 .ok_or_else(|| "高德没有返回步行路线".to_string())?;
+            let option = option_from_path(path, "walking", "步行");
             Ok(RouteLeg {
                 mode: "walking".to_string(),
-                distance: val_f64(path.get("distance")).unwrap_or(0.0) / 1000.0,
-                duration: val_f64(path.get("duration")).unwrap_or(0.0),
+                distance: option.distance,
+                duration: option.duration,
                 tolls: 0.0,
                 fare: 0.0,
                 traffic: String::new(),
-                summary: path_summary(path, "walking"),
+                summary: option.summary.clone(),
                 steps: steps_from_path(path),
-                polyline: polyline_from_steps(path),
-                warning: String::new(),
+                polyline: option.polyline.clone(),
+                alternatives: vec![option],
+                ..RouteLeg::default()
             })
         }
         "transit" => {
@@ -525,160 +719,92 @@ pub async fn route(key: &str, mode: &str, from: &RouteStop, to: &RouteStop) -> R
             )?;
             let value = cached_json(&url, super::POI_TTL).await?;
             ensure_ok(&value)?;
-            let transit = value
-                .pointer("/route/transits/0")
-                .ok_or_else(|| "高德没有返回公交换乘方案".to_string())?;
-            let mut steps = Vec::new();
-            let mut polylines = Vec::new();
-            if let Some(segments) = transit.get("segments").and_then(|item| item.as_array()) {
-                for segment in segments {
-                    if let Some(walking) = segment.get("walking") {
-                        if let Some(items) = walking.get("steps").and_then(|item| item.as_array()) {
-                            for step in items {
-                                steps.push(RouteStep {
-                                    instruction: val_text(step.get("instruction")),
-                                    road: val_text(step.get("road")),
-                                    distance: val_f64(step.get("distance")).unwrap_or(0.0),
-                                    duration: val_f64(step.get("duration")).unwrap_or(0.0),
-                                });
-                                let polyline = val_text(step.get("polyline"));
-                                if !polyline.trim().is_empty() {
-                                    polylines.push(polyline.trim_matches(';').to_string());
-                                }
-                            }
-                        }
-                    }
-                    if let Some(bus) = segment.get("bus") {
-                        if let Some(lines) = bus.get("buslines").and_then(|item| item.as_array()) {
-                            if let Some(line) = lines.first() {
-                                let name = val_text(line.get("name"));
-                                let departure = line
-                                    .get("departure_stop")
-                                    .map(|item| val_text(item.get("name")))
-                                    .unwrap_or_default();
-                                let arrival = line
-                                    .get("arrival_stop")
-                                    .map(|item| val_text(item.get("name")))
-                                    .unwrap_or_default();
-                                let via = val_f64(line.get("via_num")).unwrap_or(0.0);
-                                let duration = val_f64(line.get("duration")).unwrap_or(0.0);
-                                steps.push(RouteStep {
-                                    instruction: format!(
-                                        "乘坐 {name}，从 {departure} 上车，{arrival} 下车（{via:.0} 站，约 {:.0} 分钟）",
-                                        duration / 60.0
-                                    ),
-                                    road: name,
-                                    distance: val_f64(line.get("distance")).unwrap_or(0.0),
-                                    duration,
-                                });
-                                let polyline = val_text(line.get("polyline"));
-                                if !polyline.trim().is_empty() {
-                                    polylines.push(polyline.trim_matches(';').to_string());
-                                }
-                            }
-                        }
-                    }
-                    if let Some(railway) = segment.get("railway") {
-                        let name = val_text(railway.get("name"));
-                        if !name.trim().is_empty() {
-                            steps.push(RouteStep {
-                                instruction: format!(
-                                    "乘坐 {}，从 {} 到 {}",
-                                    name,
-                                    railway
-                                        .get("departure_stop")
-                                        .map(|item| val_text(item.get("name")))
-                                        .unwrap_or_default(),
-                                    railway
-                                        .get("arrival_stop")
-                                        .map(|item| val_text(item.get("name")))
-                                        .unwrap_or_default()
-                                ),
-                                road: name,
-                                distance: val_f64(railway.get("distance")).unwrap_or(0.0),
-                                duration: val_f64(railway.get("time")).unwrap_or(0.0),
-                            });
-                        }
-                        let polyline = val_text(railway.get("polyline"));
-                        if !polyline.trim().is_empty() {
-                            polylines.push(polyline.trim_matches(';').to_string());
-                        }
-                    }
-                    if let Some(taxi) = segment.get("taxi") {
-                        let distance = val_f64(taxi.get("distance")).unwrap_or(0.0);
-                        steps.push(RouteStep {
-                            instruction: format!(
-                                "打车约 {:.1} km，约 {:.0} 分钟",
-                                distance / 1000.0,
-                                val_f64(taxi.get("drivetime")).unwrap_or(0.0) / 60.0
-                            ),
-                            road: "出租车".to_string(),
-                            distance,
-                            duration: val_f64(taxi.get("drivetime")).unwrap_or(0.0),
-                        });
-                    }
-                }
-            }
-            let distance = val_f64(transit.get("distance"))
-                .map(|value| value / 1000.0)
-                .unwrap_or_else(|| {
-                    haversine_km(from.lng, from.lat, to.lng, to.lat) * 1.2
-                });
-            let duration = val_f64(transit.get("duration")).unwrap_or(0.0);
-            let fare = val_f64(transit.get("cost")).unwrap_or(0.0);
-            Ok(RouteLeg {
-                mode: "transit".to_string(),
-                distance,
-                duration,
-                tolls: 0.0,
-                fare,
-                traffic: String::new(),
-                summary: format!(
-                    "公共交通 · {distance:.1} km · 约 {:.0} 分钟{}",
-                    duration / 60.0,
-                    if fare > 0.0 {
-                        format!(" · 票价 {fare:.0} 元")
-                    } else {
-                        String::new()
-                    }
-                ),
-                steps,
-                polyline: coalesce_polyline(&polylines),
-                warning: String::new(),
-            })
-        }
-        _ => {
-            let url = build_url(
-                "/v3/direction/driving",
-                &[
-                    ("key", key.to_string()),
-                    ("origin", origin),
-                    ("destination", destination),
-                    ("strategy", "0".to_string()),
-                    ("extensions", "all".to_string()),
-                ],
-            )?;
-            let value = cached_json(&url, super::POI_TTL).await?;
-            ensure_ok(&value)?;
-            let path = value
-                .pointer("/route/paths/0")
-                .ok_or_else(|| "高德没有返回驾车路线".to_string())?;
-            let steps_json = path
-                .get("steps")
+            let transits = value
+                .pointer("/route/transits")
                 .and_then(|item| item.as_array())
                 .cloned()
                 .unwrap_or_default();
+            if transits.is_empty() {
+                return Err("高德没有返回公交换乘方案".to_string());
+            }
+            let mut options = Vec::new();
+            let mut primary_steps = Vec::new();
+            let transit_limit = if with_alternatives { 3 } else { 1 };
+            for (index, transit) in transits.iter().take(transit_limit).enumerate() {
+                let label = format!("方案 {}", index + 1);
+                let (option, steps) = transit_option(transit, &label, from, to);
+                if options.is_empty() {
+                    primary_steps = steps;
+                }
+                options.push(option);
+            }
+            let primary = options[0].clone();
+            Ok(RouteLeg {
+                mode: "transit".to_string(),
+                distance: primary.distance,
+                duration: primary.duration,
+                tolls: 0.0,
+                fare: primary.fare,
+                traffic: String::new(),
+                summary: primary.summary.clone(),
+                steps: primary_steps,
+                polyline: primary.polyline.clone(),
+                alternatives: options,
+                ..RouteLeg::default()
+            })
+        }
+        _ => {
+            let mut options: Vec<RouteOption> = Vec::new();
+            let mut primary_steps = Vec::new();
+            let mut last_error = String::new();
+            let strategies: &[(&str, &str)] = if with_alternatives {
+                &[("0", "推荐"), ("4", "躲避拥堵"), ("2", "距离优先")]
+            } else {
+                &[("0", "推荐")]
+            };
+            for (strategy, label) in strategies.iter().copied() {
+                match driving_one(key, &origin, &destination, strategy, label).await {
+                    Ok((option, steps)) => {
+                        let duplicate = options.iter().any(|item| {
+                            (!item.polyline.is_empty() && item.polyline == option.polyline)
+                                || ((item.distance - option.distance).abs() < 0.05
+                                    && (item.duration - option.duration).abs() < 30.0)
+                        });
+                        if duplicate {
+                            continue;
+                        }
+                        if options.is_empty() {
+                            primary_steps = steps;
+                        }
+                        options.push(option);
+                    }
+                    Err(error) => {
+                        if options.is_empty() {
+                            last_error = error;
+                        }
+                    }
+                }
+            }
+            if options.is_empty() {
+                return Err(if last_error.is_empty() {
+                    "高德没有返回驾车路线".to_string()
+                } else {
+                    last_error
+                });
+            }
+            let primary = options[0].clone();
             Ok(RouteLeg {
                 mode: "driving".to_string(),
-                distance: val_f64(path.get("distance")).unwrap_or(0.0) / 1000.0,
-                duration: val_f64(path.get("duration")).unwrap_or(0.0),
-                tolls: val_f64(path.get("tolls")).unwrap_or(0.0),
+                distance: primary.distance,
+                duration: primary.duration,
+                tolls: primary.tolls,
                 fare: 0.0,
-                traffic: summarize_traffic(&steps_json),
-                summary: path_summary(path, "driving"),
-                steps: steps_from_path(path),
-                polyline: polyline_from_steps(path),
-                warning: String::new(),
+                traffic: primary.traffic.clone(),
+                summary: primary.summary.clone(),
+                steps: primary_steps,
+                polyline: primary.polyline.clone(),
+                alternatives: options,
+                ..RouteLeg::default()
             })
         }
     }

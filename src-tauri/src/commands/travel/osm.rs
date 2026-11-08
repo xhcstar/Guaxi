@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use super::{
     cached_json, cached_post_json, coalesce_polyline, haversine_km, truncate, val_f64, val_text,
-    Place, Poi, RouteLeg, RouteStep, RouteStop, GEO_TTL, POI_TTL,
+    Place, Poi, RouteLeg, RouteOption, RouteStep, RouteStop, GEO_TTL, POI_TTL,
 };
 
 const NOMINATIM: &str = "https://nominatim.openstreetmap.org";
@@ -422,53 +422,7 @@ fn instruction_for(step: &Value) -> String {
     }
 }
 
-pub async fn osrm_route(mode: &str, from: &RouteStop, to: &RouteStop) -> Result<RouteLeg, String> {
-    let (profile, label, warning) = match mode {
-        "walking" => ("foot", "步行", String::new()),
-        "transit" => (
-            "driving",
-            "公共交通",
-            "OpenStreetMap 不提供公交换乘，以下按驾车路线参考。".to_string(),
-        ),
-        _ => ("driving", "驾车", String::new()),
-    };
-    let coords = format!(
-        "{:.6},{:.6};{:.6},{:.6}",
-        from.lng, from.lat, to.lng, to.lat
-    );
-    let url = build_url(
-        OSRM,
-        &format!("/route/v1/{profile}/{coords}"),
-        &[
-            ("overview", "full".to_string()),
-            ("geometries", "polyline".to_string()),
-            ("steps", "true".to_string()),
-        ],
-    )?;
-    let mut result = cached_json(&url, POI_TTL).await;
-    if result.is_err() && profile == "foot" {
-        // 公共 OSRM 实例不一定开放 foot profile，退回驾车。
-        let url = build_url(
-            OSRM,
-            &format!("/route/v1/driving/{coords}"),
-            &[
-                ("overview", "full".to_string()),
-                ("geometries", "polyline".to_string()),
-                ("steps", "true".to_string()),
-            ],
-        )?;
-        result = cached_json(&url, POI_TTL).await;
-    }
-    let value = result?;
-    if val_text(value.get("code")) != "Ok" {
-        return Err(format!(
-            "OSRM 路线服务返回 {}",
-            truncate(&val_text(value.get("message")), 120)
-        ));
-    }
-    let route = value
-        .pointer("/routes/0")
-        .ok_or_else(|| "OSRM 没有返回路线".to_string())?;
+fn osrm_option(route: &Value, mode: &str, label: &str) -> (RouteOption, Vec<RouteStep>) {
     let distance = val_f64(route.get("distance")).unwrap_or(0.0) / 1000.0;
     let duration = val_f64(route.get("duration")).unwrap_or(0.0);
     let mut steps = Vec::new();
@@ -508,21 +462,129 @@ pub async fn osrm_route(mode: &str, from: &RouteStop, to: &RouteStop) -> Result<
             coalesce_polyline(&polylines)
         }
     };
+    let label_text = if label.trim().is_empty() {
+        match mode {
+            "walking" => "步行",
+            "transit" => "公共交通",
+            _ => "驾车",
+        }
+    } else {
+        label
+    };
+    (
+        RouteOption {
+            label: label_text.to_string(),
+            summary: format!("{label_text} · {distance:.1} km · 约 {:.0} 分钟", duration / 60.0),
+            distance,
+            duration,
+            tolls: 0.0,
+            fare: 0.0,
+            traffic: String::new(),
+            polyline: full_polyline,
+        },
+        steps,
+    )
+}
+
+pub async fn osrm_route(
+    mode: &str,
+    from: &RouteStop,
+    to: &RouteStop,
+    with_alternatives: bool,
+) -> Result<RouteLeg, String> {
+    let (profile, label, mut warning) = match mode {
+        "walking" => ("foot", "步行", String::new()),
+        "transit" => (
+            "driving",
+            "公共交通",
+            "OpenStreetMap 不提供公交换乘，以下按驾车路线参考。".to_string(),
+        ),
+        _ => ("driving", "驾车", String::new()),
+    };
+    let coords = format!(
+        "{:.6},{:.6};{:.6},{:.6}",
+        from.lng, from.lat, to.lng, to.lat
+    );
+    let url = build_url(
+        OSRM,
+        &format!("/route/v1/{profile}/{coords}"),
+        &[
+            ("overview", "full".to_string()),
+            ("geometries", "polyline".to_string()),
+            ("steps", "true".to_string()),
+            (
+                "alternatives",
+                if with_alternatives { "3" } else { "false" }.to_string(),
+            ),
+        ],
+    )?;
+    let mut result = cached_json(&url, POI_TTL).await;
+    if result.is_err() && profile == "foot" {
+        // 公共 OSRM 实例不一定开放 foot profile，退回驾车。
+        warning = "步行路线不可用，已按驾车路线估算。".to_string();
+        let url = build_url(
+            OSRM,
+            &format!("/route/v1/driving/{coords}"),
+            &[
+                ("overview", "full".to_string()),
+                ("geometries", "polyline".to_string()),
+                ("steps", "true".to_string()),
+                (
+                    "alternatives",
+                    if with_alternatives { "3" } else { "false" }.to_string(),
+                ),
+            ],
+        )?;
+        result = cached_json(&url, POI_TTL).await;
+    }
+    let value = result?;
+    if val_text(value.get("code")) != "Ok" {
+        return Err(format!(
+            "OSRM 路线服务返回 {}",
+            truncate(&val_text(value.get("message")), 120)
+        ));
+    }
+    let routes = value
+        .get("routes")
+        .and_then(|item| item.as_array())
+        .cloned()
+        .unwrap_or_default();
+    if routes.is_empty() {
+        return Err("OSRM 没有返回路线".to_string());
+    }
+    let mut options = Vec::new();
+    let mut primary_steps = Vec::new();
+    let route_limit = if with_alternatives { 3 } else { 1 };
+    for (index, route) in routes.iter().take(route_limit).enumerate() {
+        let option_label = if index == 0 {
+            label.to_string()
+        } else {
+            format!("{label}备选 {index}")
+        };
+        let (option, steps) = osrm_option(route, mode, &option_label);
+        if index == 0 {
+            primary_steps = steps;
+        }
+        options.push(option);
+    }
+    let primary = options[0].clone();
     Ok(RouteLeg {
         mode: if mode == "transit" {
             "transit".to_string()
         } else {
             mode.to_string()
         },
-        distance,
-        duration,
+        distance: primary.distance,
+        duration: primary.duration,
         tolls: 0.0,
         fare: 0.0,
         traffic: String::new(),
-        summary: format!("{label} · {distance:.1} km · 约 {:.0} 分钟", duration / 60.0),
-        steps,
-        polyline: full_polyline,
+        summary: primary.summary.clone(),
+        steps: primary_steps,
+        polyline: primary.polyline.clone(),
+        alternatives: options,
         warning,
+        ..RouteLeg::default()
     })
 }
 

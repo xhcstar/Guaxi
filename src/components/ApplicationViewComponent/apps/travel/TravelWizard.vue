@@ -55,6 +55,19 @@
           <p v-if="form.origin.lng" class="tr-field-note">
             已确认坐标 {{ Number(form.origin.lng).toFixed(4) }}, {{ Number(form.origin.lat).toFixed(4) }} · 出发前可再次修改
           </p>
+          <div class="tr-origin-quick">
+            <span>常用：</span>
+            <button v-if="prefs.home" type="button" @click="useOrigin(prefs.home)">
+              <TravelIcon name="pin" :size="12" /> 家 · {{ shortPlace(prefs.home) }}
+            </button>
+            <button v-if="prefs.lastOrigin" type="button" @click="useOrigin(prefs.lastOrigin)">
+              <TravelIcon name="clock" :size="12" /> 上次 · {{ shortPlace(prefs.lastOrigin) }}
+            </button>
+            <button type="button" @click="locate">
+              <TravelIcon name="navigation" :size="12" /> 当前定位
+            </button>
+            <span v-if="prefs.home || prefs.lastOrigin" class="tr-origin-pref-note">已按个人偏好预填，可随时切换</span>
+          </div>
         </section>
 
         <section v-if="form.mode !== 'weekend'" class="tr-form-section">
@@ -235,10 +248,15 @@
               <input v-model="form.avoid" type="text" placeholder="人太多的网红店、爬山" />
             </label>
             <label class="tr-field">
-              <span>数据源</span>
-              <select v-model="form.source">
+              <span>地图服务商</span>
+              <select v-model="form.mapProvider">
                 <option value="auto">自动（有高德 Key 优先高德）</option>
-                <option value="osm">仅使用免费 OpenStreetMap</option>
+                <option value="amap">高德地图</option>
+                <option value="baidu">百度地图</option>
+                <option value="tencent">腾讯地图</option>
+                <option value="google">Google Maps</option>
+                <option value="mapbox">Mapbox</option>
+                <option value="osm">OpenStreetMap（免费）</option>
               </select>
             </label>
           </div>
@@ -327,6 +345,7 @@ const props = defineProps({
   isMock: Boolean,
   busy: Boolean,
   search: { type: Function, default: null },
+  preferences: { type: Object, default: () => ({}) },
 })
 
 const emit = defineEmits(['update', 'locate', 'search', 'submit', 'cancel'])
@@ -362,6 +381,7 @@ const quickPlaces = [
 const today = todayString()
 
 const fromCity = computed(() => form.origin?.city || form.origin?.name || '出发地')
+const prefs = computed(() => props.preferences || {})
 const toCity = computed(() => {
   if (form.mode === 'weekend') return `周边 ${form.radiusKm} km`
   return form.destination?.city || form.destination?.name || ''
@@ -427,6 +447,18 @@ function transportIcon(value) {
 function stepTraveler(key, delta, min) {
   const next = Math.max(min, (Number(form[key]) || 0) + delta)
   form[key] = next
+}
+
+function shortPlace(place) {
+  const text = String(place?.city || place?.name || '')
+  return text.length > 16 ? `${text.slice(0, 16)}…` : text
+}
+
+function useOrigin(place) {
+  if (!place) return
+  form.origin = { ...place }
+  suggestions.origin = []
+  activeField.value = ''
 }
 
 function toggleInterest(interest) {

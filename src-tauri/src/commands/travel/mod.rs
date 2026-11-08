@@ -8,6 +8,8 @@
 
 mod amap;
 mod osm;
+mod preferences;
+mod providers;
 mod share;
 mod store;
 mod weather;
@@ -17,7 +19,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
-use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, Listener, Manager, WebviewUrl, WebviewWindowBuilder};
 
 use crate::commands::llm_provider;
 use crate::commands::plugin_llm::{self, PluginLlmRequest};
@@ -171,6 +173,9 @@ pub struct TravelRequest {
     /// auto | amap | osm
     #[serde(default)]
     pub source: String,
+    /// auto | amap | baidu | tencent | google | mapbox | osm
+    #[serde(default)]
+    pub map_provider: String,
 }
 
 fn default_transport() -> String {
@@ -193,6 +198,9 @@ pub struct TravelFacts {
     pub weather: Vec<WeatherDay>,
     pub notes: Vec<String>,
     pub collected_at: String,
+    /// gcj02 | bd09 | wgs84，地图显示按它选择瓦片或转换坐标
+    #[serde(default)]
+    pub coord_system: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -206,6 +214,28 @@ pub struct RouteStep {
     pub distance: f64,
     #[serde(default)]
     pub duration: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct RouteOption {
+    /// 推荐 / 躲避拥堵 / 距离优先 / 方案 1
+    #[serde(default)]
+    pub label: String,
+    #[serde(default)]
+    pub summary: String,
+    #[serde(default)]
+    pub distance: f64,
+    #[serde(default)]
+    pub duration: f64,
+    #[serde(default)]
+    pub tolls: f64,
+    #[serde(default)]
+    pub fare: f64,
+    #[serde(default)]
+    pub traffic: String,
+    #[serde(default)]
+    pub polyline: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -229,6 +259,21 @@ pub struct RouteLeg {
     pub steps: Vec<RouteStep>,
     #[serde(default)]
     pub polyline: String,
+    /// 2-3 条可选路线；第一条是推荐方案。界面上不再展开逐段导航。
+    #[serde(default)]
+    pub alternatives: Vec<RouteOption>,
+    #[serde(default)]
+    pub from_lng: f64,
+    #[serde(default)]
+    pub from_lat: f64,
+    #[serde(default)]
+    pub to_lng: f64,
+    #[serde(default)]
+    pub to_lat: f64,
+    #[serde(default)]
+    pub from_name: String,
+    #[serde(default)]
+    pub to_name: String,
     #[serde(default)]
     pub warning: String,
 }
@@ -262,7 +307,16 @@ pub struct RouteDayRequest {
 pub struct RoutePlanRequest {
     #[serde(default)]
     pub transport: String,
+    #[serde(default)]
+    pub provider: String,
+    /// 是否为每段路线请求 2-3 条备选；周末班次草稿只用 1 条以减少调用。
+    #[serde(default = "default_true")]
+    pub alternatives: bool,
     pub days: Vec<RouteDayRequest>,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -305,6 +359,24 @@ pub struct TravelLlmRequest {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TravelLlmResponse {
+    pub text: String,
+    pub provider: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TravelWebLlmRequest {
+    pub provider: String,
+    pub prompt: String,
+    #[serde(default)]
+    pub system: String,
+    #[serde(default)]
+    pub session_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TravelWebLlmResponse {
     pub text: String,
     pub provider: String,
 }
@@ -559,6 +631,41 @@ pub fn travel_set_amap_key(app: AppHandle, key: String) -> TravelSettings {
     settings_snapshot(&app)
 }
 
+fn masked_map_keys() -> Value {
+    let mut out = serde_json::Map::new();
+    for provider in ["amap", "baidu", "tencent", "google", "mapbox"] {
+        let key = settingview::get_travel_map_key(provider);
+        let tail = key
+            .chars()
+            .rev()
+            .take(4)
+            .collect::<String>()
+            .chars()
+            .rev()
+            .collect::<String>();
+        out.insert(
+            provider.to_string(),
+            serde_json::json!({ "set": !key.is_empty(), "tail": tail }),
+        );
+    }
+    Value::Object(out)
+}
+
+#[tauri::command]
+pub fn travel_get_map_keys() -> Value {
+    masked_map_keys()
+}
+
+#[tauri::command]
+pub fn travel_set_map_key(provider: String, key: String) -> Result<Value, String> {
+    let provider = provider.trim().to_lowercase();
+    if !["amap", "baidu", "tencent", "google", "mapbox"].contains(&provider.as_str()) {
+        return Err(format!("不支持的地图服务商：{provider}"));
+    }
+    settingview::set_travel_map_key_value(&provider, &key);
+    Ok(masked_map_keys())
+}
+
 // ── 命令：定位与地点搜索 ─────────────────────────────────────
 
 #[tauri::command]
@@ -794,6 +901,7 @@ async fn collect_amap(request: &TravelRequest, key: &str) -> Result<TravelFacts,
         weather: weather_days,
         notes,
         collected_at: chrono::Local::now().to_rfc3339(),
+        coord_system: "gcj02".to_string(),
     })
 }
 
@@ -861,47 +969,230 @@ async fn collect_osm(request: &TravelRequest) -> Result<TravelFacts, String> {
         weather: weather_days,
         notes,
         collected_at: chrono::Local::now().to_rfc3339(),
+        coord_system: "wgs84".to_string(),
+    })
+}
+
+async fn resolve_provider_place(
+    provider: providers::MapProvider,
+    key: &str,
+    input: &PlaceRef,
+) -> Result<Place, String> {
+    if input.lng.abs() > 0.0001 && input.lat.abs() > 0.0001 {
+        return Ok(Place {
+            name: input.name.clone(),
+            address: input.address.clone(),
+            city: input.city.clone(),
+            lng: input.lng,
+            lat: input.lat,
+            source: providers::label(provider).to_string(),
+            ..Place::default()
+        });
+    }
+    match provider {
+        providers::MapProvider::Baidu => providers::baidu::geocode(key, &input.name, &input.city).await,
+        providers::MapProvider::Tencent => providers::tencent::geocode(key, &input.name, &input.city).await,
+        providers::MapProvider::Google => providers::google::geocode(key, &input.name, &input.city).await,
+        providers::MapProvider::Mapbox => providers::mapbox::geocode(key, &input.name, &input.city).await,
+        _ => Err("不支持的地图服务商".to_string()),
+    }
+}
+
+async fn provider_pois(
+    provider: providers::MapProvider,
+    key: &str,
+    kind: &str,
+    city: &str,
+    lng: f64,
+    lat: f64,
+    radius_m: f64,
+) -> Result<Vec<Poi>, String> {
+    let keyword = match kind {
+        "food" => "美食",
+        "hotel" => "酒店",
+        _ => "景点",
+    };
+    match provider {
+        providers::MapProvider::Baidu => {
+            providers::baidu::place_text(key, keyword, city, kind, lng, lat).await
+        }
+        providers::MapProvider::Tencent => {
+            providers::tencent::place_text(key, keyword, city, kind, lng, lat).await
+        }
+        providers::MapProvider::Google => {
+            let place_type = match kind {
+                "food" => "restaurant",
+                "hotel" => "lodging",
+                _ => "tourist_attraction",
+            };
+            providers::google::place_nearby(key, lat, lng, radius_m, kind, place_type).await
+        }
+        providers::MapProvider::Mapbox => {
+            providers::mapbox::place_text(key, keyword, city, kind, lng, lat).await
+        }
+        _ => Err("不支持的地图服务商".to_string()),
+    }
+}
+
+async fn collect_provider(
+    request: &TravelRequest,
+    provider: providers::MapProvider,
+    key: &str,
+) -> Result<TravelFacts, String> {
+    let origin = resolve_provider_place(provider, key, &request.origin).await?;
+    let destination = resolve_provider_place(provider, key, &request.destination).await?;
+    if destination.lng.abs() < 0.0001 || destination.lat.abs() < 0.0001 {
+        return Err("没有解析到目的地的坐标，请重新搜索目的地".to_string());
+    }
+    let city = if destination.city.trim().is_empty() {
+        destination.name.clone()
+    } else {
+        destination.city.clone()
+    };
+    let radius_m = (request.radius_km.unwrap_or(20.0) * 1000.0).clamp(3000.0, 50_000.0);
+    let mut notes = Vec::new();
+
+    let mut attractions = provider_pois(
+        provider,
+        key,
+        "sight",
+        &city,
+        destination.lng,
+        destination.lat,
+        radius_m,
+    )
+    .await
+    .unwrap_or_default();
+    let mut food = provider_pois(
+        provider,
+        key,
+        "food",
+        &city,
+        destination.lng,
+        destination.lat,
+        radius_m.min(10_000.0),
+    )
+    .await
+    .unwrap_or_default();
+    let mut hotels = provider_pois(
+        provider,
+        key,
+        "hotel",
+        &city,
+        destination.lng,
+        destination.lat,
+        radius_m.min(20_000.0),
+    )
+    .await
+    .unwrap_or_default();
+
+    // Mapbox 的 POI 检索能力有限；不足时补一份 OSM 候选，坐标同为 WGS84。
+    if provider == providers::MapProvider::Mapbox && attractions.len() < 4 {
+        if let Ok((sights, meals, stays)) =
+            osm::overpass_pois(destination.lat, destination.lng, radius_m).await
+        {
+            attractions.extend(sights);
+            food.extend(meals);
+            hotels.extend(stays);
+            notes.push("Mapbox POI 不足，已补充 OpenStreetMap 候选地点。".to_string());
+        }
+    }
+
+    let mut attractions = apply_poi_filters(attractions, &request.avoid, destination.lng, destination.lat);
+    let mut food = apply_poi_filters(food, &request.avoid, destination.lng, destination.lat);
+    let mut hotels = apply_poi_filters(hotels, &request.avoid, destination.lng, destination.lat);
+    attractions.truncate(24);
+    food.truncate(18);
+    hotels.truncate(10);
+
+    let (weather_lng, weather_lat) =
+        providers::coord::to_wgs84(provider, destination.lng, destination.lat);
+    let weather_days = weather::open_meteo(weather_lat, weather_lng, 16)
+        .await
+        .unwrap_or_default();
+
+    notes.insert(
+        0,
+        format!(
+            "{}：{} 个景点、{} 家餐厅、{} 家住宿。",
+            providers::display_name(provider),
+            attractions.len(),
+            food.len(),
+            hotels.len()
+        ),
+    );
+    if provider == providers::MapProvider::Baidu || provider == providers::MapProvider::Tencent {
+        if request.transport == "transit" {
+            notes.push("该服务商的公交接口需要额外城市编码，公交路段会按驾车参考并在计划中标注。".to_string());
+        }
+    }
+
+    Ok(TravelFacts {
+        source: providers::label(provider).to_string(),
+        origin,
+        destination,
+        attractions,
+        food,
+        hotels,
+        weather: weather_days,
+        notes,
+        collected_at: chrono::Local::now().to_rfc3339(),
+        coord_system: providers::coord_system(provider).to_string(),
     })
 }
 
 #[tauri::command]
 pub async fn travel_collect_facts(request: TravelRequest) -> Result<TravelFacts, String> {
-    let key = amap_key();
-    let prefer_osm = request.source.eq_ignore_ascii_case("osm");
-    let mut amap_error = String::new();
-
-    if !prefer_osm && !key.trim().is_empty() {
-        match collect_amap(&request, &key).await {
-            Ok(facts) => return Ok(facts),
-            Err(error) => {
-                amap_error = error;
+    let raw = if request.map_provider.trim().is_empty() {
+        request.source.as_str()
+    } else {
+        request.map_provider.as_str()
+    };
+    let provider = providers::normalize(raw);
+    match provider {
+        providers::MapProvider::Osm => collect_osm(&request).await,
+        providers::MapProvider::Amap => {
+            let key = amap_key();
+            if key.trim().is_empty() {
+                return Err("未配置高德 Web 服务 Key。请在「行迹 → 设置」中填写，或把地图服务商切换为自动/OpenStreetMap。".to_string());
+            }
+            collect_amap(&request, &key).await
+        }
+        providers::MapProvider::Auto => {
+            let key = amap_key();
+            if key.trim().is_empty() {
+                return collect_osm(&request).await;
+            }
+            match collect_amap(&request, &key).await {
+                Ok(facts) => Ok(facts),
+                Err(amap_error) => match collect_osm(&request).await {
+                    Ok(mut facts) => {
+                        facts.notes.insert(
+                            0,
+                            format!(
+                                "高德请求失败，已自动降级到 OpenStreetMap：{}",
+                                truncate(&amap_error, 160)
+                            ),
+                        );
+                        Ok(facts)
+                    }
+                    Err(osm_error) => Err(format!(
+                        "高德与 OpenStreetMap 均不可用。高德：{}；OSM：{}",
+                        truncate(&amap_error, 160),
+                        truncate(&osm_error, 160)
+                    )),
+                },
             }
         }
-    }
-    if request.source.eq_ignore_ascii_case("amap") && key.trim().is_empty() {
-        return Err("未配置高德 Web 服务 Key。请在「行迹 → 设置」中填写，或把数据源切换为自动/OSM。".to_string());
-    }
-
-    match collect_osm(&request).await {
-        Ok(mut facts) => {
-            if !amap_error.is_empty() {
-                facts.notes.insert(
-                    0,
-                    format!("高德请求失败，已自动降级到 OpenStreetMap：{}", truncate(&amap_error, 160)),
-                );
+        other => {
+            let key = providers::key(other);
+            if key.trim().is_empty() {
+                return Err(format!(
+                    "未配置 {} Key。请在「行迹 → 设置 → 地图服务商」中填写，或切换回高德/OpenStreetMap。",
+                    providers::display_name(other)
+                ));
             }
-            Ok(facts)
-        }
-        Err(osm_error) => {
-            if !amap_error.is_empty() {
-                Err(format!(
-                    "高德与 OpenStreetMap 均不可用。高德：{}；OSM：{}",
-                    truncate(&amap_error, 160),
-                    truncate(&osm_error, 160)
-                ))
-            } else {
-                Err(osm_error)
-            }
+            collect_provider(&request, other, &key).await
         }
     }
 }
@@ -930,38 +1221,114 @@ fn fallback_leg(from: &RouteStop, to: &RouteStop, mode: &str) -> RouteLeg {
         "transit" => 22.0,
         _ => 42.0,
     };
+    let duration = distance / speed * 3600.0;
+    let summary = format!(
+        "直线约 {:.1} km，按{}估算 {:.0} 分钟",
+        distance,
+        if mode == "walking" {
+            "步行"
+        } else if mode == "transit" {
+            "公共交通"
+        } else {
+            "驾车"
+        },
+        distance / speed * 60.0
+    );
+    let option = RouteOption {
+        label: "估算".to_string(),
+        summary: summary.clone(),
+        distance,
+        duration,
+        ..RouteOption::default()
+    };
     RouteLeg {
         mode: mode.to_string(),
         distance,
-        duration: distance / speed * 3600.0,
+        duration,
         traffic: String::new(),
-        summary: format!(
-            "直线约 {:.1} km，按{}估算 {:.0} 分钟",
-            distance,
-            if mode == "walking" {
-                "步行"
-            } else if mode == "transit" {
-                "公共交通"
-            } else {
-                "驾车"
-            },
-            distance / speed * 60.0
-        ),
+        summary,
         steps: vec![RouteStep {
-            instruction: format!("从 {} 前往 {}（未获取到逐段导航，按直线距离估算）", from.name, to.name),
+            instruction: format!("从 {} 前往 {}（未获取到导航，按直线距离估算）", from.name, to.name),
             road: String::new(),
             distance,
-            duration: distance / speed * 3600.0,
+            duration,
             ..RouteStep::default()
         }],
-        warning: "路线服务暂不可用，已按直线距离估算时间，出发前请用高德/地图 App 复核。".to_string(),
+        alternatives: vec![option],
+        from_lng: from.lng,
+        from_lat: from.lat,
+        to_lng: to.lng,
+        to_lat: to.lat,
+        from_name: from.name.clone(),
+        to_name: to.name.clone(),
+        warning: "路线服务暂不可用，已按直线距离估算时间，出发前请用地图 App 复核。".to_string(),
         ..RouteLeg::default()
+    }
+}
+
+async fn provider_route(
+    provider: providers::MapProvider,
+    mode: &str,
+    from: &RouteStop,
+    to: &RouteStop,
+    with_alternatives: bool,
+) -> Result<RouteLeg, String> {
+    let provider = match provider {
+        providers::MapProvider::Auto => {
+            if amap_key().trim().is_empty() {
+                providers::MapProvider::Osm
+            } else {
+                providers::MapProvider::Amap
+            }
+        }
+        other => other,
+    };
+    let key = if provider == providers::MapProvider::Amap {
+        amap_key()
+    } else {
+        providers::key(provider)
+    };
+    match provider {
+        providers::MapProvider::Amap => {
+            if key.trim().is_empty() {
+                return Err("未配置高德 Key".to_string());
+            }
+            amap::route(&key, mode, from, to, with_alternatives).await
+        }
+        providers::MapProvider::Osm => {
+            osm::osrm_route(mode, from, to, with_alternatives).await
+        }
+        providers::MapProvider::Baidu => {
+            if key.trim().is_empty() {
+                return Err("未配置百度地图 Key".to_string());
+            }
+            providers::baidu::route(&key, mode, from, to).await
+        }
+        providers::MapProvider::Tencent => {
+            if key.trim().is_empty() {
+                return Err("未配置腾讯地图 Key".to_string());
+            }
+            providers::tencent::route(&key, mode, from, to).await
+        }
+        providers::MapProvider::Google => {
+            if key.trim().is_empty() {
+                return Err("未配置 Google Maps Key".to_string());
+            }
+            providers::google::route(&key, mode, from, to).await
+        }
+        providers::MapProvider::Mapbox => {
+            if key.trim().is_empty() {
+                return Err("未配置 Mapbox Token".to_string());
+            }
+            providers::mapbox::route(&key, mode, from, to).await
+        }
+        providers::MapProvider::Auto => unreachable!(),
     }
 }
 
 #[tauri::command]
 pub async fn travel_build_routes(request: RoutePlanRequest) -> Result<Vec<RouteDayResult>, String> {
-    let key = amap_key();
+    let provider = providers::normalize(&request.provider);
     let mut results = Vec::new();
 
     for day in &request.days {
@@ -971,21 +1338,39 @@ pub async fn travel_build_routes(request: RoutePlanRequest) -> Result<Vec<RouteD
             let to = &pair[1];
             let distance_km = haversine_km(from.lng, from.lat, to.lng, to.lat);
             let mode = transport_mode(&request.transport, distance_km);
-            let mut leg = if !key.trim().is_empty() {
-                match amap::route(&key, mode, from, to).await {
-                    Ok(leg) => leg,
-                    Err(_) => osm::osrm_route(mode, from, to)
-                        .await
-                        .unwrap_or_else(|_| fallback_leg(from, to, mode)),
+            let mut leg = match provider_route(provider, mode, from, to, request.alternatives).await {
+                Ok(leg) => leg,
+                Err(error) => {
+                    let mut fallback = fallback_leg(from, to, mode);
+                    fallback.warning = format!(
+                        "{}路线不可用，已按直线距离估算：{}",
+                        providers::display_name(provider),
+                        truncate(&error, 120)
+                    );
+                    fallback
                 }
-            } else {
-                osm::osrm_route(mode, from, to)
-                    .await
-                    .unwrap_or_else(|_| fallback_leg(from, to, mode))
             };
             if leg.mode.is_empty() {
                 leg.mode = mode.to_string();
             }
+            if leg.alternatives.is_empty() {
+                leg.alternatives.push(RouteOption {
+                    label: "推荐".to_string(),
+                    summary: leg.summary.clone(),
+                    distance: leg.distance,
+                    duration: leg.duration,
+                    tolls: leg.tolls,
+                    fare: leg.fare,
+                    traffic: leg.traffic.clone(),
+                    polyline: leg.polyline.clone(),
+                });
+            }
+            leg.from_lng = from.lng;
+            leg.from_lat = from.lat;
+            leg.to_lng = to.lng;
+            leg.to_lat = to.lat;
+            leg.from_name = from.name.clone();
+            leg.to_name = to.name.clone();
             if leg.summary.is_empty() {
                 leg.summary = format!(
                     "{} · {:.1} km · 约 {:.0} 分钟",
@@ -1026,6 +1411,131 @@ pub async fn travel_llm_complete(request: TravelLlmRequest) -> Result<TravelLlmR
     })
 }
 
+/// 通过已登录的网页模型（ChatGPT / DeepSeek / Kimi / 千问 / 豆包 / 元宝）完成一次补全。
+///
+/// 网页模型由 chatview 的 capture 脚本把回答推回 `web-model-chat-push`。这里只负责：
+/// 确保窗口存在、发送一次 prompt、按 session_id 收集回答，直到回答稳定或超时。
+/// 需要登录时会由本地服务把网页窗口显示出来，用户登录一次即可复用会话。
+#[tauri::command]
+pub async fn travel_llm_web_complete(
+    app: AppHandle,
+    request: TravelWebLlmRequest,
+) -> Result<TravelWebLlmResponse, String> {
+    let provider = request.provider.trim().to_lowercase();
+    let model_id = crate::commands::chatview::web_provider_model_id(&provider)
+        .ok_or_else(|| format!("不支持网页模型：{provider}"))?;
+    let prompt = request.prompt.trim().to_string();
+    if prompt.is_empty() {
+        return Err("prompt 不能为空".to_string());
+    }
+    let session_id = request
+        .session_id
+        .unwrap_or_else(|| format!("travel-{}", uuid::Uuid::new_v4().simple()));
+    let content = if request.system.trim().is_empty() {
+        prompt.clone()
+    } else {
+        format!("{}\n\n{}", request.system.trim(), prompt)
+    };
+
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    let listener = app.listen("web-model-chat-push", move |event| {
+        let _ = tx.send(event.payload().to_string());
+    });
+
+    let result: Result<String, String> = async {
+        crate::commands::chatview::prepare_web_model_window(app.clone(), provider.clone()).await?;
+        tokio::time::sleep(Duration::from_millis(700)).await;
+        crate::commands::chatview::web_model_send_message(
+            app.clone(),
+            crate::commands::chatview::WebModelSendRequest {
+                provider: provider.clone(),
+                model_id,
+                topic_id: 0,
+                session_id: session_id.clone(),
+                content: content.clone(),
+                attachments: Vec::new(),
+            },
+        )
+        .await?;
+
+        let mut last_text = String::new();
+        let mut last_change = Instant::now();
+        let mut need_login = false;
+        let deadline = Instant::now() + Duration::from_secs(240);
+        loop {
+            if Instant::now() >= deadline {
+                break;
+            }
+            match tokio::time::timeout(Duration::from_millis(2500), rx.recv()).await {
+                Ok(Some(payload)) => {
+                    let Ok(value) = serde_json::from_str::<Value>(&payload) else {
+                        continue;
+                    };
+                    if value.get("session_id").and_then(|item| item.as_str())
+                        != Some(session_id.as_str())
+                    {
+                        continue;
+                    }
+                    let status = value
+                        .get("status")
+                        .and_then(|item| item.as_str())
+                        .unwrap_or("");
+                    if status == "need_login" {
+                        need_login = true;
+                    } else if status == "ready" && need_login {
+                        // 登录完成后把同一条 prompt 再发一次，避免首次发送落在登录页上。
+                        need_login = false;
+                        let _ = crate::commands::chatview::web_model_send_message(
+                            app.clone(),
+                            crate::commands::chatview::WebModelSendRequest {
+                                provider: provider.clone(),
+                                model_id,
+                                topic_id: 0,
+                                session_id: session_id.clone(),
+                                content: content.clone(),
+                                attachments: Vec::new(),
+                            },
+                        )
+                        .await;
+                    }
+                    if let Some(messages) = value.get("messages").and_then(|item| item.as_array()) {
+                        for message in messages {
+                            if message.get("role").and_then(|item| item.as_str()) != Some("assistant") {
+                                continue;
+                            }
+                            let text = message
+                                .get("content")
+                                .and_then(|item| item.as_str())
+                                .unwrap_or("")
+                                .trim();
+                            if !text.is_empty() && text != last_text {
+                                last_text = text.to_string();
+                                last_change = Instant::now();
+                            }
+                        }
+                    }
+                }
+                Ok(None) => break,
+                Err(_) => {
+                    if !last_text.is_empty() && last_change.elapsed() >= Duration::from_secs(2) {
+                        break;
+                    }
+                }
+            }
+        }
+
+        if last_text.trim().is_empty() {
+            Err("网页模型没有返回内容。请确认网页窗口已登录、页面可正常访问，或在设置里先打开一次登录窗口。".to_string())
+        } else {
+            Ok(last_text)
+        }
+    }
+    .await;
+
+    app.unlisten(listener);
+    result.map(|text| TravelWebLlmResponse { text, provider })
+}
+
 // ── 命令：静态地图与存储 ────────────────────────────────────
 
 #[tauri::command]
@@ -1049,6 +1559,21 @@ pub async fn travel_static_map(request: StaticMapRequest) -> Result<String, Stri
 #[tauri::command]
 pub fn travel_save_plan(app: AppHandle, plan: Value) -> Result<Value, String> {
     store::save_plan(&app, plan)
+}
+
+#[tauri::command]
+pub fn travel_get_preferences(app: AppHandle) -> Result<Value, String> {
+    preferences::load(&app)
+}
+
+#[tauri::command]
+pub fn travel_set_preferences(app: AppHandle, preferences: Value) -> Result<Value, String> {
+    preferences::save(&app, preferences)
+}
+
+#[tauri::command]
+pub fn travel_reset_preferences(app: AppHandle) -> Result<Value, String> {
+    preferences::save(&app, serde_json::json!({}))
 }
 
 #[tauri::command]

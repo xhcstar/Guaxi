@@ -70,6 +70,9 @@ pub struct AppConfig {
     // 旅行计划使用的高德 Web 服务 key；留空时自动复用相册的 key。
     #[serde(default)]
     travel_amap_key: String,
+    // 旅行计划的其它地图服务 Key（JSON：provider -> key），整体加密保存。
+    #[serde(default)]
+    travel_map_keys: String,
     #[serde(default)]
     template_repo_path: String,
     #[serde(default)]
@@ -969,6 +972,7 @@ impl Default for AppConfig {
             life_album_album_dir: "".to_string(),
             life_album_amap_key: "".to_string(),
             travel_amap_key: "".to_string(),
+            travel_map_keys: "".to_string(),
             template_repo_path: "".to_string(),
             slidev_repo_root: "".to_string(),
             chat_record_root: default_chat_record_root(),
@@ -1153,6 +1157,7 @@ pub fn load_config() -> AppConfig {
         "/llm_config/cc_switch_api_key",
         "/knowledge_bases_remote_token",
         "/lsp_github_token",
+        "/travel_map_keys",
     ] {
         if let Some(s) = v.pointer(ptr).and_then(|x| x.as_str()) {
             let t = s.trim();
@@ -1239,6 +1244,7 @@ pub fn load_config() -> AppConfig {
     try_decrypt("/llm_config/cc_switch_api_key");
     try_decrypt("/knowledge_bases_remote_token");
     try_decrypt("/lsp_github_token");
+    try_decrypt("/travel_map_keys");
 
     let mut config: AppConfig = match serde_json::from_value(v) {
         Ok(config) => config,
@@ -1401,6 +1407,7 @@ pub fn save_config(config: &AppConfig) {
     encrypt_field(&mut val, "/llm_config/cc_switch_api_key");
     encrypt_field(&mut val, "/knowledge_bases_remote_token");
     encrypt_field(&mut val, "/lsp_github_token");
+    encrypt_field(&mut val, "/travel_map_keys");
 
     let json = serde_json::to_string_pretty(&val).unwrap();
     // 原子落盘：`fs::write` 是先截断再写，中间那一瞬间文件是空的，
@@ -3125,6 +3132,47 @@ pub fn get_travel_amap_key_own() -> String {
 pub fn set_travel_amap_key_value(key: &str) {
     let mut config = load_config();
     config.travel_amap_key = key.trim().to_string();
+    save_config(&config);
+}
+
+pub fn get_travel_map_keys() -> serde_json::Value {
+    let raw = load_config().travel_map_keys;
+    if raw.trim().is_empty() {
+        return serde_json::json!({});
+    }
+    serde_json::from_str(&raw).unwrap_or_else(|_| serde_json::json!({}))
+}
+
+pub fn get_travel_map_key(provider: &str) -> String {
+    if provider == "amap" {
+        return get_travel_amap_key();
+    }
+    get_travel_map_keys()
+        .get(provider)
+        .and_then(|item| item.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string()
+}
+
+pub fn set_travel_map_key_value(provider: &str, key: &str) {
+    if provider == "amap" {
+        set_travel_amap_key_value(key);
+        return;
+    }
+    let mut config = load_config();
+    let mut map: serde_json::Map<String, serde_json::Value> =
+        serde_json::from_str(&config.travel_map_keys).unwrap_or_default();
+    let value = key.trim();
+    if value.is_empty() {
+        map.remove(provider);
+    } else {
+        map.insert(
+            provider.to_string(),
+            serde_json::Value::String(value.to_string()),
+        );
+    }
+    config.travel_map_keys = serde_json::to_string(&map).unwrap_or_default();
     save_config(&config);
 }
 

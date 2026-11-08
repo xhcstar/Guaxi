@@ -17,7 +17,7 @@
           </button>
         </div>
         <div class="tr-hero-meta">
-          <span><TravelIcon name="map" :size="14" /> {{ settings.source === 'amap' ? '高德 POI / 路线 / 路况' : 'OpenStreetMap 免费数据' }}</span>
+          <span><TravelIcon name="map" :size="14" /> {{ mapProviderLabel(preferences.mapProvider || 'auto') }}</span>
           <span><TravelIcon name="sparkles" :size="14" /> {{ settings.providerLabel || '等待配置模型' }}</span>
           <span v-if="isMock" class="is-accent">浏览器预览模式</span>
         </div>
@@ -152,12 +152,12 @@
     <section class="tr-source-strip">
       <div class="tr-source-strip-icon"><TravelIcon name="info" :size="20" /></div>
       <div>
-        <strong>{{ settings.amapKeySet ? '高德 Web 服务已连接' : '当前使用免费数据源' }}</strong>
-        <p v-if="settings.amapKeySet">
-          路线、POI 与天气来自高德；Key 只保存在本机配置里，不会进入前端页面。
+        <strong>{{ settings.amapKeySet || settings.source === 'amap' ? '地图数据已连接' : '当前使用免费数据源' }}</strong>
+        <p v-if="settings.amapKeySet || settings.source === 'amap'">
+          数据源：{{ mapProviderLabel(preferences.mapProvider || 'auto') }}。Key 只保存在本机配置里，不会进入前端页面。
         </p>
         <p v-else>
-          没有高德 Key 时自动使用 OpenStreetMap / OSRM / Open-Meteo，POI 与公交信息会弱一些。
+          数据源：{{ mapProviderLabel(preferences.mapProvider || 'auto') }}。没有高德 Key 时会自动使用 OpenStreetMap / OSRM / Open-Meteo。
           <button type="button" class="tr-link-btn" @click="$emit('open-settings')">去设置</button>
         </p>
       </div>
@@ -172,10 +172,12 @@ import TravelIcon from './TravelIcon.vue'
 import { peopleCount, ticketCities, transportLabel } from './travelShare.js'
 import { money, shortDate, todayString } from './travelUtils.js'
 import { cityCode } from './travelShare.js'
+import { mapProviderLabel } from './travelPreferences.js'
 
 const props = defineProps({
   plans: { type: Array, default: () => [] },
   settings: { type: Object, default: () => ({}) },
+  preferences: { type: Object, default: () => ({}) },
   isMock: Boolean,
 })
 

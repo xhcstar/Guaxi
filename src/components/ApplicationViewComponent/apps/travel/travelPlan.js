@@ -483,6 +483,14 @@ export function assemblePlan({
     interests: [...(form.interests || [])],
     pace: form.pace,
     source: facts.source || 'osm',
+    coordSystem:
+      facts.coordSystem ||
+      facts.coord_system ||
+      (['amap', 'tencent'].includes(facts.source)
+        ? 'gcj02'
+        : facts.source === 'baidu'
+          ? 'bd09'
+          : 'wgs84'),
     weather,
     days: normalizedDays,
     budget,
