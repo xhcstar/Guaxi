@@ -507,7 +507,16 @@ export function createLocalDraft(overrides = {}) {
 }
 
 export function createWeekendDraft(overrides = {}) {
-  return createLocalDraft({ mode: 'weekend', endDate: addDays(nextSaturday(), 1), ...overrides })
+  const startDate = overrides.startDate || nextSaturday()
+  return createLocalDraft({
+    mode: 'weekend',
+    startDate,
+    // 周末默认当天往返；把返回日期改到次日即可生成两天一夜。
+    endDate: overrides.endDate || startDate,
+    startTime: overrides.startTime || '09:30',
+    endTime: overrides.endTime || '17:00',
+    ...overrides,
+  })
 }
 
 export { createDemoPlan }

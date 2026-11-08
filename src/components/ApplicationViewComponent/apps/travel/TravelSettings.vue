@@ -26,7 +26,7 @@
         <div class="tr-pref-grid">
           <div class="tr-pref-block">
             <h3><TravelIcon name="pin" :size="15" /> 家庭地址</h3>
-            <div class="tr-place-field" :class="{ 'is-open': homeSuggestions.length }">
+            <div class="tr-place-field tr-settings-home" :class="{ 'is-open': homeSuggestions.length }">
               <TravelIcon name="pin" :size="16" />
               <input
                 v-model="homeQuery"
@@ -35,6 +35,8 @@
                 autocomplete="off"
                 @input="onHomeInput"
                 @focus="onHomeFocus"
+                @blur="scheduleCloseHome"
+                @keydown.esc="closeHomeSuggestions"
               />
               <button type="button" class="tr-locate-btn" @click="locateHome">
                 <TravelIcon name="navigation" :size="14" /> 定位
@@ -232,53 +234,8 @@
       <section class="tr-settings-card is-wide">
         <div class="tr-settings-card-head">
           <div>
-            <h2><TravelIcon name="map" :size="18" /> 高德 Web 服务 Key</h2>
-            <p>用于 POI 检索、逐段路线、路况与天气。Key 只保存在本机配置文件，不会进入前端页面或分享内容。</p>
-          </div>
-          <span class="tr-source-tag" :class="settings.amapKeySet ? 'is-amap' : 'is-osm'">
-            {{ settings.amapKeySet ? '已连接' : '未连接' }}
-          </span>
-        </div>
-        <div class="tr-key-row">
-          <div class="tr-key-input">
-            <TravelIcon name="lock" :size="15" />
-            <input
-              v-model="keyInput"
-              type="password"
-              show-password
-              autocomplete="new-password"
-              placeholder="粘贴高德 Web 服务 Key（不是 JS API Key）"
-              @keyup.enter="save"
-            />
-            <span v-if="settings.amapKeyTail" class="tr-key-tail">…{{ settings.amapKeyTail }}</span>
-          </div>
-          <button type="button" class="tr-btn is-primary is-small" @click="save">保存</button>
-          <button type="button" class="tr-btn is-outline is-small" :disabled="testing" @click="test">
-            {{ testing ? '测试中…' : '测试连接' }}
-          </button>
-        </div>
-        <div class="tr-settings-status">
-          <span v-if="settings.ownKeySet">正在使用旅行专属 Key</span>
-          <span v-else-if="settings.albumKeySet">旅行 Key 未填写，已自动复用相册的高德 Key</span>
-          <span v-else>未填写 Key，当前使用 OpenStreetMap / OSRM / Open-Meteo 免费数据</span>
-        </div>
-        <details class="tr-key-help">
-          <summary>怎么申请？个人认证后免费额度够用吗？</summary>
-          <ol>
-            <li>打开 <button type="button" class="tr-link-btn" @click="openAmap">高德开放平台控制台</button>，注册并完成个人实名认证。</li>
-            <li>「应用管理 → 我的应用 → 创建新应用」，类型随意；在该应用下「添加 Key」。</li>
-            <li>服务平台必须选 <strong>Web 服务</strong>（不是 Web 端 JS API），提交后复制 Key。</li>
-            <li>个人认证的免费额度大致为：路径规划 / 地理编码 5000 次/日、15 万次/月；POI 搜索约 100 次/日、5000 次/月；天气 5000 次/月。</li>
-            <li>行迹会把 POI 检索按「城市 + 分类」缓存 7 天，正常个人使用不会轻易用完搜索额度。</li>
-          </ol>
-        </details>
-      </section>
-
-      <section class="tr-settings-card is-wide">
-        <div class="tr-settings-card-head">
-          <div>
             <h2><TravelIcon name="map" :size="18" /> 地图服务商</h2>
-            <p>国内可选高德/百度/腾讯，境外可选 Google/Mapbox/OpenStreetMap。新生成的计划会使用这里的选择。</p>
+            <p>国内可选高德/百度/腾讯，境外可选 Google/Mapbox/OpenStreetMap。Key 只保存在本机加密配置，不会进入前端页面或分享内容。</p>
           </div>
           <span class="tr-source-tag">{{ mapProviderLabel(effectiveMapProvider) }}</span>
         </div>
@@ -300,24 +257,44 @@
               <span>{{ provider.label }} <small>{{ provider.hint }}</small></span>
               <small>{{ mapKeys[provider.value]?.set ? `已配置 …${mapKeys[provider.value].tail}` : '未配置' }}</small>
             </div>
-            <div class="tr-key-row">
+            <div v-if="mapKeys[provider.value]?.set && editingKeyProvider !== provider.value" class="tr-key-configured">
+              <TravelIcon name="lock" :size="14" />
+              <span class="tr-key-mask">••••••••••••{{ mapKeys[provider.value].tail }}</span>
+              <button type="button" class="tr-link-btn" @click="startKeyEdit(provider.value)">重新编辑</button>
+              <button type="button" class="tr-link-btn is-danger" @click="removeMapKey(provider.value)">删除</button>
+            </div>
+            <div v-else class="tr-key-row">
               <div class="tr-key-input">
                 <TravelIcon name="lock" :size="14" />
                 <input
-                  v-model="mapKeyInputs[provider.value]"
+                  v-model="keyDrafts[provider.value]"
                   type="password"
                   autocomplete="new-password"
                   :placeholder="`粘贴 ${provider.label} Key`"
                 />
               </div>
-              <button type="button" class="tr-btn is-outline is-small" @click="saveOtherMapKey(provider.value)">保存</button>
+              <button type="button" class="tr-btn is-outline is-small" @click="saveMapKey(provider.value)">保存</button>
+              <button v-if="editingKeyProvider === provider.value" type="button" class="tr-btn is-ghost is-small" @click="cancelKeyEdit">取消</button>
             </div>
+            <p v-if="provider.value === 'amap' && settings.albumKeySet && !settings.ownKeySet" class="tr-field-note">
+              当前复用相册的高德 Key；保存旅行专属 Key 后会单独覆盖。
+            </p>
           </div>
         </div>
         <p class="tr-settings-note">
-          高德 Key 在上方单独管理；其它 Key 与高德 Key 一样在本机加密保存，不会写入分享内容。
+          高德 Key 也在这张卡片里管理，不再重复设置。已配置的 Key 只显示尾号与掩码，可重新编辑或删除。
           百度使用 BD-09 坐标，显示时自动转换为通用地图瓦片；公交路线在部分服务商下会退化为驾车参考。
         </p>
+        <details class="tr-key-help">
+          <summary>怎么申请高德 Key？个人认证后免费额度够用吗？</summary>
+          <ol>
+            <li>打开 <button type="button" class="tr-link-btn" @click="openAmap">高德开放平台控制台</button>，注册并完成个人实名认证。</li>
+            <li>「应用管理 → 我的应用 → 创建新应用」，类型随意；在该应用下「添加 Key」。</li>
+            <li>服务平台必须选 <strong>Web 服务</strong>（不是 Web 端 JS API），提交后复制 Key。</li>
+            <li>个人认证的免费额度大致为：路径规划 / 地理编码 5000 次/日、15 万次/月；POI 搜索约 100 次/日、5000 次/月；天气 5000 次/月。</li>
+            <li>行迹会把 POI 检索按「城市 + 分类」缓存 7 天，正常个人使用不会轻易用完搜索额度。</li>
+          </ol>
+        </details>
       </section>
 
       <section class="tr-settings-card is-wide">
@@ -493,7 +470,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import TravelIcon from './TravelIcon.vue'
 import { api } from './travelApi.js'
 import {
@@ -517,10 +494,8 @@ const props = defineProps({
   isMock: Boolean,
   preferences: { type: Object, default: () => ({}) },
 })
-const emit = defineEmits(['save-key', 'set-prefer-osm', 'save-preferences', 'reset-preferences', 'home'])
+const emit = defineEmits(['set-prefer-osm', 'save-preferences', 'reset-preferences', 'home'])
 
-const keyInput = ref('')
-const testing = ref(false)
 const notice = ref('')
 const noticeType = ref('info')
 const modelReady = computed(
@@ -539,13 +514,15 @@ const interestOptions = INTEREST_OPTIONS
 const webAiProviders = WEB_AI_PROVIDERS
 const mapProviders = MAP_PROVIDERS
 const mapKeyProviders = [
+  { value: 'amap', label: '高德地图', hint: 'Web 服务 Key（不是 JS API Key）' },
   { value: 'baidu', label: '百度地图', hint: 'Web 服务 AK' },
   { value: 'tencent', label: '腾讯地图', hint: 'WebService Key' },
   { value: 'google', label: 'Google Maps', hint: 'Places / Directions API Key' },
   { value: 'mapbox', label: 'Mapbox', hint: 'Access Token' },
 ]
 const mapKeys = ref({})
-const mapKeyInputs = reactive({ baidu: '', tencent: '', google: '', mapbox: '' })
+const keyDrafts = reactive({ amap: '', baidu: '', tencent: '', google: '', mapbox: '' })
+const editingKeyProvider = ref('')
 const quota = ref(null)
 const effectiveMapProvider = computed(() => (props.preferOsm ? 'osm' : prefs.mapProvider || 'auto'))
 
@@ -587,6 +564,8 @@ const quotaRows = computed(() => {
 })
 
 onMounted(async () => {
+  document.addEventListener('pointerdown', onHomePointerDown, true)
+  window.addEventListener('scroll', closeHomeSuggestions, true)
   try {
     mapKeys.value = (await api.getMapKeys()) || {}
   } catch {
@@ -598,6 +577,27 @@ onMounted(async () => {
     quota.value = null
   }
 })
+
+onBeforeUnmount(() => {
+  document.removeEventListener('pointerdown', onHomePointerDown, true)
+  window.removeEventListener('scroll', closeHomeSuggestions, true)
+  if (homeTimer) clearTimeout(homeTimer)
+})
+
+function closeHomeSuggestions() {
+  homeSuggestions.value = []
+}
+
+function onHomePointerDown(event) {
+  if (!event.target?.closest?.('.tr-settings-home')) {
+    closeHomeSuggestions()
+  }
+}
+
+function scheduleCloseHome() {
+  if (homeTimer) clearTimeout(homeTimer)
+  homeTimer = setTimeout(closeHomeSuggestions, 180)
+}
 
 async function clearMapCache() {
   if (!window.confirm('清空本地地点/路线缓存？之后会重新请求地图服务，可能消耗当日额度。')) return
@@ -617,14 +617,50 @@ function setMapProvider(value) {
   persistPreferences()
 }
 
-async function saveOtherMapKey(provider) {
+async function saveMapKey(provider) {
+  const key = String(keyDrafts[provider] || '').trim()
+  if (!key) {
+    notice.value = '请输入 Key 后再保存。'
+    noticeType.value = 'error'
+    return
+  }
   try {
-    mapKeys.value = await api.setMapKey(provider, mapKeyInputs[provider] || '')
-    mapKeyInputs[provider] = ''
+    mapKeys.value = await api.setMapKey(provider, key)
+    keyDrafts[provider] = ''
+    editingKeyProvider.value = ''
     notice.value = `${mapProviderLabel(provider)} Key 已保存。`
     noticeType.value = 'success'
   } catch (error) {
     notice.value = `保存 Key 失败：${error?.message || error}`
+    noticeType.value = 'error'
+  }
+}
+
+function startKeyEdit(provider) {
+  editingKeyProvider.value = provider
+  keyDrafts[provider] = ''
+}
+
+function cancelKeyEdit() {
+  if (editingKeyProvider.value) keyDrafts[editingKeyProvider.value] = ''
+  editingKeyProvider.value = ''
+}
+
+async function removeMapKey(provider) {
+  if (!window.confirm(`删除${mapProviderLabel(provider)} Key？删除后该服务商会退回未配置状态。`)) return
+  try {
+    const next = await api.setMapKey(provider, '')
+    mapKeys.value = next
+    keyDrafts[provider] = ''
+    editingKeyProvider.value = ''
+    if (provider === 'amap' && next?.amap?.set) {
+      notice.value = '旅行专属高德 Key 已清除，当前仍在复用相册的高德 Key。'
+    } else {
+      notice.value = `${mapProviderLabel(provider)} Key 已删除。`
+    }
+    noticeType.value = 'success'
+  } catch (error) {
+    notice.value = `删除 Key 失败：${error?.message || error}`
     noticeType.value = 'error'
   }
 }
@@ -776,28 +812,6 @@ function resetPrefs() {
   homeSuggestions.value = []
   notice.value = '已清空个人偏好与学习记录。'
   noticeType.value = 'success'
-}
-
-async function save() {
-  const key = keyInput.value.trim()
-  emit('save-key', key)
-  notice.value = key ? '已保存。下一次生成会优先使用高德数据。' : '已清除旅行 Key。若相册里配置了 Key，仍会复用相册的 Key。'
-  noticeType.value = 'success'
-  keyInput.value = ''
-}
-
-async function test() {
-  testing.value = true
-  try {
-    const place = await api.ipLocation()
-    notice.value = `连接成功：IP 定位到 ${place.city || place.name}。${api.isMock ? '（预览模式）' : ''}`
-    noticeType.value = 'success'
-  } catch (error) {
-    notice.value = `连接失败：${error?.message || error}`
-    noticeType.value = 'error'
-  } finally {
-    testing.value = false
-  }
 }
 
 async function openAmap() {

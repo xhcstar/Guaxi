@@ -152,16 +152,14 @@
     <section class="tr-source-strip">
       <div class="tr-source-strip-icon"><TravelIcon name="info" :size="20" /></div>
       <div>
-        <strong>{{ settings.amapKeySet || settings.source === 'amap' ? '地图数据已连接' : '当前使用免费数据源' }}</strong>
-        <p v-if="settings.amapKeySet || settings.source === 'amap'">
-          数据源：{{ mapProviderLabel(preferences.mapProvider || 'auto') }}。Key 只保存在本机配置里，不会进入前端页面。
-        </p>
-        <p v-else>
-          数据源：{{ mapProviderLabel(preferences.mapProvider || 'auto') }}。没有高德 Key 时会自动使用 OpenStreetMap / OSRM / Open-Meteo。
+        <strong>地图数据：{{ mapProviderLabel(preferences.mapProvider || 'auto') }}</strong>
+        <p>
+          新计划会按所选服务商检索；没有可用 Key 时自动回退到 OpenStreetMap / OSRM / Open-Meteo。
+          Key 只保存在本机配置里，不会进入前端页面或分享内容。
           <button type="button" class="tr-link-btn" @click="$emit('open-settings')">去设置</button>
         </p>
       </div>
-      <span class="tr-source-tag">{{ settings.source === 'amap' ? 'AMAP' : 'OSM' }}</span>
+      <span class="tr-source-tag">{{ (preferences.mapProvider || 'auto').toUpperCase() }}</span>
     </section>
   </div>
 </template>

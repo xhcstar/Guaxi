@@ -78,14 +78,7 @@
 
     <main class="tr-main">
       <header class="tr-topbar">
-        <div class="tr-crumb">
-          <span class="tr-crumb-brand">行迹</span>
-          <TravelIcon name="chevronRight" :size="12" />
-          <span>{{ viewTitle }}</span>
-          <span v-if="state.plan && state.view === 'plan'" class="tr-crumb-plan">{{ state.plan.title }}</span>
-        </div>
-        <div class="tr-topbar-actions">
-          <span v-if="api.isMock" class="tr-preview-pill">浏览器预览 · 内置数据</span>
+        <div class="tr-topbar-left">
           <button
             type="button"
             class="tr-icon-btn tr-rail-toggle-btn"
@@ -94,6 +87,15 @@
           >
             <TravelIcon :name="railCollapsed ? 'chevronRight' : 'chevronLeft'" :size="16" />
           </button>
+          <div class="tr-crumb">
+            <span class="tr-crumb-brand">行迹</span>
+            <TravelIcon name="chevronRight" :size="12" />
+            <span>{{ viewTitle }}</span>
+            <span v-if="state.plan && state.view === 'plan'" class="tr-crumb-plan">{{ state.plan.title }}</span>
+          </div>
+        </div>
+        <div class="tr-topbar-actions">
+          <span v-if="api.isMock" class="tr-preview-pill">浏览器预览 · 内置数据</span>
           <button type="button" class="tr-icon-btn" title="设置" @click="state.view = 'settings'">
             <TravelIcon name="settings" :size="16" />
           </button>
@@ -167,7 +169,6 @@
           :prefer-osm="state.preferOsm"
           :is-mock="api.isMock"
           :preferences="state.preferences"
-          @save-key="store.saveSettings"
           @set-prefer-osm="store.setPreferOsm"
           @save-preferences="store.savePreferences"
           @reset-preferences="store.resetPreferences"

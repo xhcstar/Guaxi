@@ -24,7 +24,9 @@ import {
   addDays,
   deepClone,
   enumerateDates,
+  formatDate,
   nextSaturday,
+  parseDate,
   runWithConcurrency,
   safeText,
   uid,
@@ -613,8 +615,14 @@ export function useTravelStore() {
   const WEEKEND_PROMPT_SYSTEM = `你是一名熟悉城市周边游的中文旅行规划师。你只能使用给出的候选地点 id，不得编造地点。
 只输出一个 JSON 对象，不要 markdown，不要解释。每个周末安排周六、周日两天，节奏松弛，适合从所在城市出发的短途游。`
 
-  function weekendDates() {
-    const first = nextSaturday()
+  function weekendDates(form) {
+    let first = nextSaturday()
+    const start = parseDate(form?.startDate)
+    const today = new Date()
+    today.setHours(0, 0, 0, 0)
+    if (start && start >= today && (start.getDay() === 6 || start.getDay() === 0)) {
+      first = formatDate(start)
+    }
     return Array.from({ length: 8 }, (_, index) => addDays(first, index * 7))
   }
 
@@ -732,7 +740,7 @@ ${weather || '（暂无）'}
     return normalizeWeekendOutline({ weekends: [] }, { form, facts, dates })
   }
 
-  function weekendOutlineDays(item, map) {
+  function weekendOutlineDays(item, map, oneDay = false) {
     const base = map.get(item.basePoiId)
     const stops1 = uniqueBy(
       [base, ...item.stops1.map((id) => map.get(id))].filter(Boolean),
@@ -755,20 +763,24 @@ ${weather || '（暂无）'}
       day2Stops.push({ poiId: poi.id, kind: 'sight' })
       if (index === 0 && food2) day2Stops.push({ poiId: food2.id, kind: 'food' })
     })
+    const firstDay = {
+      date: item.date,
+      weekday: weekdayCn(item.date),
+      theme: `${item.theme} · ${weekdayCn(item.date)}`,
+      area: base?.category || '',
+      stops: day1Stops.slice(0, 4),
+      hotelId: hotel?.id || '',
+      paceNote: '',
+    }
+    if (oneDay) {
+      return [{ ...firstDay, hotelId: '' }]
+    }
     return [
-      {
-        date: item.date,
-        weekday: weekdayCn(item.date),
-        theme: `${item.theme} · 周六`,
-        area: base?.category || '',
-        stops: day1Stops.slice(0, 4),
-        hotelId: hotel?.id || '',
-        paceNote: '',
-      },
+      firstDay,
       {
         date: addDays(item.date, 1),
         weekday: weekdayCn(addDays(item.date, 1)),
-        theme: `${item.theme} · 周日`,
+        theme: `${item.theme} · ${weekdayCn(addDays(item.date, 1))}`,
         area: base?.category || '',
         stops: day2Stops.slice(0, 4),
         hotelId: '',
@@ -778,17 +790,18 @@ ${weather || '（暂无）'}
   }
 
   async function buildWeekendPlan({ form, facts, item, outline, map, seriesId, index }) {
+    const oneDay = form.startDate === form.endDate
     const weekendForm = {
       ...form,
       mode: 'weekend',
       destination: item.basePoiId ? map.get(item.basePoiId) : form.destination,
       startDate: item.date,
-      endDate: addDays(item.date, 1),
-      startTime: '08:30',
-      endTime: '19:30',
+      endDate: oneDay ? item.date : addDays(item.date, 1),
+      startTime: form.startTime || '09:30',
+      endTime: form.endTime || '17:00',
       budgetTotal: null,
     }
-    const totalDays = 2
+    const totalDays = oneDay ? 1 : 2
     const routeInfo = await buildRoutesForOutline({
       form: weekendForm,
       facts,
@@ -835,7 +848,7 @@ ${weather || '（暂无）'}
       facts,
       outline: {
         ...outline,
-        title: `${baseName || item.theme} · 周末两日`,
+        title: `${baseName || item.theme} · ${oneDay ? '周末一日' : '周末两日'}`,
         subtitle: item.theme + (item.note ? ` · ${item.note}` : ''),
       },
       days,
@@ -874,15 +887,16 @@ ${weather || '（暂无）'}
     setStage('collect', '正在检索周边适合周末去的地方…', 5)
     try {
       rememberOrigin(form.origin)
-      const dates = weekendDates()
+      const oneDay = form.startDate === form.endDate
+      const dates = weekendDates(form)
       const baseForm = {
         ...form,
         mode: 'weekend',
         destination: form.origin,
         startDate: dates[0],
-        endDate: addDays(dates[0], 1),
-        startTime: '08:30',
-        endTime: '19:30',
+        endDate: oneDay ? dates[0] : addDays(dates[0], 1),
+        startTime: form.startTime || '09:30',
+        endTime: form.endTime || '17:00',
         budgetTotal: null,
         source: state.preferOsm ? 'osm' : form.source || 'auto',
       }
@@ -912,9 +926,9 @@ ${weather || '（暂无）'}
           38 + Math.round((index / outlineItems.length) * 52),
         )
         const outline = {
-          title: `${item.theme} · 周末两日`,
+          title: `${item.theme} · ${oneDay ? '周末一日' : '周末两日'}`,
           subtitle: item.note,
-          days: weekendOutlineDays(item, map),
+          days: weekendOutlineDays(item, map, oneDay),
           advice: [],
           mustKnow: [],
         }
@@ -1133,10 +1147,11 @@ ${weather || '（暂无）'}
         hotelId: hotel?.id || '',
         note: '换一个目的地后，时间与路线已重新计算。',
       }
+      const oneDay = plan.startDate === plan.endDate
       const outline = {
-        title: `${base.name} · 周末两日`,
+        title: `${base.name} · ${oneDay ? '周末一日' : '周末两日'}`,
         subtitle: item.note,
-        days: weekendOutlineDays(item, map),
+        days: weekendOutlineDays(item, map, oneDay),
         advice: plan.advice || [],
         mustKnow: plan.mustKnow || [],
       }

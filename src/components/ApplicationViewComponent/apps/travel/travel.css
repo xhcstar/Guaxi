@@ -769,6 +769,18 @@
   color: var(--tr-ink-faint);
 }
 
+.tr-topbar-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.tr-topbar-left .tr-rail-toggle-btn {
+  flex: 0 0 auto;
+  border: 1px solid var(--tr-line);
+}
+
 .tr-crumb-brand {
   font-family: var(--tr-serif);
   font-size: 13px;
@@ -1726,6 +1738,17 @@
 .tr-field select:focus {
   border-color: var(--tr-accent);
   box-shadow: 0 0 0 3px rgba(196, 85, 45, 0.1);
+}
+
+/* 金额输入自身就是一层容器；不要再套一层 .tr-field 的输入边框。 */
+.tr-field .tr-money-input input,
+.tr-field .tr-money-input input:focus {
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
 }
 
 .tr-field select {
@@ -5118,6 +5141,36 @@
   font-family: var(--tr-mono);
   font-size: 9px;
   color: var(--tr-ink-faint);
+}
+
+.tr-key-configured {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  padding: 7px 9px;
+  border: 1px solid var(--tr-line);
+  border-radius: 9px;
+  background: var(--tr-paper-deep);
+  color: var(--tr-ink-faint);
+}
+
+.tr-key-mask {
+  flex: 1;
+  font-family: var(--tr-mono);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  color: var(--tr-ink-soft);
+}
+
+.tr-key-configured .tr-link-btn {
+  font-size: 9.5px;
+  white-space: nowrap;
+}
+
+.tr-key-configured .tr-link-btn.is-danger {
+  color: var(--tr-accent);
 }
 
 .tr-settings-status {

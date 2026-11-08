@@ -34,6 +34,7 @@
                 @input="onPlaceInput('origin', $event.target.value)"
                 @focus="openSuggestions('origin')"
                 @blur="closeSuggestionsLater"
+                @keydown.esc="closeAllSuggestions"
               />
               <button type="button" class="tr-locate-btn" :disabled="locating" @click.stop="locate">
                 <TravelIcon name="navigation" :size="15" />
@@ -82,6 +83,7 @@
               @input="onPlaceInput('destination', $event.target.value)"
               @focus="openSuggestions('destination')"
               @blur="closeSuggestionsLater"
+              @keydown.esc="closeAllSuggestions"
             />
             <div v-if="suggestions.destination.length" class="tr-suggest">
               <button
@@ -146,7 +148,9 @@
               <input v-model="form.endTime" type="time" />
             </label>
           </div>
-          <p v-if="form.mode === 'weekend'" class="tr-field-note">周末模式会把每个周六、周日作为独立的两日行程。</p>
+          <p v-if="form.mode === 'weekend'" class="tr-field-note">
+            默认周六当天往返（09:30-17:00）；把返回日期改到周日即可生成两天一夜。
+          </p>
         </section>
 
         <section class="tr-form-section">
@@ -327,7 +331,7 @@
 </template>
 
 <script setup>
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import TravelIcon from './TravelIcon.vue'
 import { api } from './travelApi.js'
 import {
@@ -383,7 +387,7 @@ const today = todayString()
 const fromCity = computed(() => form.origin?.city || form.origin?.name || '出发地')
 const prefs = computed(() => props.preferences || {})
 const toCity = computed(() => {
-  if (form.mode === 'weekend') return `周边 ${form.radiusKm} km`
+  if (form.mode === 'weekend') return '周边'
   return form.destination?.city || form.destination?.name || ''
 })
 const fromCode = computed(() => cityCode(fromCity.value))
@@ -418,7 +422,9 @@ watch(
     if (mode === 'weekend') {
       const saturday = nextSaturday()
       form.startDate = saturday
-      form.endDate = addDays(saturday, 1)
+      form.endDate = saturday
+      form.startTime = '09:30'
+      form.endTime = '17:00'
     }
   },
 )
@@ -426,11 +432,14 @@ watch(
 function onStartDateChange() {
   if (form.mode === 'weekend') {
     const date = new Date(`${form.startDate}T12:00:00`)
-    if (date.getDay() !== 6) {
-      const saturday = nextSaturday(date)
-      form.startDate = saturday
-      form.endDate = addDays(saturday, 1)
-    } else {
+    if (Number.isNaN(date.getTime())) return
+    if (date.getDay() !== 0 && date.getDay() !== 6) {
+      form.startDate = nextSaturday(date)
+    }
+    if (!form.endDate || form.endDate < form.startDate) {
+      form.endDate = form.startDate
+    }
+    if (form.endDate > addDays(form.startDate, 1)) {
       form.endDate = addDays(form.startDate, 1)
     }
     return
@@ -480,6 +489,32 @@ function closeSuggestionsLater() {
     activeField.value = ''
   }, 160)
 }
+
+function closeAllSuggestions() {
+  if (blurTimer) clearTimeout(blurTimer)
+  activeField.value = ''
+  suggestions.origin = []
+  suggestions.destination = []
+}
+
+function onGlobalPointerDown(event) {
+  if (!event.target?.closest?.('.tr-place-field')) {
+    closeAllSuggestions()
+  }
+}
+
+onMounted(() => {
+  document.addEventListener('pointerdown', onGlobalPointerDown, true)
+  window.addEventListener('scroll', closeAllSuggestions, true)
+})
+
+onBeforeUnmount(() => {
+  document.removeEventListener('pointerdown', onGlobalPointerDown, true)
+  window.removeEventListener('scroll', closeAllSuggestions, true)
+  if (blurTimer) clearTimeout(blurTimer)
+  if (searchTimers.origin) clearTimeout(searchTimers.origin)
+  if (searchTimers.destination) clearTimeout(searchTimers.destination)
+})
 
 function onPlaceInput(field, value) {
   form[field].name = value
