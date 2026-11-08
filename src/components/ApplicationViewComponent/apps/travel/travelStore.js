@@ -616,17 +616,16 @@ export function useTravelStore() {
   async function createOutline({ form, facts }) {
     try {
       const { system, prompt } = buildOutlinePrompt({ form, facts })
-      const response = await completeLlm({
+      const { raw, provider } = await completeJsonLlm({
         prompt,
         system,
         temperature: 0.35,
-        maxTokens: 4096,
+        maxTokens: 8192,
       })
-      const raw = parseModelJson(response.text)
       const outline = normalizeOutline(raw, { form, facts })
       return {
         outline,
-        provider: response.provider || '',
+        provider: provider || '',
         usedFallback: false,
         warning: '',
       }
@@ -635,7 +634,7 @@ export function useTravelStore() {
         outline: fallbackOutline({ form, facts }),
         provider: api.isMock ? '内置编排' : '确定性兜底',
         usedFallback: true,
-        warning: api.isMock ? '' : `模型编排不可用，已使用确定性编排：${friendlyError(error)}`,
+        warning: api.isMock ? '' : `模型这次没有返回可用的大纲 JSON，已用确定性编排兜底：${friendlyError(error)}`,
       }
     }
   }
@@ -661,7 +660,34 @@ export function useTravelStore() {
       })
       return { text: response.text, provider: response.provider || '本地模型' }
     }
-    return api.llmComplete(payload)
+    return api.llmComplete({ ...payload, jsonMode: true, disableReasoning: true })
+  }
+
+  // 模型偶尔回一段说明而不是 JSON：强制 JSON 模式，再给一次“只输出 JSON”的机会。
+  async function completeJsonLlm(payload) {
+    const attempts = [
+      payload,
+      {
+        ...payload,
+        temperature: 0.2,
+        prompt: `${payload.prompt}\n\n再次强调：只输出一个 JSON 对象，不要任何解释、标题或 markdown。`,
+      },
+    ]
+    let lastError = null
+    for (let index = 0; index < attempts.length; index += 1) {
+      let response = null
+      try {
+        response = await completeLlm({ ...attempts[index], jsonMode: true })
+        return { raw: parseModelJson(response.text), provider: response.provider || '' }
+      } catch (error) {
+        const message = String(error?.message || error)
+        const label = response?.provider ? `（模型：${response.provider}）` : ''
+        lastError = new Error(`${message}${label}`)
+        // 配置/网络类错误重试也没用，直接抛出真实原因。
+        if (/没有可用的模型|API Key|不调用模型|Failed to fetch|网络请求失败/.test(message)) break
+      }
+    }
+    throw lastError || new Error('模型没有返回可解析的 JSON')
   }
 
   async function createDay({ form, facts, outlineDay, dayIndex, totalDays, legs, stopRefs, startName, useModel = true }) {
@@ -690,13 +716,12 @@ export function useTravelStore() {
         legs,
         startName,
       })
-      const response = await completeLlm({
+      const { raw } = await completeJsonLlm({
         prompt,
         system,
         temperature: 0.3,
-        maxTokens: 4096,
+        maxTokens: 8192,
       })
-      const raw = parseModelJson(response.text)
       const day = normalizeDay(raw, {
         form,
         facts,
@@ -1235,8 +1260,7 @@ ${weather || '（暂无）'}
       let modelError = null
       try {
         const { system, prompt } = buildWeekendPrompt({ form: baseForm, facts, dates })
-        const response = await completeLlm({ prompt, system, temperature: 0.5, maxTokens: 4096 })
-        const raw = parseModelJson(response.text)
+        const { raw } = await completeJsonLlm({ prompt, system, temperature: 0.5, maxTokens: 8192 })
         outlineItems = normalizeWeekendOutline(raw, { form: baseForm, facts, dates })
       } catch (error) {
         outlineItems = fallbackWeekendOutline({ form: baseForm, facts, dates })
@@ -1285,7 +1309,7 @@ ${weather || '（暂无）'}
       }
       if (usedFallback && !api.isMock) {
         const reason = modelError ? friendlyError(modelError) : '模型没有返回可解析的班次'
-        state.warning = `模型班次编排不可用，已使用确定性方案：${reason}；可在班次表里逐个细化。`
+        state.warning = `模型这次没有返回可用的班次 JSON，已用确定性方案兜底：${reason}；可在班次表里逐个细化。`
       }
       showToast(
         usedFallback

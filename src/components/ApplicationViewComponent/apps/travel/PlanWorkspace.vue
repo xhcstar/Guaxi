@@ -52,38 +52,60 @@
           <button type="button" class="tr-btn is-outline is-small" @click="$emit('print', plan)">
             <TravelIcon name="print" :size="15" /> 打印
           </button>
-          <details class="tr-more">
-            <summary class="tr-icon-btn" title="更多操作"><TravelIcon name="settings" :size="16" /></summary>
-            <div class="tr-more-menu">
-              <button type="button" @click="startRename">
-                <TravelIcon name="pencil" :size="14" /> 重命名
-              </button>
-              <button type="button" @click="$emit('duplicate-plan', plan.id)">
-                <TravelIcon name="copy" :size="14" /> 复制一份
-              </button>
-              <button type="button" @click="$emit('adopt-plan', plan.id)">
-                <TravelIcon name="check" :size="14" />
-                {{ plan.adoptedAt ? '再记录一次版本' : '采纳并记录历史' }}
-              </button>
-              <button type="button" @click="$emit('regenerate', plan)">
-                <TravelIcon name="refresh" :size="14" /> 重新拉取资料并生成
-              </button>
-              <button v-if="isWeekend" type="button" @click="$emit('replace-weekend', plan.id)">
-                <TravelIcon name="refresh" :size="14" /> 换一个目的地
-              </button>
-              <button v-if="isWeekend" type="button" :disabled="refining" @click="$emit('refine-weekend', plan.id)">
-                <TravelIcon name="sparkles" :size="14" />
-                {{ refining ? '正在细化…' : 'AI 细化这个周末' }}
-              </button>
-              <button v-if="isWeekend" type="button" @click="$emit('toggle-lock', plan.id)">
-                <TravelIcon :name="plan.locked ? 'unlock' : 'lock'" :size="14" />
-                {{ plan.locked ? '解锁' : '锁定这个周末' }}
-              </button>
-              <button type="button" class="is-danger" @click="$emit('delete', plan.id)">
-                <TravelIcon name="trash" :size="14" /> 删除计划
-              </button>
-            </div>
-          </details>
+          <div class="tr-more">
+            <button
+              type="button"
+              class="tr-icon-btn tr-more-toggle"
+              title="更多操作"
+              :aria-expanded="menuOpen"
+              @click="toggleMenu"
+            >
+              <TravelIcon name="settings" :size="16" />
+            </button>
+            <Teleport to=".tr-app">
+              <div
+                v-if="menuOpen"
+                ref="menuEl"
+                class="tr-more-menu is-floating"
+                :style="menuStyle"
+                @mousedown.stop
+                @click.stop
+              >
+                <button type="button" @click="startRename(); closeMenu()">
+                  <TravelIcon name="pencil" :size="14" /> 重命名
+                </button>
+                <button type="button" @click="closeMenu(); $emit('duplicate-plan', plan.id)">
+                  <TravelIcon name="copy" :size="14" /> 复制一份
+                </button>
+                <button type="button" @click="closeMenu(); $emit('adopt-plan', plan.id)">
+                  <TravelIcon name="check" :size="14" />
+                  {{ plan.adoptedAt ? '再记录一次版本' : '采纳并记录历史' }}
+                </button>
+                <button type="button" @click="closeMenu(); $emit('regenerate', plan)">
+                  <TravelIcon name="refresh" :size="14" /> 重新拉取资料并生成
+                </button>
+                <button v-if="isWeekend" type="button" @click="closeMenu(); $emit('replace-weekend', plan.id)">
+                  <TravelIcon name="refresh" :size="14" /> 换一个目的地
+                </button>
+                <button
+                  v-if="isWeekend"
+                  type="button"
+                  :disabled="refining"
+                  @click="closeMenu(); $emit('refine-weekend', plan.id)"
+                >
+                  <TravelIcon name="sparkles" :size="14" />
+                  {{ refining ? '正在细化…' : 'AI 细化这个周末' }}
+                </button>
+                <button v-if="isWeekend" type="button" @click="closeMenu(); $emit('toggle-lock', plan.id)">
+                  <TravelIcon :name="plan.locked ? 'unlock' : 'lock'" :size="14" />
+                  {{ plan.locked ? '解锁' : '锁定这个周末' }}
+                </button>
+                <button type="button" class="is-danger" @click="closeMenu(); $emit('delete', plan.id)">
+                  <TravelIcon name="trash" :size="14" /> 删除计划
+                </button>
+              </div>
+            </Teleport>
+          </div>
         </div>
       </div>
 
@@ -241,7 +263,7 @@
 </template>
 
 <script setup>
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import TravelIcon from './TravelIcon.vue'
 import DayTimeline from './DayTimeline.vue'
 import PlanMap from './PlanMap.vue'
@@ -277,6 +299,55 @@ const emit = defineEmits([
 const renaming = ref(false)
 const titleDraft = ref('')
 const titleInput = ref(null)
+
+// 更多菜单放到 .tr-app 下并用 fixed 定位：车票卡片有 overflow:hidden，绝对定位会被裁掉。
+const menuOpen = ref(false)
+const menuEl = ref(null)
+const menuPos = ref({ top: 0, right: 0 })
+const menuStyle = computed(() => ({ top: `${menuPos.value.top}px`, right: `${menuPos.value.right}px` }))
+
+function onDocPointerDown(event) {
+  if (!menuOpen.value) return
+  if (menuEl.value?.contains(event.target)) return
+  if (event.target?.closest?.('.tr-more-toggle')) return
+  closeMenu()
+}
+
+function onMenuKeydown(event) {
+  if (event.key === 'Escape') closeMenu()
+}
+
+function toggleMenu(event) {
+  if (menuOpen.value) {
+    closeMenu()
+    return
+  }
+  const rect = event.currentTarget.getBoundingClientRect()
+  menuPos.value = {
+    top: rect.bottom + 6,
+    right: Math.max(8, window.innerWidth - rect.right),
+  }
+  menuOpen.value = true
+  document.addEventListener('mousedown', onDocPointerDown, true)
+  document.addEventListener('keydown', onMenuKeydown)
+  nextTick(() => {
+    const el = menuEl.value
+    if (!el) return
+    const height = el.offsetHeight
+    if (menuPos.value.top + height > window.innerHeight - 8) {
+      menuPos.value = { ...menuPos.value, top: Math.max(8, rect.top - height - 6) }
+    }
+  })
+}
+
+function closeMenu() {
+  if (!menuOpen.value) return
+  menuOpen.value = false
+  document.removeEventListener('mousedown', onDocPointerDown, true)
+  document.removeEventListener('keydown', onMenuKeydown)
+}
+
+onBeforeUnmount(closeMenu)
 
 function startRename() {
   titleDraft.value = props.plan.title || ''

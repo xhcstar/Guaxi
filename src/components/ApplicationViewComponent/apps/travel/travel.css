@@ -2446,6 +2446,15 @@
   box-shadow: var(--tr-shadow);
 }
 
+/* 车票卡片 overflow:hidden，菜单要用 fixed 浮层，否则会被裁掉。 */
+.tr-more-menu.is-floating {
+  position: fixed;
+  z-index: 9999;
+  max-height: min(70vh, 460px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
 .tr-more-menu button {
   width: 100%;
   display: flex;

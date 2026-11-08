@@ -672,7 +672,7 @@ export function parseModelJson(text) {
   } catch (error) {
     // 把模型的原话带进报错：登录墙/额度用尽时，用户能直接看到“请先登录”之类的提示。
     const snippet = String(text || '').replace(/\s+/g, ' ').trim().slice(0, 80)
-    if (snippet) throw new Error(`模型返回的不是 JSON：${snippet}`)
+    if (snippet) throw new Error(`模型回了说明文字而不是 JSON：${snippet}`)
     throw error
   }
 }

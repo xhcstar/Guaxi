@@ -400,6 +400,12 @@ pub struct TravelLlmRequest {
     pub temperature: Option<f32>,
     #[serde(default)]
     pub max_tokens: Option<u32>,
+    /// 行迹的编排全部要求 JSON，默认开启。
+    #[serde(default)]
+    pub json_mode: bool,
+    /// 结构化编排不需要思考链：关掉 reasoning，避免 token 被思考过程吃光。
+    #[serde(default)]
+    pub disable_reasoning: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -854,6 +860,28 @@ fn poi_matches_avoid(poi: &Poi, avoid: &[String]) -> bool {
         .any(|item| haystack.contains(&item))
 }
 
+/// 公交站、停车场、收费站这类“途经设施”不能当出游目的地/景点，
+/// 但搜索「峪口」时经常会把同名公交站排在前面。
+fn is_infra_poi(poi: &Poi) -> bool {
+    const INFRA: &[&str] = &[
+        "公交站",
+        "地铁站",
+        "停车场",
+        "收费站",
+        "加油站",
+        "服务区",
+        "充电站",
+        "公共厕所",
+        "售票处",
+        "出入口",
+        "火车站",
+        "汽车站",
+        "高速路口",
+    ];
+    let haystack = format!("{} {}", poi.name, poi.category);
+    INFRA.iter().any(|keyword| haystack.contains(keyword))
+}
+
 /// 统一收尾候选地点：避开词过滤、按检索中心重算距离、**剔除超出半径的候选**、去重排序。
 ///
 /// 高德的 around 搜索自带距离，但城市级文本搜索（景点兜底、必去地点）和 OSM 补点
@@ -867,6 +895,8 @@ fn apply_poi_filters(
     radius_m: f64,
 ) -> (Vec<Poi>, usize) {
     items.retain(|poi| !poi_matches_avoid(poi, avoid));
+    // 途经设施（公交站/停车场等）不能被当成景点或周末目的地。
+    items.retain(|poi| poi.kind != "sight" || !is_infra_poi(poi));
     for poi in items.iter_mut() {
         poi.distance = Some(haversine_km(center_lng, center_lat, poi.lng, poi.lat) * 1000.0);
     }
@@ -1794,6 +1824,8 @@ pub async fn travel_llm_complete(request: TravelLlmRequest) -> Result<TravelLlmR
         model_id: request.model_id,
         temperature: request.temperature.or(Some(0.35)),
         max_tokens: request.max_tokens.or(Some(4096)),
+        json_mode: request.json_mode,
+        disable_reasoning: request.disable_reasoning,
     })
     .await
     .map_err(|error| {
