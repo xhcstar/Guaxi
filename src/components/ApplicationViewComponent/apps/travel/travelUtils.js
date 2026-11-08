@@ -1,0 +1,201 @@
+// 行迹旅行计划的纯函数工具：日期、金额、并发、JSON 解析与转义。
+// 不依赖 Vue / Tauri，方便在预览与 Node 测试里单独使用。
+
+export const DAY_MS = 24 * 60 * 60 * 1000
+
+export const pad2 = (value) => String(value).padStart(2, '0')
+
+export function parseDate(value) {
+  if (!value) return null
+  const [year, month, day] = String(value).slice(0, 10).split('-').map(Number)
+  if (!year || !month || !day) return null
+  return new Date(year, month - 1, day, 12, 0, 0)
+}
+
+export function formatDate(date) {
+  if (!date) return ''
+  const d = date instanceof Date ? date : parseDate(date)
+  if (!d) return ''
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`
+}
+
+export function addDays(value, count) {
+  const date = parseDate(value)
+  if (!date) return ''
+  date.setDate(date.getDate() + count)
+  return formatDate(date)
+}
+
+export function enumerateDates(start, end) {
+  const startDate = parseDate(start)
+  const endDate = parseDate(end)
+  if (!startDate) return []
+  const last = endDate && endDate >= startDate ? endDate : startDate
+  const dates = []
+  const cursor = new Date(startDate)
+  let guard = 0
+  while (cursor <= last && guard < 31) {
+    dates.push(formatDate(cursor))
+    cursor.setDate(cursor.getDate() + 1)
+    guard += 1
+  }
+  return dates
+}
+
+export function weekdayCn(value) {
+  const date = parseDate(value)
+  if (!date) return ''
+  return ['周日', '周一', '周二', '周三', '周四', '周五', '周六'][date.getDay()]
+}
+
+export function shortDate(value) {
+  const date = parseDate(value)
+  if (!date) return ''
+  return `${date.getMonth() + 1}月${date.getDate()}日`
+}
+
+/** 把 YYYY-MM-DD 或 ISO 时间转成中文短日期；其它文案原样返回。 */
+export function friendlyDate(value) {
+  const text = String(value || '').trim()
+  return /^\d{4}-\d{2}-\d{2}/.test(text) ? shortDate(text.slice(0, 10)) : text
+}
+
+export function diffDays(a, b) {
+  const start = parseDate(a)
+  const end = parseDate(b)
+  if (!start || !end) return 0
+  return Math.round((end - start) / DAY_MS)
+}
+
+export function todayString() {
+  return formatDate(new Date())
+}
+
+export function nextSaturday(from = new Date()) {
+  const date = new Date(from)
+  date.setHours(12, 0, 0, 0)
+  const day = date.getDay()
+  const delta = (6 - day + 7) % 7
+  date.setDate(date.getDate() + (delta === 0 ? 0 : delta))
+  return formatDate(date)
+}
+
+export function timeToMinutes(value) {
+  const [hours, minutes] = String(value || '')
+    .split(':')
+    .map(Number)
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return null
+  return hours * 60 + minutes
+}
+
+export function minutesToTime(total) {
+  const safe = Math.max(0, Math.min(24 * 60 - 1, Math.round(total)))
+  return `${pad2(Math.floor(safe / 60))}:${pad2(safe % 60)}`
+}
+
+export function addMinutes(value, minutes) {
+  const base = timeToMinutes(value)
+  if (base == null) return value
+  return minutesToTime(base + minutes)
+}
+
+export function normalizeTime(value, fallback = '09:00') {
+  const raw = String(value || '').trim()
+  const match = raw.match(/^(\d{1,2}):(\d{2})/)
+  if (!match) return fallback
+  const hours = Number(match[1])
+  const minutes = Number(match[2])
+  if (hours > 23 || minutes > 59) return fallback
+  return `${pad2(hours)}:${pad2(minutes)}`
+}
+
+export function durationText(seconds) {
+  const total = Number(seconds) || 0
+  if (total <= 0) return ''
+  const minutes = Math.round(total / 60)
+  if (minutes < 60) return `${minutes} 分钟`
+  const hours = Math.floor(minutes / 60)
+  const rest = minutes % 60
+  return rest ? `${hours} 小时 ${rest} 分` : `${hours} 小时`
+}
+
+export function distanceText(km) {
+  const value = Number(km) || 0
+  if (value <= 0) return ''
+  return value < 10 ? `${value.toFixed(1)} km` : `${Math.round(value)} km`
+}
+
+export function money(value) {
+  const number = Number(value) || 0
+  return number.toLocaleString('zh-CN', {
+    maximumFractionDigits: number % 1 === 0 ? 0 : 1,
+  })
+}
+
+export function uid(prefix = 'trp') {
+  return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`
+}
+
+export function clamp(value, min, max) {
+  return Math.min(max, Math.max(min, value))
+}
+
+export async function runWithConcurrency(items, limit, worker) {
+  const results = new Array(items.length)
+  let cursor = 0
+  const runners = Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, async () => {
+    while (cursor < items.length) {
+      const index = cursor
+      cursor += 1
+      results[index] = await worker(items[index], index)
+    }
+  })
+  await Promise.all(runners)
+  return results
+}
+
+/** 模型经常把 JSON 包在 ```json 里或在前后加解释，这里取第一个完整对象。 */
+export function extractJson(text) {
+  if (!text || typeof text !== 'string') {
+    throw new Error('模型没有返回内容')
+  }
+  let source = text.trim()
+  source = source.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/i, '').trim()
+  const start = source.indexOf('{')
+  const end = source.lastIndexOf('}')
+  if (start === -1 || end <= start) {
+    throw new Error('模型返回的内容不是 JSON')
+  }
+  source = source.slice(start, end + 1)
+  return JSON.parse(source)
+}
+
+export function escapeHtml(value) {
+  return String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;')
+}
+
+export function safeText(value, fallback = '') {
+  if (typeof value === 'string') return value.trim()
+  if (typeof value === 'number') return String(value)
+  if (Array.isArray(value)) return value.filter((item) => typeof item === 'string').join('')
+  return fallback
+}
+
+export function uniqueBy(items, keyFn) {
+  const seen = new Set()
+  return items.filter((item) => {
+    const key = keyFn(item)
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+}
+
+export function deepClone(value) {
+  return JSON.parse(JSON.stringify(value))
+}

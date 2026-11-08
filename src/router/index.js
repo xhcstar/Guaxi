@@ -41,6 +41,8 @@ import AIFilmStudioApp from '../components/ApplicationViewComponent/apps/AIFilmS
 import RemoteTerminalApp from '../components/ApplicationViewComponent/apps/RemoteTerminalApp.vue'
 import ResourceHunterApp from '../components/ApplicationViewComponent/apps/ResourceHunterApp.vue'
 import MailApp from '../components/ApplicationViewComponent/apps/MailApp.vue'
+import TravelPlannerApp from '../components/ApplicationViewComponent/apps/TravelPlannerApp.vue'
+import TravelPrintView from '../views/TravelPrintView.vue'
 
 const APP_COMPONENT_MAP = {
   'life-album': LifeAlbumApp,
@@ -55,6 +57,7 @@ const APP_COMPONENT_MAP = {
   'tools-remote-terminal': RemoteTerminalApp,
   'tools-resource-hunter': ResourceHunterApp,
   'tools-mail': MailApp,
+  'life-travel-planner': TravelPlannerApp,
 }
 
 const GuaxiAppWindow = {
@@ -64,7 +67,7 @@ const GuaxiAppWindow = {
     const appId = computed(() => String(route.params?.appId || ''))
     const Comp = computed(() => APP_COMPONENT_MAP[appId.value] || PlaceholderApp)
     // Workbench-style apps own their full window layout, so the route host should not add outer padding.
-    const fullBleedAppIds = new Set(['life-album', 'music-player', 'tools-tts-book', 'work-resume', 'creation-ai-film-studio', 'tools-remote-terminal', 'tools-resource-hunter', 'tools-mail'])
+    const fullBleedAppIds = new Set(['life-album', 'music-player', 'tools-tts-book', 'work-resume', 'creation-ai-film-studio', 'tools-remote-terminal', 'tools-resource-hunter', 'tools-mail', 'life-travel-planner'])
     const hostPadding = computed(() => (fullBleedAppIds.has(appId.value) ? '0px' : '16px'))
 
     return () =>
@@ -269,6 +272,13 @@ export const routes = [
     path: '/app/:appId',
     name: 'app-window',
     component: GuaxiAppWindow,
+  },
+  {
+    // 旅行计划打印窗口：只渲染 A4 行程，供“打印 / 保存为 PDF”使用。
+    // label 用 app-travel-print-*，复用既有 app-* capability，不需要新增权限。
+    path: '/travel-print',
+    name: 'travel-print',
+    component: TravelPrintView,
   },
   {
     path: '/data-lab-workbench',

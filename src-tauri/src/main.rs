@@ -753,6 +753,24 @@ async fn app_main() {
             commands::p2psync::p2p_sync_cancel,
             commands::templateview::open_application_window,
 
+            // 旅行计划（应用页「行迹 · 旅行计划」卡片）
+            commands::travel::travel_get_settings,
+            commands::travel::travel_set_amap_key,
+            commands::travel::travel_ip_location,
+            commands::travel::travel_search_places,
+            commands::travel::travel_collect_facts,
+            commands::travel::travel_build_routes,
+            commands::travel::travel_llm_complete,
+            commands::travel::travel_static_map,
+            commands::travel::travel_save_plan,
+            commands::travel::travel_list_plans,
+            commands::travel::travel_get_plan,
+            commands::travel::travel_delete_plan,
+            commands::travel::travel_share_start,
+            commands::travel::travel_share_stop,
+            commands::travel::travel_share_status,
+            commands::travel::travel_open_print_window,
+
             // 邮箱客户端（应用页「邮件」卡片）
             commands::mail::mail_list_accounts,
             // 通讯录（联系人 / 通讯组 / vCard 导入导出）

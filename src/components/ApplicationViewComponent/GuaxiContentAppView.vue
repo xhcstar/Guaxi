@@ -49,6 +49,7 @@ import AIFilmStudioApp from "./apps/AIFilmStudioApp.vue"
 import RemoteTerminalApp from "./apps/RemoteTerminalApp.vue"
 import ResourceHunterApp from "./apps/ResourceHunterApp.vue"
 import MailApp from "./apps/MailApp.vue"
+import TravelPlannerApp from "./apps/TravelPlannerApp.vue"
 
 const logger = createLogger('GuaxiContentAppView')
 const settingsStore = useSettingsStore()
@@ -92,6 +93,16 @@ const apps = [
     icon: '🎬',
     color: 'linear-gradient(135deg, #667eea, #302b63)',
     component: AIFilmStudioApp
+  },
+  {
+    id: 'life-travel-planner',
+    name: '行迹 · 旅行计划',
+    category: 'life',
+    categoryLabel: '生活类',
+    description: 'AI 编排行程：逐段路线、天气、美食住宿、预算与行前清单，支持周末班次表与微信分享',
+    icon: '🧭',
+    color: 'linear-gradient(135deg, #c65a34, #35514a)',
+    component: TravelPlannerApp
   },
   {
     id: 'life-album',

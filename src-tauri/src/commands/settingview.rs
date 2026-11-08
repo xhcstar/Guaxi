@@ -67,6 +67,9 @@ pub struct AppConfig {
     // 相册地名反查用的高德 Web 服务 key。留空则回退 Nominatim(OSM)。
     #[serde(default)]
     life_album_amap_key: String,
+    // 旅行计划使用的高德 Web 服务 key；留空时自动复用相册的 key。
+    #[serde(default)]
+    travel_amap_key: String,
     #[serde(default)]
     template_repo_path: String,
     #[serde(default)]
@@ -965,6 +968,7 @@ impl Default for AppConfig {
             sync_engine: crate::commands::sync::SyncEngineConfig::default(),
             life_album_album_dir: "".to_string(),
             life_album_amap_key: "".to_string(),
+            travel_amap_key: "".to_string(),
             template_repo_path: "".to_string(),
             slidev_repo_root: "".to_string(),
             chat_record_root: default_chat_record_root(),
@@ -3100,6 +3104,27 @@ pub fn get_life_album_amap_key_cmd() -> String {
 pub fn set_life_album_amap_key(key: String) {
     let mut config = load_config();
     config.life_album_amap_key = key.trim().to_string();
+    save_config(&config);
+}
+
+/// 旅行计划解析使用的高德 Key：优先旅行专属 Key，未填写时复用相册 Key。
+pub fn get_travel_amap_key() -> String {
+    let config = load_config();
+    let travel = config.travel_amap_key.trim();
+    if !travel.is_empty() {
+        travel.to_string()
+    } else {
+        config.life_album_amap_key.trim().to_string()
+    }
+}
+
+pub fn get_travel_amap_key_own() -> String {
+    load_config().travel_amap_key.trim().to_string()
+}
+
+pub fn set_travel_amap_key_value(key: &str) {
+    let mut config = load_config();
+    config.travel_amap_key = key.trim().to_string();
     save_config(&config);
 }
 
