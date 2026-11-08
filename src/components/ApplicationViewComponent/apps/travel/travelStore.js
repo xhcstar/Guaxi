@@ -5,6 +5,7 @@ import { computed, reactive } from 'vue'
 import { api, createLocalDraft, createWeekendDraft } from './travelApi.js'
 import { createDemoPlan } from './travelData.js'
 import { assemblePlan, computeBudget, defaultPlanTitle } from './travelPlan.js'
+import { formatProblems, validatePlan } from './travelValidate.js'
 import {
   buildDayPrompt,
   buildOutlinePrompt,
@@ -25,6 +26,7 @@ import {
   deepClone,
   enumerateDates,
   formatDate,
+  haversineKm,
   minutesToTime,
   nextSaturday,
   parseDate,
@@ -42,6 +44,9 @@ import {
 const STORAGE_ORIGIN = 'guaxi.travel.origin.v1'
 const STORAGE_PREFER_OSM = 'guaxi.travel.preferOsm.v1'
 const STORAGE_DEFAULTS = 'guaxi.travel.defaults.v1'
+// 网页模型是没有流式的黑盒：一次编排最多等 120 秒，超时立刻走确定性编排，
+// 避免整条流水线在某个阶段一停就是几分钟。
+const WEB_MODEL_TIMEOUT_MS = 120 * 1000
 
 const state = reactive({
   view: 'home',
@@ -95,7 +100,21 @@ function showToast(text, type = 'info', duration = 2600) {
 }
 
 function setStage(key, label, percent = 0, detail = '') {
-  state.stage = { key, label, percent, detail }
+  state.stage = { key, label, percent, detail, startedAt: Date.now() }
+}
+
+function modelWaitHint() {
+  if (state.preferences.aiSource !== 'web') return ''
+  const label = webProviderLabel(state.preferences.webProvider)
+  return `网页模型 ${label} 最多等 ${WEB_MODEL_TIMEOUT_MS / 1000} 秒，没有响应就改用确定性编排`
+}
+
+// 校验不过就不落盘：宁可报错，也不把违反距离/日期约束的计划交给用户。
+// 浏览器预览用的是内置示例 POI，与目的地坐标不同源，只校验结构，不校验半径。
+function assertPlanConstraints(plan, options) {
+  const report = validatePlan(plan, api.isMock ? { ...options, radiusKm: 0 } : options)
+  if (report.ok) return
+  throw new Error(`生成结果未通过约束校验：${formatProblems(report.problems)}`)
 }
 
 function friendlyError(error) {
@@ -236,6 +255,19 @@ export function useTravelStore() {
     writeJson(STORAGE_ORIGIN, origin)
   }
 
+  // 家庭地址存的可能是“只有名字和 adcode、没有坐标”的旧数据，
+  // 一旦按名字解析出了坐标，就把它补回去，避免每次生成都重新猜城市。
+  async function repairHomeOrigin(resolved) {
+    if (!resolved?.lng || !resolved?.lat) return
+    const home = state.preferences.home
+    if (!home || home.lng || !home.adcode) return
+    if (String(home.adcode).slice(0, 4) !== String(resolved.adcode || '').slice(0, 4)) return
+    await savePreferences({
+      ...state.preferences,
+      home: { ...home, ...resolved, name: home.name || resolved.name },
+    })
+  }
+
   function rememberDefaults(form) {
     writeJson(STORAGE_DEFAULTS, {
       interests: form.interests,
@@ -273,6 +305,8 @@ export function useTravelStore() {
         name: form.origin?.name || '',
         address: form.origin?.address || '',
         city: form.origin?.city || '',
+        adcode: form.origin?.adcode || '',
+        cityCode: form.origin?.cityCode || '',
         lng: Number(form.origin?.lng) || 0,
         lat: Number(form.origin?.lat) || 0,
       },
@@ -280,6 +314,8 @@ export function useTravelStore() {
         name: form.destination?.name || '',
         address: form.destination?.address || '',
         city: form.destination?.city || '',
+        adcode: form.destination?.adcode || '',
+        cityCode: form.destination?.cityCode || '',
         lng: Number(form.destination?.lng) || 0,
         lat: Number(form.destination?.lat) || 0,
       },
@@ -605,6 +641,7 @@ export function useTravelStore() {
         provider: state.preferences.webProvider,
         prompt: payload.prompt,
         system: payload.system,
+        timeoutMs: WEB_MODEL_TIMEOUT_MS,
       })
       return {
         text: response.text,
@@ -622,7 +659,22 @@ export function useTravelStore() {
     return api.llmComplete(payload)
   }
 
-  async function createDay({ form, facts, outlineDay, dayIndex, totalDays, legs, stopRefs, startName }) {
+  async function createDay({ form, facts, outlineDay, dayIndex, totalDays, legs, stopRefs, startName, useModel = true }) {
+    const buildFallback = () => {
+      const day = fallbackDay({
+        form,
+        facts,
+        outlineDay,
+        dayIndex,
+        legs,
+        stopRefs,
+        startName,
+      })
+      day.source = 'fallback'
+      return day
+    }
+    // 大纲阶段模型已经失败时不再逐日重试：网页模型每次都要等满超时，代价太高。
+    if (!useModel) return buildFallback()
     try {
       const { system, prompt } = buildDayPrompt({
         form,
@@ -652,17 +704,7 @@ export function useTravelStore() {
       day.source = 'ai'
       return day
     } catch {
-      const day = fallbackDay({
-        form,
-        facts,
-        outlineDay,
-        dayIndex,
-        legs,
-        stopRefs,
-        startName,
-      })
-      day.source = 'fallback'
-      return day
+      return buildFallback()
     }
   }
 
@@ -679,15 +721,22 @@ export function useTravelStore() {
     state.stage = { key: 'collect', label: '正在解析地点与检索周边…', detail: '', percent: 4 }
     try {
       const request = toRequest(form)
-      rememberOrigin(form.origin)
       rememberDefaults(form)
       const facts = await api.collectFacts(request)
       if (token !== state.generationToken) return null
+      // 用后端解析后的坐标回填出发点，避免下一次又拿着 0 坐标按名字乱查城市。
+      if (facts.origin?.lng && facts.origin?.lat) {
+        form.origin = { ...form.origin, ...facts.origin }
+        rememberOrigin(form.origin)
+        if (state.wizard) state.wizard.origin = form.origin
+        await repairHomeOrigin(form.origin)
+      }
+      const waitHint = modelWaitHint()
       setStage(
         'outline',
         '正在编排整体行程…',
         22,
-        `已找到 ${facts.attractions.length} 个景点、${facts.food.length} 家餐饮、${facts.hotels.length} 家住宿`,
+        `已找到 ${facts.attractions.length} 个景点、${facts.food.length} 家餐饮、${facts.hotels.length} 家住宿${waitHint ? `；${waitHint}` : ''}`,
       )
       const outlineResult = await createOutline({ form, facts })
       if (token !== state.generationToken) return null
@@ -703,7 +752,7 @@ export function useTravelStore() {
         map,
       })
       if (token !== state.generationToken) return null
-      setStage('days', '正在细化每天的游览节奏与用餐…', 58)
+      setStage('days', '正在细化每天的游览节奏与用餐…', 58, modelWaitHint())
       const days = await runWithConcurrency(
         outlineResult.outline.days,
         2,
@@ -718,6 +767,7 @@ export function useTravelStore() {
             legs: info.legs,
             stopRefs: info.stopRefs,
             startName: info.startName,
+            useModel: !outlineResult.usedFallback,
           })
         },
       )
@@ -736,6 +786,11 @@ export function useTravelStore() {
         days,
         provider: outlineResult.provider,
         routeWeather: routeInfo.weatherMeta,
+      })
+      assertPlanConstraints(plan, {
+        center: facts.destination,
+        radiusKm: Number(form.radiusKm) || 20,
+        expectedDates: enumerateDates(form.startDate, form.endDate),
       })
       const saved = await api.savePlan(plan)
       if (token !== state.generationToken) return null
@@ -825,12 +880,26 @@ ${weather || '（暂无）'}
     return { system: WEEKEND_PROMPT_SYSTEM, prompt: user }
   }
 
+  // 自驾/坐车出去一天，目的地就在家门口（几公里）没有意义：
+  // 按交通方式和半径给“周末目的地”一个最小距离，走路/骑行不受限。
+  function weekendMinBaseKm(form) {
+    const radius = Number(form?.radiusKm) || 60
+    if (form?.transport === 'driving') return Math.min(20, Math.max(8, radius * 0.25))
+    if (form?.transport === 'transit') return Math.min(15, Math.max(5, radius * 0.15))
+    return 3
+  }
+
   function normalizeWeekendOutline(raw, { form, facts, dates }) {
     const map = poiMap(facts)
     const attractions = [...(facts.attractions || [])].sort((a, b) => {
       const rating = (Number(b.rating) || 0) - (Number(a.rating) || 0)
       return rating || (Number(a.distance) || 0) - (Number(b.distance) || 0)
     })
+    const minBaseKm = weekendMinBaseKm(form)
+    const farEnough = (poi) => {
+      const meters = Number(poi?.distance)
+      return !Number.isFinite(meters) || meters / 1000 >= minBaseKm
+    }
     const food = [...(facts.food || [])]
     const hotels = [...(facts.hotels || [])]
     const used = new Set()
@@ -839,8 +908,10 @@ ${weather || '（暂无）'}
     return dates.map((date, index) => {
       const source = rawItems[index] || {}
       let base = map.get(safeText(source.basePoiId))
+      if (base && !farEnough(base)) base = null
       if (!base) {
         base =
+          attractions.find((poi) => !usedBases.has(poi.id) && farEnough(poi)) ||
           attractions.find((poi) => !usedBases.has(poi.id)) ||
           attractions[index % Math.max(1, attractions.length)]
       }
@@ -851,13 +922,26 @@ ${weather || '（暂无）'}
       const pickSights = (ids) =>
         (Array.isArray(ids) ? ids : [])
           .map((id) => map.get(safeText(id)))
-          .filter((poi) => poi && poi.kind !== 'food' && poi.kind !== 'hotel')
+          .filter(
+            (poi) =>
+              poi &&
+              poi.kind !== 'food' &&
+              poi.kind !== 'hotel' &&
+              // 目的地离出发点十几公里，就别把家门口的公园排进同一天。
+              (!base || haversineKm(base, poi) <= Math.max(15, minBaseKm)),
+          )
           .slice(0, 2)
       let stops1 = pickSights(source.stops1)
       let stops2 = pickSights(source.stops2)
       if (!stops1.length && base) stops1 = [base]
       if (!stops2.length) {
-        const next = attractions.find((poi) => !used.has(poi.id) && poi.id !== base?.id)
+        const next =
+          attractions.find(
+            (poi) =>
+              !used.has(poi.id) &&
+              poi.id !== base?.id &&
+              (!base || haversineKm(base, poi) <= Math.max(15, minBaseKm)),
+          ) || attractions.find((poi) => !used.has(poi.id) && poi.id !== base?.id)
         if (next) {
           stops2 = [next]
           used.add(next.id)
@@ -865,13 +949,32 @@ ${weather || '（暂无）'}
           stops2 = [base]
         }
       }
-      const food1 = map.get(safeText(source.food1)) || food.find((poi) => !used.has(poi.id)) || food[0]
-      const food2 = map.get(safeText(source.food2)) || food.find((poi) => !used.has(poi.id) && poi.id !== food1?.id) || food[1] || food[0]
+      const nearBase = (poi, limit = Math.max(12, minBaseKm)) =>
+        !base || !poi || haversineKm(base, poi) <= limit
+      const foodNearBase = (poi) => nearBase(poi, Math.max(15, minBaseKm))
+      // 模型点名但离目的地太远的餐饮/住宿一律不采纳，换成本地候选。
+      const pickFood = (rawId, excludeId, fallbackIndex = 0) => {
+        const named = map.get(safeText(rawId))
+        return (
+          (named && foodNearBase(named) ? named : null) ||
+          food.find((poi) => !used.has(poi.id) && poi.id !== excludeId && foodNearBase(poi)) ||
+          food.find((poi) => !used.has(poi.id) && poi.id !== excludeId) ||
+          named ||
+          food[fallbackIndex] ||
+          food[0] ||
+          null
+        )
+      }
+      const food1 = pickFood(source.food1, '', 0)
+      const food2 = pickFood(source.food2, food1?.id, 1)
       if (food1) used.add(food1.id)
       if (food2) used.add(food2.id)
+      const namedHotel = map.get(safeText(source.hotelId))
       const hotel =
-        map.get(safeText(source.hotelId)) ||
+        (namedHotel && foodNearBase(namedHotel) ? namedHotel : null) ||
+        hotels.find((poi) => !used.has(poi.id) && foodNearBase(poi)) ||
         hotels.find((poi) => !used.has(poi.id)) ||
+        namedHotel ||
         hotels[0]
       if (hotel) used.add(hotel.id)
       return {
@@ -941,7 +1044,7 @@ ${weather || '（暂无）'}
     ]
   }
 
-  async function buildWeekendPlan({ form, facts, item, outline, map, seriesId, index }) {
+  async function buildWeekendPlan({ form, facts, item, outline, map, seriesId, index, useModel = true }) {
     const oneDay = form.startDate === form.endDate
     const weekendForm = {
       ...form,
@@ -962,7 +1065,7 @@ ${weather || '（暂无）'}
       map,
       alternatives: index === 0,
     })
-    const detailed = index === 0
+    const detailed = useModel && index === 0
     const days = []
     for (let dayIndex = 0; dayIndex < totalDays; dayIndex += 1) {
       const outlineDay = outline.days[dayIndex]
@@ -1019,6 +1122,11 @@ ${weather || '（暂无）'}
       note: item.note,
       index,
     }
+    assertPlanConstraints(plan, {
+      center: facts.destination,
+      radiusKm: Number(weekendForm.radiusKm) || 20,
+      expectedDates: oneDay ? [item.date] : [item.date, addDays(item.date, 1)],
+    })
     return plan
   }
 
@@ -1039,7 +1147,6 @@ ${weather || '（暂无）'}
     state.weekend.loading = true
     setStage('collect', '正在检索周边适合周末去的地方…', 5)
     try {
-      rememberOrigin(form.origin)
       const oneDay = form.startDate === form.endDate
       const dates = weekendDates(form)
       const baseForm = {
@@ -1055,17 +1162,28 @@ ${weather || '（暂无）'}
       }
       const facts = await api.collectFacts(toRequest(baseForm))
       if (token !== state.generationToken) return []
-      setStage('outline', '正在把周边地点排成 8 个周末班次…', 30)
+      // 用后端解析后的坐标回填出发点，避免下一次又拿着 0 坐标按名字乱查城市。
+      if (facts.origin?.lng && facts.origin?.lat) {
+        form.origin = { ...form.origin, ...facts.origin }
+        rememberOrigin(form.origin)
+        if (state.wizard) state.wizard.origin = form.origin
+        baseForm.origin = form.origin
+        baseForm.destination = form.origin
+        await repairHomeOrigin(form.origin)
+      }
+      setStage('outline', '正在把周边地点排成 8 个周末班次…', 30, modelWaitHint())
       let outlineItems
       let usedFallback = false
+      let modelError = null
       try {
         const { system, prompt } = buildWeekendPrompt({ form: baseForm, facts, dates })
         const response = await completeLlm({ prompt, system, temperature: 0.5, maxTokens: 4096 })
         const raw = parseModelJson(response.text)
         outlineItems = normalizeWeekendOutline(raw, { form: baseForm, facts, dates })
-      } catch {
+      } catch (error) {
         outlineItems = fallbackWeekendOutline({ form: baseForm, facts, dates })
         usedFallback = true
+        modelError = error
       }
       const map = poiMap(facts)
       const seriesId = uid('wks')
@@ -1093,6 +1211,7 @@ ${weather || '（暂无）'}
           map,
           seriesId,
           index,
+          useModel: !usedFallback,
         })
         const saved = await api.savePlan(plan)
         plans.push(saved)
@@ -1107,21 +1226,40 @@ ${weather || '（暂无）'}
         state.plan = plans[0]
       }
       if (usedFallback && !api.isMock) {
-        state.warning = '模型班次编排不可用，已使用确定性方案；可在班次表里逐个细化。'
+        const reason = modelError ? friendlyError(modelError) : '模型没有返回可解析的班次'
+        state.warning = `模型班次编排不可用，已使用确定性方案：${reason}；可在班次表里逐个细化。`
       }
-      showToast('已生成未来 8 个周末的班次，最近一周已细化', 'success')
+      showToast(
+        usedFallback
+          ? '已生成未来 8 个周末的班次，使用确定性编排'
+          : '已生成未来 8 个周末的班次，最近一周已细化',
+        'success',
+      )
       state.stage = { key: 'done', label: '周末班次已生成', detail: '', percent: 100 }
       return plans
     } catch (error) {
       state.error = friendlyError(error)
       return []
     } finally {
-      state.busy = false
-      state.weekend.loading = false
-      setTimeout(() => {
-        if (state.stage.key === 'done') state.stage = { key: '', label: '', detail: '', percent: 0 }
-      }, 800)
+      if (token === state.generationToken) {
+        state.busy = false
+        state.weekend.loading = false
+        setTimeout(() => {
+          if (state.stage.key === 'done') state.stage = { key: '', label: '', detail: '', percent: 0 }
+        }, 800)
+      }
     }
+  }
+
+  // 只是放弃这次结果：在途请求仍在后端跑，token 已变，回来时会被丢弃。
+  function cancelGeneration() {
+    if (!state.busy) return
+    state.generationToken += 1
+    state.busy = false
+    state.weekend.loading = false
+    state.weekend.refiningId = ''
+    state.stage = { key: '', label: '', detail: '', percent: 0 }
+    showToast('已取消本次生成', 'info')
   }
 
   async function openWeekendBoard() {
@@ -1164,6 +1302,8 @@ ${weather || '（暂无）'}
         elders: plan.travelers?.elders || 0,
         interests: plan.interests || [],
         pace: plan.pace || 'balanced',
+        // 沿用在生成时用过的半径，避免细化时把约束悄悄放宽。
+        radiusKm: Number(plan.radiusKm) || createWeekendDraft().radiusKm,
         source: state.preferOsm ? 'osm' : 'auto',
       }
       const facts = await api.collectFacts(toRequest(form))
@@ -1223,6 +1363,11 @@ ${weather || '（暂无）'}
       rebuilt.createdAt = plan.createdAt
       rebuilt.locked = plan.locked
       rebuilt.weekend = plan.weekend
+      assertPlanConstraints(rebuilt, {
+        center: facts.destination,
+        radiusKm: Number(form.radiusKm) || 20,
+        expectedDates: days.map((day) => day.date),
+      })
       const saved = await api.savePlan(rebuilt)
       state.weekend.plans = state.weekend.plans.map((item) =>
         item.id === planId ? saved : item,
@@ -1493,6 +1638,7 @@ ${weather || '（暂无）'}
     searchPlaces,
     generateTrip,
     generateWeekend,
+    cancelGeneration,
     openWeekendBoard,
     refineWeekend,
     toggleWeekendLock,

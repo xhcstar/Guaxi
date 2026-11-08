@@ -213,8 +213,11 @@
             <i :style="{ width: `${Math.max(3, state.stage.percent || 0)}%` }"></i>
           </div>
           <div class="tr-progress-foot">
-            <span>{{ Math.round(state.stage.percent || 0) }}%</span>
-            <span>可以先去泡杯茶，路线和预算会一起算好</span>
+            <span>{{ Math.round(state.stage.percent || 0) }}% · 已等待 {{ elapsedSeconds }}s</span>
+            <div class="tr-progress-foot-right">
+              <span class="tr-progress-hint">可以先去泡杯茶，路线和预算会一起算好</span>
+              <button type="button" class="tr-progress-cancel" @click="store.cancelGeneration()">取消</button>
+            </div>
           </div>
         </div>
       </div>
@@ -230,7 +233,7 @@
 </template>
 
 <script setup>
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { api } from './travel/travelApi.js'
 import { useTravelStore } from './travel/travelStore.js'
 import { mapProviderLabel } from './travel/travelPreferences.js'
@@ -246,6 +249,29 @@ import './travel/travel.css'
 const store = useTravelStore()
 const { state } = store
 const scrollEl = ref(null)
+
+// 进度卡按秒刷新，让长等待看起来是“还在跑”，而不是卡死。
+const nowTs = ref(Date.now())
+const elapsedSeconds = computed(() => {
+  const startedAt = state.stage.startedAt
+  if (!startedAt) return 0
+  return Math.max(0, Math.floor((nowTs.value - startedAt) / 1000))
+})
+let stageTimer = null
+watch(
+  () => state.busy,
+  (busy) => {
+    if (stageTimer) {
+      clearInterval(stageTimer)
+      stageTimer = null
+    }
+    if (!busy) return
+    nowTs.value = Date.now()
+    stageTimer = setInterval(() => {
+      nowTs.value = Date.now()
+    }, 1000)
+  },
+)
 
 const RAIL_WIDTH_KEY = 'guaxi.travel.railWidth.v1'
 const RAIL_COLLAPSED_KEY = 'guaxi.travel.railCollapsed.v1'
@@ -416,6 +442,7 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
+  if (stageTimer) clearInterval(stageTimer)
   document.removeEventListener('mousemove', onRailResize)
   document.removeEventListener('mouseup', stopRailResize)
   document.body.style.cursor = ''

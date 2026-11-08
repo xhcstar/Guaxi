@@ -521,6 +521,10 @@ function onPlaceInput(field, value) {
   form[field].lng = 0
   form[field].lat = 0
   form[field].city = ''
+  form[field].address = ''
+  // 只是改了名字：旧的行政区编码/城市编码不能再留着，否则会被约束到上一座城市。
+  form[field].adcode = ''
+  form[field].cityCode = ''
   activeField.value = field
   if (searchTimers[field]) clearTimeout(searchTimers[field])
   searchTimers[field] = setTimeout(() => runSearch(field, value), 280)

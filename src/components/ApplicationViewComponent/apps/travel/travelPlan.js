@@ -203,22 +203,30 @@ export function computeBudget({ form, days, facts }) {
       amount: Math.round(food),
       note: `约 ¥${BUDGET_DEFAULTS.food[level]} / 人 / 天，儿童按 0.6 计`,
     },
-    {
-      category: '住宿',
-      label: nights > 0 ? `住宿 ${nights} 晚 × ${Math.max(1, Math.ceil((adults + elders) / 2))} 间` : '住宿',
-      amount: Math.round(lodging),
-      note: nights > 0 ? hotelName || '按预算档位估算' : '当日往返，无住宿',
-    },
-    {
-      category: '机动',
-      label: '零食、购物与机动',
-      amount: Math.round(shopping + other),
-      note: `购物约 ¥${BUDGET_DEFAULTS.shopping[level]} / 人 / 天 + 8% 机动`,
-    },
   ]
+  // 当天往返不列住宿项：留一行 ¥0 的“住宿”反而让人以为方案含酒店。
+  if (nights > 0) {
+    items.push({
+      category: '住宿',
+      label: `住宿 ${nights} 晚 × ${Math.max(1, Math.ceil((adults + elders) / 2))} 间`,
+      amount: Math.round(lodging),
+      note: hotelName || '按预算档位估算',
+    })
+  }
+  items.push({
+    category: '机动',
+    label: '零食、购物与机动',
+    amount: Math.round(shopping + other),
+    note: `购物约 ¥${BUDGET_DEFAULTS.shopping[level]} / 人 / 天 + 8% 机动`,
+  })
 
   // 明细各自取整后再求和，避免页面顶部与清单底部差 1 元。
   const total = items.reduce((sum, item) => sum + item.amount, 0)
+  const notes = []
+  if (nights === 0) notes.push('当天往返，未计入住宿。')
+  if (form.budgetTotal && total > Number(form.budgetTotal)) {
+    notes.push(`当前估算比目标预算高 ¥${money(total - Number(form.budgetTotal))}，可优先减少收费景点或调整餐饮档位。`)
+  }
 
   return {
     currency: 'CNY',
@@ -227,10 +235,7 @@ export function computeBudget({ form, days, facts }) {
     perPerson: Math.round(total / Math.max(1, people)),
     people,
     nights,
-    note:
-      form.budgetTotal && total > Number(form.budgetTotal)
-        ? `当前估算比目标预算高 ¥${money(total - Number(form.budgetTotal))}，可优先调整住宿档位或减少收费景点。`
-        : '',
+    note: notes.join(' '),
   }
 }
 
@@ -532,7 +537,9 @@ export function assemblePlan({
     date: day.date || tripDates[index] || form.startDate,
     weekday: day.weekday || weekdayCn(day.date || tripDates[index] || form.startDate),
     weather:
-      day.weather ||
+      (day.weather && day.weather.date === (day.date || tripDates[index])
+        ? day.weather
+        : null) ||
       weather.find((item) => item.date === (day.date || tripDates[index])) ||
       null,
     routeWeather: dedupeRoutePoints(
@@ -570,6 +577,7 @@ export function assemblePlan({
     endDate: form.endDate,
     startTime: form.startTime,
     endTime: form.endTime,
+    radiusKm: Number(form.radiusKm) || 0,
     transport: form.transport,
     budgetLevel: form.budgetLevel,
     budgetTotal: form.budgetTotal || null,

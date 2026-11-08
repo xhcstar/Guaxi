@@ -710,12 +710,20 @@ function togglePrefInterest(interest) {
   else list.push(interest)
 }
 function onHomeInput() {
-  prefs.home = {
-    ...(prefs.home || {}),
-    name: homeQuery.value,
-    lng: 0,
-    lat: 0,
-    city: '',
+  const name = homeQuery.value.trim()
+  // 文字变了才说明换了地点：坐标、城市、行政区编码一起清掉，
+  // 避免出现“名字是小区、adcode 还是上一座城市、坐标是 0”的混合状态。
+  if (name !== (prefs.home?.name || '').trim()) {
+    prefs.home = {
+      name,
+      address: '',
+      city: '',
+      cityCode: '',
+      adcode: '',
+      lng: 0,
+      lat: 0,
+      source: '',
+    }
   }
   if (homeTimer) clearTimeout(homeTimer)
   homeTimer = setTimeout(async () => {

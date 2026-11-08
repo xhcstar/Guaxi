@@ -16,6 +16,7 @@ import {
   weekdayCn,
 } from './travelUtils.js'
 import { PACE_OPTIONS, TRANSPORT_OPTIONS } from './travelPlan.js'
+import { validateDayBlocks } from './travelValidate.js'
 
 const SYSTEM_PROMPT = `你是一名资深中文旅行规划师，擅长把真实 POI 与真实路线编排成可执行的行程。
 硬性规则：
@@ -530,6 +531,20 @@ export function normalizeDay(raw, { form, facts, outlineDay, dayIndex, legs, sto
   }
 
   blocks = blocks.sort((a, b) => (timeToMinutes(a.start) || 0) - (timeToMinutes(b.start) || 0))
+  // 模型自由发挥的地点、超出半径的地点、时间倒挂的排法都在这里拦下，
+  // 由调用方退回确定性编排，避免把不满足约束的计划交给用户。
+  const problems = validateDayBlocks(
+    { blocks, weather: null },
+    {
+      center: facts.destination,
+      radiusKm: Number(form.radiusKm) || 20,
+      notBeforeMinutes: timeToMinutes(form.startTime),
+      allowHotel: form.startDate !== form.endDate,
+    },
+  )
+  if (problems.length) {
+    throw new Error(`模型当天安排未通过校验：${problems[0]}`)
+  }
   return {
     date: outlineDay.date,
     weekday: outlineDay.weekday || weekdayCn(outlineDay.date),
@@ -643,5 +658,12 @@ export function fallbackDay({ form, facts, outlineDay, dayIndex, legs, stopRefs,
 }
 
 export function parseModelJson(text) {
-  return extractJson(text)
+  try {
+    return extractJson(text)
+  } catch (error) {
+    // 把模型的原话带进报错：登录墙/额度用尽时，用户能直接看到“请先登录”之类的提示。
+    const snippet = String(text || '').replace(/\s+/g, ' ').trim().slice(0, 80)
+    if (snippet) throw new Error(`模型返回的不是 JSON：${snippet}`)
+    throw error
+  }
 }

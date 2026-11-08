@@ -4212,7 +4212,8 @@ fn web_model_url(provider: &str) -> Option<&'static str> {
         "chatgpt" => Some("https://chatgpt.com"),
         "deepseek" => Some("https://chat.deepseek.com"),
         "kimi" => Some("https://kimi.moonshot.cn"),
-        "qwen" => Some("https://tongyi.aliyun.com/qianwen/"),
+        // 通义千问已迁移到 qianwen.com；旧域名 301 跳转会让登录态落在另一个 origin 上。
+        "qwen" => Some("https://www.qianwen.com/"),
         "doubao" => Some("https://www.doubao.com/chat/"),
         "claude" => Some("https://claude.ai/new"),
         _ => None,
@@ -4306,6 +4307,7 @@ pub async fn web_model_send_message(
     const provider = {provider};
     const text = {content};
     const attachments = Array.isArray({attachments}) ? {attachments} : [];
+    const ENDPOINT = 'http://127.0.0.1:8888/api/web-model-chat';
 
     function findInput() {{
       const sendBtn = document.querySelector('#yuanbao-send-btn');
@@ -4370,20 +4372,39 @@ pub async fn web_model_send_message(
       }}
 
       if (el.isContentEditable) {{
+        // 千问/部分站点用 Slate 之类的富文本编辑器：直接改 textContent 只改 DOM，
+        // 编辑器内部状态仍是空的，发送按钮会一直禁用。优先用 paste 事件让编辑器自己写入。
+        let written = false;
         try {{
-          el.textContent = '';
-          if (document.execCommand) {{
-            document.execCommand('selectAll', false, null);
-            document.execCommand('insertText', false, valueText);
-          }} else {{
-            el.textContent = valueText;
+          if (typeof DataTransfer === 'function' && typeof ClipboardEvent === 'function') {{
+            el.focus();
+            const dt = new DataTransfer();
+            dt.setData('text/plain', valueText);
+            const paste = new ClipboardEvent('paste', {{ bubbles: true, cancelable: true, clipboardData: dt }});
+            el.dispatchEvent(paste);
+            written = paste.defaultPrevented;
           }}
-        }} catch (e) {{
-          try {{ el.textContent = valueText; }} catch (e2) {{ return false; }}
+        }} catch (e) {{}}
+        if (!written) {{
+          try {{
+            el.focus();
+            el.textContent = '';
+            if (document.execCommand) {{
+              document.execCommand('selectAll', false, null);
+              document.execCommand('insertText', false, valueText);
+            }} else {{
+              el.textContent = valueText;
+            }}
+            written = true;
+          }} catch (e) {{
+            try {{ el.textContent = valueText; written = true; }} catch (e2) {{ return false; }}
+          }}
         }}
 
-        try {{ el.dispatchEvent(new InputEvent('input', {{ bubbles: true, data: valueText }})); }} catch (e) {{ el.dispatchEvent(new Event('input', {{ bubbles: true }})); }}
-        return true;
+        if (written) {{
+          try {{ el.dispatchEvent(new InputEvent('input', {{ bubbles: true, data: valueText }})); }} catch (e) {{ el.dispatchEvent(new Event('input', {{ bubbles: true }})); }}
+        }}
+        return written;
       }}
 
       return false;
@@ -4512,32 +4533,72 @@ pub async fn web_model_send_message(
       return false;
     }}
 
+    let filled = false;
+    let sent = false;
+    let filledAt = 0;
+
+    // 发送按钮要等编辑器状态同步后才会启用（千问是 Slate，写入后约 1~2 秒），
+    // 所以这里轮询而不是固定重试三次：最多等 40 秒。
     function sendNow() {{
+      if (sent) return true;
       const input = findInput();
-      if (!input) return;
+      if (!input) return false;
 
-      openAttachmentEntrances(input);
+      if (!filled) {{
+        openAttachmentEntrances(input);
+        filled = setValue(input, appendAttachmentHint(text));
+        if (filled) filledAt = Date.now();
+      }}
+      if (!filled) return false;
 
-      const finalText = appendAttachmentHint(text);
-      if (!setValue(input, finalText)) return;
-
-      if (trySubmitForm(input)) return;
+      // 页面重新渲染把内容清空了就重贴一次，避免一直等一个空输入框。
+      if (Date.now() - filledAt > 2500) {{
+        const current = (input.innerText || input.textContent || '').trim();
+        if (!current) {{ filled = false; filledAt = 0; return false; }}
+      }}
 
       if (provider === 'yuanbao') {{
         const ybtn = document.querySelector('#yuanbao-send-btn');
-        if (ybtn && click(ybtn)) return;
+        if (ybtn && !isDisabled(ybtn) && click(ybtn)) {{ sent = true; return true; }}
       }}
 
       const btn = bestSendButton(input);
-      if (btn && click(btn)) return;
+      if (btn && click(btn)) {{ sent = true; return true; }}
 
-      tryEnter(input);
+      // 没有可用按钮时才退回表单/回车，避免在编辑器状态未同步时发出空消息。
+      if (trySubmitForm(input)) {{ sent = true; return true; }}
+      return false;
     }}
 
-    sendNow();
-    setTimeout(sendNow, 120);
-    setTimeout(sendNow, 420);
-    setTimeout(sendNow, 900);
+    function reportSend(ok) {{
+      try {{
+        window.__GUAXI_LAST_PROMPT__ = text;
+        fetch(ENDPOINT, {{
+          method: 'POST',
+          headers: {{ 'Content-Type': 'application/json' }},
+          body: JSON.stringify({{
+            provider: provider,
+            model_id: window.__GUAXI_MODEL_ID__,
+            topic_id: window.__GUAXI_TOPIC_ID__,
+            session_id: window.__GUAXI_SESSION_ID__,
+            status: ok ? 'sent' : 'send_failed',
+            messages: []
+          }})
+        }});
+      }} catch (e) {{}}
+    }}
+
+    let attempts = 0;
+    function tick() {{
+      attempts += 1;
+      let ok = false;
+      try {{ ok = sendNow(); }} catch (e) {{}}
+      if (ok) {{ reportSend(true); return; }}
+      if (attempts >= 80) {{ reportSend(false); return; }}
+      setTimeout(tick, 500);
+    }}
+
+    tick();
   }} catch (e) {{}}
 }})();"#,
         model_id = request.model_id,

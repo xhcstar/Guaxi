@@ -92,6 +92,22 @@ async fn web_model_chat_push(
             }
         }
 
+        let pushed_session = payload
+            .get("session_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let pushed_status = payload
+            .get("status")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let pushed_messages = payload
+            .get("messages")
+            .and_then(|v| v.as_array())
+            .map(|v| v.len())
+            .unwrap_or(0);
+
         if let Err(e) = app_handle.emit("web-model-chat-push", payload) {
             warn!("emit web-model-chat-push failed: {}", e);
             return HttpResponse::InternalServerError().json(json!({
@@ -102,6 +118,9 @@ async fn web_model_chat_push(
         info!(
             model_id = model_id,
             topic_id = topic_id,
+            session_id = %pushed_session,
+            status = %pushed_status,
+            messages = pushed_messages,
             "received web-model chat push"
         );
     } else {

@@ -5862,6 +5862,42 @@
   color: var(--tr-ink-faint);
 }
 
+.tr-progress-foot > span {
+  flex: none;
+}
+
+.tr-progress-foot-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.tr-progress-hint {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tr-progress-cancel {
+  flex: none;
+  padding: 3px 10px;
+  border: 1px solid var(--tr-line-strong);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--tr-ink-faint);
+  font-family: var(--tr-mono);
+  font-size: 9px;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  transition: color 0.18s ease, border-color 0.18s ease;
+}
+
+.tr-progress-cancel:hover {
+  border-color: var(--tr-accent);
+  color: var(--tr-ink);
+}
+
 .tr-toast {
   position: fixed;
   left: 50%;

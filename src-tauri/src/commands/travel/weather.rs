@@ -76,11 +76,23 @@ fn code_text(code: i64) -> (&'static str, &'static str) {
     }
 }
 
+fn wind_label(degrees: Option<f64>) -> String {
+    let Some(degrees) = degrees else {
+        return String::new();
+    };
+    const NAMES: [&str; 8] = [
+        "北风", "东北风", "东风", "东南风", "南风", "西南风", "西风", "西北风",
+    ];
+    let normalized = degrees.rem_euclid(360.0);
+    let index = (((normalized + 22.5) % 360.0) / 45.0).floor() as usize % 8;
+    NAMES[index].to_string()
+}
+
 pub async fn open_meteo(lat: f64, lng: f64, days: u32) -> Result<Vec<WeatherDay>, String> {
     let days = days.clamp(1, 16);
     let url = format!(
         "https://api.open-meteo.com/v1/forecast?latitude={lat:.4}&longitude={lng:.4}\
-&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,wind_speed_10m_max\
+&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,wind_speed_10m_max,wind_direction_10m_dominant\
 &timezone=auto&forecast_days={days}"
     );
     let value = cached_json(&url, WEATHER_TTL).await?;
@@ -117,6 +129,11 @@ pub async fn open_meteo(lat: f64, lng: f64, days: u32) -> Result<Vec<WeatherDay>
         .and_then(|item| item.as_array())
         .cloned()
         .unwrap_or_default();
+    let wind_direction = daily
+        .get("wind_direction_10m_dominant")
+        .and_then(|item| item.as_array())
+        .cloned()
+        .unwrap_or_default();
 
     let mut out = Vec::new();
     for (index, date) in dates.iter().enumerate() {
@@ -136,7 +153,7 @@ pub async fn open_meteo(lat: f64, lng: f64, days: u32) -> Result<Vec<WeatherDay>
             night_weather: text.to_string(),
             day_temp: max_temps.get(index).and_then(|item| val_f64(Some(item))),
             night_temp: min_temps.get(index).and_then(|item| val_f64(Some(item))),
-            wind: "风速".to_string(),
+            wind: wind_label(wind_direction.get(index).and_then(|item| val_f64(Some(item)))),
             wind_level: wind
                 .get(index)
                 .and_then(|item| val_f64(Some(item)))

@@ -67,6 +67,10 @@ pub struct PlaceRef {
     #[serde(default)]
     pub city: String,
     #[serde(default)]
+    pub adcode: String,
+    #[serde(default)]
+    pub city_code: String,
+    #[serde(default)]
     pub lng: f64,
     #[serde(default)]
     pub lat: f64,
@@ -411,6 +415,9 @@ pub struct TravelWebLlmRequest {
     pub system: String,
     #[serde(default)]
     pub session_id: Option<String>,
+    /// 等待网页模型回答的上限（毫秒）。调用方按场景缩短，缺省 240 秒。
+    #[serde(default)]
+    pub timeout_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -780,6 +787,8 @@ async fn resolve_place(input: &PlaceRef, key: &str) -> Result<Place, String> {
             name: input.name.clone(),
             address: input.address.clone(),
             city: input.city.clone(),
+            adcode: input.adcode.clone(),
+            city_code: input.city_code.clone(),
             lng: input.lng,
             lat: input.lat,
             source: if key.trim().is_empty() {
@@ -790,10 +799,32 @@ async fn resolve_place(input: &PlaceRef, key: &str) -> Result<Place, String> {
             ..Place::default()
         });
     }
-    if key.trim().is_empty() {
-        return osm::geocode(&input.name, &input.city).await;
+    // 只按名字地理编码很容易跑偏（例如「兴庆小区」在西安和银川都有）。
+    // 用户选地点时带了城市/行政区编码，就一定要用它把范围钉住（高德接受 adcode）。
+    let city_hint = if !input.city.trim().is_empty() {
+        input.city.trim().to_string()
+    } else {
+        input.adcode.trim().to_string()
+    };
+    let resolved = if key.trim().is_empty() {
+        osm::geocode(&input.name, &input.city).await?
+    } else {
+        amap::geocode(key, &input.name, &city_hint).await?
+    };
+    let expected: String = input.adcode.trim().chars().take(4).collect();
+    let actual: String = resolved.adcode.trim().chars().take(4).collect();
+    if expected.len() == 4 && actual.len() == 4 && expected != actual {
+        return Err(format!(
+            "出发点「{}」解析到了{}，和设定的城市不一致。请重新选择出发点，或在设置里重新定位家庭地址。",
+            input.name,
+            if resolved.city.trim().is_empty() {
+                resolved.name.clone()
+            } else {
+                resolved.city.clone()
+            }
+        ));
     }
-    amap::geocode(key, &input.name, &input.city).await
+    Ok(resolved)
 }
 
 fn dedupe_pois(items: &mut Vec<Poi>) {
@@ -820,18 +851,26 @@ fn poi_matches_avoid(poi: &Poi, avoid: &[String]) -> bool {
         .any(|item| haystack.contains(&item))
 }
 
+/// 统一收尾候选地点：避开词过滤、按检索中心重算距离、**剔除超出半径的候选**、去重排序。
+///
+/// 高德的 around 搜索自带距离，但城市级文本搜索（景点兜底、必去地点）和 OSM 补点
+/// 可能返回几十上百公里外的地点；半径是用户的硬约束，必须在进入模型之前就裁掉，
+/// 否则模型会拿这些点排进行程。返回被剔除的数量，供调用方写进数据说明。
 fn apply_poi_filters(
     mut items: Vec<Poi>,
     avoid: &[String],
     center_lng: f64,
     center_lat: f64,
-) -> Vec<Poi> {
+    radius_m: f64,
+) -> (Vec<Poi>, usize) {
     items.retain(|poi| !poi_matches_avoid(poi, avoid));
     for poi in items.iter_mut() {
-        if poi.distance.is_none() {
-            poi.distance = Some(haversine_km(center_lng, center_lat, poi.lng, poi.lat) * 1000.0);
-        }
+        poi.distance = Some(haversine_km(center_lng, center_lat, poi.lng, poi.lat) * 1000.0);
     }
+    let limit_m = radius_m + 500.0;
+    let before = items.len();
+    items.retain(|poi| poi.distance.unwrap_or(f64::MAX) <= limit_m);
+    let dropped = before.saturating_sub(items.len());
     dedupe_pois(&mut items);
     items.sort_by(|a, b| {
         let rating = b.rating.unwrap_or(0.0).partial_cmp(&a.rating.unwrap_or(0.0)).unwrap();
@@ -842,7 +881,7 @@ fn apply_poi_filters(
                 .unwrap()
         })
     });
-    items
+    (items, dropped)
 }
 
 async fn collect_amap(request: &TravelRequest, key: &str) -> Result<TravelFacts, String> {
@@ -851,14 +890,17 @@ async fn collect_amap(request: &TravelRequest, key: &str) -> Result<TravelFacts,
     if destination.lng.abs() < 0.0001 || destination.lat.abs() < 0.0001 {
         return Err("没有解析到目的地的坐标，请重新搜索目的地".to_string());
     }
-    let radius_m = (request.radius_km.unwrap_or(20.0) * 1000.0).clamp(3000.0, 50_000.0);
+    // 用户可选 30/60/100 km；高德 around 接口最多支持 50 km，超出部分靠文本搜索补点，
+    // 再统一按真实半径裁剪（见 apply_poi_filters）。
+    let radius_m = (request.radius_km.unwrap_or(20.0) * 1000.0).clamp(3000.0, 150_000.0);
+    let around_m = radius_m.min(50_000.0);
 
     let mut notes = Vec::new();
     let mut attractions = amap::place_around(
         key,
         destination.lng,
         destination.lat,
-        radius_m,
+        around_m,
         "110000|110101|140100",
         "",
     )
@@ -866,6 +908,13 @@ async fn collect_amap(request: &TravelRequest, key: &str) -> Result<TravelFacts,
     .unwrap_or_default();
     if attractions.len() < 6 {
         if let Ok(more) = amap::place_text(key, "景点", &destination.city).await {
+            attractions.extend(more);
+        }
+    }
+    // 半径超过高德 around 的 50 km 上限时，再用一次城市级文本搜索补候选，
+    // 随后统一按真实半径过滤，避免 60/100 km 请求只拿到 50 km 内的点。
+    if radius_m > around_m && attractions.len() < 24 {
+        if let Ok(more) = amap::place_text(key, "风景名胜", &destination.city).await {
             attractions.extend(more);
         }
     }
@@ -882,7 +931,7 @@ async fn collect_amap(request: &TravelRequest, key: &str) -> Result<TravelFacts,
         key,
         destination.lng,
         destination.lat,
-        radius_m.min(10_000.0),
+        radius_m.min(30_000.0),
         "050000",
         "",
     )
@@ -892,7 +941,7 @@ async fn collect_amap(request: &TravelRequest, key: &str) -> Result<TravelFacts,
         key,
         destination.lng,
         destination.lat,
-        radius_m.min(20_000.0),
+        radius_m.min(30_000.0),
         "100000",
         "",
     )
@@ -903,7 +952,7 @@ async fn collect_amap(request: &TravelRequest, key: &str) -> Result<TravelFacts,
     // 保证地图与路线仍然对齐。只在候选明显不足时触发，避免无谓消耗。
     if attractions.len() < 4 {
         if let Ok((sights, meals, stays)) =
-            osm::overpass_pois(destination.lat, destination.lng, radius_m).await
+            osm::overpass_pois(destination.lat, destination.lng, around_m).await
         {
             let convert = |mut poi: Poi| {
                 let (lng, lat) = providers::coord::wgs84_to_gcj02(poi.lng, poi.lat);
@@ -920,9 +969,19 @@ async fn collect_amap(request: &TravelRequest, key: &str) -> Result<TravelFacts,
         }
     }
 
-    let mut attractions = apply_poi_filters(attractions, &request.avoid, destination.lng, destination.lat);
-    let mut food = apply_poi_filters(food, &request.avoid, destination.lng, destination.lat);
-    let mut hotels = apply_poi_filters(hotels, &request.avoid, destination.lng, destination.lat);
+    let (mut attractions, dropped_sights) =
+        apply_poi_filters(attractions, &request.avoid, destination.lng, destination.lat, radius_m);
+    let (mut food, dropped_food) =
+        apply_poi_filters(food, &request.avoid, destination.lng, destination.lat, radius_m);
+    let (mut hotels, dropped_hotels) =
+        apply_poi_filters(hotels, &request.avoid, destination.lng, destination.lat, radius_m);
+    let dropped = dropped_sights + dropped_food + dropped_hotels;
+    if dropped > 0 {
+        notes.push(format!(
+            "有 {dropped} 个候选地点超出 {:.0} km 半径，已从候选里剔除。",
+            radius_m / 1000.0
+        ));
+    }
     attractions.truncate(24);
     food.truncate(18);
     hotels.truncate(10);
@@ -1001,12 +1060,17 @@ async fn collect_osm(request: &TravelRequest) -> Result<TravelFacts, String> {
         return Err("没有解析到目的地的坐标，请重新搜索目的地".to_string());
     }
 
-    let radius_m = (request.radius_km.unwrap_or(20.0) * 1000.0).clamp(3000.0, 40_000.0);
+    // Overpass 半径越大越慢，最多取 50 km：更大的半径需求只能给到 50 km 内的候选。
+    let radius_m = (request.radius_km.unwrap_or(20.0) * 1000.0).clamp(3000.0, 50_000.0);
     let (attractions, food, hotels) =
         osm::overpass_pois(destination.lat, destination.lng, radius_m).await?;
-    let mut attractions = apply_poi_filters(attractions, &request.avoid, destination.lng, destination.lat);
-    let mut food = apply_poi_filters(food, &request.avoid, destination.lng, destination.lat);
-    let mut hotels = apply_poi_filters(hotels, &request.avoid, destination.lng, destination.lat);
+    let (mut attractions, dropped_sights) =
+        apply_poi_filters(attractions, &request.avoid, destination.lng, destination.lat, radius_m);
+    let (mut food, dropped_food) =
+        apply_poi_filters(food, &request.avoid, destination.lng, destination.lat, radius_m);
+    let (mut hotels, dropped_hotels) =
+        apply_poi_filters(hotels, &request.avoid, destination.lng, destination.lat, radius_m);
+    let dropped = dropped_sights + dropped_food + dropped_hotels;
     attractions.truncate(24);
     food.truncate(18);
     hotels.truncate(10);
@@ -1018,6 +1082,12 @@ async fn collect_osm(request: &TravelRequest) -> Result<TravelFacts, String> {
     let mut notes = vec![
         "未启用高德 Key，当前使用 OpenStreetMap / OSRM / Open-Meteo。POI 名称与营业信息可能不如高德完整，公交路线不可用。".to_string(),
     ];
+    if dropped > 0 {
+        notes.push(format!(
+            "有 {dropped} 个候选地点超出 {:.0} km 半径，已从候选里剔除。",
+            radius_m / 1000.0
+        ));
+    }
     if attractions.is_empty() {
         notes.push("周边 POI 检索结果较少，模型会基于目的地常识给出建议，出发前请核实。".to_string());
     }
@@ -1046,17 +1116,25 @@ async fn resolve_provider_place(
             name: input.name.clone(),
             address: input.address.clone(),
             city: input.city.clone(),
+            adcode: input.adcode.clone(),
+            city_code: input.city_code.clone(),
             lng: input.lng,
             lat: input.lat,
             source: providers::label(provider).to_string(),
             ..Place::default()
         });
     }
+    let city_hint = if !input.city.trim().is_empty() {
+        input.city.trim().to_string()
+    } else {
+        input.adcode.trim().to_string()
+    };
     match provider {
-        providers::MapProvider::Baidu => providers::baidu::geocode(key, &input.name, &input.city).await,
-        providers::MapProvider::Tencent => providers::tencent::geocode(key, &input.name, &input.city).await,
-        providers::MapProvider::Google => providers::google::geocode(key, &input.name, &input.city).await,
-        providers::MapProvider::Mapbox => providers::mapbox::geocode(key, &input.name, &input.city).await,
+        providers::MapProvider::Baidu => providers::baidu::geocode(key, &input.name, &city_hint).await,        providers::MapProvider::Tencent => {
+            providers::tencent::geocode(key, &input.name, &city_hint).await
+        }
+        providers::MapProvider::Google => providers::google::geocode(key, &input.name, &city_hint).await,
+        providers::MapProvider::Mapbox => providers::mapbox::geocode(key, &input.name, &city_hint).await,
         _ => Err("不支持的地图服务商".to_string()),
     }
 }
@@ -1112,7 +1190,7 @@ async fn collect_provider(
     } else {
         destination.city.clone()
     };
-    let radius_m = (request.radius_km.unwrap_or(20.0) * 1000.0).clamp(3000.0, 50_000.0);
+    let radius_m = (request.radius_km.unwrap_or(20.0) * 1000.0).clamp(3000.0, 150_000.0);
     let mut notes = Vec::new();
 
     let mut attractions = provider_pois(
@@ -1133,7 +1211,7 @@ async fn collect_provider(
         &city,
         destination.lng,
         destination.lat,
-        radius_m.min(10_000.0),
+        radius_m.min(30_000.0),
     )
     .await
     .unwrap_or_default();
@@ -1144,7 +1222,7 @@ async fn collect_provider(
         &city,
         destination.lng,
         destination.lat,
-        radius_m.min(20_000.0),
+        radius_m.min(30_000.0),
     )
     .await
     .unwrap_or_default();
@@ -1152,7 +1230,7 @@ async fn collect_provider(
     // Mapbox 的 POI 检索能力有限；不足时补一份 OSM 候选，坐标同为 WGS84。
     if provider == providers::MapProvider::Mapbox && attractions.len() < 4 {
         if let Ok((sights, meals, stays)) =
-            osm::overpass_pois(destination.lat, destination.lng, radius_m).await
+            osm::overpass_pois(destination.lat, destination.lng, radius_m.min(50_000.0)).await
         {
             attractions.extend(sights);
             food.extend(meals);
@@ -1161,9 +1239,19 @@ async fn collect_provider(
         }
     }
 
-    let mut attractions = apply_poi_filters(attractions, &request.avoid, destination.lng, destination.lat);
-    let mut food = apply_poi_filters(food, &request.avoid, destination.lng, destination.lat);
-    let mut hotels = apply_poi_filters(hotels, &request.avoid, destination.lng, destination.lat);
+    let (mut attractions, dropped_sights) =
+        apply_poi_filters(attractions, &request.avoid, destination.lng, destination.lat, radius_m);
+    let (mut food, dropped_food) =
+        apply_poi_filters(food, &request.avoid, destination.lng, destination.lat, radius_m);
+    let (mut hotels, dropped_hotels) =
+        apply_poi_filters(hotels, &request.avoid, destination.lng, destination.lat, radius_m);
+    let dropped = dropped_sights + dropped_food + dropped_hotels;
+    if dropped > 0 {
+        notes.push(format!(
+            "有 {dropped} 个候选地点超出 {:.0} km 半径，已从候选里剔除。",
+            radius_m / 1000.0
+        ));
+    }
     attractions.truncate(24);
     food.truncate(18);
     hotels.truncate(10);
@@ -1572,6 +1660,11 @@ pub async fn travel_llm_complete(request: TravelLlmRequest) -> Result<TravelLlmR
     if prompt.is_empty() {
         return Err("prompt 不能为空".to_string());
     }
+    tracing::info!(
+        model_id = ?request.model_id,
+        prompt_chars = prompt.chars().count(),
+        "[travel-llm] API 模型请求开始"
+    );
     let response = plugin_llm::complete(PluginLlmRequest {
         prompt,
         system: request.system,
@@ -1579,7 +1672,16 @@ pub async fn travel_llm_complete(request: TravelLlmRequest) -> Result<TravelLlmR
         temperature: request.temperature.or(Some(0.35)),
         max_tokens: request.max_tokens.or(Some(4096)),
     })
-    .await?;
+    .await
+    .map_err(|error| {
+        tracing::warn!(model_id = ?request.model_id, error = %error, "[travel-llm] API 模型失败");
+        error
+    })?;
+    tracing::info!(
+        provider = ?response.provider,
+        chars = response.text.chars().count(),
+        "[travel-llm] API 模型返回"
+    );
     Ok(TravelLlmResponse {
         text: response.text,
         provider: response.provider.unwrap_or_else(|| "未知模型".to_string()),
@@ -1642,11 +1744,22 @@ pub async fn travel_llm_web_complete(
     let session_id = request
         .session_id
         .unwrap_or_else(|| format!("travel-{}", uuid::Uuid::new_v4().simple()));
+    let timeout_secs = request
+        .timeout_ms
+        .map(|ms| (ms / 1000).clamp(20, 240))
+        .unwrap_or(240);
     let content = if request.system.trim().is_empty() {
         prompt.clone()
     } else {
         format!("{}\n\n{}", request.system.trim(), prompt)
     };
+    tracing::info!(
+        provider = %provider,
+        session_id = %session_id,
+        timeout_secs = timeout_secs,
+        prompt_chars = content.chars().count(),
+        "[travel-llm] 网页模型请求开始"
+    );
 
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
     let listener = app.listen("web-model-chat-push", move |event| {
@@ -1672,7 +1785,8 @@ pub async fn travel_llm_web_complete(
         let mut last_text = String::new();
         let mut last_change = Instant::now();
         let mut need_login = false;
-        let deadline = Instant::now() + Duration::from_secs(240);
+        let mut send_failed = false;
+        let deadline = Instant::now() + Duration::from_secs(timeout_secs);
         loop {
             if Instant::now() >= deadline {
                 break;
@@ -1693,6 +1807,10 @@ pub async fn travel_llm_web_complete(
                         .unwrap_or("");
                     if status == "need_login" {
                         need_login = true;
+                    } else if status == "sent" {
+                        // 发送成功：丢掉发送前抓到的旧回答，只等这次的新内容。
+                        last_text.clear();
+                        last_change = Instant::now();
                     } else if status == "ready" && need_login {
                         // 登录完成后把同一条 prompt 再发一次，避免首次发送落在登录页上。
                         need_login = false;
@@ -1708,6 +1826,10 @@ pub async fn travel_llm_web_complete(
                             },
                         )
                         .await;
+                    } else if status == "send_failed" && last_text.trim().is_empty() {
+                        // 页面里没找到输入框/发送按钮：立刻报错，别再干等超时。
+                        send_failed = true;
+                        break;
                     }
                     if let Some(messages) = value.get("messages").and_then(|item| item.as_array()) {
                         for message in messages {
@@ -1735,8 +1857,12 @@ pub async fn travel_llm_web_complete(
             }
         }
 
-        if last_text.trim().is_empty() {
-            Err("网页模型没有返回内容。请确认网页窗口已登录、页面可正常访问，或在设置里先打开一次登录窗口。".to_string())
+        if send_failed && last_text.trim().is_empty() {
+            Err("网页模型页面里没有找到可用的输入框或发送按钮。请在「设置 → 网页模型」打开登录窗口，确认页面能正常输入并发送。".to_string())
+        } else if last_text.trim().is_empty() {
+            Err(format!(
+                "网页模型 {timeout_secs} 秒内没有返回内容。请到「设置 → 网页模型」打开登录窗口，确认已登录且页面能正常对话。"
+            ))
         } else {
             Ok(last_text)
         }
@@ -1744,6 +1870,19 @@ pub async fn travel_llm_web_complete(
     .await;
 
     app.unlisten(listener);
+    match &result {
+        Ok(text) => tracing::info!(
+            provider = %provider,
+            chars = text.chars().count(),
+            "[travel-llm] 网页模型返回"
+        ),
+        Err(error) => tracing::warn!(
+            provider = %provider,
+            timeout_secs = timeout_secs,
+            error = %error,
+            "[travel-llm] 网页模型失败"
+        ),
+    }
     result.map(|text| TravelWebLlmResponse { text, provider })
 }
 

@@ -388,13 +388,12 @@
         let content = (PROVIDER === 'yuanbao') ? markdownOf(container) : textOf(container);
         if (!content) continue;
         if (content.length < 10) continue;
-        if (content.length > 4000) {
-          if (PROVIDER === 'yuanbao') {
-            content = content.slice(-4000);
-          } else {
-            continue;
-          }
+        // 自己刚发出去的问题不能当成模型回答回传。
+        const lastPrompt = (window.__GUAXI_LAST_PROMPT__ || '').toString();
+        if (lastPrompt && (content === lastPrompt || (content.length > 80 && lastPrompt.startsWith(content.slice(0, 80))))) {
+          continue;
         }
+        if (content.length > 12000) content = content.slice(-12000);
 
         if (PROVIDER === 'yuanbao' && looksLikeYuanbaoUi(content)) continue;
 
@@ -412,8 +411,31 @@
       return out.slice(-12);
     }
 
+    // 千问（qianwen.com）的结构固定：每个 .chat-round 里问题在 wrapper-question、
+    // 回答在 wrapper-answer，正文是 .qk-markdown。只看最后一轮，避免把历史回答当成本次结果。
+    function collectQianwenMessages() {
+      const rounds = Array.from(document.querySelectorAll('.chat-round'));
+      const round = rounds[rounds.length - 1];
+      if (!round) return [];
+      // 刚发出去的问题还没形成新一轮时，最后一轮仍是旧问答：不能把它当成这次的回答。
+      const lastPrompt = String(window.__GUAXI_LAST_PROMPT__ || '').replace(/\s+/g, '');
+      if (lastPrompt) {
+        const question = textOf(round.querySelector('[class*="wrapper-question"]')).replace(/\s+/g, '');
+        if (!question.includes(lastPrompt.slice(0, 16))) return [];
+      }
+      const answer =
+        round.querySelector('[class*="wrapper-answer"] .qk-markdown') ||
+        round.querySelector('[class*="message-select-wrapper-answer"] .qk-markdown') ||
+        round.querySelector('[class*="wrapper-answer"]');
+      if (!answer) return [];
+      const content = textOf(answer);
+      if (!content || content.length < 2) return [];
+      return [{ role: 'assistant', content: content.slice(0, 12000), message_id: `a-${getElementId(answer)}` }];
+    }
+
     function collectMessages() {
       if (PROVIDER === 'chatgpt') return collectChatgptMessages();
+      if (PROVIDER === 'qwen') return collectQianwenMessages();
       return collectGenericMessages();
     }
 

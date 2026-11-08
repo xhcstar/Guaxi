@@ -219,6 +219,21 @@ export function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value))
 }
 
+/// 两点间大圆距离（km）。只用于约束校验，展示距离仍以服务商返回为准。
+export function haversineKm(from, to) {
+  const a = from || {}
+  const b = to || {}
+  if (!Number.isFinite(Number(a.lat)) || !Number.isFinite(Number(b.lat))) return NaN
+  const radius = 6371
+  const dLat = ((Number(b.lat) - Number(a.lat)) * Math.PI) / 180
+  const dLng = ((Number(b.lng) - Number(a.lng)) * Math.PI) / 180
+  const lat1 = (Number(a.lat) * Math.PI) / 180
+  const lat2 = (Number(b.lat) * Math.PI) / 180
+  const value =
+    Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2
+  return 2 * radius * Math.asin(Math.sqrt(Math.min(1, Math.max(0, value))))
+}
+
 export async function runWithConcurrency(items, limit, worker) {
   const results = new Array(items.length)
   let cursor = 0
