@@ -315,6 +315,12 @@ export function buildDayPrompt({ form, facts, outlineDay, dayIndex, totalDays, l
   const season = seasonFor(outlineDay.date)
   const food = (facts.food || []).map(compactPoi)
   const hotels = (facts.hotels || []).map(compactPoi)
+  // 当天往返（含周末一日）不能出现住宿；多日行程只有非最后一晚才写酒店。
+  const allowHotel = form.startDate !== form.endDate && dayIndex < totalDays - 1
+  const startTime = form.startTime || '09:00'
+  const hotelExample = allowHotel
+    ? ` {"start":"19:00","end":"20:00","kind":"hotel","poiId":"候选 id","title":"入住","detail":"位置与入住提示"},\n {"start":"21:00","end":"21:30","kind":"rest","title":"回酒店休息","detail":""},\n`
+    : ''
 
   const user = `【当天信息】
 日期：${outlineDay.date} ${outlineDay.weekday || weekdayCn(outlineDay.date)}；第 ${dayIndex + 1} / ${totalDays} 天
@@ -336,25 +342,25 @@ ${legWeatherLines(legs) || '（沿途天气暂不可用，按季节与目的地�
 
 【可选餐饮】
 ${food.map((poi) => `- ${poi.id} | ${poi.name} | 评分 ${poi.rating ?? '未知'}`).join('\n') || '（无）'}
-
+${allowHotel ? `
 【可选住宿】
 ${hotels.map((poi) => `- ${poi.id} | ${poi.name} | 参考人均 ${poi.cost ?? '未知'}`).join('\n') || '（无）'}
+` : ''}
 
 请输出当天的可执行时间表：
 {"date":"${outlineDay.date}","theme":"当天主题","blocks":[
- {"start":"08:30","end":"09:00","kind":"transit","legIndex":0,"title":"前往第一站","detail":"简短说明"},
- {"start":"09:00","end":"10:30","kind":"sight","poiId":"候选 id","title":"游览标题","detail":"为什么值得、怎么逛","tips":["实用提示"],"booking":{"needed":true,"channel":"公众号/美团","deadline":"${form.startDate}","note":""}},
+ {"start":"${startTime}","end":"${addMinutes(startTime, 30)}","kind":"transit","legIndex":0,"title":"前往第一站","detail":"简短说明"},
+ {"start":"${addMinutes(startTime, 30)}","end":"${addMinutes(startTime, 120)}","kind":"sight","poiId":"候选 id","title":"游览标题","detail":"为什么值得、怎么逛","tips":["实用提示"],"booking":{"needed":true,"channel":"公众号/美团","deadline":"${form.startDate}","note":""}},
  {"start":"12:00","end":"13:00","kind":"food","poiId":"候选 id","title":"午餐","detail":"推荐菜与人均感受"},
- {"start":"19:00","end":"20:00","kind":"hotel","poiId":"候选 id","title":"入住","detail":"位置与入住提示"},
- {"start":"21:00","end":"21:30","kind":"rest","title":"回酒店休息","detail":""}
-]}
+${hotelExample}]}
 
 要求：
 - 必须为上面每一条 leg 输出一个 kind=transit 且带 legIndex 的块，时间要覆盖该段路程。
 - 每个景点/餐饮/住宿块尽量带 poiId，且只能来自候选；不要编造新地点。
 - 景点 60-150 分钟，餐饮 45-90 分钟；节奏松弛就多留白，紧凑就少留白。
 - 结合沿途与目的地天气：有雨把户外点放到雨势较小的时段或准备室内备选；有雾提醒自驾降速；温差大提醒分层穿衣。
-- 最后一天按用户结束时间收尾，不要再安排入住。
+- 第一天从 ${startTime} 之后开始，最后按用户结束时间 ${form.endTime} 收尾。
+- 当天往返和最后一天不要安排住宿；住宿只在真的需要过夜时填写。
 - 不写预算金额；tips 写排队、预约、停车、穿衣、点菜等真正有用的信息。`
 
   return { system: SYSTEM_PROMPT, prompt: user }

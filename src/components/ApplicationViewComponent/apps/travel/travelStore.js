@@ -324,6 +324,7 @@ export function useTravelStore() {
       startTime: form.startTime,
       endTime: form.endTime,
       transport: form.transport,
+      mode: form.mode,
       budgetLevel: form.budgetLevel,
       adults: Number(form.adults) || 1,
       children: Number(form.children) || 0,
@@ -703,7 +704,8 @@ export function useTravelStore() {
       })
       day.source = 'ai'
       return day
-    } catch {
+    } catch (error) {
+      console.warn('[travel] 模型当天安排未通过校验，已改用确定性编排：', error?.message || error)
       return buildFallback()
     }
   }
@@ -819,8 +821,9 @@ export function useTravelStore() {
 
   // ── 周末班次 ───────────────────────────────────────────────
 
-  const WEEKEND_PROMPT_SYSTEM = `你是一名熟悉城市周边游的中文旅行规划师。你只能使用给出的候选地点 id，不得编造地点。
-只输出一个 JSON 对象，不要 markdown，不要解释。每个周末安排周六、周日两天，节奏松弛，适合从所在城市出发的短途游。`
+  const WEEKEND_PROMPT_SYSTEM = `你是一名熟悉城市周边出游的中文旅行规划师。你只能使用给出的候选地点 id，不得编造地点。
+只输出一个 JSON 对象，不要 markdown，不要解释。每个周末安排周六、周日两天，节奏松弛。
+周末出游是“出门”而不是在小区附近转：目的地优先选在半径外圈，类型尽量多样——峪口、古道、徒步点、观景台、水库、古镇古村、县城集镇、集市、农家乐、公园、商场、博物馆、寺庙都可以作为目的地；餐饮优先选目的地附近的小店。`
 
   function weekendDates(form) {
     let first = nextSaturday()
@@ -834,31 +837,39 @@ export function useTravelStore() {
   }
 
   function buildWeekendPrompt({ form, facts, dates }) {
-    const attractions = (facts.attractions || [])
-      .slice(0, 24)
+    const ring = weekendRing(form)
+    // 按距离从远到近列给模型：目的地本来就要选外圈，先看到远处的候选。
+    const attractions = [...(facts.attractions || [])]
+      .sort((a, b) => (Number(b.distance) || 0) - (Number(a.distance) || 0))
+      .slice(0, 36)
       .map(
         (poi) =>
           `- ${poi.id} | ${poi.name} | ${poi.category} | 评分 ${poi.rating ?? '未知'} | ${Math.round((Number(poi.distance) || 0) / 1000)} km`,
       )
       .join('\n')
-    const food = (facts.food || [])
-      .slice(0, 12)
-      .map((poi) => `- ${poi.id} | ${poi.name} | 评分 ${poi.rating ?? '未知'}`)
+    const food = [...(facts.food || [])]
+      .sort((a, b) => (Number(b.distance) || 0) - (Number(a.distance) || 0))
+      .slice(0, 24)
+      .map(
+        (poi) =>
+          `- ${poi.id} | ${poi.name} | ${poi.category || '餐饮'} | 评分 ${poi.rating ?? '未知'} | ${Math.round((Number(poi.distance) || 0) / 1000)} km`,
+      )
       .join('\n')
-    const hotels = (facts.hotels || [])
-      .slice(0, 8)
+    const hotels = [...(facts.hotels || [])]
+      .sort((a, b) => (Number(b.distance) || 0) - (Number(a.distance) || 0))
+      .slice(0, 10)
       .map((poi) => `- ${poi.id} | ${poi.name} | 参考人均 ${poi.cost ?? '未知'}`)
       .join('\n')
     const weather = (facts.weather || [])
       .map((item) => `${item.date} ${item.dayWeather || ''} ${item.nightTemp ?? ''}~${item.dayTemp ?? ''}℃`)
       .join('\n')
     const user = `【出发点】${facts.origin?.name || form.origin?.name}（${facts.origin?.city || ''}）
-【周边半径】${form.radiusKm} km
+【周边半径】${form.radiusKm} km（目的地要真的出门：不要选 ${Math.round(ring.min)} km 以内的地点，优先 ${Math.round(ring.prefer)}-${Math.round(ring.radius)} km）
 【人数】成人 ${form.adults}、儿童 ${form.children}、老人 ${form.elders}
 【偏好】${(form.interests || []).join('、') || '不限定'}；节奏 ${form.pace}
 【未来 8 个周六】${dates.join('、')}
 
-【候选景点】
+【候选景点与周边目的地】
 ${attractions || '（无）'}
 【候选餐饮】
 ${food || '（无）'}
@@ -874,19 +885,46 @@ ${weather || '（暂无）'}
 要求：
 - weekends 正好 8 项，顺序对应上面的 8 个周六。
 - 每个周末只围绕一个 base 目的地，周六、周日各 1-2 个景点；不要每天都跨城。
-- 尽量让 8 个周末的目的地和主题有变化（自然/人文/美食/亲子/露营等），不要重复同一个 base。
+- base 必须是候选里距离出发地 ${Math.round(ring.min)} km 以外的地点；能选 ${Math.round(ring.prefer)} km 以外的就不要选近的。
+- 8 个周末的目的地和类型尽量不重复（峪口/山野、古镇古村、县城集市、公园湿地、商场博物馆、亲子农场等都算不同类型）。
+- 餐饮优先选 base 附近的小店/农家乐，不要选出发地附近的连锁店。
 - 只使用候选 id；住宿只在需要过夜时填写。`
 
     return { system: WEEKEND_PROMPT_SYSTEM, prompt: user }
   }
 
-  // 自驾/坐车出去一天，目的地就在家门口（几公里）没有意义：
-  // 按交通方式和半径给“周末目的地”一个最小距离，走路/骑行不受限。
-  function weekendMinBaseKm(form) {
+  // 周末出游应当“出门”：目的地放在半径外圈，而不是家门口。
+  // min = 至少要离开家多远；prefer = 优先从这之外选（半径的一半左右）。
+  function weekendRing(form) {
     const radius = Number(form?.radiusKm) || 60
-    if (form?.transport === 'driving') return Math.min(20, Math.max(8, radius * 0.25))
-    if (form?.transport === 'transit') return Math.min(15, Math.max(5, radius * 0.15))
-    return 3
+    if (form?.transport === 'walking') {
+      return { radius, min: 2, prefer: Math.max(3, radius * 0.15) }
+    }
+    if (form?.transport === 'transit') {
+      return {
+        radius,
+        min: Math.max(5, radius * 0.15),
+        prefer: Math.max(10, radius * 0.45),
+      }
+    }
+    return {
+      radius,
+      min: Math.max(8, radius * 0.25),
+      prefer: Math.max(15, radius * 0.55),
+    }
+  }
+
+  // 粗分类只用于“8 个周末别都是公园”，不是数据字段。
+  function weekendBaseKind(poi) {
+    const text = `${poi?.name || ''}${poi?.category || ''}`
+    if (/峪|谷|峡|山|森林|湿地|湖|水库|沙滩|岛/.test(text)) return 'nature'
+    if (/古镇|古城|村|镇|寨|集|圩/.test(text)) return 'village'
+    if (/徒步|营地|古道|观景|栈道|步道/.test(text)) return 'outdoor'
+    if (/公园/.test(text)) return 'park'
+    if (/商场|购物|广场|街区/.test(text)) return 'mall'
+    if (/寺|庙|观|教堂|遗址/.test(text)) return 'temple'
+    if (/博物馆|美术馆|纪念馆|展览/.test(text)) return 'museum'
+    return String(poi?.category || 'other')
   }
 
   function normalizeWeekendOutline(raw, { form, facts, dates }) {
@@ -895,25 +933,49 @@ ${weather || '（暂无）'}
       const rating = (Number(b.rating) || 0) - (Number(a.rating) || 0)
       return rating || (Number(a.distance) || 0) - (Number(b.distance) || 0)
     })
-    const minBaseKm = weekendMinBaseKm(form)
-    const farEnough = (poi) => {
+    const ring = weekendRing(form)
+    const distanceKm = (poi) => {
       const meters = Number(poi?.distance)
-      return !Number.isFinite(meters) || meters / 1000 >= minBaseKm
+      return Number.isFinite(meters) ? meters / 1000 : NaN
     }
+    const inRing = (poi) => !Number.isFinite(distanceKm(poi)) || distanceKm(poi) >= ring.min
+    const inOuter = (poi) => Number.isFinite(distanceKm(poi)) && distanceKm(poi) >= ring.prefer
     const food = [...(facts.food || [])]
     const hotels = [...(facts.hotels || [])]
     const used = new Set()
     const usedBases = new Set()
+    const usedKinds = new Set()
+    // 目的地优先外圈；同样条件下同类目的地不连续重复（8 个周末别都是公园）。
+    const pickBase = () => {
+      const free = attractions.filter((poi) => !usedBases.has(poi.id))
+      const groups = [
+        free.filter((poi) => inOuter(poi) && !usedKinds.has(weekendBaseKind(poi))),
+        free.filter((poi) => inRing(poi) && !usedKinds.has(weekendBaseKind(poi))),
+        free.filter((poi) => inOuter(poi)),
+        free.filter((poi) => inRing(poi)),
+        free,
+      ]
+      const chosen = groups.find((group) => group.length)?.[0]
+      if (chosen) usedKinds.add(weekendBaseKind(chosen))
+      return chosen
+    }
     const rawItems = Array.isArray(raw?.weekends) ? raw.weekends : []
     return dates.map((date, index) => {
       const source = rawItems[index] || {}
       let base = map.get(safeText(source.basePoiId))
-      if (base && !farEnough(base)) base = null
+      // 模型也可能挑一个家门口的公园：外圈还有得选时不采纳。
+      const outerAvailable = attractions.some(
+        (poi) => !usedBases.has(poi.id) && inOuter(poi),
+      )
+      if (
+        base &&
+        (!inRing(base) ||
+          (outerAvailable && Number.isFinite(distanceKm(base)) && distanceKm(base) < ring.prefer))
+      ) {
+        base = null
+      }
       if (!base) {
-        base =
-          attractions.find((poi) => !usedBases.has(poi.id) && farEnough(poi)) ||
-          attractions.find((poi) => !usedBases.has(poi.id)) ||
-          attractions[index % Math.max(1, attractions.length)]
+        base = pickBase() || attractions[index % Math.max(1, attractions.length)]
       }
       if (base) {
         used.add(base.id)
@@ -928,7 +990,7 @@ ${weather || '（暂无）'}
               poi.kind !== 'food' &&
               poi.kind !== 'hotel' &&
               // 目的地离出发点十几公里，就别把家门口的公园排进同一天。
-              (!base || haversineKm(base, poi) <= Math.max(15, minBaseKm)),
+              (!base || haversineKm(base, poi) <= Math.max(15, ring.min)),
           )
           .slice(0, 2)
       let stops1 = pickSights(source.stops1)
@@ -940,7 +1002,7 @@ ${weather || '（暂无）'}
             (poi) =>
               !used.has(poi.id) &&
               poi.id !== base?.id &&
-              (!base || haversineKm(base, poi) <= Math.max(15, minBaseKm)),
+              (!base || haversineKm(base, poi) <= Math.max(15, ring.min)),
           ) || attractions.find((poi) => !used.has(poi.id) && poi.id !== base?.id)
         if (next) {
           stops2 = [next]
@@ -949,15 +1011,30 @@ ${weather || '（暂无）'}
           stops2 = [base]
         }
       }
-      const nearBase = (poi, limit = Math.max(12, minBaseKm)) =>
+      const nearBase = (poi, limit = Math.max(12, ring.min)) =>
         !base || !poi || haversineKm(base, poi) <= limit
-      const foodNearBase = (poi) => nearBase(poi, Math.max(15, minBaseKm))
+      const foodNearBase = (poi) => nearBase(poi, Math.max(15, ring.min))
+      // 没有“目的地附近”的候选时，退而求其次选离目的地最近的一个，避免把家附近的店排进去。
+      const closestToBase = (list, excludeId) => {
+        if (!base) return null
+        return (
+          [...list]
+            .filter(
+              (poi) =>
+                !used.has(poi.id) &&
+                poi.id !== excludeId &&
+                Number.isFinite(haversineKm(base, poi)),
+            )
+            .sort((a, b) => haversineKm(base, a) - haversineKm(base, b))[0] || null
+        )
+      }
       // 模型点名但离目的地太远的餐饮/住宿一律不采纳，换成本地候选。
       const pickFood = (rawId, excludeId, fallbackIndex = 0) => {
         const named = map.get(safeText(rawId))
         return (
           (named && foodNearBase(named) ? named : null) ||
           food.find((poi) => !used.has(poi.id) && poi.id !== excludeId && foodNearBase(poi)) ||
+          closestToBase(food, excludeId) ||
           food.find((poi) => !used.has(poi.id) && poi.id !== excludeId) ||
           named ||
           food[fallbackIndex] ||
@@ -973,6 +1050,7 @@ ${weather || '（暂无）'}
       const hotel =
         (namedHotel && foodNearBase(namedHotel) ? namedHotel : null) ||
         hotels.find((poi) => !used.has(poi.id) && foodNearBase(poi)) ||
+        closestToBase(hotels, '') ||
         hotels.find((poi) => !used.has(poi.id)) ||
         namedHotel ||
         hotels[0]
@@ -1284,7 +1362,9 @@ ${weather || '（暂无）'}
   async function refineWeekend(planId) {
     const summary = state.plans.find((item) => item.id === planId)
     if (!summary) return
+    if (state.weekend.refiningId) return
     state.weekend.refiningId = planId
+    showToast('正在细化这个周末，模型和路线都需要重新核对…', 'info', 3200)
     try {
       const plan = await api.getPlan(planId)
       const form = {
@@ -1374,7 +1454,14 @@ ${weather || '（暂无）'}
       )
       state.plan = saved
       await refreshPlans()
-      showToast('这个周末已细化完成', 'success')
+      const aiDays = refinedDays.filter((day) => day.source === 'ai').length
+      showToast(
+        aiDays > 0
+          ? '这个周末已细化完成'
+          : 'AI 细化未通过校验，已保留确定性编排',
+        aiDays > 0 ? 'success' : 'info',
+        3200,
+      )
     } catch (error) {
       showToast(`细化失败：${friendlyError(error)}`, 'error')
     } finally {

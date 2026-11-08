@@ -50,8 +50,9 @@
               <button v-if="isWeekend" type="button" @click="$emit('replace-weekend', plan.id)">
                 <TravelIcon name="refresh" :size="14" /> 换一个目的地
               </button>
-              <button v-if="isWeekend" type="button" @click="$emit('refine-weekend', plan.id)">
-                <TravelIcon name="sparkles" :size="14" /> AI 细化这个周末
+              <button v-if="isWeekend" type="button" :disabled="refining" @click="$emit('refine-weekend', plan.id)">
+                <TravelIcon name="sparkles" :size="14" />
+                {{ refining ? '正在细化…' : 'AI 细化这个周末' }}
               </button>
               <button v-if="isWeekend" type="button" @click="$emit('toggle-lock', plan.id)">
                 <TravelIcon :name="plan.locked ? 'unlock' : 'lock'" :size="14" />
@@ -87,10 +88,12 @@
     <div v-if="isWeekend && plan.detailLevel === 'draft'" class="tr-draft-banner">
       <TravelIcon name="sparkles" :size="18" />
       <div>
-        <strong>这份周末计划还是班次表草稿</strong>
-        <p>已经可以选择执行；点“AI 细化”会重新核对天气、路线并把每个时间段排细。</p>
+        <strong>{{ refining ? '正在细化这个周末…' : '这份周末计划还是班次表草稿' }}</strong>
+        <p>{{ refining ? '正在重新核对天气、路线并重排每个时间段。' : '已经可以选择执行；点“AI 细化”会重新核对天气、路线并把每个时间段排细。' }}</p>
       </div>
-      <button type="button" class="tr-btn is-primary is-small" @click="$emit('refine-weekend', plan.id)">AI 细化</button>
+      <button type="button" class="tr-btn is-primary is-small" :disabled="refining" @click="$emit('refine-weekend', plan.id)">
+        {{ refining ? '细化中…' : 'AI 细化' }}
+      </button>
     </div>
 
     <nav class="tr-tabs" aria-label="行程视图">
@@ -230,6 +233,7 @@ import { durationText, money, shortDate, timeAgo, weekdayCn } from './travelUtil
 const props = defineProps({
   plan: { type: Object, required: true },
   isMock: Boolean,
+  refining: Boolean,
 })
 
 defineEmits([

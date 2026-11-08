@@ -278,6 +278,45 @@ pub async fn place_around(
     types: &str,
     keyword: &str,
 ) -> Result<Vec<Poi>, String> {
+    place_around_page(key, lng, lat, radius_m, types, keyword, 1).await
+}
+
+/// 周末半径大、候选多是常态，翻两页才能让外圈也有足够选择；每页仍走 7 天缓存。
+pub async fn place_around_pages(
+    key: &str,
+    lng: f64,
+    lat: f64,
+    radius_m: f64,
+    types: &str,
+    keyword: &str,
+    pages: u32,
+) -> Result<Vec<Poi>, String> {
+    let mut out = Vec::new();
+    let mut last_error = String::new();
+    for page in 1..=pages.clamp(1, 3) {
+        match place_around_page(key, lng, lat, radius_m, types, keyword, page).await {
+            Ok(mut items) => out.append(&mut items),
+            Err(error) => {
+                last_error = error;
+                break;
+            }
+        }
+    }
+    if out.is_empty() && !last_error.is_empty() {
+        return Err(last_error);
+    }
+    Ok(out)
+}
+
+async fn place_around_page(
+    key: &str,
+    lng: f64,
+    lat: f64,
+    radius_m: f64,
+    types: &str,
+    keyword: &str,
+    page: u32,
+) -> Result<Vec<Poi>, String> {
     let url = build_url(
         "/v3/place/around",
         &[
@@ -287,7 +326,7 @@ pub async fn place_around(
             ("types", types.to_string()),
             ("keywords", keyword.to_string()),
             ("offset", "25".to_string()),
-            ("page", "1".to_string()),
+            ("page", page.to_string()),
             ("extensions", "all".to_string()),
             ("sortrule", "weight".to_string()),
         ],

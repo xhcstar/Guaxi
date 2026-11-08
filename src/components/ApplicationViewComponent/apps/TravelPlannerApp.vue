@@ -135,6 +135,7 @@
           v-else-if="state.view === 'plan' && state.plan"
           :plan="state.plan"
           :is-mock="api.isMock"
+          :refining="state.weekend.refiningId === state.plan.id"
           @back="store.showHome()"
           @update-budget="store.updateBudget"
           @update-plan="store.updatePlan"

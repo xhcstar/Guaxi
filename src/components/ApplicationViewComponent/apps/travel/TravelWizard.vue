@@ -125,7 +125,7 @@
               <small>{{ option.hint }}</small>
             </button>
           </div>
-          <p class="tr-field-note">会以出发地所在城市为圆心，检索这个范围内的景点、餐饮与住宿。</p>
+          <p class="tr-field-note">目的地会选在这个范围内的外圈（不会安排家门口），景点、餐饮、住宿都按这个半径检索。</p>
         </section>
 
         <section class="tr-form-section">

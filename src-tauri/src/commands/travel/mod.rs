@@ -182,6 +182,9 @@ pub struct TravelRequest {
     /// auto | amap | baidu | tencent | google | mapbox | osm
     #[serde(default)]
     pub map_provider: String,
+    /// trip | weekend：周末模式会把候选扩到峪口、村镇、集市、徒步点等出游目的地。
+    #[serde(default)]
+    pub mode: String,
 }
 
 fn default_transport() -> String {
@@ -884,28 +887,97 @@ fn apply_poi_filters(
     (items, dropped)
 }
 
+/// 按距离分环保留候选：半径越大，越不能让评分高的近处地点把远处的候选挤掉。
+/// 每个环带保留评分靠前的若干条，保证从近郊到半径边缘都有地点可选。
+fn pick_across_rings(items: Vec<Poi>, radius_m: f64, limit: usize) -> Vec<Poi> {
+    if items.len() <= limit {
+        return items;
+    }
+    let bands = 6usize;
+    let per_band = (limit / bands).max(3);
+    let mut out: Vec<Poi> = Vec::with_capacity(limit);
+    let mut used = std::collections::HashSet::new();
+    let key_of = |poi: &Poi| {
+        if poi.id.trim().is_empty() {
+            format!("{}|{:.5},{:.5}", poi.name, poi.lng, poi.lat)
+        } else {
+            poi.id.clone()
+        }
+    };
+    for band in 0..bands {
+        let lo = radius_m * band as f64 / bands as f64;
+        let hi = radius_m * (band + 1) as f64 / bands as f64;
+        let mut taken = 0usize;
+        for poi in items.iter() {
+            if taken >= per_band {
+                break;
+            }
+            let distance = poi.distance.unwrap_or(0.0);
+            if distance < lo || distance >= hi {
+                continue;
+            }
+            if !used.insert(key_of(poi)) {
+                continue;
+            }
+            out.push(poi.clone());
+            taken += 1;
+        }
+    }
+    for poi in items.iter() {
+        if out.len() >= limit {
+            break;
+        }
+        if used.insert(key_of(poi)) {
+            out.push(poi.clone());
+        }
+    }
+    out.truncate(limit);
+    out
+}
+
 async fn collect_amap(request: &TravelRequest, key: &str) -> Result<TravelFacts, String> {
     let origin = resolve_place(&request.origin, key).await?;
     let destination = resolve_place(&request.destination, key).await?;
     if destination.lng.abs() < 0.0001 || destination.lat.abs() < 0.0001 {
         return Err("没有解析到目的地的坐标，请重新搜索目的地".to_string());
     }
+    let weekend = request.mode.trim() == "weekend";
     // 用户可选 30/60/100 km；高德 around 接口最多支持 50 km，超出部分靠文本搜索补点，
     // 再统一按真实半径裁剪（见 apply_poi_filters）。
     let radius_m = (request.radius_km.unwrap_or(20.0) * 1000.0).clamp(3000.0, 150_000.0);
     let around_m = radius_m.min(50_000.0);
+    // 周末要真的“出门”，餐饮/住宿候选也得覆盖到半径外圈，不能只搜家附近。
+    let stay_radius_m = if weekend {
+        radius_m.min(50_000.0)
+    } else {
+        radius_m.min(30_000.0)
+    };
 
     let mut notes = Vec::new();
-    let mut attractions = amap::place_around(
-        key,
-        destination.lng,
-        destination.lat,
-        around_m,
-        "110000|110101|140100",
-        "",
-    )
-    .await
-    .unwrap_or_default();
+    let mut attractions = if weekend {
+        amap::place_around_pages(
+            key,
+            destination.lng,
+            destination.lat,
+            around_m,
+            "110000|110101|140100",
+            "",
+            2,
+        )
+        .await
+        .unwrap_or_default()
+    } else {
+        amap::place_around(
+            key,
+            destination.lng,
+            destination.lat,
+            around_m,
+            "110000|110101|140100",
+            "",
+        )
+        .await
+        .unwrap_or_default()
+    };
     if attractions.len() < 6 {
         if let Ok(more) = amap::place_text(key, "景点", &destination.city).await {
             attractions.extend(more);
@@ -918,6 +990,18 @@ async fn collect_amap(request: &TravelRequest, key: &str) -> Result<TravelFacts,
             attractions.extend(more);
         }
     }
+    // 周末不是只逛“景点”：山野徒步、古镇集市、县城村庄都可能是目的地。
+    // 两次文本检索各取 20 条，结果仍会按真实半径裁剪并按距离分环保留。
+    if weekend {
+        for keywords in [
+            "峪口|古道|徒步|营地|水库|观景台",
+            "古镇|古村|集市|乡镇|农家乐",
+        ] {
+            if let Ok(mut more) = amap::place_text(key, keywords, &destination.city).await {
+                attractions.append(&mut more);
+            }
+        }
+    }
     for must in &request.must_visit {
         if must.trim().is_empty() {
             continue;
@@ -927,21 +1011,35 @@ async fn collect_amap(request: &TravelRequest, key: &str) -> Result<TravelFacts,
         }
     }
 
-    let mut food = amap::place_around(
-        key,
-        destination.lng,
-        destination.lat,
-        radius_m.min(30_000.0),
-        "050000",
-        "",
-    )
-    .await
-    .unwrap_or_default();
+    let mut food = if weekend {
+        amap::place_around_pages(
+            key,
+            destination.lng,
+            destination.lat,
+            stay_radius_m,
+            "050000",
+            "",
+            2,
+        )
+        .await
+        .unwrap_or_default()
+    } else {
+        amap::place_around(
+            key,
+            destination.lng,
+            destination.lat,
+            stay_radius_m,
+            "050000",
+            "",
+        )
+        .await
+        .unwrap_or_default()
+    };
     let mut hotels = amap::place_around(
         key,
         destination.lng,
         destination.lat,
-        radius_m.min(30_000.0),
+        stay_radius_m,
         "100000",
         "",
     )
@@ -982,9 +1080,15 @@ async fn collect_amap(request: &TravelRequest, key: &str) -> Result<TravelFacts,
             radius_m / 1000.0
         ));
     }
-    attractions.truncate(24);
-    food.truncate(18);
-    hotels.truncate(10);
+    if weekend {
+        attractions = pick_across_rings(attractions, radius_m, 48);
+        food = pick_across_rings(food, radius_m, 48);
+        hotels = pick_across_rings(hotels, radius_m, 16);
+    } else {
+        attractions.truncate(24);
+        food.truncate(18);
+        hotels.truncate(10);
+    }
 
     let mut weather_days = Vec::new();
     if !destination.adcode.trim().is_empty() {
@@ -1061,6 +1165,7 @@ async fn collect_osm(request: &TravelRequest) -> Result<TravelFacts, String> {
     }
 
     // Overpass 半径越大越慢，最多取 50 km：更大的半径需求只能给到 50 km 内的候选。
+    let weekend = request.mode.trim() == "weekend";
     let radius_m = (request.radius_km.unwrap_or(20.0) * 1000.0).clamp(3000.0, 50_000.0);
     let (attractions, food, hotels) =
         osm::overpass_pois(destination.lat, destination.lng, radius_m).await?;
@@ -1071,9 +1176,15 @@ async fn collect_osm(request: &TravelRequest) -> Result<TravelFacts, String> {
     let (mut hotels, dropped_hotels) =
         apply_poi_filters(hotels, &request.avoid, destination.lng, destination.lat, radius_m);
     let dropped = dropped_sights + dropped_food + dropped_hotels;
-    attractions.truncate(24);
-    food.truncate(18);
-    hotels.truncate(10);
+    if weekend {
+        attractions = pick_across_rings(attractions, radius_m, 48);
+        food = pick_across_rings(food, radius_m, 48);
+        hotels = pick_across_rings(hotels, radius_m, 16);
+    } else {
+        attractions.truncate(24);
+        food.truncate(18);
+        hotels.truncate(10);
+    }
 
     let weather_days = weather::open_meteo(destination.lat, destination.lng, 16)
         .await
@@ -1191,6 +1302,12 @@ async fn collect_provider(
         destination.city.clone()
     };
     let radius_m = (request.radius_km.unwrap_or(20.0) * 1000.0).clamp(3000.0, 150_000.0);
+    let weekend = request.mode.trim() == "weekend";
+    let stay_radius_m = if weekend {
+        radius_m.min(50_000.0)
+    } else {
+        radius_m.min(30_000.0)
+    };
     let mut notes = Vec::new();
 
     let mut attractions = provider_pois(
@@ -1211,7 +1328,7 @@ async fn collect_provider(
         &city,
         destination.lng,
         destination.lat,
-        radius_m.min(30_000.0),
+        stay_radius_m,
     )
     .await
     .unwrap_or_default();
@@ -1222,7 +1339,7 @@ async fn collect_provider(
         &city,
         destination.lng,
         destination.lat,
-        radius_m.min(30_000.0),
+        stay_radius_m,
     )
     .await
     .unwrap_or_default();
@@ -1252,9 +1369,15 @@ async fn collect_provider(
             radius_m / 1000.0
         ));
     }
-    attractions.truncate(24);
-    food.truncate(18);
-    hotels.truncate(10);
+    if weekend {
+        attractions = pick_across_rings(attractions, radius_m, 48);
+        food = pick_across_rings(food, radius_m, 48);
+        hotels = pick_across_rings(hotels, radius_m, 16);
+    } else {
+        attractions.truncate(24);
+        food.truncate(18);
+        hotels.truncate(10);
+    }
 
     let (weather_lng, weather_lat) =
         providers::coord::to_wgs84(provider, destination.lng, destination.lat);
