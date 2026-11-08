@@ -14,6 +14,12 @@
       </div>
     </div>
 
+    <div class="tr-prep-freshness">
+      <TravelIcon name="clock" :size="14" />
+      资料采集于 {{ timeAgo(plan.factsMeta?.collectedAt) }}。天气、路况和营业时间是生成时的快照，
+      出发前 24-48 小时建议点「重新拉取资料并生成」再确认一次。
+    </div>
+
     <div class="tr-prep-grid">
       <div class="tr-prep-card">
         <h3><TravelIcon name="check" :size="16" /> 出发前确认</h3>
@@ -93,7 +99,7 @@
 <script setup>
 import { computed } from 'vue'
 import TravelIcon from './TravelIcon.vue'
-import { friendlyDate, shortDate } from './travelUtils.js'
+import { friendlyDate, shortDate, timeAgo } from './travelUtils.js'
 
 const props = defineProps({
   plan: { type: Object, required: true },

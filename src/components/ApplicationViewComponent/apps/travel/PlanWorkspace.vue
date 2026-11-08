@@ -45,7 +45,7 @@
             <summary class="tr-icon-btn" title="更多操作"><TravelIcon name="settings" :size="16" /></summary>
             <div class="tr-more-menu">
               <button type="button" @click="$emit('regenerate', plan)">
-                <TravelIcon name="refresh" :size="14" /> 按当前条件重新生成
+                <TravelIcon name="refresh" :size="14" /> 重新拉取资料并生成
               </button>
               <button v-if="isWeekend" type="button" @click="$emit('replace-weekend', plan.id)">
                 <TravelIcon name="refresh" :size="14" /> 换一个目的地
@@ -71,6 +71,14 @@
         <div><small>方式</small><span>{{ transportLabel(plan.transport) }}</span></div>
         <div><small>预算</small><span>¥{{ money(plan.budget?.total) }}</span></div>
         <div><small>人均</small><span>¥{{ money(plan.budget?.perPerson) }}</span></div>
+      </div>
+      <div class="tr-data-freshness">
+        <span class="tr-freshness-dot"></span>
+        <span>资料更新于 {{ timeAgo(plan.factsMeta?.collectedAt) }}</span>
+        <span>· {{ mapSourceLabel(plan.source) }}</span>
+        <span>· 天气/路况为生成时快照（路线缓存 2 小时）</span>
+        <span>· POI 缓存 7 天</span>
+        <span v-if="plan.factsMeta?.notes?.length">· {{ plan.factsMeta.notes[0] }}</span>
       </div>
       <div class="tr-perforation" aria-hidden="true"></div>
     </header>
@@ -179,7 +187,7 @@ import BudgetPanel from './BudgetPanel.vue'
 import PrepPanel from './PrepPanel.vue'
 import SharePanel from './SharePanel.vue'
 import { cityCode, mapSourceLabel, peopleCount, ticketCities, transportLabel } from './travelShare.js'
-import { durationText, money, shortDate, weekdayCn } from './travelUtils.js'
+import { durationText, money, shortDate, timeAgo, weekdayCn } from './travelUtils.js'
 
 const props = defineProps({
   plan: { type: Object, required: true },

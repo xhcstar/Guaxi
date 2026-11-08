@@ -60,6 +60,18 @@ export function friendlyDate(value) {
   return /^\d{4}-\d{2}-\d{2}/.test(text) ? shortDate(text.slice(0, 10)) : text
 }
 
+/** 把 ISO 时间显示成「刚刚 / N 分钟前 / N 小时前 / N 天前」，用于数据新鲜度。 */
+export function timeAgo(value) {
+  if (!value) return '未知'
+  const then = new Date(value).getTime()
+  if (!Number.isFinite(then)) return String(value)
+  const diff = Date.now() - then
+  if (diff < 60 * 1000) return '刚刚'
+  if (diff < 60 * 60 * 1000) return `${Math.max(1, Math.round(diff / 60000))} 分钟前`
+  if (diff < 24 * 60 * 60 * 1000) return `${Math.round(diff / 3600000)} 小时前`
+  return `${Math.round(diff / 86400000)} 天前`
+}
+
 export function diffDays(a, b) {
   const start = parseDate(a)
   const end = parseDate(b)

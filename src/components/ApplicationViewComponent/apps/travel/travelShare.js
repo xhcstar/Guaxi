@@ -1,8 +1,9 @@
 // 手机分享页：完全自包含的 HTML（内联 CSS、地图 data URI），不发任何外部请求。
 // 这样微信里打开不会因为离线/跨域变成白屏，也方便用户另存为文件。
 
-import { escapeHtml, friendlyDate, money, shortDate, weekdayCn } from './travelUtils.js'
+import { escapeHtml, friendlyDate, money, shortDate, timeAgo, weekdayCn } from './travelUtils.js'
 import { TRANSPORT_OPTIONS } from './travelPlan.js'
+import { platformSearchLinks } from './travelLinks.js'
 
 const CITY_CODES = {
   上海: 'SHA',
@@ -68,6 +69,20 @@ export function mapSourceLabel(source) {
   )
 }
 
+export function poiSourceLabel(source) {
+  return (
+    {
+      amap: '高德',
+      osm: 'OSM',
+      baidu: '百度',
+      tencent: '腾讯',
+      google: 'Google',
+      mapbox: 'Mapbox',
+      ai: 'AI 建议',
+    }[source] || '来源'
+  )
+}
+
 export function peopleCount(plan) {
   if (!plan) return 0
   if (Number(plan.people) > 0) return Number(plan.people)
@@ -127,14 +142,26 @@ function renderBlock(block) {
     block.poi?.category || (block.kind === 'food' ? '餐饮' : block.kind === 'hotel' ? '住宿' : block.kind === 'transit' ? '交通' : '')
   const tips = (block.tips || []).map((tip) => `<li>${escapeHtml(tip)}</li>`).join('')
   const booking = block.booking?.needed
-    ? `<div class="booking">需预订${block.booking.channel ? ` · ${escapeHtml(block.booking.channel)}` : ''}${block.booking.deadline ? ` · 截止 ${escapeHtml(dateLabel(block.booking.deadline))}` : ''}</div>`
+    ? `<div class="booking">需预订${block.booking.channel ? ` · ${escapeHtml(block.booking.channel)}` : ''}${block.booking.deadline ? ` · 截止 ${escapeHtml(dateLabel(block.booking.deadline))}` : ''} · 以官方渠道实时信息为准</div>`
+    : ''
+  const source = block.poi?.source
+    ? `<span class="tag source">${escapeHtml(poiSourceLabel(block.poi.source))}</span>`
+    : ''
+  const links = block.poi
+    ? `<div class="poi-links">${platformSearchLinks(block.poi)
+        .map(
+          (link) =>
+            `<a href="${escapeHtml(link.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(link.label)}</a>`,
+        )
+        .join('')}<small>跳转平台搜索，价格/房态以实时为准</small></div>`
     : ''
   return `<article class="block block-${escapeHtml(block.kind)}">
   <div class="time">${time}</div>
   <div class="body">
-    <div class="block-head"><h3>${escapeHtml(block.title || '')}</h3>${category ? `<span class="tag">${escapeHtml(category)}</span>` : ''}</div>
+    <div class="block-head"><h3>${escapeHtml(block.title || '')}</h3>${category ? `<span class="tag">${escapeHtml(category)}</span>` : ''}${source}</div>
     ${block.detail ? `<p>${escapeHtml(block.detail)}</p>` : ''}
     ${block.poi ? `<div class="poi-meta">${block.poi.rating ? `<span>★ ${escapeHtml(block.poi.rating)}</span>` : ''}${block.poi.address ? `<span>${escapeHtml(block.poi.address)}</span>` : ''}${block.poi.cost ? `<span>参考 ¥${escapeHtml(block.poi.cost)}</span>` : ''}</div>` : ''}
+    ${links}
     ${tips ? `<ul class="tips">${tips}</ul>` : ''}
     ${booking}
     ${renderRoute(block)}
@@ -222,6 +249,7 @@ export function buildShareHtml(plan, options = {}) {
   const shareUrl = options.shareUrl || ''
   const source = mapSourceLabel(plan.source)
   const title = plan.title || '旅行计划'
+  const updated = plan.factsMeta?.collectedAt ? timeAgo(plan.factsMeta.collectedAt) : '未知'
   const meta = `${dateRangeText(plan)} · ${peopleCount(plan)} 人 · ${transportLabel(plan.transport)} · 人均 ¥${money(plan.budget?.perPerson)}`
   const days = (plan.days || []).map(renderDay).join('')
   const notes = (plan.factsMeta?.notes || []).map((item) => `<li>${escapeHtml(item)}</li>`).join('')
@@ -272,6 +300,11 @@ body{font-family:"PingFang SC","Microsoft YaHei",system-ui,sans-serif;line-heigh
 .block h3{font-size:16px;margin:0;overflow-wrap:anywhere}
 .block p{font-size:13px;color:#4a5a55;margin:5px 0 0;overflow-wrap:anywhere}
 .tag{font-size:10px;letter-spacing:.06em;color:#4f6b57;border:1px solid rgba(79,107,87,.4);padding:1px 7px;border-radius:999px;white-space:nowrap}
+.tag.source{color:#7c8a83;border-color:rgba(29,42,40,.2)}
+.poi-links{display:flex;flex-wrap:wrap;align-items:center;gap:5px;margin-top:7px}
+.poi-links a{padding:2px 7px;border:1px solid rgba(29,42,40,.16);border-radius:999px;color:#4f6b57;font-size:9.5px;text-decoration:none}
+.poi-links a:hover{background:#efe7d7}
+.poi-links small{width:100%;font-size:8.5px;color:#7c8a83}
 .poi-meta{display:flex;gap:10px;flex-wrap:wrap;font-size:11px;color:#7c8a83;margin-top:6px;overflow-wrap:anywhere}
 .poi-meta span{overflow-wrap:anywhere}
 .tips{margin:7px 0 0;padding-left:17px;font-size:12px;color:#4a5a55;overflow-wrap:anywhere}
@@ -336,7 +369,7 @@ body{font-family:"PingFang SC","Microsoft YaHei",system-ui,sans-serif;line-heigh
     <h1>${escapeHtml(title)}</h1>
     ${plan.subtitle ? `<p class="meta">${escapeHtml(plan.subtitle)}</p>` : ''}
     <div class="meta">${escapeHtml(meta)}</div>
-    <div class="source">${escapeHtml(source)} · ${escapeHtml(plan.factsMeta?.provider || '行迹')}</div>
+    <div class="source">${escapeHtml(source)} · ${escapeHtml(plan.factsMeta?.provider || '行迹')} · 资料更新于 ${escapeHtml(updated)}</div>
     ${mapBlock(plan)}
   </header>
 

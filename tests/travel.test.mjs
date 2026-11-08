@@ -19,7 +19,8 @@ const { computeBudget, assemblePlan } = await load(path.join(travelDir, 'travelP
 const { normalizeOutline, normalizeDay, fallbackOutline, parseModelJson } = await load(
   path.join(travelDir, 'travelPrompt.js'),
 )
-const { buildShareHtml } = await load(path.join(travelDir, 'travelShare.js'))
+const { buildShareHtml, mapSourceLabel } = await load(path.join(travelDir, 'travelShare.js'))
+const { platformSearchLinks } = await load(path.join(travelDir, 'travelLinks.js'))
 const {
   mergePreferences,
   applyPreferencesToForm,
@@ -50,6 +51,10 @@ test('应用卡片、路由、窗口与命令都已注册', () => {
     'travel_collect_facts',
     'travel_build_routes',
     'travel_llm_complete',
+    'travel_llm_web_complete',
+    'travel_llm_local_complete',
+    'travel_get_quota_usage',
+    'travel_clear_cache',
     'travel_save_plan',
     'travel_share_start',
     'travel_open_print_window',
@@ -256,10 +261,20 @@ test('生成后会累计学习计数并记录最近出发地/目的地', () => {
 
 test('地图服务商标签与坐标转换可用', () => {
   assert.equal(mapProviderLabel('baidu'), '百度')
+  assert.equal(mapSourceLabel('google'), 'Google 数据')
   const [gLng, gLat] = wgs84ToGcj02(121.4737, 31.2304)
   const [wLng, wLat] = gcj02ToWgs84(gLng, gLat)
   assert.ok(Math.abs(wLng - 121.4737) < 0.0002)
   assert.ok(Math.abs(wLat - 31.2304) < 0.0002)
+})
+
+test('平台跳转只生成搜索链接，不抓取第三方数据', () => {
+  const links = platformSearchLinks({ name: '楼外楼', city: '杭州' })
+  assert.ok(links.length >= 3)
+  assert.ok(links.every((link) => link.url.startsWith('https://')))
+  assert.ok(links.some((link) => link.url.includes('dianping.com')))
+  assert.ok(links.some((link) => link.url.includes('ctrip.com')))
+  assert.ok(links.some((link) => link.url.includes('uri.amap.com')))
 })
 
 test('示例行程每条路段都有 2-3 条备选，且不再展示逐段步骤', () => {

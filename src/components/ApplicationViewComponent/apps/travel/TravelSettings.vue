@@ -320,6 +320,39 @@
         </p>
       </section>
 
+      <section class="tr-settings-card is-wide">
+        <div class="tr-settings-card-head">
+          <div>
+            <h2><TravelIcon name="receipt" :size="18" /> 缓存与今日额度</h2>
+            <p>同一城市与分类的检索会缓存 7 天，天气缓存 30 分钟，路线缓存 2 小时，避免反复消耗接口额度。</p>
+          </div>
+          <button type="button" class="tr-btn is-ghost is-small" @click="clearMapCache">清空地点缓存</button>
+        </div>
+        <div v-if="quota" class="tr-quota-grid">
+          <div v-for="row in quotaRows" :key="`${row.provider}-${row.kind}`" class="tr-quota-row">
+            <div>
+              <strong>{{ row.provider }} · {{ row.kind }}</strong>
+              <small>{{ row.limit ? `个人认证参考上限 ${row.limit}/日` : '免费或自建配额' }}</small>
+            </div>
+            <span class="tr-quota-count">{{ row.count }}{{ row.limit ? `/${row.limit}` : '' }}</span>
+            <div class="tr-quota-bar">
+              <i :style="{ width: row.limit ? `${Math.min(100, Math.round((row.count / row.limit) * 100))}%` : '8%' }"></i>
+            </div>
+          </div>
+          <div v-if="!quotaRows.length" class="tr-prep-empty">今日还没有发出地图请求。</div>
+          <div class="tr-quota-cache">
+            <TravelIcon name="book" :size="13" />
+            本地缓存 {{ quota.cacheCount || 0 }} 条 · {{ quota.day }}
+            <span v-if="quota.preview">（浏览器预览数据）</span>
+          </div>
+        </div>
+        <div v-else class="tr-prep-empty">暂时没有额度记录；完成一次地点检索后会在这里显示。</div>
+        <p class="tr-settings-note">
+          高德个人认证的关键字/周边搜索约 100 次/天，路线与地理编码约 5000 次/天。
+          清空缓存后会重新请求服务并消耗当日额度；日常规划建议保留缓存。路况只缓存 2 小时，出发前重新生成可拿到较新的拥堵信息。
+        </p>
+      </section>
+
       <section class="tr-settings-card">
         <h2><TravelIcon name="globe" :size="18" /> 数据源</h2>
         <div class="tr-setting-row">
@@ -347,7 +380,7 @@
 
       <section class="tr-settings-card">
         <h2><TravelIcon name="sparkles" :size="18" /> 模型</h2>
-        <div class="tr-segmented is-two" style="margin-bottom: 11px">
+        <div class="tr-segmented is-three" style="margin-bottom: 11px">
           <button type="button" :class="{ active: prefs.aiSource === 'api' }" @click="setAiSource('api')">
             <strong>API 供应商</strong>
             <small>使用设置页已配置的 Key</small>
@@ -355,6 +388,10 @@
           <button type="button" :class="{ active: prefs.aiSource === 'web' }" @click="setAiSource('web')">
             <strong>网页模型</strong>
             <small>登录一次，免 API Key</small>
+          </button>
+          <button type="button" :class="{ active: prefs.aiSource === 'local' }" @click="setAiSource('local')">
+            <strong>本地模型</strong>
+            <small>离线，零 API 成本</small>
           </button>
         </div>
 
@@ -374,7 +411,7 @@
           </p>
         </template>
 
-        <template v-else>
+        <template v-else-if="prefs.aiSource === 'web'">
           <div class="tr-pref-label">
             <span>网页模型站点</span>
             <button type="button" class="tr-btn is-outline is-small" @click="openWebLogin">
@@ -396,6 +433,32 @@
           <p class="tr-settings-note">
             首次使用会在独立窗口打开站点，登录一次后会复用网页会话；只有会话失效时才需要重新登录。
             网页模型不消耗 API 额度，但站点改版可能导致自动发送/读取失效，失败时可切回 API 供应商。
+          </p>
+        </template>
+
+        <template v-else>
+          <div class="tr-pref-label"><span>本地模型</span></div>
+          <div class="tr-pref-chips">
+            <button
+              type="button"
+              class="tr-chip"
+              :class="{ active: prefs.localModel === 'deepseek' }"
+              @click="setLocalModel('deepseek')"
+            >
+              DeepSeek R1
+            </button>
+            <button
+              type="button"
+              class="tr-chip"
+              :class="{ active: prefs.localModel === 'qwen' }"
+              @click="setLocalModel('qwen')"
+            >
+              Qwen
+            </button>
+          </div>
+          <p class="tr-settings-note">
+            本地模型完全离线、零 API 成本，适合批量生成周末计划；首次加载模型较慢。
+            需要先在「设置 → 大模型」里下载并启用对应本地模型，否则会返回启动失败提示。
           </p>
         </template>
       </section>
@@ -483,7 +546,45 @@ const mapKeyProviders = [
 ]
 const mapKeys = ref({})
 const mapKeyInputs = reactive({ baidu: '', tencent: '', google: '', mapbox: '' })
+const quota = ref(null)
 const effectiveMapProvider = computed(() => (props.preferOsm ? 'osm' : prefs.mapProvider || 'auto'))
+
+const quotaRows = computed(() => {
+  const data = quota.value
+  if (!data) return []
+  const providers = data.providers || {}
+  const limits = data.limits || {}
+  const labels = {
+    amap: '高德',
+    baidu: '百度',
+    tencent: '腾讯',
+    google: 'Google',
+    mapbox: 'Mapbox',
+    osm: 'OSM',
+    'open-meteo': 'Open-Meteo',
+  }
+  const kinds = {
+    poi: '地点检索',
+    route: '路线规划',
+    geocode: '地理编码',
+    weather: '天气',
+    static: '静态地图',
+    other: '其它',
+  }
+  const rows = []
+  for (const [provider, counts] of Object.entries(providers)) {
+    for (const [kind, count] of Object.entries(counts || {})) {
+      const limit = limits?.[provider]?.[kind]
+      rows.push({
+        provider: labels[provider] || provider,
+        kind: kinds[kind] || kind,
+        count: Number(count) || 0,
+        limit: Number(limit) || 0,
+      })
+    }
+  }
+  return rows.sort((a, b) => b.count - a.count)
+})
 
 onMounted(async () => {
   try {
@@ -491,7 +592,25 @@ onMounted(async () => {
   } catch {
     mapKeys.value = {}
   }
+  try {
+    quota.value = await api.getQuotaUsage()
+  } catch {
+    quota.value = null
+  }
 })
+
+async function clearMapCache() {
+  if (!window.confirm('清空本地地点/路线缓存？之后会重新请求地图服务，可能消耗当日额度。')) return
+  try {
+    await api.clearCache()
+    quota.value = await api.getQuotaUsage()
+    notice.value = '地图缓存已清空。'
+    noticeType.value = 'success'
+  } catch (error) {
+    notice.value = `清空缓存失败：${error?.message || error}`
+    noticeType.value = 'error'
+  }
+}
 
 function setMapProvider(value) {
   prefs.mapProvider = value
@@ -620,6 +739,12 @@ function setAiSource(value) {
 function setWebProvider(value) {
   prefs.webProvider = value
   prefs.aiSource = 'web'
+  persistPreferences()
+}
+
+function setLocalModel(value) {
+  prefs.localModel = value
+  prefs.aiSource = 'local'
   persistPreferences()
 }
 

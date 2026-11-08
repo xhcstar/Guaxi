@@ -49,6 +49,7 @@ pub fn gcj02_to_wgs84(lng: f64, lat: f64) -> (f64, f64) {
     (lng * 2.0 - g_lng, lat * 2.0 - g_lat)
 }
 
+#[allow(dead_code)]
 pub fn gcj02_to_bd09(lng: f64, lat: f64) -> (f64, f64) {
     let z = (lng * lng + lat * lat).sqrt() + 0.00002 * ((lat * PI * 3000.0) / 180.0).sin();
     let theta = lat.atan2(lng) + 0.000003 * ((lng * PI * 3000.0) / 180.0).cos();

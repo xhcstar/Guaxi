@@ -21,6 +21,7 @@ export const DEFAULT_PREFERENCES = {
   mapProvider: 'auto',
   aiSource: 'api',
   webProvider: 'deepseek',
+  localModel: 'deepseek',
   learned: {
     transport: {},
     budget: {},
@@ -114,10 +115,11 @@ export function mergePreferences(raw = {}) {
     )
       ? source.mapProvider
       : 'auto',
-    aiSource: source.aiSource === 'web' ? 'web' : 'api',
+    aiSource: ['api', 'web', 'local'].includes(source.aiSource) ? source.aiSource : 'api',
     webProvider: WEB_AI_PROVIDERS.some((item) => item.value === source.webProvider)
       ? source.webProvider
       : 'deepseek',
+    localModel: ['deepseek', 'qwen'].includes(source.localModel) ? source.localModel : 'deepseek',
     learned: {
       transport: counts(learned.transport),
       budget: counts(learned.budget),

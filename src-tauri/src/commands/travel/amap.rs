@@ -508,7 +508,7 @@ async fn driving_one(
             ("extensions", "all".to_string()),
         ],
     )?;
-    let value = cached_json(&url, super::POI_TTL).await?;
+    let value = cached_json(&url, super::ROUTE_TTL).await?;
     ensure_ok(&value)?;
     let path = value
         .pointer("/route/paths/0")
@@ -674,7 +674,7 @@ pub async fn route(
                     ("destination", destination),
                 ],
             )?;
-            let value = cached_json(&url, super::POI_TTL).await?;
+            let value = cached_json(&url, super::ROUTE_TTL).await?;
             ensure_ok(&value)?;
             let path = value
                 .pointer("/route/paths/0")
@@ -717,7 +717,7 @@ pub async fn route(
                     ("nightflag", "0".to_string()),
                 ],
             )?;
-            let value = cached_json(&url, super::POI_TTL).await?;
+            let value = cached_json(&url, super::ROUTE_TTL).await?;
             ensure_ok(&value)?;
             let transits = value
                 .pointer("/route/transits")

@@ -7,6 +7,7 @@
 //! Nominatim / Overpass / OSRM / Open-Meteo。降级只影响精度与公交能力，不影响应用可用性。
 
 mod amap;
+mod cache;
 mod osm;
 mod preferences;
 mod providers;
@@ -16,8 +17,7 @@ mod weather;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock};
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Listener, Manager, WebviewUrl, WebviewWindowBuilder};
 
@@ -26,6 +26,8 @@ use crate::commands::plugin_llm::{self, PluginLlmRequest};
 use crate::commands::settingview;
 
 pub(crate) const POI_TTL: Duration = Duration::from_secs(7 * 24 * 3600);
+/// 路况/路线不缓存太久：出发前重新规划时才不会拿几天前的拥堵信息。
+pub(crate) const ROUTE_TTL: Duration = Duration::from_secs(2 * 3600);
 pub(crate) const WEATHER_TTL: Duration = Duration::from_secs(30 * 60);
 pub(crate) const GEO_TTL: Duration = Duration::from_secs(30 * 24 * 3600);
 pub(crate) const HTTP_TIMEOUT: Duration = Duration::from_secs(25);
@@ -381,6 +383,15 @@ pub struct TravelWebLlmResponse {
     pub provider: String,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TravelLocalLlmRequest {
+    pub provider: String,
+    pub prompt: String,
+    #[serde(default)]
+    pub system: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TravelSettings {
@@ -396,37 +407,13 @@ pub struct TravelSettings {
 
 // ── 缓存与 HTTP ─────────────────────────────────────────────
 
-type CacheMap = HashMap<String, (Instant, Value)>;
-
-fn cache() -> &'static Mutex<CacheMap> {
-    static CACHE: OnceLock<Mutex<CacheMap>> = OnceLock::new();
-    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-/// 命中未过期缓存时返回副本；过期条目顺手删除，缓存不会无限增长。
+/// 跨进程 SQLite 缓存：高德搜索只有约 100 次/天，必须在重启后仍然复用。
 pub(crate) fn cache_get_ttl(key: &str) -> Option<Value> {
-    let mut guard = cache().lock().ok()?;
-    let expired = match guard.get(key) {
-        Some((expires_at, _)) => Instant::now() >= *expires_at,
-        None => return None,
-    };
-    if expired {
-        guard.remove(key);
-        return None;
-    }
-    guard.get(key).map(|(_, value)| value.clone())
+    cache::get(key, Duration::from_secs(0))
 }
 
 pub(crate) fn cache_put(key: &str, value: Value, ttl: Duration) {
-    if let Ok(mut guard) = cache().lock() {
-        if guard.len() > 800 {
-            guard.retain(|_, (expires_at, _)| Instant::now() < *expires_at);
-            if guard.len() > 800 {
-                guard.clear();
-            }
-        }
-        guard.insert(key.to_string(), (Instant::now() + ttl, value));
-    }
+    let _ = cache::put(key, &value, ttl);
 }
 
 pub(crate) fn http_client() -> Result<reqwest::Client, String> {
@@ -461,6 +448,7 @@ pub(crate) fn cached_json(url: &str, ttl: Duration) -> impl std::future::Future<
         if let Some(hit) = cache_get_ttl(&url) {
             return Ok(hit);
         }
+        cache::bump(&url);
         let response = http_client()?
             .get(&url)
             .send()
@@ -491,6 +479,7 @@ pub(crate) async fn cached_post_json(
     if let Some(hit) = cache_get_ttl(&key) {
         return Ok(hit);
     }
+    cache::bump(url);
     let response = http_client()?
         .post(url)
         .form(&form)
@@ -664,6 +653,16 @@ pub fn travel_set_map_key(provider: String, key: String) -> Result<Value, String
     }
     settingview::set_travel_map_key_value(&provider, &key);
     Ok(masked_map_keys())
+}
+
+#[tauri::command]
+pub fn travel_get_quota_usage() -> Result<Value, String> {
+    cache::usage_today()
+}
+
+#[tauri::command]
+pub fn travel_clear_cache() -> Result<(), String> {
+    cache::clear()
 }
 
 // ── 命令：定位与地点搜索 ─────────────────────────────────────
@@ -842,7 +841,7 @@ async fn collect_amap(request: &TravelRequest, key: &str) -> Result<TravelFacts,
         }
     }
 
-    let food = amap::place_around(
+    let mut food = amap::place_around(
         key,
         destination.lng,
         destination.lat,
@@ -852,7 +851,7 @@ async fn collect_amap(request: &TravelRequest, key: &str) -> Result<TravelFacts,
     )
     .await
     .unwrap_or_default();
-    let hotels = amap::place_around(
+    let mut hotels = amap::place_around(
         key,
         destination.lng,
         destination.lat,
@@ -862,6 +861,27 @@ async fn collect_amap(request: &TravelRequest, key: &str) -> Result<TravelFacts,
     )
     .await
     .unwrap_or_default();
+
+    // 高德在小城市/新景点上偶尔会缺候选；用 OSM 补一份并转换到 GCJ-02，
+    // 保证地图与路线仍然对齐。只在候选明显不足时触发，避免无谓消耗。
+    if attractions.len() < 4 {
+        if let Ok((sights, meals, stays)) =
+            osm::overpass_pois(destination.lat, destination.lng, radius_m).await
+        {
+            let convert = |mut poi: Poi| {
+                let (lng, lat) = providers::coord::wgs84_to_gcj02(poi.lng, poi.lat);
+                poi.lng = lng;
+                poi.lat = lat;
+                poi.source = "osm".to_string();
+                poi.distance = Some(haversine_km(destination.lng, destination.lat, lng, lat) * 1000.0);
+                poi
+            };
+            attractions.extend(sights.into_iter().map(convert));
+            food.extend(meals.into_iter().map(convert));
+            hotels.extend(stays.into_iter().map(convert));
+            notes.push("高德候选较少，已用 OpenStreetMap 补充地点（坐标已转换为 GCJ-02）。".to_string());
+        }
+    }
 
     let mut attractions = apply_poi_filters(attractions, &request.avoid, destination.lng, destination.lat);
     let mut food = apply_poi_filters(food, &request.avoid, destination.lng, destination.lat);
@@ -876,9 +896,15 @@ async fn collect_amap(request: &TravelRequest, key: &str) -> Result<TravelFacts,
             weather_days = items;
         }
     }
-    let open_meteo = weather::open_meteo(destination.lat, destination.lng, 16)
-        .await
-        .unwrap_or_default();
+    let open_meteo = {
+        let (weather_lng, weather_lat) = providers::coord::gcj02_to_wgs84(
+            destination.lng,
+            destination.lat,
+        );
+        weather::open_meteo(weather_lat, weather_lng, 16)
+            .await
+            .unwrap_or_default()
+    };
     let weather_days = weather::merge(weather_days, open_meteo);
 
     notes.push(format!(
@@ -1408,6 +1434,42 @@ pub async fn travel_llm_complete(request: TravelLlmRequest) -> Result<TravelLlmR
     Ok(TravelLlmResponse {
         text: response.text,
         provider: response.provider.unwrap_or_else(|| "未知模型".to_string()),
+    })
+}
+
+#[tauri::command]
+pub async fn travel_llm_local_complete(
+    request: TravelLocalLlmRequest,
+) -> Result<TravelLlmResponse, String> {
+    let prompt = request.prompt.trim().to_string();
+    if prompt.is_empty() {
+        return Err("prompt 不能为空".to_string());
+    }
+    let question = if request.system.trim().is_empty() {
+        prompt
+    } else {
+        format!("{}\n\n{}", request.system.trim(), prompt)
+    };
+    let provider = request.provider.trim().to_lowercase();
+    let (answer, label) = match provider.as_str() {
+        "qwen" => (
+            crate::commands::chatview::get_answer_from_local_qwen(&question, &[], "travel-local")
+                .await?,
+            "本地 Qwen",
+        ),
+        _ => (
+            crate::commands::chatview::get_answer_from_local_deepseek(
+                &question,
+                &[],
+                "travel-local",
+            )
+            .await?,
+            "本地 DeepSeek",
+        ),
+    };
+    Ok(TravelLlmResponse {
+        text: answer.answer,
+        provider: label.to_string(),
     })
 }
 

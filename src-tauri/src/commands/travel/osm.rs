@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use super::{
     cached_json, cached_post_json, coalesce_polyline, haversine_km, truncate, val_f64, val_text,
-    Place, Poi, RouteLeg, RouteOption, RouteStep, RouteStop, GEO_TTL, POI_TTL,
+    Place, Poi, RouteLeg, RouteOption, RouteStep, RouteStop, GEO_TTL, POI_TTL, ROUTE_TTL,
 };
 
 const NOMINATIM: &str = "https://nominatim.openstreetmap.org";
@@ -518,7 +518,7 @@ pub async fn osrm_route(
             ),
         ],
     )?;
-    let mut result = cached_json(&url, POI_TTL).await;
+    let mut result = cached_json(&url, ROUTE_TTL).await;
     if result.is_err() && profile == "foot" {
         // 公共 OSRM 实例不一定开放 foot profile，退回驾车。
         warning = "步行路线不可用，已按驾车路线估算。".to_string();
@@ -535,7 +535,7 @@ pub async fn osrm_route(
                 ),
             ],
         )?;
-        result = cached_json(&url, POI_TTL).await;
+        result = cached_json(&url, ROUTE_TTL).await;
     }
     let value = result?;
     if val_text(value.get("code")) != "Ok" {

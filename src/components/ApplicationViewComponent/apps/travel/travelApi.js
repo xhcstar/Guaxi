@@ -310,6 +310,14 @@ export const api = {
     return invoke('travel_llm_web_complete', { request })
   },
 
+  async localLlmComplete(request) {
+    if (!isTauriRuntime()) {
+      await delay(300)
+      throw new Error('浏览器预览不调用本地模型')
+    }
+    return invoke('travel_llm_local_complete', { request })
+  },
+
   async openWebModelWindow(provider) {
     if (!isTauriRuntime()) {
       await delay(120)
@@ -378,6 +386,24 @@ export const api = {
       return mockMapKeys(local.mapKeys || {})
     }
     return invoke('travel_get_map_keys')
+  },
+
+  async getQuotaUsage() {
+    if (!isTauriRuntime()) {
+      return {
+        day: new Date().toISOString().slice(0, 10),
+        providers: { amap: { poi: 2, route: 3, geocode: 1 } },
+        cacheCount: 8,
+        limits: { amap: { poi: 100, route: 5000, geocode: 5000, weather: 5000 } },
+        preview: true,
+      }
+    }
+    return invoke('travel_get_quota_usage')
+  },
+
+  async clearCache() {
+    if (!isTauriRuntime()) return
+    return invoke('travel_clear_cache')
   },
 
   async getPreferences() {

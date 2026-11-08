@@ -25,8 +25,8 @@ pub fn sanitize_id(raw: &str) -> Result<String, String> {
     Ok(trimmed.to_string())
 }
 
-pub fn root(app: &AppHandle) -> Result<PathBuf, String> {
-    let _ = app;
+/// 旅行数据的根目录。计划、偏好、地图缓存都放在这里，随绿色版整体迁移。
+pub fn travel_root() -> Result<PathBuf, String> {
     let exe = std::env::current_exe().map_err(|e| format!("无法获取程序路径: {e}"))?;
     let base = exe
         .parent()
@@ -38,6 +38,10 @@ pub fn root(app: &AppHandle) -> Result<PathBuf, String> {
         fs::create_dir_all(base.join(sub)).map_err(|e| format!("创建旅行子目录失败: {e}"))?;
     }
     Ok(base)
+}
+
+pub fn root(_app: &AppHandle) -> Result<PathBuf, String> {
+    travel_root()
 }
 
 fn plans_dir(app: &AppHandle) -> Result<PathBuf, String> {

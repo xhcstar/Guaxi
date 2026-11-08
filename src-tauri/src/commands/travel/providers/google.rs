@@ -7,7 +7,7 @@ use serde_json::Value;
 use super::{as_f64, as_text, build_url, decode_polyline, strip_html};
 use crate::commands::travel::{
     cached_json, haversine_km, truncate, Place, Poi, RouteLeg, RouteOption, RouteStep, RouteStop,
-    GEO_TTL, POI_TTL,
+    GEO_TTL, POI_TTL, ROUTE_TTL,
 };
 
 const BASE: &str = "https://maps.googleapis.com";
@@ -234,7 +234,7 @@ pub async fn route(
             ("key", key.to_string()),
         ],
     )?;
-    let value = cached_json(&url, POI_TTL).await?;
+    let value = cached_json(&url, ROUTE_TTL).await?;
     ensure_ok(&value)?;
     let routes = value
         .get("routes")

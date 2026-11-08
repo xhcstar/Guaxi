@@ -458,6 +458,14 @@ export function useTravelStore() {
         provider: `网页 · ${webProviderLabel(state.preferences.webProvider)}`,
       }
     }
+    if (state.preferences.aiSource === 'local') {
+      const response = await api.localLlmComplete({
+        provider: state.preferences.localModel,
+        prompt: payload.prompt,
+        system: payload.system,
+      })
+      return { text: response.text, provider: response.provider || '本地模型' }
+    }
     return api.llmComplete(payload)
   }
 

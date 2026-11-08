@@ -7,7 +7,7 @@ use serde_json::Value;
 use super::{as_f64, as_text, build_url};
 use crate::commands::travel::{
     cached_json, coalesce_polyline, haversine_km, truncate, val_text, Place, Poi, RouteLeg,
-    RouteOption, RouteStep, RouteStop, GEO_TTL, POI_TTL,
+    RouteOption, RouteStep, RouteStop, GEO_TTL, POI_TTL, ROUTE_TTL,
 };
 
 const BASE: &str = "https://api.map.baidu.com";
@@ -203,7 +203,7 @@ pub async fn route(
             ("ak", key.to_string()),
         ],
     )?;
-    let value = cached_json(&url, POI_TTL).await?;
+    let value = cached_json(&url, ROUTE_TTL).await?;
     if !status_ok(&value) {
         return Err(error_text(&value));
     }

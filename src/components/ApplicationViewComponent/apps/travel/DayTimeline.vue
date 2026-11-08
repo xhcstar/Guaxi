@@ -49,12 +49,29 @@
           <p v-if="block.detail" class="tr-block-detail">{{ block.detail }}</p>
 
           <div v-if="block.poi" class="tr-block-meta">
+            <span v-if="block.poi.source" class="tr-poi-source">{{ poiSourceLabel(block.poi.source) }}</span>
             <span v-if="block.poi.category">{{ block.poi.category }}</span>
             <span v-if="block.poi.rating"><TravelIcon name="heart" :size="11" /> {{ block.poi.rating }}</span>
             <span v-if="block.poi.cost">参考 ¥{{ block.poi.cost }}</span>
             <span v-if="block.poi.address">{{ block.poi.address }}</span>
             <span v-if="block.poi.tel">{{ block.poi.tel }}</span>
           </div>
+
+          <details v-if="block.poi" class="tr-poi-links" @click.stop>
+            <summary><TravelIcon name="external" :size="12" /> 查实时评价 / 价格</summary>
+            <div class="tr-poi-link-list">
+              <button
+                v-for="link in platformLinksFor(block.poi)"
+                :key="link.label"
+                type="button"
+                @click="openLink(link.url)"
+              >
+                <strong>{{ link.label }}</strong>
+                <small>{{ link.hint }}</small>
+              </button>
+            </div>
+            <p>跳转到平台搜索结果；价格、房态与营业时间以平台实时信息为准，行迹不抓取这些数据。</p>
+          </details>
 
           <div v-if="block.route" class="tr-route-line">
             <div class="tr-route-summary">
@@ -109,6 +126,7 @@
             <span v-if="block.booking.channel"> · {{ block.booking.channel }}</span>
             <span v-if="block.booking.deadline"> · 截止 {{ friendlyDate(block.booking.deadline) }}</span>
             <span v-if="block.booking.note"> · {{ block.booking.note }}</span>
+            <span> · 以官方渠道实时信息为准</span>
           </div>
         </article>
       </li>
@@ -136,6 +154,8 @@ import {
   wgs84ToGcj02,
   weekdayCn,
 } from './travelUtils.js'
+import { poiSourceLabel } from './travelShare.js'
+import { openExternalUrl, platformSearchLinks } from './travelLinks.js'
 
 const props = defineProps({
   day: { type: Object, required: true },
@@ -194,6 +214,14 @@ function routeOptions(block) {
   const list = block?.route?.alternatives
   if (Array.isArray(list) && list.length) return list.slice(0, 3)
   return block?.route ? [block.route] : []
+}
+
+function platformLinksFor(poi) {
+  return platformSearchLinks(poi)
+}
+
+async function openLink(url) {
+  await openExternalUrl(url)
 }
 
 function canNavigate(block) {
