@@ -354,48 +354,37 @@ onMounted(async () => {
 
 <style scoped>
 .about-shell {
-  --a-paper: #fbfaf6;
-  --a-surface: #ffffff;
-  --a-surface-2: #f6f3ec;
-  --a-ink: #211f1a;
-  --a-muted: #6f695d;
-  --a-line: #e4ddd0;
-  --a-line-strong: #cfc5b2;
-  --a-accent: #c2410c;
-  --a-accent-ink: #8f2f08;
-  --a-accent-soft: rgba(194, 65, 12, 0.08);
-  --a-blue: #2f5d8a;
-  --a-blue-soft: rgba(47, 93, 138, 0.08);
+  --a-paper: var(--guaxi-panel-bg);
+  --a-surface: var(--guaxi-content-bg);
+  --a-surface-2: color-mix(in srgb, var(--guaxi-panel-bg) 86%, var(--guaxi-text-primary) 14%);
+  --a-ink: var(--guaxi-text-primary);
+  --a-muted: var(--guaxi-text-secondary);
+  --a-line: var(--guaxi-border);
+  --a-line-strong: color-mix(in srgb, var(--guaxi-border) 64%, var(--guaxi-text-secondary) 36%);
+  --a-accent: #4078f2;
+  --a-accent-ink: #4078f2;
+  --a-accent-soft: color-mix(in srgb, var(--a-accent) 14%, transparent);
+  --a-blue: var(--a-accent);
+  --a-blue-soft: color-mix(in srgb, var(--a-blue) 11%, transparent);
   --a-body-font: 'Noto Sans SC', 'Source Han Sans SC', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
   --a-display: 'Iowan Old Style', 'Palatino Linotype', 'Source Han Serif SC', 'Noto Serif SC', 'Songti SC', serif;
   --a-mono: var(--guaxi-editor-font-family, 'Maple Mono NF CN', Consolas, monospace);
-  --a-shadow: 0 14px 38px rgba(52, 42, 20, 0.08);
+  --a-shadow: 0 12px 28px rgba(0, 0, 0, 0.14);
 
   width: 100%;
   container-type: inline-size;
   color: var(--a-ink);
   font-family: var(--a-body-font);
   background:
-    radial-gradient(900px 420px at 8% -12%, var(--a-accent-soft), transparent 62%),
-    radial-gradient(820px 360px at 104% -8%, var(--a-blue-soft), transparent 58%),
+    radial-gradient(900px 380px at 8% -12%, var(--a-accent-soft), transparent 62%),
     var(--a-paper);
   box-sizing: border-box;
 }
 
 .about-shell.is-dark {
-  --a-paper: #15171a;
-  --a-surface: #1c1f23;
-  --a-surface-2: #202429;
-  --a-ink: #ece7dd;
-  --a-muted: #a49d92;
-  --a-line: #30353b;
-  --a-line-strong: #454b54;
-  --a-accent: #f28a5b;
-  --a-accent-ink: #ffb08a;
-  --a-accent-soft: rgba(242, 138, 91, 0.12);
-  --a-blue: #82b3dc;
-  --a-blue-soft: rgba(130, 179, 220, 0.1);
-  --a-shadow: 0 16px 42px rgba(0, 0, 0, 0.34);
+  --a-accent: #61afef;
+  --a-accent-ink: #61afef;
+  --a-shadow: 0 16px 38px rgba(0, 0, 0, 0.32);
 }
 
 /* 封面 */
@@ -523,7 +512,7 @@ onMounted(async () => {
 .about-btn.is-primary {
   border-color: var(--a-accent);
   background: var(--a-accent);
-  color: #fff8f3;
+  color: #ffffff;
 }
 
 .about-btn.is-primary:hover {

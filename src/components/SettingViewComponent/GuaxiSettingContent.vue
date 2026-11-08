@@ -1,10 +1,15 @@
 <template>
-  <div class="setting-content">
-    <n-card class="setting-card">
+  <div class="setting-content" :class="{ 'is-manual': isManual }">
+    <n-card v-if="!isManual" class="setting-card">
       <keep-alive>
         <component :is="currentComponent" />
       </keep-alive>
     </n-card>
+    <!-- 手册是整页文档，不再套一层卡片：保留 24px 内边距会让它看起来
+         “嵌在中间”。这里直接铺满设置内容区，由手册自己管理滚动。 -->
+    <keep-alive v-else>
+      <component :is="currentComponent" />
+    </keep-alive>
   </div>
 </template>
 
@@ -29,6 +34,7 @@ import FeedsSetting from './FeedsSetting.vue';
 import { useSettingsStore } from '../../stores/settingsStore';
 
 const settingsStore = useSettingsStore();
+const isManual = computed(() => settingsStore.selectedMenu === 'manual');
 
 // 根据选中的菜单项动态加载组件
 const currentComponent = computed(() => {
@@ -75,6 +81,22 @@ const currentComponent = computed(() => {
   min-height: 0;
   display: flex;
   overflow: hidden;
+}
+
+.setting-content.is-manual {
+  display: flex;
+  flex-direction: column;
+  height: calc(100vh - 30px);
+  max-height: calc(100vh - 30px);
+  min-height: 0;
+  overflow: hidden;
+}
+
+.setting-content.is-manual > .manual-shell {
+  flex: 1 1 0;
+  min-height: 0;
+  width: 100%;
+  height: 100%;
 }
 
 .setting-card {

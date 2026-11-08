@@ -35,7 +35,7 @@ export const pageChaptersC = [
               ['简历工坊', '工作', '多份简历管理：版本历史、模板库与 HTML / PDF 导出'],
             ],
           },
-          { type: 'figure', image: 'page-application', caption: '应用中心：左侧分类，中间应用卡片。' },
+          { type: 'figure', image: 'page-application', caption: '应用中心：左侧分类与当前分类下的应用卡片。' },
         ],
       },
       {
@@ -57,9 +57,6 @@ export const pageChaptersC = [
               '<b>差异对比</b>：对比任意两个文件或目录，适合比较版本、备份和转换结果。',
             ],
           },
-          { type: 'figure', image: 'window-template-manager', caption: '模板管理：默认模板、导入与编辑。' },
-          { type: 'figure', image: 'window-ppt-manager', caption: 'PPT 制作与管理：Slidev 源文件、预览与导出。' },
-          { type: 'figure', image: 'window-resource-manager', caption: '知识库资源管理：资源目录与文件操作。' },
         ],
       },
     ],

@@ -100,32 +100,8 @@
     </header>
 
     <div class="m-body">
-      <nav v-if="layoutMode !== 'narrow' && !query.trim()" class="m-rail" aria-label="手册章节">
-        <div class="m-rail-head">
-          <span>目录</span>
-          <span class="m-rail-progress">{{ Math.round(scrollProgress) }}%</span>
-        </div>
-        <div v-for="group in manualGroups" :key="group" class="m-rail-group">
-          <div class="m-rail-group-title">{{ group }}</div>
-          <button
-            v-for="chapter in chaptersByGroup(group)"
-            :key="chapter.id"
-            type="button"
-            class="m-rail-item"
-            :class="{ active: activeChapter === chapter.id && !query.trim() }"
-            @click="goChapter(chapter.id)"
-          >
-            <span class="m-rail-no">{{ chapter.number }}</span>
-            <span class="m-rail-title">{{ chapter.title }}</span>
-          </button>
-        </div>
-        <div class="m-rail-foot">
-          按 <kbd>Ctrl</kbd>+<kbd>K</kbd> 可搜索正文
-        </div>
-      </nav>
-
       <div class="m-content">
-        <div v-if="layoutMode === 'narrow' && !query.trim()" class="m-chapter-strip">
+        <div v-if="showChapterStrip && !query.trim()" class="m-chapter-strip">
           <button
             v-for="chapter in manualChapters"
             :key="chapter.id"
@@ -359,27 +335,6 @@
         </template>
       </div>
 
-      <aside v-if="layoutMode === 'wide' && !query.trim()" class="m-toc" aria-label="本章小节">
-        <div class="m-toc-head">本章</div>
-        <template v-if="!query.trim() && activeChapterData">
-          <div class="m-toc-chapter">
-            <span>{{ activeChapterData.number }}</span>
-            {{ activeChapterData.title }}
-          </div>
-          <button
-            v-for="(section, index) in activeChapterData.sections"
-            :key="section.id"
-            type="button"
-            class="m-toc-item"
-            @click="scrollToSection(section.id)"
-          >
-            <span class="m-toc-no">{{ sectionNumber(activeChapterData, index) }}</span>
-            {{ section.title }}
-          </button>
-        </template>
-        <div v-else class="m-toc-empty">搜索结果会替换正文；清除搜索后回到章节。</div>
-        <button type="button" class="m-toc-top" @click="scrollToTop">回到顶部 ↑</button>
-      </aside>
     </div>
 
     <Teleport to="body">
@@ -405,24 +360,30 @@ import {
   watch,
 } from 'vue'
 import { useSettingsStore } from '../../stores/settingsStore'
+import { useSiderStore } from '../../stores/useSiderStore'
+import { useManualStore } from '../../stores/manualStore.js'
 import { createLogger } from '../../utils/logger'
-import { manualChapters, manualGroups, manualSearchEntries, manualStats } from './manual/manualContent.js'
+import { manualChapters, manualSearchEntries, manualStats } from './manual/manualContent.js'
 
 const logger = createLogger('GuaxiManual')
 const settingsStore = useSettingsStore()
+const siderStore = useSiderStore()
+const manualStore = useManualStore()
 
 const shellRef = ref(null)
 const searchInput = ref(null)
 const query = ref('')
 const activeResult = ref(0)
 const resultLimit = ref(30)
-const activeChapter = ref(manualChapters[0]?.id || '')
 const layoutMode = ref('mid')
-const scrollProgress = ref(0)
 const flashId = ref('')
 const copiedKey = ref('')
 const preview = ref(null)
 const brokenFigures = reactive(new Set())
+
+const activeChapter = computed(() => manualStore.activeChapterId)
+const scrollProgress = computed(() => manualStore.progress)
+const showChapterStrip = computed(() => siderStore.isRightSiderCollapsed['setting'] !== false)
 
 let scrollRoot = null
 let resizeObserver = null
@@ -505,8 +466,6 @@ const searchTerms = computed(() =>
     .filter(Boolean),
 )
 
-const chaptersByGroup = (group) => manualChapters.filter((chapter) => chapter.group === group)
-
 const searchResults = computed(() => {
   const terms = searchTerms.value
   if (!terms.length) return []
@@ -540,10 +499,6 @@ const searchResults = computed(() => {
 })
 
 const visibleResults = computed(() => searchResults.value.slice(0, resultLimit.value))
-
-const activeChapterData = computed(
-  () => manualChapters.find((chapter) => chapter.id === activeChapter.value) || manualChapters[0],
-)
 
 const sectionNumber = (chapter, index) => `${chapter.number}.${pad2(index + 1)}`
 
@@ -723,10 +678,10 @@ function updateScrollState() {
   if (!root) return
   if (root === window) {
     const max = document.documentElement.scrollHeight - window.innerHeight
-    scrollProgress.value = max > 0 ? Math.min(100, Math.max(0, (window.scrollY / max) * 100)) : 0
+    manualStore.setProgress(max > 0 ? (window.scrollY / max) * 100 : 0)
   } else {
     const max = root.scrollHeight - root.clientHeight
-    scrollProgress.value = max > 0 ? Math.min(100, Math.max(0, (root.scrollTop / max) * 100)) : 0
+    manualStore.setProgress(max > 0 ? (root.scrollTop / max) * 100 : 0)
   }
 
   if (query.value) return
@@ -739,7 +694,19 @@ function updateScrollState() {
     const top = element.getBoundingClientRect().top - rootTop
     if (top <= 150) current = chapter.id
   }
-  if (current !== activeChapter.value) activeChapter.value = current
+  manualStore.setActiveChapter(current)
+
+  const currentChapter = manualChapters.find((chapter) => chapter.id === current)
+  if (currentChapter) {
+    let currentSection = currentChapter.sections[0]?.id || ''
+    for (const section of currentChapter.sections) {
+      const element = document.getElementById(section.id)
+      if (!element) continue
+      const top = element.getBoundingClientRect().top - rootTop
+      if (top <= 190) currentSection = section.id
+    }
+    manualStore.setActiveSection(currentSection)
+  }
 }
 
 function onWindowKeydown(event) {
@@ -781,51 +748,30 @@ watch(
   },
 )
 
-// 设置页的滚动条不一定挂在 n-card__content 上：naive-ui 的内层布局会把
-// 真正的滚动容器上提到 .n-layout-scroll-container。这里向上找第一个
-// “确实可以滚动”的祖先，阅读进度、当前章节和回到顶部才能跟着动。
-function findScrollParent(element) {
-  let node = element?.parentElement
-  while (node && node !== document.body) {
-    const overflowY = getComputedStyle(node).overflowY
-    const scrollable = overflowY === 'auto' || overflowY === 'scroll'
-    if (scrollable && node.scrollHeight > node.clientHeight + 1) return node
-    node = node.parentElement
-  }
-  return window
-}
+// 右侧栏只发起“跳到某节”的请求，滚动仍由正文负责，避免两边各维护一套定位逻辑。
+watch(
+  () => manualStore.scrollRequest,
+  (request) => {
+    if (request?.sectionId) {
+      scrollToSection(request.sectionId, { smooth: request.smooth })
+    }
+  },
+)
 
-let layoutScroller = null
-
-/**
- * 设置页的祖级卡片带 overflow:hidden，会把 sticky 目录压成 static。
- * 解法是让手册自己成为一个滚动的视口：高度取外层布局的可用高度，
- * 这样左目录、右小节和顶部进度条都能相对手册稳定吸附。
- */
-function configureScrollSurface() {
-  const shell = shellRef.value
-  if (!shell) return
-  if (!layoutScroller) layoutScroller = findScrollParent(shell)
-  if (!layoutScroller || layoutScroller === window) {
-    shell.style.height = ''
-    scrollRoot = window
-    return
-  }
-
-  layoutScroller.scrollTop = 0
-  const outerRect = layoutScroller.getBoundingClientRect()
-  if (outerRect.height <= 0) return
-  const topGap = Math.max(0, shell.getBoundingClientRect().top - outerRect.top)
-  // 26px 覆盖卡片底部的内边距与 1px 边框，避免多出一条外层滚动条。
-  const available = Math.max(360, Math.round(outerRect.height - topGap - 26))
-  shell.style.height = `${available}px`
-  scrollRoot = shell
-}
+watch(
+  () => manualStore.searchFocusTick,
+  () => {
+    nextTick(() => {
+      scrollRoot?.scrollTo?.({ top: 0, behavior: 'auto' })
+      focusSearch()
+    })
+  },
+)
 
 function attachListeners() {
   if (listenersAttached) detachListeners()
-  configureScrollSurface()
-  scrollRoot = scrollRoot || window
+  // 手册现在是设置内容区里唯一的滚动视口，不再需要向外找滚动祖先。
+  scrollRoot = shellRef.value || window
   scrollRoot.addEventListener?.('scroll', updateScrollState, { passive: true })
   window.addEventListener('keydown', onWindowKeydown)
   window.addEventListener('resize', onViewportResize)
@@ -837,7 +783,6 @@ function attachListeners() {
 }
 
 function onViewportResize() {
-  configureScrollSurface()
   measureLayout()
   updateScrollState()
 }
@@ -882,35 +827,37 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .manual-shell {
-  --m-paper: #fbfaf6;
-  --m-surface: #ffffff;
-  --m-surface-2: #f6f3ec;
-  --m-ink: #211f1a;
-  --m-muted: #6f695d;
-  --m-line: #e4ddd0;
-  --m-line-strong: #cfc5b2;
-  --m-accent: #c2410c;
-  --m-accent-ink: #8f2f08;
-  --m-accent-soft: rgba(194, 65, 12, 0.08);
-  --m-blue: #2f5d8a;
-  --m-blue-soft: rgba(47, 93, 138, 0.08);
-  --m-code-bg: #f3efe6;
-  --m-shadow: 0 14px 38px rgba(52, 42, 20, 0.08);
+  /* 手册不再自带一套暖色纸感配色：直接跟随软件的亮/暗主题变量，
+     强调色用 Naive 的主色，避免和顶部栏、左侧导航和表单控件割裂。 */
+  --m-paper: var(--guaxi-content-bg);
+  --m-surface: var(--guaxi-panel-bg);
+  --m-surface-2: color-mix(in srgb, var(--guaxi-panel-bg) 88%, var(--guaxi-text-primary) 12%);
+  --m-ink: var(--guaxi-text-primary);
+  --m-muted: var(--guaxi-text-secondary);
+  --m-line: var(--guaxi-border);
+  --m-line-strong: color-mix(in srgb, var(--guaxi-border) 64%, var(--guaxi-text-secondary) 36%);
+  --m-accent: #4078f2;
+  --m-accent-ink: #4078f2;
+  --m-accent-soft: color-mix(in srgb, var(--m-accent) 14%, transparent);
+  --m-blue: var(--m-accent);
+  --m-blue-soft: color-mix(in srgb, var(--m-blue) 11%, transparent);
+  --m-code-bg: color-mix(in srgb, var(--guaxi-panel-bg) 84%, var(--guaxi-text-primary) 8%);
+  --m-shadow: 0 12px 28px rgba(0, 0, 0, 0.14);
   --m-body-font: 'Noto Sans SC', 'Source Han Sans SC', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
   --m-display: 'Iowan Old Style', 'Palatino Linotype', 'Source Han Serif SC', 'Noto Serif SC', 'Songti SC', serif;
   --m-mono: var(--guaxi-editor-font-family, 'Maple Mono NF CN', Consolas, monospace);
 
   position: relative;
   width: 100%;
-  min-height: 100%;
+  height: 100%;
+  min-height: 0;
   color: var(--m-ink);
   font-family: var(--m-body-font);
   background-color: var(--m-paper);
   background-image:
-    radial-gradient(900px 420px at 6% -10%, var(--m-accent-soft), transparent 62%),
-    radial-gradient(820px 360px at 102% -8%, var(--m-blue-soft), transparent 58%),
-    repeating-linear-gradient(0deg, transparent 0 31px, rgba(120, 104, 74, 0.035) 31px 32px),
-    repeating-linear-gradient(90deg, transparent 0 31px, rgba(120, 104, 74, 0.035) 31px 32px);
+    radial-gradient(900px 360px at 4% -8%, var(--m-accent-soft), transparent 60%),
+    repeating-linear-gradient(0deg, transparent 0 31px, color-mix(in srgb, var(--m-ink) 4%, transparent) 31px 32px),
+    repeating-linear-gradient(90deg, transparent 0 31px, color-mix(in srgb, var(--m-ink) 4%, transparent) 31px 32px);
   box-sizing: border-box;
   overflow-x: hidden;
   overflow-y: auto;
@@ -920,25 +867,9 @@ onBeforeUnmount(() => {
 }
 
 .manual-shell.is-dark {
-  --m-paper: #15171a;
-  --m-surface: #1c1f23;
-  --m-surface-2: #202429;
-  --m-ink: #ece7dd;
-  --m-muted: #a49d92;
-  --m-line: #30353b;
-  --m-line-strong: #454b54;
-  --m-accent: #f28a5b;
-  --m-accent-ink: #ffb08a;
-  --m-accent-soft: rgba(242, 138, 91, 0.12);
-  --m-blue: #82b3dc;
-  --m-blue-soft: rgba(130, 179, 220, 0.1);
-  --m-code-bg: #101214;
-  --m-shadow: 0 16px 42px rgba(0, 0, 0, 0.34);
-  background-image:
-    radial-gradient(900px 420px at 6% -10%, var(--m-accent-soft), transparent 62%),
-    radial-gradient(820px 360px at 102% -8%, var(--m-blue-soft), transparent 58%),
-    repeating-linear-gradient(0deg, transparent 0 31px, rgba(255, 255, 255, 0.025) 31px 32px),
-    repeating-linear-gradient(90deg, transparent 0 31px, rgba(255, 255, 255, 0.025) 31px 32px);
+  --m-accent: #61afef;
+  --m-accent-ink: #61afef;
+  --m-shadow: 0 16px 38px rgba(0, 0, 0, 0.32);
 }
 
 .m-progress {
@@ -1141,15 +1072,9 @@ onBeforeUnmount(() => {
 
 .m-route-card {
   padding: 18px;
-  border-radius: 16px;
-  background: var(--m-ink);
-  color: var(--m-paper);
-  box-shadow: var(--m-shadow);
-}
-
-.is-dark .m-route-card {
-  background: var(--m-surface);
-  border: 1px solid var(--m-line);
+  border: 1px solid color-mix(in srgb, var(--m-accent) 32%, var(--m-line));
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--m-accent) 8%, var(--m-surface));
   color: var(--m-ink);
 }
 
@@ -1168,7 +1093,7 @@ onBeforeUnmount(() => {
   width: 100%;
   padding: 10px 8px;
   border: 0;
-  border-top: 1px solid rgba(255, 255, 255, 0.12);
+  border-top: 1px solid var(--m-line);
   background: transparent;
   color: inherit;
   text-align: left;
@@ -1177,16 +1102,8 @@ onBeforeUnmount(() => {
   transition: background 0.16s ease, padding-left 0.16s ease;
 }
 
-.is-dark .m-route-item {
-  border-top-color: var(--m-line);
-}
-
 .m-route-item:hover {
   padding-left: 12px;
-  background: rgba(255, 255, 255, 0.06);
-}
-
-.is-dark .m-route-item:hover {
   background: var(--m-surface-2);
 }
 
@@ -1250,28 +1167,10 @@ onBeforeUnmount(() => {
 
 /* ---------- 主体两栏 ---------- */
 .m-body {
-  display: grid;
-  align-items: start;
-}
-
-.layout-wide .m-body {
-  grid-template-columns: 194px minmax(0, 1fr) 194px;
-}
-
-.layout-mid .m-body {
-  grid-template-columns: 186px minmax(0, 1fr);
-}
-
-.layout-narrow .m-body {
   display: block;
 }
 
-/* 检索态：收起目录与封面装饰，让结果区占满宽度并紧贴搜索框。 */
-.layout-wide.is-searching .m-body,
-.layout-mid.is-searching .m-body {
-  grid-template-columns: minmax(0, 1fr);
-}
-
+/* 检索态：收起封面装饰，让结果区紧贴搜索框。 */
 .manual-shell.is-searching .m-hero-grid {
   grid-template-columns: minmax(0, 1fr);
 }
@@ -1285,101 +1184,23 @@ onBeforeUnmount(() => {
   padding-bottom: 20px;
 }
 
-.m-rail {
-  position: sticky;
-  top: 16px;
-  align-self: start;
-  max-height: calc(100vh - 48px);
-  overflow: auto;
-  padding: 24px 14px 30px 20px;
-  border-right: 1px solid var(--m-line);
-  scrollbar-width: thin;
-}
-
-.m-rail-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 14px;
-  font-family: var(--m-mono);
-  font-size: 10.5px;
-  letter-spacing: 0.16em;
-  color: var(--m-muted);
-}
-
-.m-rail-progress {
-  color: var(--m-accent);
-}
-
-.m-rail-group {
-  margin-bottom: 18px;
-}
-
-.m-rail-group-title {
-  margin: 0 0 6px 8px;
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  color: var(--m-muted);
-}
-
-.m-rail-item {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  width: 100%;
-  padding: 7px 8px;
-  border: 0;
-  border-left: 2px solid transparent;
-  background: transparent;
-  color: var(--m-muted);
-  text-align: left;
-  font: inherit;
-  font-size: 12.5px;
-  line-height: 1.45;
-  cursor: pointer;
-  transition: color 0.16s ease, background 0.16s ease, border-color 0.16s ease;
-}
-
-.m-rail-item:hover {
-  color: var(--m-ink);
-  background: var(--m-surface-2);
-}
-
-.m-rail-item.active {
-  color: var(--m-accent-ink);
-  border-left-color: var(--m-accent);
-  background: var(--m-accent-soft);
-  font-weight: 600;
-}
-
-.m-rail-no {
-  flex: 0 0 18px;
-  font-family: var(--m-mono);
-  font-size: 10px;
-  opacity: 0.7;
-}
-
-.m-rail-foot {
-  margin-top: 18px;
-  padding-top: 12px;
-  border-top: 1px dashed var(--m-line);
-  font-size: 11px;
-  line-height: 1.9;
-  color: var(--m-muted);
-}
-
 .m-content {
+  --m-content-pad-x: 44px;
+  --m-content-pad-y: 32px;
   min-width: 0;
-  padding: 34px 40px 64px;
-}
-
-.layout-narrow .m-content {
-  padding: 20px 20px 52px;
+  padding: var(--m-content-pad-y) var(--m-content-pad-x) 64px;
 }
 
 .layout-mid .m-content {
-  padding: 30px 30px 60px;
+  --m-content-pad-x: 30px;
+  --m-content-pad-y: 26px;
+  padding: var(--m-content-pad-y) var(--m-content-pad-x) 58px;
+}
+
+.layout-narrow .m-content {
+  --m-content-pad-x: 20px;
+  --m-content-pad-y: 20px;
+  padding: var(--m-content-pad-y) var(--m-content-pad-x) 52px;
 }
 
 .m-chapter-strip {
@@ -1388,8 +1209,8 @@ onBeforeUnmount(() => {
   z-index: 12;
   display: flex;
   gap: 6px;
-  margin: -20px -20px 18px;
-  padding: 10px 16px;
+  margin: calc(var(--m-content-pad-y) * -1) calc(var(--m-content-pad-x) * -1) 22px;
+  padding: 8px var(--m-content-pad-x);
   overflow-x: auto;
   background: color-mix(in srgb, var(--m-paper) 92%, transparent);
   border-bottom: 1px solid var(--m-line);
@@ -1579,19 +1400,6 @@ onBeforeUnmount(() => {
 .m-callout :deep(kbd),
 .m-step-text :deep(kbd),
 .m-a :deep(kbd) {
-  display: inline-block;
-  padding: 0 5px;
-  border: 1px solid var(--m-line-strong);
-  border-bottom-width: 2px;
-  border-radius: 4px;
-  background: var(--m-surface);
-  font-family: var(--m-mono);
-  font-size: 0.88em;
-  line-height: 1.6;
-  color: var(--m-ink);
-}
-
-.m-rail-foot kbd {
   display: inline-block;
   padding: 0 5px;
   border: 1px solid var(--m-line-strong);
@@ -2134,86 +1942,6 @@ onBeforeUnmount(() => {
   font-size: 13.5px;
   line-height: 1.9;
   color: var(--m-muted);
-}
-
-/* 右侧本章目录 */
-.m-toc {
-  position: sticky;
-  top: 16px;
-  align-self: start;
-  max-height: calc(100vh - 48px);
-  overflow: auto;
-  padding: 24px 18px 30px 16px;
-  border-left: 1px solid var(--m-line);
-  scrollbar-width: thin;
-}
-
-.m-toc-head {
-  margin-bottom: 10px;
-  font-family: var(--m-mono);
-  font-size: 10.5px;
-  letter-spacing: 0.16em;
-  color: var(--m-muted);
-}
-
-.m-toc-chapter {
-  display: flex;
-  align-items: baseline;
-  gap: 7px;
-  margin-bottom: 8px;
-  font-size: 13px;
-  font-weight: 700;
-  color: var(--m-ink);
-}
-
-.m-toc-chapter span {
-  font-family: var(--m-mono);
-  font-size: 10px;
-  color: var(--m-accent);
-}
-
-.m-toc-item {
-  display: block;
-  width: 100%;
-  padding: 5px 0 5px 8px;
-  border: 0;
-  border-left: 1px solid var(--m-line);
-  background: transparent;
-  color: var(--m-muted);
-  text-align: left;
-  font: inherit;
-  font-size: 11.8px;
-  line-height: 1.55;
-  cursor: pointer;
-  transition: color 0.16s ease, border-color 0.16s ease;
-}
-
-.m-toc-item:hover {
-  color: var(--m-ink);
-  border-left-color: var(--m-accent);
-}
-
-.m-toc-no {
-  margin-right: 5px;
-  font-family: var(--m-mono);
-  font-size: 9px;
-  color: var(--m-accent);
-}
-
-.m-toc-empty {
-  font-size: 11.5px;
-  line-height: 1.8;
-  color: var(--m-muted);
-}
-
-.m-toc-top {
-  margin-top: 16px;
-  border: 0;
-  background: transparent;
-  color: var(--m-accent);
-  font: inherit;
-  font-size: 11.5px;
-  cursor: pointer;
 }
 
 /* 搜索结果 */

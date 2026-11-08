@@ -21,7 +21,7 @@ export const startChapters = [
             type: 'p',
             text: '它适合完成一条长期循环：<b>导入资料 → 阅读摘录 → AI 辅助理解 → 写作整理 → 知识库沉淀 → 统计复盘</b>。每一段都能在同一个窗口里完成，不需要在十几个应用之间搬来搬去。',
           },
-          { type: 'figure', image: 'overview', caption: 'Guaxi 主界面：左侧导航、中间工作区、右侧辅助面板。' },
+          { type: 'figure', image: 'overview', caption: 'Guaxi 主界面：左侧导航、知识库文件树与编辑工作区。' },
           {
             type: 'callout',
             tone: 'note',

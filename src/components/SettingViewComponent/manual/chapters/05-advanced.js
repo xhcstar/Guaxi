@@ -123,7 +123,6 @@ export const advancedChapters = [
             ],
           },
           { type: 'figure', image: 'setting-llm', caption: '大模型：供应商、密钥、模型与 ChatRecord。' },
-          { type: 'figure', image: 'setting-local-llm', caption: '本地模型：下载、导入与运行状态。' },
         ],
       },
       {

@@ -25,8 +25,9 @@
 
 <script setup>
 import { createLogger } from '../../utils/logger'
-import { ref, computed, onMounted, onBeforeUnmount } from "vue"
+import { ref, computed, onMounted, onBeforeUnmount, watch } from "vue"
 import { useSiderStore } from '../../stores/useSiderStore'
+import { useSettingsStore } from '../../stores/settingsStore'
 import GuaxiSidebarSettingView from "./GuaxiSidebarSettingView.vue"
 import GuaxiSettingContent from "./GuaxiSettingContent.vue"
 import GuaxiRightContentSettingView from "./GuaxiRightContentSettingView.vue"
@@ -51,6 +52,49 @@ const isRightSiderCollapsed = computed({
   get: () => siderStore.isRightSiderCollapsed[viewKey] ?? true,
   set: (val) => siderStore.setRightSiderCollapsed(viewKey, val)
 })
+const settingsStore = useSettingsStore()
+
+// 手册把右侧栏当作自己的章节目录：进入时自动展开并收窄到适合阅读的宽度，
+// 离开时恢复原来的宽度与折叠状态。窗口不够宽时保持收起，改用手册内的吸顶章节条。
+const MANUAL_RIGHT_SIDER_WIDTH = 320
+const MANUAL_RIGHT_SIDER_MIN_WINDOW = 1360
+let rightWidthBeforeManual = 0
+let rightCollapsedBeforeManual = null
+let manualAutoOpenedRight = false
+
+watch(
+  () => settingsStore.selectedMenu,
+  (menu, previous) => {
+    if (menu === 'manual') {
+      rightWidthBeforeManual = rightSiderbarWidth.value
+      rightCollapsedBeforeManual = isRightSiderCollapsed.value
+      rightSiderbarWidth.value = MANUAL_RIGHT_SIDER_WIDTH
+      if (window.innerWidth >= MANUAL_RIGHT_SIDER_MIN_WINDOW && isRightSiderCollapsed.value) {
+        siderStore.setRightSiderCollapsed(viewKey, false)
+        manualAutoOpenedRight = true
+      }
+      return
+    }
+
+    if (previous === 'manual') {
+      rightSiderbarWidth.value = rightWidthBeforeManual || 650
+      if (rightCollapsedBeforeManual !== null) {
+        siderStore.setRightSiderCollapsed(viewKey, rightCollapsedBeforeManual)
+      }
+      manualAutoOpenedRight = false
+      rightCollapsedBeforeManual = null
+    }
+  },
+  { immediate: true },
+)
+
+const onWindowResizeForManual = () => {
+  if (settingsStore.selectedMenu !== 'manual') return
+  if (window.innerWidth < MANUAL_RIGHT_SIDER_MIN_WINDOW && manualAutoOpenedRight) {
+    siderStore.setRightSiderCollapsed(viewKey, true)
+    manualAutoOpenedRight = false
+  }
+}
 
 const onMouseDownLeftSidebar = (event) => {
   leftSidebarresizing.value = true;
@@ -98,8 +142,13 @@ const onMouseUpRightSidebar = () => {
   document.removeEventListener("mouseup", onMouseUpRightSidebar);
 };
 
+onMounted(() => {
+  window.addEventListener('resize', onWindowResizeForManual)
+})
+
 // Cleanup listeners when the component is unmounted
 onBeforeUnmount(() => {
+  window.removeEventListener('resize', onWindowResizeForManual)
   document.removeEventListener("mousemove", onMouseMoveLeftSidebar);
   document.removeEventListener("mouseup", onMouseUpLeftSidebar);
   document.removeEventListener("mousemove", onMouseMoveRightSidebar);

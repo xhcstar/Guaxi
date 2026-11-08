@@ -19,7 +19,7 @@ export const pageChaptersA = [
             type: 'p',
             text: '首页是主要工作台。左侧栏可在知识库树、任务目录、普通目录和打开历史之间工作；中间是编辑器；右侧栏承载大纲、智能助手、搜索结果和数学工作区等辅助面板。',
           },
-          { type: 'figure', image: 'page-home', caption: '知识编辑：左栏文件树、中间编辑器、右侧辅助面板。' },
+          { type: 'figure', image: 'page-home', caption: '知识编辑：顶栏工具、左栏文件树与中间编辑器。' },
           {
             type: 'defs',
             items: [
@@ -85,8 +85,6 @@ export const pageChaptersA = [
             title: '工具栏与面包屑可以藏起来',
             text: '格式工具栏和面包屑会占两行高度。打开 PDF、电子书、图片这类只读内容时，点 Guaxi 标志右侧的收起图标或按 Alt+G，把高度让给正文；再点一次恢复，状态按窗口记住。',
           },
-          { type: 'figure', image: 'window-git-panel', caption: 'Git 面板：状态、暂存、提交、分支与 hunk 级差异。' },
-          { type: 'figure', image: 'window-browser-preview', caption: '在浏览器中查看 Markdown：本地 8888 服务渲染的静态页面。' },
         ],
       },
       {
@@ -440,7 +438,7 @@ export const pageChaptersA = [
             type: 'p',
             text: '仓库用于管理导入资料。顶部搜索框可以按文件名、描述、标签、所属文件库、知识库或文件类型筛选；右侧可在表格视图和书架视图之间切换。',
           },
-          { type: 'figure', image: 'page-repo-search', caption: '仓库：表格视图与按字段搜索菜单。' },
+          { type: 'figure', image: 'page-repo-search', caption: '仓库：书架视图与知识库筛选。' },
           {
             type: 'list',
             items: [
@@ -461,7 +459,6 @@ export const pageChaptersA = [
             type: 'p',
             text: '资料库页面用于管理导入资料，阅读器用于深度阅读。当前链路覆盖 PDF、转换后的 PDF / Markdown、EPUB、HTML、Markdown、文本、Word 等类型。',
           },
-          { type: 'figure', image: 'window-reader', caption: '阅读器：工具栏、目录 / 缩略图、正文与右侧笔记面板。' },
           {
             type: 'list',
             items: [
@@ -483,7 +480,6 @@ export const pageChaptersA = [
             type: 'p',
             text: '仓库的「导入文件」会把资料登记到当前文件库，并按原格式保存；如果要在知识库里直接编辑，用首页的「转换为 Markdown 后导入」。导入后可以补描述与标签，它们是仓库搜索的主要依据。',
           },
-          { type: 'figure', image: 'window-kb-manager', caption: '知识库资源管理：资源目录、文件与批量操作。' },
           {
             type: 'callout',
             tone: 'tip',

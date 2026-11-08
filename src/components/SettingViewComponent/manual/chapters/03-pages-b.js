@@ -98,7 +98,6 @@ export const pageChaptersB = [
             type: 'p',
             text: '知识图谱页用于从知识库文件结构、段落、章节和概念中构建可视化网络。它既能浏览知识库，也能帮助发现节点之间的关系。',
           },
-          { type: 'figure', image: 'page-brain', caption: '知识图谱：左侧知识库树，中间 3D 网络，右侧节点与筛选。' },
           {
             type: 'list',
             items: [
@@ -179,7 +178,7 @@ export const pageChaptersB = [
             title: '两个前提',
             text: '第一，它不去互联网上替你找新知识，只处理你自己的知识库、资料库和知识源抓回来的内容；第二，它默认很安静，大多数时候“没有待处理的提醒”是正常状态。',
           },
-          { type: 'figure', image: 'page-cognition', caption: '大脑：左栏概览与感知来源、待处理提醒、收件箱。' },
+          { type: 'figure', image: 'page-cognition', caption: '大脑：左栏概览、提醒流与收件箱。' },
         ],
       },
       {
