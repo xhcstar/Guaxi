@@ -1844,10 +1844,12 @@ onBeforeUnmount(() => {
 }
 
 .m-figure-frame img {
+  /* 图片宽度跟随图框，高度按比例自然增长。不要给图片加 max-height：
+     一旦高度被封顶，contain 会在两侧补出空白，窗口/右侧栏变化时看起来
+     像图片区域没有跟着变宽。长截图就让它自然变长，由手册整体滚动。 */
   display: block;
   width: 100%;
-  max-height: 620px;
-  object-fit: contain;
+  height: auto;
   border-radius: 8px;
   background: var(--m-surface-2);
 }
@@ -2242,7 +2244,7 @@ onBeforeUnmount(() => {
 }
 
 .layout-narrow .m-figure-frame img {
-  max-height: 300px;
+  height: auto;
 }
 
 .layout-narrow .m-lightbox {
