@@ -96,7 +96,7 @@ const apps = [
   },
   {
     id: 'life-travel-planner',
-    name: '行迹 · 旅行计划',
+    name: 'Guaxi · 旅行计划',
     category: 'life',
     categoryLabel: '生活类',
     description: 'AI 编排行程：逐段路线、天气、美食住宿、预算与行前清单，支持周末班次表与微信分享',

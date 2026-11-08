@@ -918,7 +918,10 @@ pub async fn static_map(
             .join(";");
         if !points.is_empty() {
             // 高德的 paths 参数依赖裸逗号/分号，手动拼 URL，避免被 query 编码器转义。
-            url.push_str(&format!("&paths=5,0xC65A34,1,,:{points}"));
+            // 白色描边 + 绿色主线：公园、道路本身也是彩色，纯细线会混在一起。
+            url.push_str(&format!(
+                "&paths=9,0xFFFFFF,1,,:{points}|6,0x0F7A3D,1,,:{points}"
+            ));
         }
     }
     let response = super::http_client()?

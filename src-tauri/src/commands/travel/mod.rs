@@ -400,7 +400,7 @@ pub struct TravelLlmRequest {
     pub temperature: Option<f32>,
     #[serde(default)]
     pub max_tokens: Option<u32>,
-    /// 行迹的编排全部要求 JSON，默认开启。
+    /// Guaxi的编排全部要求 JSON，默认开启。
     #[serde(default)]
     pub json_mode: bool,
     /// 结构化编排不需要思考链：关掉 reasoning，避免 token 被思考过程吃光。
@@ -992,7 +992,7 @@ async fn collect_amap(request: &TravelRequest, key: &str) -> Result<TravelFacts,
             around_m,
             "110000|110101|140100",
             "",
-            2,
+            3,
         )
         .await
         .unwrap_or_default()
@@ -1049,7 +1049,7 @@ async fn collect_amap(request: &TravelRequest, key: &str) -> Result<TravelFacts,
             stay_radius_m,
             "050000",
             "",
-            2,
+            3,
         )
         .await
         .unwrap_or_default()
@@ -1111,9 +1111,9 @@ async fn collect_amap(request: &TravelRequest, key: &str) -> Result<TravelFacts,
         ));
     }
     if weekend {
-        attractions = pick_across_rings(attractions, radius_m, 48);
-        food = pick_across_rings(food, radius_m, 48);
-        hotels = pick_across_rings(hotels, radius_m, 16);
+        attractions = pick_across_rings(attractions, radius_m, 120);
+        food = pick_across_rings(food, radius_m, 80);
+        hotels = pick_across_rings(hotels, radius_m, 24);
     } else {
         attractions.truncate(24);
         food.truncate(18);
@@ -1207,9 +1207,9 @@ async fn collect_osm(request: &TravelRequest) -> Result<TravelFacts, String> {
         apply_poi_filters(hotels, &request.avoid, destination.lng, destination.lat, radius_m);
     let dropped = dropped_sights + dropped_food + dropped_hotels;
     if weekend {
-        attractions = pick_across_rings(attractions, radius_m, 48);
-        food = pick_across_rings(food, radius_m, 48);
-        hotels = pick_across_rings(hotels, radius_m, 16);
+        attractions = pick_across_rings(attractions, radius_m, 120);
+        food = pick_across_rings(food, radius_m, 80);
+        hotels = pick_across_rings(hotels, radius_m, 24);
     } else {
         attractions.truncate(24);
         food.truncate(18);
@@ -1400,9 +1400,9 @@ async fn collect_provider(
         ));
     }
     if weekend {
-        attractions = pick_across_rings(attractions, radius_m, 48);
-        food = pick_across_rings(food, radius_m, 48);
-        hotels = pick_across_rings(hotels, radius_m, 16);
+        attractions = pick_across_rings(attractions, radius_m, 120);
+        food = pick_across_rings(food, radius_m, 80);
+        hotels = pick_across_rings(hotels, radius_m, 24);
     } else {
         attractions.truncate(24);
         food.truncate(18);
@@ -1458,7 +1458,7 @@ pub async fn travel_collect_facts(request: TravelRequest) -> Result<TravelFacts,
         providers::MapProvider::Amap => {
             let key = amap_key();
             if key.trim().is_empty() {
-                return Err("未配置高德 Web 服务 Key。请在「行迹 → 设置」中填写，或把地图服务商切换为自动/OpenStreetMap。".to_string());
+                return Err("未配置高德 Web 服务 Key。请在「Guaxi → 设置」中填写，或把地图服务商切换为自动/OpenStreetMap。".to_string());
             }
             collect_amap(&request, &key).await
         }
@@ -1492,7 +1492,7 @@ pub async fn travel_collect_facts(request: TravelRequest) -> Result<TravelFacts,
             let key = providers::key(other);
             if key.trim().is_empty() {
                 return Err(format!(
-                    "未配置 {} Key。请在「行迹 → 设置 → 地图服务商」中填写，或切换回高德/OpenStreetMap。",
+                    "未配置 {} Key。请在「Guaxi → 设置 → 地图服务商」中填写，或切换回高德/OpenStreetMap。",
                     providers::display_name(other)
                 ));
             }
@@ -2043,6 +2043,32 @@ pub async fn travel_llm_web_complete(
 
 // ── 命令：静态地图与存储 ────────────────────────────────────
 
+/// 把前端生成的长图（PNG data URL）直接写进系统剪贴板。
+///
+/// 不能把原始 RGBA 通过 IPC 传过来：一张 1080×8000 的长图就有 30+ MB，
+/// 序列化会卡死主线程。这里只传 base64 PNG，在 Rust 侧解码后写剪贴板。
+#[tauri::command]
+pub fn travel_copy_image(app: AppHandle, data_url: String) -> Result<(), String> {
+    use base64::Engine as _;
+    use tauri_plugin_clipboard_manager::ClipboardExt;
+
+    let encoded = data_url.split(',').nth(1).unwrap_or(&data_url).trim();
+    if encoded.is_empty() {
+        return Err("长图数据为空".to_string());
+    }
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .map_err(|e| format!("长图数据解析失败: {e}"))?;
+    let rgba = image::load_from_memory(&bytes)
+        .map_err(|e| format!("长图解码失败: {e}"))?
+        .to_rgba8();
+    let (width, height) = rgba.dimensions();
+    let clipboard_image = tauri::image::Image::new_owned(rgba.into_raw(), width, height);
+    app.clipboard()
+        .write_image(&clipboard_image)
+        .map_err(|e| format!("写入剪贴板失败: {e}"))
+}
+
 #[tauri::command]
 pub async fn travel_static_map(request: StaticMapRequest) -> Result<String, String> {
     let key = amap_key();
@@ -2140,7 +2166,7 @@ pub async fn travel_open_print_window(
         format!("/travel-print?planId={}", plan_id)
     };
     let window = WebviewWindowBuilder::new(&app, &label, WebviewUrl::App(url.into()))
-        .title("行迹 · 打印行程")
+        .title("Guaxi · 打印行程")
         .inner_size(900.0, 1100.0)
         .min_inner_size(720.0, 800.0)
         .center()

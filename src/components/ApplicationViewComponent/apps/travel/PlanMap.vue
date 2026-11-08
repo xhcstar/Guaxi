@@ -52,7 +52,8 @@ const props = defineProps({
   dayIndex: { type: [Number, String], default: null },
 })
 
-const DAY_COLORS = ['#c4552d', '#4f6b57', '#6f93ab', '#a8763e', '#7a5c7e', '#3f6f6a']
+// 路线统一用绿色系，和地图上的公园/道路区分开；多天用深浅与冷绿区分。
+const DAY_COLORS = ['#0f7a3d', '#0b8f6b', '#4f9a2f', '#1f8f8f', '#2f6b4f', '#6aa84f']
 const mapEl = ref(null)
 const activeDay = ref(props.dayIndex == null ? 'all' : Number(props.dayIndex))
 const offline = ref(false)

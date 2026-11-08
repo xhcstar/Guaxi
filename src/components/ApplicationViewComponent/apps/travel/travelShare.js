@@ -244,8 +244,8 @@ function mapBlock(plan) {
   return `<div class="map-frame map-fallback">
     <svg viewBox="0 0 800 260" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
       <rect width="800" height="260" fill="#efe7d7"/>
-      <path d="M40 200 C180 40, 300 230, 430 110 S650 60, 760 160" fill="none" stroke="#c4552d" stroke-width="3" stroke-dasharray="9 8"/>
-      <circle cx="40" cy="200" r="9" fill="#1d2a28"/><circle cx="430" cy="110" r="7" fill="#c4552d"/><circle cx="760" cy="160" r="9" fill="#4f6b57"/>
+      <path d="M40 200 C180 40, 300 230, 430 110 S650 60, 760 160" fill="none" stroke="#0f7a3d" stroke-width="3" stroke-dasharray="9 8"/>
+      <circle cx="40" cy="200" r="9" fill="#1d2a28"/><circle cx="430" cy="110" r="7" fill="#0f7a3d"/><circle cx="760" cy="160" r="9" fill="#4f6b57"/>
       <text x="56" y="225" font-size="17" fill="#1d2a28">出发</text><text x="700" y="195" font-size="17" fill="#1d2a28">抵达</text>
     </svg>
   </div>`
@@ -282,7 +282,7 @@ export function buildShareHtml(plan, options = {}) {
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1"/>
-<title>${escapeHtml(title)} · 行迹</title>
+<title>${escapeHtml(title)} · Guaxi</title>
 <style>
 :root{color-scheme:light}
 *{box-sizing:border-box}
@@ -386,7 +386,7 @@ body{font-family:"PingFang SC","Microsoft YaHei",system-ui,sans-serif;line-heigh
 <body>
 <main class="page">
   <header class="ticket">
-    <div class="brand">行迹 · Travel Journal</div>
+    <div class="brand">Guaxi · Travel Journal</div>
     <div class="route">
       <div><b>${escapeHtml(cities.from)}</b><small>${escapeHtml(cities.fromCode)}</small></div>
       <i>→</i>
@@ -395,7 +395,7 @@ body{font-family:"PingFang SC","Microsoft YaHei",system-ui,sans-serif;line-heigh
     <h1>${escapeHtml(title)}</h1>
     ${plan.subtitle ? `<p class="meta">${escapeHtml(plan.subtitle)}</p>` : ''}
     <div class="meta">${escapeHtml(meta)}</div>
-    <div class="source">${escapeHtml(source)} · ${escapeHtml(plan.factsMeta?.provider || '行迹')} · 资料更新于 ${escapeHtml(updated)}</div>
+    <div class="source">${escapeHtml(source)} · ${escapeHtml(plan.factsMeta?.provider || 'Guaxi')} · 资料更新于 ${escapeHtml(updated)}</div>
     ${mapBlock(plan)}
   </header>
 
@@ -413,8 +413,38 @@ body{font-family:"PingFang SC","Microsoft YaHei",system-ui,sans-serif;line-heigh
   ${renderAdvice(plan)}
   ${notes ? `<section class="panel"><h2>数据与说明</h2><ul class="notes">${notes}</ul></section>` : ''}
   ${shareNote}
-  <div class="footer">由行迹生成 · ${escapeHtml(new Date().toLocaleString('zh-CN'))} · ${escapeHtml(source)}</div>
+  <div class="footer">由 Guaxi生成 · ${escapeHtml(new Date().toLocaleString('zh-CN'))} · ${escapeHtml(source)}</div>
 </main>
 </body>
 </html>`
+}
+
+/**
+ * 生成长图/打印用的静态地图（后端绘制绿色路线 + 白色描边）。
+ * 返回 data URL；没有可用的路线或服务商时返回空字符串。
+ */
+export async function buildPlanPosterMap(plan, api) {
+  const coordSystem = plan?.coordSystem || (plan?.source === 'amap' ? 'gcj02' : 'wgs84')
+  if (coordSystem !== 'gcj02') return ''
+  const day = (plan?.days || []).find((item) =>
+    (item.blocks || []).some((block) => block.route?.polyline),
+  )
+  const block = day?.blocks?.find((item) => item.route?.polyline)
+  const destination = plan?.destination
+  if (!block || !destination?.lng || !destination?.lat) return ''
+  const points = String(block.route.polyline)
+    .split(';')
+    .map((point) => point.split(',').map(Number))
+    .filter((pair) => pair.length === 2 && pair.every(Number.isFinite))
+  if (!points.length) return ''
+  return (
+    (await api.staticMap({
+      centerLng: Number(destination.lng),
+      centerLat: Number(destination.lat),
+      zoom: 11,
+      width: 900,
+      height: 380,
+      path: points.slice(0, 120),
+    })) || ''
+  )
 }

@@ -565,6 +565,11 @@ export const api = {
     }
     return invoke('travel_open_print_window', { planId, theme })
   },
+
+  async copyImage(dataUrl) {
+    if (!isTauriRuntime()) throw new Error('浏览器预览不支持写入剪贴板')
+    return invoke('travel_copy_image', { dataUrl })
+  },
 }
 
 export function createLocalDraft(overrides = {}) {

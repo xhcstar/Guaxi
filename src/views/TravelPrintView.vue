@@ -2,7 +2,7 @@
   <div class="tr-print" :data-theme="theme">
     <div class="tr-print-toolbar">
       <div>
-        <strong>行迹 · 打印行程</strong>
+        <strong>Guaxi · 打印行程</strong>
         <span>{{ plan?.title || '正在加载…' }}</span>
       </div>
       <div class="tr-print-actions">
@@ -17,8 +17,8 @@
     <article v-else-if="plan" class="tr-print-sheet">
       <header class="tr-print-head">
         <div class="tr-print-brand">
-          <span class="tr-print-seal">行迹</span>
-          <div><strong>行迹 · 旅行计划</strong><small>XINGJI TRAVEL JOURNAL</small></div>
+          <span class="tr-print-seal">G</span>
+          <div><strong>Guaxi · 旅行计划</strong><small>GUAXI TRAVEL JOURNAL</small></div>
         </div>
         <div class="tr-print-route">
           <strong>{{ cities.from }}</strong>
@@ -107,7 +107,7 @@
       </section>
 
       <footer class="tr-print-foot">
-        <span>由行迹生成 · {{ plan.factsMeta?.provider || 'AI 编排' }}</span>
+        <span>由 Guaxi 生成 · {{ plan.factsMeta?.provider || 'AI 编排' }}</span>
         <span>{{ issued }}</span>
       </footer>
     </article>
@@ -175,7 +175,7 @@ onMounted(async () => {
   }
   try {
     plan.value = await api.getPlan(planId)
-    document.title = `${plan.value.title || '行程'} · 行迹打印`
+    document.title = `${plan.value.title || '行程'} · Guaxi 打印`
   } catch (err) {
     error.value = `读取计划失败：${err?.message || err}`
   }

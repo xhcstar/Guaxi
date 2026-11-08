@@ -2,10 +2,10 @@
   <div ref="root" class="tr-poster">
     <div class="tr-poster-top">
       <div class="tr-poster-brand">
-        <span class="tr-poster-seal">行迹</span>
+        <span class="tr-poster-seal">G</span>
         <div>
-          <strong>行迹 · 旅行计划</strong>
-          <small>XINGJI TRAVEL JOURNAL · ISSUED {{ issued }}</small>
+          <strong>Guaxi · 旅行计划</strong>
+          <small>GUAXI TRAVEL JOURNAL · ISSUED {{ issued }}</small>
         </div>
       </div>
       <div class="tr-poster-code">
@@ -40,9 +40,9 @@
           <path d="M-20 265 C140 145 220 325 400 215 S700 125 1000 245" />
           <path d="M-20 290 C140 170 220 350 400 240 S700 150 1000 270" />
         </g>
-        <path d="M60 230 C220 60, 360 280, 540 150 S800 80, 920 190" fill="none" stroke="#c4552d" stroke-width="4" stroke-dasharray="10 9" />
+        <path d="M60 230 C220 60, 360 280, 540 150 S800 80, 920 190" fill="none" stroke="#0f7a3d" stroke-width="4" stroke-dasharray="10 9" />
         <circle cx="60" cy="230" r="10" fill="#1c2a27" />
-        <circle cx="540" cy="150" r="8" fill="#c4552d" />
+        <circle cx="540" cy="150" r="8" fill="#0f7a3d" />
         <circle cx="920" cy="190" r="10" fill="#4f6b57" />
         <text x="80" y="258" font-size="18" fill="#1c2a27">{{ cities.from }}</text>
         <text x="820" y="230" font-size="18" fill="#1c2a27">{{ cities.to }}</text>
@@ -101,13 +101,13 @@
         <small>扫码在手机查看</small>
       </div>
       <div v-else class="tr-poster-stamp">
-        <span>行迹</span>
-        <small>XINGJI</small>
+        <span>Guaxi</span>
+        <small>GUAXI</small>
       </div>
     </div>
 
     <div class="tr-poster-foot">
-      <span>由行迹生成 · {{ plan.factsMeta?.provider || 'AI 编排' }} · {{ plan.source === 'amap' ? '高德地图数据' : 'OpenStreetMap 数据' }}</span>
+      <span>由 Guaxi 生成 · {{ plan.factsMeta?.provider || 'AI 编排' }} · {{ plan.source === 'amap' ? '高德地图数据' : 'OpenStreetMap 数据' }}</span>
       <span>{{ issued }}</span>
     </div>
     <div class="tr-poster-perforation" aria-hidden="true"></div>

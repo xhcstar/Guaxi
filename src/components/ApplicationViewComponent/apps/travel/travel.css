@@ -1,4 +1,4 @@
-/* 行迹 · 旅行计划
+/* Guaxi · 旅行计划
    视觉方向：车票 × 时刻表 × 旅行手账。
    所有选择器都收在 .tr-app / .tr-print / .tr-poster 下，不污染主应用。 */
 
@@ -1263,7 +1263,55 @@
 
 .tr-section-actions {
   display: flex;
+  align-items: center;
   gap: 14px;
+  flex-wrap: wrap;
+}
+
+.tr-library-tabs {
+  display: inline-flex;
+  padding: 3px;
+  border: 1px solid var(--tr-line);
+  border-radius: 999px;
+  background: var(--tr-card);
+}
+
+.tr-library-tabs button {
+  padding: 5px 12px;
+  border-radius: 999px;
+  font-size: 11px;
+  color: var(--tr-ink-faint);
+}
+
+.tr-library-tabs button.active {
+  background: var(--tr-accent-soft);
+  color: var(--tr-accent);
+}
+
+.tr-draft-hint {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px 20px;
+  border: 1px dashed var(--tr-line-strong);
+  border-radius: 12px;
+  background: var(--tr-card);
+}
+
+.tr-draft-hint div {
+  min-width: 0;
+}
+
+.tr-draft-hint strong {
+  font-family: var(--tr-serif);
+  font-size: 14px;
+}
+
+.tr-draft-hint p {
+  margin: 4px 0 0;
+  font-size: 11px;
+  color: var(--tr-ink-faint);
 }
 
 .tr-plan-grid {
@@ -2313,7 +2361,7 @@
   display: inline-flex;
   align-items: center;
   gap: 3px;
-  font-size: 11px;
+  font-size: 12px;
   color: var(--tr-ink-faint);
 }
 
@@ -2349,7 +2397,7 @@
 .tr-ticket-route strong {
   display: block;
   font-family: var(--tr-serif);
-  font-size: 30px;
+  font-size: 33px;
   line-height: 1.1;
   white-space: nowrap;
 }
@@ -2358,7 +2406,7 @@
   display: block;
   margin-top: 3px;
   font-family: var(--tr-mono);
-  font-size: 8.5px;
+  font-size: 9.5px;
   letter-spacing: 0.18em;
   color: var(--tr-ink-faint);
 }
@@ -2390,14 +2438,14 @@
 .tr-ticket-heading h1 {
   margin: 7px 0 4px;
   font-family: var(--tr-serif);
-  font-size: 27px;
+  font-size: 29.5px;
   font-weight: 600;
   line-height: 1.35;
 }
 
 .tr-ticket-heading p {
   margin: 0;
-  font-size: 11.5px;
+  font-size: 12.5px;
   color: var(--tr-ink-faint);
   line-height: 1.7;
 }
@@ -2463,7 +2511,7 @@
   padding: 8px 9px;
   border-radius: 7px;
   text-align: left;
-  font-size: 11.5px;
+  font-size: 12.5px;
   color: var(--tr-ink-soft);
 }
 
@@ -2487,7 +2535,7 @@
 .tr-ticket-meta small {
   display: block;
   font-family: var(--tr-mono);
-  font-size: 8px;
+  font-size: 9px;
   letter-spacing: 0.12em;
   color: var(--tr-ink-faint);
 }
@@ -2495,7 +2543,7 @@
 .tr-ticket-meta span {
   display: block;
   margin-top: 3px;
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 600;
 }
 
@@ -2528,13 +2576,19 @@
 
 .tr-draft-banner strong {
   display: block;
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .tr-draft-banner p {
   margin: 2px 0 0;
-  font-size: 10.5px;
+  font-size: 11.5px;
   opacity: 0.82;
+}
+
+.tr-draft-banner.is-adopt {
+  border-color: rgba(79, 107, 87, 0.4);
+  background: var(--tr-moss-soft);
+  color: var(--tr-moss);
 }
 
 .tr-tabs {
@@ -2559,7 +2613,7 @@
   padding: 0 15px;
   border-radius: 8px;
   color: var(--tr-ink-faint);
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 600;
   transition: background 0.16s ease, color 0.16s ease;
 }
@@ -2584,7 +2638,7 @@
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.16);
   font-family: var(--tr-mono);
-  font-size: 9px;
+  font-size: 10px;
 }
 
 .tr-tabs button:not(.active) small {
@@ -2623,21 +2677,21 @@
 
 .tr-weather-date {
   font-family: var(--tr-mono);
-  font-size: 9px;
+  font-size: 10px;
   color: var(--tr-ink-faint);
 }
 
 .tr-weather-day strong {
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .tr-weather-day span:not(.tr-weather-date) {
-  font-size: 10.5px;
+  font-size: 11.5px;
   color: var(--tr-ink-soft);
 }
 
 .tr-weather-day small {
-  font-size: 9.5px;
+  font-size: 10.5px;
   color: var(--tr-ink-faint);
 }
 
@@ -2665,13 +2719,13 @@
 
 .tr-route-weather-head strong {
   font-family: var(--tr-serif);
-  font-size: 14px;
+  font-size: 15.5px;
   letter-spacing: 0.02em;
 }
 
 .tr-route-weather-head > small {
   font-family: var(--tr-mono);
-  font-size: 9.5px;
+  font-size: 10.5px;
   color: var(--tr-ink-faint);
 }
 
@@ -2703,13 +2757,13 @@
 
 .tr-route-weather-time {
   font-family: var(--tr-mono);
-  font-size: 8.5px;
+  font-size: 9.5px;
   color: var(--tr-ink-faint);
   white-space: nowrap;
 }
 
 .tr-route-weather-point strong {
-  font-size: 11.5px;
+  font-size: 12.5px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2720,7 +2774,7 @@
   align-items: center;
   gap: 4px;
   color: var(--tr-ink-soft);
-  font-size: 10.5px;
+  font-size: 11.5px;
 }
 
 .tr-route-weather-main svg {
@@ -2729,7 +2783,7 @@
 }
 
 .tr-route-weather-point small {
-  font-size: 9px;
+  font-size: 10px;
   line-height: 1.4;
   color: var(--tr-ink-faint);
 }
@@ -2740,7 +2794,7 @@
 
 .tr-route-weather-note {
   margin: 7px 0 0;
-  font-size: 9.5px;
+  font-size: 10.5px;
   line-height: 1.5;
   color: var(--tr-ink-faint);
 }
@@ -2784,18 +2838,18 @@
 
 .tr-day-switcher small {
   font-family: var(--tr-mono);
-  font-size: 8px;
+  font-size: 9px;
   letter-spacing: 0.1em;
   opacity: 0.7;
 }
 
 .tr-day-switcher strong {
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .tr-day-switcher span {
   max-width: 150px;
-  font-size: 9.5px;
+  font-size: 10.5px;
   opacity: 0.72;
   white-space: nowrap;
   overflow: hidden;
@@ -2808,7 +2862,7 @@
   flex-direction: row;
   gap: 5px;
   min-width: 96px;
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .tr-day-switcher .tr-all-days.active {
@@ -2842,14 +2896,14 @@
 
 .tr-all-day-head span {
   font-family: var(--tr-mono);
-  font-size: 9px;
+  font-size: 10px;
   letter-spacing: 0.12em;
   color: var(--tr-accent);
 }
 
 .tr-all-day-head strong {
   font-family: var(--tr-serif);
-  font-size: 17px;
+  font-size: 18.5px;
 }
 
 .tr-day-summary {
@@ -2860,7 +2914,7 @@
   padding-bottom: 12px;
   border-bottom: 1px dashed var(--tr-line);
   font-family: var(--tr-mono);
-  font-size: 10px;
+  font-size: 11px;
   color: var(--tr-ink-faint);
 }
 
@@ -2883,13 +2937,13 @@
 .tr-timeline-head h2 {
   margin: 7px 0 3px;
   font-family: var(--tr-serif);
-  font-size: 24px;
+  font-size: 26.5px;
   font-weight: 600;
 }
 
 .tr-timeline-head p {
   margin: 0;
-  font-size: 11px;
+  font-size: 12px;
   color: var(--tr-ink-faint);
 }
 
@@ -2909,12 +2963,12 @@
 
 .tr-timeline-weather strong {
   display: block;
-  font-size: 11.5px;
+  font-size: 12.5px;
 }
 
 .tr-timeline-weather span {
   display: block;
-  font-size: 9.5px;
+  font-size: 10.5px;
   color: var(--tr-ink-faint);
 }
 
@@ -2940,13 +2994,13 @@
 
 .tr-timeline-time strong {
   font-family: var(--tr-mono);
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 600;
 }
 
 .tr-timeline-time span {
   font-family: var(--tr-mono);
-  font-size: 9px;
+  font-size: 10px;
   color: var(--tr-ink-faint);
 }
 
@@ -3048,7 +3102,7 @@
   display: inline-block;
   margin-bottom: 3px;
   font-family: var(--tr-mono);
-  font-size: 8px;
+  font-size: 9px;
   letter-spacing: 0.12em;
   color: var(--tr-ink-faint);
   text-transform: uppercase;
@@ -3057,20 +3111,20 @@
 .tr-block h3 {
   margin: 0;
   font-family: var(--tr-serif);
-  font-size: 16px;
+  font-size: 17.5px;
   font-weight: 600;
   line-height: 1.4;
 }
 
 .tr-timeline-item.is-transit .tr-block h3 {
   font-family: var(--tr-sans);
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 600;
 }
 
 .tr-block-detail {
   margin: 5px 0 0;
-  font-size: 11.5px;
+  font-size: 12.5px;
   line-height: 1.75;
   color: var(--tr-ink-soft);
   overflow-wrap: anywhere;
@@ -3081,7 +3135,7 @@
   flex-wrap: wrap;
   gap: 4px 10px;
   margin-top: 7px;
-  font-size: 10px;
+  font-size: 11px;
   color: var(--tr-ink-faint);
   overflow-wrap: anywhere;
 }
@@ -3098,14 +3152,14 @@
   border: 1px solid var(--tr-line);
   border-radius: 999px;
   font-family: var(--tr-mono);
-  font-size: 8px;
+  font-size: 9px;
   color: var(--tr-ink-faint);
   background: var(--tr-paper-deep);
 }
 
 .tr-poi-links {
   margin-top: 8px;
-  font-size: 9.5px;
+  font-size: 10.5px;
 }
 
 .tr-poi-links > summary {
@@ -3147,18 +3201,18 @@
 }
 
 .tr-poi-link-list strong {
-  font-size: 9.5px;
+  font-size: 10.5px;
   font-weight: 600;
 }
 
 .tr-poi-link-list small {
-  font-size: 8px;
+  font-size: 9px;
   color: var(--tr-ink-faint);
 }
 
 .tr-poi-links > p {
   margin: 6px 0 0;
-  font-size: 8.5px;
+  font-size: 9.5px;
   line-height: 1.5;
   color: var(--tr-ink-faint);
 }
@@ -3169,7 +3223,7 @@
   align-items: center;
   gap: 6px;
   margin-top: 10px;
-  font-size: 9px;
+  font-size: 10px;
   color: var(--tr-ink-faint);
 }
 
@@ -3190,7 +3244,7 @@
   border-radius: 999px;
   background: var(--tr-accent-soft);
   color: var(--tr-accent-deep);
-  font-size: 9px;
+  font-size: 10px;
 }
 
 .tr-block-booking-note {
@@ -3200,7 +3254,7 @@
   border-radius: 3px;
   background: var(--tr-accent-soft);
   color: var(--tr-accent-deep);
-  font-size: 10px;
+  font-size: 11px;
   line-height: 1.6;
 }
 
@@ -3217,7 +3271,7 @@
   display: flex;
   align-items: flex-start;
   gap: 5px;
-  font-size: 10.5px;
+  font-size: 11.5px;
   line-height: 1.65;
   color: var(--tr-ink-faint);
 }
@@ -3240,7 +3294,7 @@
   gap: 5px 12px;
   align-items: center;
   font-family: var(--tr-mono);
-  font-size: 9.5px;
+  font-size: 10.5px;
   color: var(--tr-ink-faint);
 }
 
@@ -3266,7 +3320,7 @@
   align-items: flex-start;
   gap: 5px;
   margin-top: 6px;
-  font-size: 10px;
+  font-size: 11px;
   line-height: 1.6;
   color: var(--tr-accent);
 }
@@ -3299,7 +3353,7 @@
 }
 
 .tr-route-option-head span {
-  font-size: 9px;
+  font-size: 10px;
   color: var(--tr-ink-faint);
   white-space: nowrap;
   overflow: hidden;
@@ -3312,7 +3366,7 @@
 
 .tr-route-option-head strong {
   font-family: var(--tr-mono);
-  font-size: 11px;
+  font-size: 12px;
   white-space: nowrap;
 }
 
@@ -3321,7 +3375,7 @@
   flex-wrap: wrap;
   gap: 2px 7px;
   margin-top: 3px;
-  font-size: 9px;
+  font-size: 10px;
   color: var(--tr-ink-faint);
   overflow-wrap: anywhere;
 }
@@ -3334,7 +3388,7 @@
   margin-top: 7px;
   padding-top: 6px;
   border-top: 1px dashed var(--tr-line);
-  font-size: 9.5px;
+  font-size: 10.5px;
   color: var(--tr-ink-faint);
 }
 
@@ -3364,7 +3418,7 @@
 
 .tr-route-weather-line small {
   font-family: var(--tr-mono);
-  font-size: 8.5px;
+  font-size: 9.5px;
 }
 
 .tr-route-weather-line span.is-unknown {
@@ -3378,7 +3432,7 @@
   margin-top: 8px;
   padding: 0;
   color: var(--tr-accent);
-  font-size: 9.5px;
+  font-size: 10.5px;
   font-weight: 600;
 }
 
@@ -3394,7 +3448,7 @@
 
 .tr-route-steps summary {
   cursor: pointer;
-  font-size: 10px;
+  font-size: 11px;
   color: var(--tr-ink-faint);
   list-style: none;
 }
@@ -3425,7 +3479,7 @@
   display: flex;
   align-items: baseline;
   gap: 7px;
-  font-size: 10px;
+  font-size: 11px;
   line-height: 1.6;
   color: var(--tr-ink-soft);
 }
@@ -3440,13 +3494,13 @@
   background: var(--tr-paper-deep);
   color: var(--tr-ink-faint);
   font-family: var(--tr-mono);
-  font-size: 8px;
+  font-size: 9px;
 }
 
 .tr-route-steps li small {
   margin-left: auto;
   font-family: var(--tr-mono);
-  font-size: 9px;
+  font-size: 10px;
   color: var(--tr-ink-faint);
   white-space: nowrap;
 }
@@ -3462,14 +3516,14 @@
   display: flex;
   align-items: center;
   gap: 5px;
-  font-size: 10.5px;
+  font-size: 11.5px;
   color: var(--tr-ink-soft);
 }
 
 .tr-day-tips ul {
   margin: 5px 0 0;
   padding-left: 17px;
-  font-size: 10.5px;
+  font-size: 11.5px;
   line-height: 1.7;
   color: var(--tr-ink-faint);
 }
@@ -3479,7 +3533,7 @@
   border: 1px dashed var(--tr-line-strong);
   border-radius: 10px;
   text-align: center;
-  font-size: 12px;
+  font-size: 13px;
   color: var(--tr-ink-faint);
 }
 
@@ -3515,7 +3569,7 @@
   border: 1px solid var(--tr-line);
   color: var(--tr-ink-faint);
   font-family: var(--tr-mono);
-  font-size: 10px;
+  font-size: 11px;
 }
 
 .tr-map-days button.active {
@@ -3533,7 +3587,7 @@
 
 .tr-map-source {
   font-family: var(--tr-mono);
-  font-size: 9px;
+  font-size: 10px;
   color: var(--tr-ink-faint);
 }
 
@@ -3558,7 +3612,7 @@
 .tr-map .leaflet-control-attribution {
   background: rgba(255, 250, 240, 0.86);
   color: #46564f;
-  font-size: 9px;
+  font-size: 10px;
 }
 
 .tr-map .leaflet-control-zoom a {
@@ -3585,19 +3639,19 @@
 
 .tr-map-popup strong {
   display: block;
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .tr-map-popup span {
   display: block;
   margin-top: 1px;
-  font-size: 9.5px;
+  font-size: 10.5px;
   color: #7b8a82;
 }
 
 .tr-map-popup p {
   margin: 4px 0 0;
-  font-size: 10px;
+  font-size: 11px;
   line-height: 1.5;
   color: #46564f;
 }
@@ -3605,7 +3659,7 @@
 .tr-map-popup small {
   display: block;
   margin-top: 3px;
-  font-size: 9.5px;
+  font-size: 10.5px;
   color: #c4552d;
 }
 
@@ -3626,7 +3680,7 @@
   border: 2px solid #fffaf0;
   box-shadow: 0 3px 10px rgba(28, 42, 39, 0.28);
   font-family: var(--tr-mono);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 700;
 }
 
@@ -3651,7 +3705,7 @@
   border-radius: 8px;
   background: rgba(255, 250, 240, 0.94);
   color: #8f3819;
-  font-size: 10.5px;
+  font-size: 11.5px;
   box-shadow: 0 8px 20px -12px rgba(28, 42, 39, 0.4);
 }
 
@@ -3671,12 +3725,12 @@
 
 .tr-map-empty strong {
   font-family: var(--tr-serif);
-  font-size: 17px;
+  font-size: 18.5px;
   color: #1c2a27;
 }
 
 .tr-map-empty span {
-  font-size: 10.5px;
+  font-size: 11.5px;
 }
 
 .tr-map-empty > svg {
@@ -3695,7 +3749,7 @@
   border-radius: 8px;
   background: rgba(255, 250, 240, 0.9);
   font-family: var(--tr-mono);
-  font-size: 8px;
+  font-size: 9px;
   color: #46564f;
 }
 
@@ -3734,14 +3788,14 @@
 .tr-panel-head h2 {
   margin: 7px 0 3px;
   font-family: var(--tr-serif);
-  font-size: 24px;
+  font-size: 26.5px;
   font-weight: 600;
 }
 
 .tr-panel-head p {
   margin: 0;
   max-width: 620px;
-  font-size: 11px;
+  font-size: 12px;
   line-height: 1.7;
   color: var(--tr-ink-faint);
 }
@@ -3754,7 +3808,7 @@
 .tr-budget-total small {
   display: block;
   font-family: var(--tr-mono);
-  font-size: 8px;
+  font-size: 9px;
   letter-spacing: 0.12em;
   color: var(--tr-ink-faint);
 }
@@ -3762,14 +3816,14 @@
 .tr-budget-total strong {
   display: block;
   font-family: var(--tr-serif);
-  font-size: 30px;
+  font-size: 33px;
   line-height: 1.1;
   color: var(--tr-accent);
 }
 
 .tr-budget-total span {
   display: block;
-  font-size: 10px;
+  font-size: 11px;
   color: var(--tr-ink-faint);
 }
 
@@ -3834,19 +3888,19 @@
 
 .tr-budget-label strong {
   display: block;
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .tr-budget-label span {
   display: block;
-  font-size: 10.5px;
+  font-size: 11.5px;
   color: var(--tr-ink-soft);
 }
 
 .tr-budget-label small {
   display: block;
   margin-top: 2px;
-  font-size: 9.5px;
+  font-size: 10.5px;
   color: var(--tr-ink-faint);
 }
 
@@ -3861,7 +3915,7 @@
 
 .tr-budget-total-inline {
   font-family: var(--tr-serif);
-  font-size: 22px;
+  font-size: 24px;
   font-weight: 600;
   color: var(--tr-accent);
 }
@@ -3878,7 +3932,7 @@
   display: inline-flex;
   align-items: flex-start;
   gap: 5px;
-  font-size: 10px;
+  font-size: 11px;
   line-height: 1.6;
   color: var(--tr-ink-faint);
 }
@@ -3908,11 +3962,11 @@
   display: block;
   margin-bottom: 3px;
   font-family: var(--tr-serif);
-  font-size: 13px;
+  font-size: 14.5px;
 }
 
 .tr-budget-tips span {
-  font-size: 10.5px;
+  font-size: 11.5px;
   line-height: 1.7;
   color: var(--tr-ink-faint);
 }
@@ -3950,12 +4004,12 @@
   position: relative;
   z-index: 1;
   font-family: var(--tr-mono);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 600;
 }
 
 .tr-prep-progress small {
-  font-size: 8.5px;
+  font-size: 9.5px;
   color: var(--tr-ink-faint);
 }
 
@@ -3967,7 +4021,7 @@
   padding: 9px 11px;
   border-radius: 8px;
   background: var(--tr-paper-deep);
-  font-size: 9.5px;
+  font-size: 10.5px;
   line-height: 1.6;
   color: var(--tr-ink-faint);
 }
@@ -4003,7 +4057,7 @@
   gap: 6px;
   margin: 0 0 11px;
   font-family: var(--tr-serif);
-  font-size: 15px;
+  font-size: 16.5px;
   font-weight: 600;
 }
 
@@ -4038,7 +4092,7 @@
 
 .tr-checklist strong {
   display: block;
-  font-size: 11.5px;
+  font-size: 12.5px;
   font-weight: 600;
   line-height: 1.5;
 }
@@ -4046,7 +4100,7 @@
 .tr-checklist small {
   display: block;
   margin-top: 1px;
-  font-size: 9.5px;
+  font-size: 10.5px;
   line-height: 1.5;
   color: var(--tr-ink-faint);
 }
@@ -4073,7 +4127,7 @@
 .tr-due {
   flex: 0 0 auto;
   font-family: var(--tr-mono);
-  font-size: 8.5px;
+  font-size: 9.5px;
   color: var(--tr-ink-faint);
   white-space: nowrap;
   padding-top: 2px;
@@ -4093,27 +4147,27 @@
 .tr-booking-day {
   flex: 0 0 26px;
   font-family: var(--tr-mono);
-  font-size: 9px;
+  font-size: 10px;
   color: var(--tr-accent);
   padding-top: 2px;
 }
 
 .tr-booking-item strong {
   display: block;
-  font-size: 11.5px;
+  font-size: 12.5px;
 }
 
 .tr-booking-item small {
   display: block;
   margin-top: 1px;
-  font-size: 9.5px;
+  font-size: 10.5px;
   color: var(--tr-ink-faint);
   line-height: 1.5;
 }
 
 .tr-booking-item p {
   margin: 2px 0 0;
-  font-size: 10px;
+  font-size: 11px;
   color: var(--tr-ink-soft);
   line-height: 1.5;
 }
@@ -4122,7 +4176,7 @@
   padding: 12px;
   border: 1px dashed var(--tr-line);
   border-radius: 8px;
-  font-size: 10.5px;
+  font-size: 11.5px;
   line-height: 1.7;
   color: var(--tr-ink-faint);
 }
@@ -4136,14 +4190,14 @@
 .tr-pack-group strong {
   display: block;
   margin-bottom: 5px;
-  font-size: 10.5px;
+  font-size: 11.5px;
   color: var(--tr-moss);
 }
 
 .tr-pack-group ul {
   margin: 0;
   padding-left: 16px;
-  font-size: 10.5px;
+  font-size: 11.5px;
   line-height: 1.7;
   color: var(--tr-ink-soft);
 }
@@ -4155,14 +4209,14 @@
   border: 1px solid var(--tr-line);
   border-radius: 999px;
   font-family: var(--tr-mono);
-  font-size: 9px;
+  font-size: 10px;
   color: var(--tr-accent-deep);
   background: var(--tr-paper);
 }
 
 .tr-prep-lead {
   margin: 0 0 11px;
-  font-size: 11.5px;
+  font-size: 12.5px;
   line-height: 1.8;
   color: var(--tr-ink-soft);
 }
@@ -4183,18 +4237,18 @@
 .tr-mini-weather span {
   display: block;
   font-family: var(--tr-mono);
-  font-size: 8.5px;
+  font-size: 9.5px;
   color: var(--tr-ink-faint);
 }
 
 .tr-mini-weather strong {
   display: block;
-  font-size: 10.5px;
+  font-size: 11.5px;
 }
 
 .tr-mini-weather small {
   display: block;
-  font-size: 9px;
+  font-size: 10px;
   color: var(--tr-ink-faint);
 }
 
@@ -4210,7 +4264,7 @@
 .tr-advice-list li {
   position: relative;
   padding-left: 13px;
-  font-size: 10.5px;
+  font-size: 11.5px;
   line-height: 1.7;
   color: var(--tr-ink-soft);
 }
@@ -4221,13 +4275,13 @@
   left: 1px;
   top: -2px;
   color: var(--tr-accent);
-  font-size: 17px;
+  font-size: 18.5px;
   line-height: 1;
 }
 
 .tr-advice-list.is-alt li::before {
   content: "↳";
-  font-size: 11px;
+  font-size: 12px;
   top: 1px;
   color: var(--tr-moss);
 }
@@ -4501,7 +4555,7 @@
   border-radius: 7px;
   color: #c4552d;
   font-family: "Songti SC", "Noto Serif SC", serif;
-  font-size: 17px;
+  font-size: 32px;
   font-weight: 700;
   transform: rotate(-3deg);
   background: #fffaf0;
@@ -4510,7 +4564,7 @@
 .tr-poster-brand strong {
   display: block;
   font-family: "Songti SC", "Noto Serif SC", serif;
-  font-size: 20px;
+  font-size: 37px;
   letter-spacing: 0.12em;
 }
 
@@ -4518,7 +4572,7 @@
   display: block;
   margin-top: 3px;
   font-family: "JetBrains Mono", Consolas, monospace;
-  font-size: 8px;
+  font-size: 14.5px;
   letter-spacing: 0.14em;
   color: #7b8a82;
 }
@@ -4528,7 +4582,7 @@
   align-items: center;
   gap: 10px;
   font-family: "JetBrains Mono", Consolas, monospace;
-  font-size: 18px;
+  font-size: 33.5px;
   letter-spacing: 0.12em;
   color: #1c2a27;
 }
@@ -4554,7 +4608,7 @@
 .tr-poster-route strong {
   display: block;
   font-family: "Songti SC", "Noto Serif SC", serif;
-  font-size: 50px;
+  font-size: 93px;
   line-height: 1.05;
   letter-spacing: 0.04em;
 }
@@ -4563,7 +4617,7 @@
   display: block;
   margin-top: 4px;
   font-family: "JetBrains Mono", Consolas, monospace;
-  font-size: 9px;
+  font-size: 16.5px;
   letter-spacing: 0.2em;
   color: #7b8a82;
 }
@@ -4589,14 +4643,14 @@
 .tr-poster h1 {
   margin: 12px 0 8px;
   font-family: "Songti SC", "Noto Serif SC", serif;
-  font-size: 40px;
+  font-size: 74px;
   font-weight: 600;
   line-height: 1.3;
 }
 
 .tr-poster-sub {
   margin: 0 0 12px;
-  font-size: 14px;
+  font-size: 26px;
   line-height: 1.7;
   color: #46564f;
 }
@@ -4606,7 +4660,7 @@
   flex-wrap: wrap;
   gap: 8px 20px;
   font-family: "JetBrains Mono", Consolas, monospace;
-  font-size: 10px;
+  font-size: 19px;
   color: #46564f;
 }
 
@@ -4634,7 +4688,7 @@
   border-radius: 4px;
   background: rgba(255, 250, 240, 0.88);
   font-family: "JetBrains Mono", Consolas, monospace;
-  font-size: 8px;
+  font-size: 14.5px;
   letter-spacing: 0.12em;
   color: #46564f;
 }
@@ -4665,32 +4719,32 @@
 
 .tr-poster-day-head > span {
   font-family: "JetBrains Mono", Consolas, monospace;
-  font-size: 9px;
+  font-size: 16.5px;
   letter-spacing: 0.12em;
   color: #c4552d;
 }
 
 .tr-poster-day-head strong {
   font-family: "Songti SC", "Noto Serif SC", serif;
-  font-size: 17px;
+  font-size: 32px;
 }
 
 .tr-poster-day-head em {
   font-style: normal;
-  font-size: 11px;
+  font-size: 20.5px;
   color: #46564f;
 }
 
 .tr-poster-day-head small {
   margin-left: auto;
-  font-size: 9.5px;
+  font-size: 17.5px;
   color: #7b8a82;
 }
 
 .tr-poster-route-weather {
   margin: 7px 0 0;
   font-family: "JetBrains Mono", Consolas, monospace;
-  font-size: 8.5px;
+  font-size: 16px;
   line-height: 1.6;
   color: #7b8a82;
   overflow-wrap: anywhere;
@@ -4713,16 +4767,16 @@
 
 .tr-poster-day li {
   display: grid;
-  grid-template-columns: 92px minmax(0, 1fr) auto;
+  grid-template-columns: 140px minmax(0, 1fr) auto;
   align-items: baseline;
   gap: 8px;
-  font-size: 10.5px;
+  font-size: 19.5px;
   line-height: 1.5;
 }
 
 .tr-poster-time {
   font-family: "JetBrains Mono", Consolas, monospace;
-  font-size: 9px;
+  font-size: 16.5px;
   color: #7b8a82;
 }
 
@@ -4734,14 +4788,14 @@
 }
 
 .tr-poster-day li small {
-  font-size: 8.5px;
+  font-size: 16px;
   color: #7b8a82;
   white-space: nowrap;
 }
 
 .tr-poster-bottom {
   display: grid;
-  grid-template-columns: 1.3fr 1fr 130px;
+  grid-template-columns: 1.4fr 1fr 150px;
   gap: 16px;
   margin-top: 24px;
   padding-top: 20px;
@@ -4752,7 +4806,7 @@
 .tr-poster-prep h3 {
   margin: 0 0 9px;
   font-family: "Songti SC", "Noto Serif SC", serif;
-  font-size: 16px;
+  font-size: 29.5px;
 }
 
 .tr-poster-budget-row {
@@ -4762,18 +4816,18 @@
   gap: 10px;
   padding: 5px 0;
   border-bottom: 1px dashed rgba(28, 42, 39, 0.12);
-  font-size: 10.5px;
+  font-size: 19.5px;
 }
 
 .tr-poster-budget-row span small {
   display: block;
-  font-size: 8.5px;
+  font-size: 16px;
   color: #7b8a82;
 }
 
 .tr-poster-budget-row strong {
   font-family: "JetBrains Mono", Consolas, monospace;
-  font-size: 10px;
+  font-size: 19px;
 }
 
 .tr-poster-budget-total {
@@ -4782,19 +4836,19 @@
   justify-content: space-between;
   gap: 10px;
   padding-top: 9px;
-  font-size: 12px;
+  font-size: 22.5px;
 }
 
 .tr-poster-budget-total strong {
   font-family: "Songti SC", "Noto Serif SC", serif;
-  font-size: 24px;
+  font-size: 44px;
   color: #c4552d;
 }
 
 .tr-poster-prep ul {
   margin: 0;
   padding-left: 16px;
-  font-size: 10px;
+  font-size: 19px;
   line-height: 1.7;
   color: #46564f;
 }
@@ -4808,14 +4862,14 @@
 
 .tr-poster-pack strong {
   display: block;
-  font-size: 9.5px;
+  font-size: 17.5px;
   color: #4f6b57;
 }
 
 .tr-poster-pack span {
   display: block;
   margin-top: 2px;
-  font-size: 9px;
+  font-size: 16.5px;
   line-height: 1.6;
   color: #46564f;
 }
@@ -4838,7 +4892,7 @@
 }
 
 .tr-poster-qr small {
-  font-size: 8.5px;
+  font-size: 16px;
   color: #7b8a82;
 }
 
@@ -4861,13 +4915,13 @@
 
 .tr-poster-stamp span {
   font-family: "Songti SC", "Noto Serif SC", serif;
-  font-size: 25px;
+  font-size: 46.5px;
   letter-spacing: 0.1em;
 }
 
 .tr-poster-stamp small {
   font-family: "JetBrains Mono", Consolas, monospace;
-  font-size: 7px;
+  font-size: 13px;
   letter-spacing: 0.18em;
 }
 
@@ -4880,7 +4934,7 @@
   padding-top: 12px;
   border-top: 1px dashed rgba(28, 42, 39, 0.18);
   font-family: "JetBrains Mono", Consolas, monospace;
-  font-size: 8.5px;
+  font-size: 16px;
   color: #7b8a82;
 }
 
@@ -4891,6 +4945,28 @@
   bottom: 16px;
   height: 1px;
   background: repeating-linear-gradient(90deg, rgba(28, 42, 39, 0.24) 0 6px, transparent 6px 12px);
+}
+
+/* 放大字号后的收口：城市名和印章单独定尺寸，避免盖过标题或撑破印章。 */
+.tr-poster-route strong {
+  font-size: 66px;
+}
+
+.tr-poster-route small {
+  font-size: 15px;
+}
+
+.tr-poster-stamp {
+  width: 122px;
+  height: 122px;
+}
+
+.tr-poster-stamp span {
+  font-size: 30px;
+}
+
+.tr-poster-stamp small {
+  font-size: 10px;
 }
 
 /* ── 周末班次 ─────────────────────────────────────────────── */
@@ -6312,7 +6388,7 @@
   background: #ddd6c8;
   color: var(--print-ink);
   font-family: "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
-  font-size: 13px;
+  font-size: 16px;
   line-height: 1.65;
 }
 
@@ -6338,12 +6414,12 @@
 
 .tr-print-toolbar strong {
   font-family: "Songti SC", "Noto Serif SC", serif;
-  font-size: 15px;
+  font-size: 18.5px;
   letter-spacing: 0.1em;
 }
 
 .tr-print-toolbar span {
-  font-size: 10px;
+  font-size: 12px;
   color: rgba(244, 238, 225, 0.62);
 }
 
@@ -6391,7 +6467,7 @@
   border-radius: 6px;
   color: #c4552d;
   font-family: "Songti SC", "Noto Serif SC", serif;
-  font-size: 13px;
+  font-size: 16px;
   font-weight: 700;
   transform: rotate(-3deg);
 }
@@ -6399,14 +6475,14 @@
 .tr-print-brand strong {
   display: block;
   font-family: "Songti SC", "Noto Serif SC", serif;
-  font-size: 15px;
+  font-size: 18.5px;
   letter-spacing: 0.1em;
 }
 
 .tr-print-brand small {
   display: block;
   font-family: "JetBrains Mono", Consolas, monospace;
-  font-size: 7px;
+  font-size: 8.5px;
   letter-spacing: 0.16em;
   color: var(--print-faint);
 }
@@ -6417,25 +6493,25 @@
   gap: 12px;
   margin-top: 14px;
   font-family: "Songti SC", "Noto Serif SC", serif;
-  font-size: 26px;
+  font-size: 31.5px;
 }
 
 .tr-print-route span {
   color: #c4552d;
-  font-size: 18px;
+  font-size: 22px;
 }
 
 .tr-print-head h1 {
   margin: 8px 0 4px;
   font-family: "Songti SC", "Noto Serif SC", serif;
-  font-size: 28px;
+  font-size: 34px;
   font-weight: 600;
   line-height: 1.35;
 }
 
 .tr-print-head p {
   margin: 0 0 6px;
-  font-size: 12px;
+  font-size: 14.5px;
   color: var(--print-soft);
 }
 
@@ -6445,7 +6521,7 @@
   gap: 4px 16px;
   margin-top: 6px;
   font-family: "JetBrains Mono", Consolas, monospace;
-  font-size: 9px;
+  font-size: 11px;
   color: var(--print-soft);
 }
 
@@ -6464,26 +6540,26 @@
 
 .tr-print-day-head span {
   font-family: "JetBrains Mono", Consolas, monospace;
-  font-size: 8px;
+  font-size: 10px;
   letter-spacing: 0.12em;
   color: #c4552d;
 }
 
 .tr-print-day-head strong {
   font-family: "Songti SC", "Noto Serif SC", serif;
-  font-size: 14px;
+  font-size: 17px;
 }
 
 .tr-print-day-head em {
   margin-left: auto;
   font-style: normal;
-  font-size: 9px;
+  font-size: 11px;
   color: var(--print-faint);
 }
 
 .tr-print-route-weather {
   margin: 5px 0 0;
-  font-size: 8.5px;
+  font-size: 10.5px;
   line-height: 1.55;
   color: var(--print-faint);
   overflow-wrap: anywhere;
@@ -6503,13 +6579,13 @@
 .tr-print-time {
   width: 70px;
   font-family: "JetBrains Mono", Consolas, monospace;
-  font-size: 9px;
+  font-size: 11px;
   color: var(--print-faint);
   white-space: nowrap;
 }
 
 .tr-print-table strong {
-  font-size: 11.5px;
+  font-size: 14px;
 }
 
 .tr-print-kind {
@@ -6518,13 +6594,13 @@
   padding: 0 5px;
   border: 1px solid var(--print-line);
   border-radius: 999px;
-  font-size: 7.5px;
+  font-size: 9px;
   color: var(--print-faint);
 }
 
 .tr-print-table p {
   margin: 2px 0 0;
-  font-size: 9.5px;
+  font-size: 11.5px;
   line-height: 1.6;
   color: var(--print-soft);
 }
@@ -6532,7 +6608,7 @@
 .tr-print-route-line {
   color: #4f6b57 !important;
   font-family: "JetBrains Mono", Consolas, monospace;
-  font-size: 8.5px !important;
+  font-size: 10.5px !important;
 }
 
 .tr-print-address {
@@ -6553,14 +6629,14 @@
   padding-bottom: 4px;
   border-bottom: 1px solid var(--print-line);
   font-family: "Songti SC", "Noto Serif SC", serif;
-  font-size: 16px;
+  font-size: 19.5px;
   font-weight: 600;
 }
 
 .tr-print-budget {
   width: 100%;
   border-collapse: collapse;
-  font-size: 10px;
+  font-size: 12px;
 }
 
 .tr-print-budget td,
@@ -6578,14 +6654,14 @@
 
 .tr-print-budget small {
   display: block;
-  font-size: 8px;
+  font-size: 10px;
   color: var(--print-faint);
 }
 
 .tr-print-budget tfoot th {
   padding-top: 7px;
   font-family: "Songti SC", "Noto Serif SC", serif;
-  font-size: 14px;
+  font-size: 17px;
 }
 
 .tr-print-columns {
@@ -6600,12 +6676,12 @@
 
 .tr-print-pack strong {
   display: block;
-  font-size: 9.5px;
+  font-size: 11.5px;
   color: #4f6b57;
 }
 
 .tr-print-pack span {
-  font-size: 9px;
+  font-size: 11px;
   color: var(--print-soft);
   line-height: 1.6;
 }
@@ -6614,7 +6690,7 @@
   list-style: none;
   margin: 0;
   padding: 0;
-  font-size: 9.5px;
+  font-size: 11.5px;
 }
 
 .tr-print-checklist li {
@@ -6635,7 +6711,7 @@
 .tr-print-advice {
   margin: 0;
   padding-left: 16px;
-  font-size: 9.5px;
+  font-size: 11.5px;
   line-height: 1.7;
   color: var(--print-soft);
 }
@@ -6648,7 +6724,7 @@
   padding-top: 8px;
   border-top: 1px solid var(--print-line);
   font-family: "JetBrains Mono", Consolas, monospace;
-  font-size: 8px;
+  font-size: 10px;
   color: var(--print-faint);
 }
 

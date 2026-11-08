@@ -16,7 +16,7 @@ import {
   weekdayCn,
 } from './travelUtils.js'
 import { PACE_OPTIONS, TRANSPORT_OPTIONS } from './travelPlan.js'
-import { homeGuardKm } from './travelEngine.js'
+import { homeGuardKm, pickNearAnchor } from './travelEngine.js'
 import { validateDayBlocks } from './travelValidate.js'
 
 const SYSTEM_PROMPT = `你是一名资深中文旅行规划师，擅长把真实 POI 与真实路线编排成可执行的行程。
@@ -361,7 +361,8 @@ ${hotelExample}]}
 - 景点 60-150 分钟，餐饮 45-90 分钟；节奏松弛就多留白，紧凑就少留白。
 - 结合沿途与目的地天气：有雨把户外点放到雨势较小的时段或准备室内备选；有雾提醒自驾降速；温差大提醒分层穿衣。
 - 第一天从 ${startTime} 之后开始，最后按用户结束时间 ${form.endTime} 收尾。
-- 当天往返和最后一天不要安排住宿；住宿只在真的需要过夜时填写。
+- 时间覆盖 11:00-15:00 必须安排午餐；覆盖 17:00-20:30 必须安排晚餐。候选里没有合适的店时，写一顿“附近小店/简餐”，不要省略。
+- 当天往返和最后一天不要安排住宿；需要过夜的那几天必须安排住宿。
 - 不写预算金额；tips 写排队、预约、停车、穿衣、点菜等真正有用的信息。`
 
   return { system: SYSTEM_PROMPT, prompt: user }
@@ -387,12 +388,52 @@ function normalizeKind(value) {
   return KIND_ALIAS[kind] || (['transit', 'sight', 'food', 'hotel', 'rest', 'activity'].includes(kind) ? kind : 'activity')
 }
 
-function normalizeBlock(raw, map, fallbackStart = '09:00') {
+function normalizeText(value) {
+  return String(value || '')
+    .replace(/\s+/g, '')
+    .replace(/[·・,，。:：;；\-—_（）()【】\[\]]/g, '')
+}
+
+// 模型经常把地点写成“蓝关古道雨中慢行”这种自由文本；
+// 按名称包含关系匹配回候选，能救回大部分“不是候选地点”的误判。
+function buildPoiMatcher(map) {
+  const list = [...map.values()].filter((poi) => poi?.name)
+  return (text, kind = '') => {
+    const needle = normalizeText(text)
+    if (needle.length < 2) return null
+    let best = null
+    let bestScore = 0
+    for (const poi of list) {
+      // 餐饮/住宿只和同类匹配，景点也不会被餐厅名字顶掉。
+      if (kind === 'food' && poi.kind !== 'food') continue
+      if (kind === 'hotel' && poi.kind !== 'hotel') continue
+      if (kind !== 'food' && kind !== 'hotel' && (poi.kind === 'food' || poi.kind === 'hotel')) {
+        continue
+      }
+      const name = normalizeText(poi.name)
+      if (name.length < 2) continue
+      if (needle === name) return poi
+      if (needle.includes(name) || name.includes(needle)) {
+        const score = Math.min(name.length, needle.length) / Math.max(name.length, needle.length)
+        if (score > bestScore) {
+          bestScore = score
+          best = poi
+        }
+      }
+    }
+    return bestScore >= 0.5 ? best : null
+  }
+}
+
+function normalizeBlock(raw, map, fallbackStart = '09:00', matchPoi = null) {
   const start = normalizeTime(raw?.start, fallbackStart)
   const end = normalizeTime(raw?.end, addMinutes(start, 60))
   const kind = normalizeKind(raw?.kind)
   const poiId = safeText(raw?.poiId)
-  const poi = map.get(poiId)
+  let poi = map.get(poiId)
+  if (!poi && matchPoi && kind !== 'transit') {
+    poi = matchPoi(raw?.title, kind) || null
+  }
   return {
     id: uid('blk'),
     start,
@@ -438,11 +479,20 @@ export function normalizeDay(raw, { form, facts, outlineDay, dayIndex, legs, sto
   if (!raw || !Array.isArray(raw.blocks)) {
     throw new Error('模型当天安排缺少 blocks')
   }
+  const matchPoi = buildPoiMatcher(map)
   let blocks = raw.blocks
-    .map((block) => normalizeBlock(block, map, form.startTime))
+    .map((block) => normalizeBlock(block, map, form.startTime, matchPoi))
     .filter((block) => timeToMinutes(block.start) != null)
     .sort((a, b) => (timeToMinutes(a.start) || 0) - (timeToMinutes(b.start) || 0))
+  // 匹配不上的景点/餐饮/住宿块直接丢掉，而不是整份作废；自由活动/休息保留。
+  blocks = blocks.filter((block) => {
+    if (block.poi) return true
+    return block.kind === 'transit' || block.kind === 'rest' || block.kind === 'activity'
+  })
   if (!blocks.length) throw new Error('模型当天安排为空')
+  if (!blocks.some((block) => block.kind === 'sight' && block.poi)) {
+    throw new Error('模型没有给出可用的景点')
+  }
 
   // 把路线挂到 transit 块；模型漏掉的，按目标景点前插一段。
   legs.forEach((leg, index) => {
@@ -549,6 +599,9 @@ export function normalizeDay(raw, { form, facts, outlineDay, dayIndex, legs, sto
       allowHotel: form.startDate !== form.endDate,
       home: facts.origin,
       homeGuard: homeGuardKm(form),
+      requireLunch: (timeToMinutes(form.endTime) ?? 0) >= 13 * 60,
+      requireDinner: (timeToMinutes(form.endTime) ?? 0) >= 19 * 60,
+      requireHotel: form.startDate !== form.endDate && dayIndex < totalDays - 1,
     },
   )
   if (problems.length) {
@@ -567,13 +620,80 @@ export function normalizeDay(raw, { form, facts, outlineDay, dayIndex, legs, sto
   }
 }
 
-export function fallbackDay({ form, facts, outlineDay, dayIndex, legs, stopRefs, startName }) {
+export function fallbackDay({ form, facts, outlineDay, dayIndex, totalDays = 1, legs, stopRefs, startName }) {
   const map = poiMap(facts)
   const blocks = []
-  let cursor = timeToMinutes(form.startTime || '08:30') ?? 510
+  const startMin = timeToMinutes(form.startTime || '08:30') ?? 510
+  const endMin = Math.max(timeToMinutes(form.endTime || '20:30') ?? 1230, startMin + 5 * 60)
+  let cursor = startMin
   const startLabel = startName || facts.origin?.name || '酒店'
+  // 覆盖范围放宽到 15:00 / 20:30，长行程也能补上“晚一点的午饭/晚饭”。
+  const LUNCH = { from: 11 * 60 + 30, to: 15 * 60 }
+  const DINNER = { from: 17 * 60 + 30, to: 20 * 60 + 30 }
+  let lunchDone = false
+  let dinnerDone = false
+  let lastAnchor = null
+  const usedFood = new Set()
+  const foodPool = uniqueBy(
+    [
+      ...(facts.food || []),
+      ...stopRefs.filter((item) => item.kind === 'food').map((item) => map.get(item.poiId)),
+    ].filter(Boolean),
+    (poi) => poi.id,
+  )
+
+  const addMeal = (kind, anchor) => {
+    const windowInfo = kind === 'lunch' ? LUNCH : DINNER
+    const start = Math.max(cursor, windowInfo.from)
+    if (start > windowInfo.to - 60 || start > endMin - 45) return false
+    const near = pickNearAnchor(foodPool, anchor, { maxKm: 8, exclude: usedFood, kind: 'food' })
+    blocks.push({
+      id: uid('blk'),
+      start: minutesToTime(start),
+      end: minutesToTime(start + 60),
+      kind: 'food',
+      title:
+        near
+          ? near.name
+          : kind === 'lunch'
+            ? '午餐 · 附近小店（现场选择）'
+            : '晚餐 · 附近小店（现场选择）',
+      detail: near
+        ? `位于${near.address || near.city || '附近'}，${kind === 'lunch' ? '避开 12:00-13:00 的排队高峰，按当地口味点菜' : '就近吃晚饭，不为了网红店折返'}。`
+        : '目的地附近有多家小馆，按口味现场选即可；不为了吃饭折返几十公里。',
+      poiId: near?.id || '',
+      poi: near || null,
+      freeMeal: !near,
+      tips: [],
+      booking: null,
+      legIndex: null,
+      route: null,
+    })
+    if (near) usedFood.add(near.id)
+    cursor = start + 60 + 15
+    if (kind === 'lunch') lunchDone = true
+    else dinnerDone = true
+    return true
+  }
+
+  const maybeMeals = (anchor) => {
+    if (!lunchDone && cursor >= LUNCH.from && cursor <= LUNCH.to - 60) addMeal('lunch', anchor)
+    if (!dinnerDone && cursor >= DINNER.from && cursor <= DINNER.to - 60) addMeal('dinner', anchor)
+  }
+
   stopRefs.forEach((poi, index) => {
     const leg = legs[index]
+    const legMinutes = leg ? durationMinutes(leg) : 0
+    const nextStart = cursor + (legMinutes ? legMinutes + 10 : 0)
+    // 下一站本身就是饭点附近的餐饮时，不重复插一顿。
+    const nextFoodInLunch =
+      poi.kind === 'food' && nextStart >= LUNCH.from - 15 && nextStart <= LUNCH.to
+    const nextFoodInDinner =
+      poi.kind === 'food' && nextStart >= DINNER.from - 15 && nextStart <= DINNER.to
+    if (index > 0 && !nextFoodInLunch && !nextFoodInDinner) {
+      maybeMeals(lastAnchor || poi)
+    }
+
     if (leg) {
       const minutes = durationMinutes(leg)
       blocks.push({
@@ -594,10 +714,11 @@ export function fallbackDay({ form, facts, outlineDay, dayIndex, legs, stopRefs,
     }
     const isFood = poi.kind === 'food'
     const duration = isFood ? 60 : form.pace === 'relaxed' ? 120 : 90
+    const blockStart = cursor
     blocks.push({
       id: uid('blk'),
-      start: minutesToTime(cursor),
-      end: minutesToTime(cursor + duration),
+      start: minutesToTime(blockStart),
+      end: minutesToTime(blockStart + duration),
       kind: isFood ? 'food' : 'sight',
       title: poi.name,
       detail: isFood
@@ -610,14 +731,34 @@ export function fallbackDay({ form, facts, outlineDay, dayIndex, legs, stopRefs,
       legIndex: null,
       route: null,
     })
+    if (isFood) {
+      if (blockStart >= LUNCH.from && blockStart < LUNCH.to) lunchDone = true
+      if (blockStart >= DINNER.from && blockStart < DINNER.to) dinnerDone = true
+    }
+    lastAnchor = poi
     cursor += duration + 15
   })
 
-  const hotel = outlineDay.hotelId ? map.get(outlineDay.hotelId) : null
+  // 白天很长但景点少：收尾前把没排上的饭补上（睡到自然醒/只逛一个点也能吃上午饭）。
+  if (!lunchDone && endMin >= 13 * 60) {
+    cursor = Math.max(cursor, startMin)
+    addMeal('lunch', lastAnchor)
+  }
+  if (!dinnerDone && endMin >= 19 * 60) {
+    addMeal('dinner', lastAnchor)
+  }
+
+  const lastDay = dayIndex >= Math.max(1, totalDays) - 1
+  const needHotel = !lastDay && form.startDate !== form.endDate
+  const hotel = outlineDay.hotelId
+    ? map.get(outlineDay.hotelId)
+    : needHotel
+      ? pickNearAnchor(facts.hotels || [], lastAnchor, { maxKm: 15, kind: 'hotel' })
+      : null
   const extraLeg = legs[stopRefs.length]
   if (extraLeg) {
     const minutes = durationMinutes(extraLeg)
-    const targetName = extraLeg.toName || hotel?.name || '下一站'
+    const targetName = extraLeg.toName || hotel?.name || (needHotel ? '住宿' : '下一站')
     blocks.push({
       id: uid('blk'),
       start: minutesToTime(cursor),
@@ -635,17 +776,18 @@ export function fallbackDay({ form, facts, outlineDay, dayIndex, legs, stopRefs,
     cursor += minutes + 10
   }
 
-  if (hotel) {
+  if (needHotel) {
     const hotelStart = Math.max(cursor + 30, 19 * 60)
     blocks.push({
       id: uid('blk'),
       start: minutesToTime(hotelStart),
       end: minutesToTime(hotelStart + 30),
       kind: 'hotel',
-      title: `入住 ${hotel.name}`,
-      detail: hotel.address || '办理入住，放下行李后附近吃晚饭',
-      poiId: hotel.id,
-      poi: hotel,
+      title: hotel ? `入住 ${hotel.name}` : '入住目的地附近酒店（现场预订）',
+      detail: hotel?.address || '目的地附近酒店较多，按预算现场预订即可。',
+      poiId: hotel?.id || '',
+      poi: hotel || null,
+      freeHotel: !hotel,
       tips: [],
       booking: null,
       legIndex: null,

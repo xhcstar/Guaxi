@@ -15,7 +15,17 @@ function distanceText(km) {
 
 export function validateDayBlocks(
   day,
-  { center, radiusKm = 0, notBeforeMinutes = null, allowHotel = true, home = null, homeGuard = 0 } = {},
+  {
+    center,
+    radiusKm = 0,
+    notBeforeMinutes = null,
+    allowHotel = true,
+    home = null,
+    homeGuard = 0,
+    requireLunch = false,
+    requireDinner = false,
+    requireHotel = false,
+  } = {},
 ) {
   const problems = []
   const blocks = Array.isArray(day?.blocks) ? day.blocks : []
@@ -30,6 +40,38 @@ export function validateDayBlocks(
 
   const foodBlocks = []
   const otherPois = []
+  const overlapsMeal = (block, from, to) => {
+    const start = timeToMinutes(block?.start)
+    const end = timeToMinutes(block?.end)
+    return start != null && end != null && start < to && end > from
+  }
+  const hasMeal = (from, to) =>
+    blocks.some((block) => block?.kind === 'food' && overlapsMeal(block, from, to))
+  // 只有时间线里真的腾得出 40 分钟，才算“漏排了饭”；全程在路上/排满时不能强求。
+  const mealGap = (from, to) => {
+    const sorted = [...blocks].sort(
+      (a, b) => (timeToMinutes(a?.start) ?? 0) - (timeToMinutes(b?.start) ?? 0),
+    )
+    let cursor = from
+    for (const block of sorted) {
+      const start = timeToMinutes(block?.start)
+      const end = timeToMinutes(block?.end)
+      if (start == null || end == null) continue
+      if (start > cursor && Math.min(start, to) - Math.max(cursor, from) >= 40) return true
+      cursor = Math.max(cursor, end)
+      if (cursor >= to) return false
+    }
+    return to - Math.max(cursor, from) >= 40
+  }
+  if (requireLunch && !hasMeal(11 * 60, 15 * 60) && mealGap(11 * 60, 15 * 60)) {
+    problems.push('时间跨过午饭时段，但没有午餐安排')
+  }
+  if (requireDinner && !hasMeal(17 * 60, 20 * 60 + 30) && mealGap(17 * 60, 20 * 60 + 30)) {
+    problems.push('时间跨过晚饭时段，但没有晚餐安排')
+  }
+  if (requireHotel && !blocks.some((block) => block?.kind === 'hotel')) {
+    problems.push('当天需要过夜，但没有住宿安排')
+  }
 
   const first = blocks[0]
   if (notBeforeMinutes != null) {
@@ -77,7 +119,7 @@ export function validateDayBlocks(
       return
     }
 
-    if (POI_KINDS.has(block?.kind) && !block?.poi) {
+    if (POI_KINDS.has(block?.kind) && !block?.poi && !block?.freeMeal && !block?.freeHotel) {
       problems.push(`「${label}」不是候选地点里的地点`)
       return
     }
@@ -155,6 +197,9 @@ export function validatePlan(plan, { center, radiusKm = 0, expectedDates = [] } 
   const allowHotel = !sameDay && days.length > 1
   const notBeforeMinutes = timeToMinutes(plan?.startTime)
   const homeGuard = homeGuardKm(plan)
+  const endMinutes = timeToMinutes(plan?.endTime) ?? 0
+  const requireLunch = endMinutes >= 13 * 60
+  const requireDinner = endMinutes >= 19 * 60
   days.forEach((day, index) => {
     const prefix = `第 ${index + 1} 天`
     if (expectedDates[index] && day?.date !== expectedDates[index]) {
@@ -167,6 +212,9 @@ export function validatePlan(plan, { center, radiusKm = 0, expectedDates = [] } 
       allowHotel,
       home: plan?.origin,
       homeGuard,
+      requireLunch,
+      requireDinner,
+      requireHotel: !sameDay && index < days.length - 1,
     }).forEach((item) => {
       problems.push(`${prefix}：${item}`)
     })

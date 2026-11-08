@@ -3,7 +3,7 @@
     <div class="tr-settings-head">
       <div>
         <div class="tr-eyebrow"><span></span> SETTINGS</div>
-        <h1>行迹设置</h1>
+        <h1>Guaxi 设置</h1>
         <p>数据源、模型与本地存储。没有高德 Key 也能用，只是周边检索和公交路线会弱一些。</p>
       </div>
       <button type="button" class="tr-btn is-ghost is-small" @click="$emit('home')">
@@ -292,7 +292,7 @@
             <li>「应用管理 → 我的应用 → 创建新应用」，类型随意；在该应用下「添加 Key」。</li>
             <li>服务平台必须选 <strong>Web 服务</strong>（不是 Web 端 JS API），提交后复制 Key。</li>
             <li>个人认证的免费额度大致为：路径规划 / 地理编码 5000 次/日、15 万次/月；POI 搜索约 100 次/日、5000 次/月；天气 5000 次/月。</li>
-            <li>行迹会把 POI 检索按「城市 + 分类」缓存 7 天，正常个人使用不会轻易用完搜索额度。</li>
+            <li>Guaxi 会把 POI 检索按「城市 + 分类」缓存 7 天，正常个人使用不会轻易用完搜索额度。</li>
           </ol>
         </details>
       </section>
@@ -383,7 +383,7 @@
             </span>
           </div>
           <p class="tr-settings-note">
-            行迹复用「设置 → 大模型」里的供应商与 Key。模型只负责排序和文案；地点、路线、预算由程序校验和计算。
+            Guaxi 复用「设置 → 大模型」里的供应商与 Key。模型只负责排序和文案；地点、路线、预算由程序校验和计算。
             <template v-if="settings.preview"> 浏览器预览不会调用模型，会使用内置示例编排。</template>
           </p>
         </template>

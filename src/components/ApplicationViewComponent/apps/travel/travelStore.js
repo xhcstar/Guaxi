@@ -1,4 +1,4 @@
-// 行迹应用状态与编排流水线：事实 → 大纲 → 路线 → 分日 → 预算 → 保存。
+// Guaxi应用状态与编排流水线：事实 → 大纲 → 路线 → 分日 → 预算 → 保存。
 // 所有耗时步骤都有阶段进度；模型失败时自动落到确定性编排，保证永远能出计划。
 
 import { computed, reactive } from 'vue'
@@ -45,6 +45,8 @@ import {
 const STORAGE_ORIGIN = 'guaxi.travel.origin.v1'
 const STORAGE_PREFER_OSM = 'guaxi.travel.preferOsm.v1'
 const STORAGE_DEFAULTS = 'guaxi.travel.defaults.v1'
+// 记录已经排过的周末目的地：重排时优先避开，候选真的用完了才复用。
+const STORAGE_USED_BASES = 'guaxi.travel.usedBases.v1'
 // 网页模型是没有流式的黑盒：一次编排最多等 120 秒，超时立刻走确定性编排，
 // 避免整条流水线在某个阶段一停就是几分钟。
 const WEB_MODEL_TIMEOUT_MS = 120 * 1000
@@ -270,6 +272,62 @@ export function useTravelStore() {
       ...state.preferences,
       home: { ...home, ...resolved, name: home.name || resolved.name },
     })
+  }
+
+  function weekendSeenKey(origin) {
+    const adcode = String(origin?.adcode || '').trim()
+    const name = String(origin?.name || '').trim()
+    return adcode || name || 'default'
+  }
+
+  function readUsedBaseStore() {
+    try {
+      const raw = localStorage.getItem(STORAGE_USED_BASES)
+      return raw ? JSON.parse(raw) : {}
+    } catch {
+      return {}
+    }
+  }
+
+  // 历史目的地 = 本地记录 ∪ 计划库里的周末计划；按 ID 和名字匹配。
+  function weekendSeen(origin) {
+    const ids = new Set()
+    const names = new Set()
+    const bucket = readUsedBaseStore()[weekendSeenKey(origin)]
+    if (Array.isArray(bucket)) {
+      for (const item of bucket) {
+        if (item?.id) ids.add(String(item.id))
+        if (item?.name) names.add(String(item.name))
+      }
+    }
+    for (const plan of state.plans || []) {
+      if (plan.kind !== 'weekend') continue
+      const name = plan.destinationName || plan.destination?.name
+      if (name) names.add(String(name))
+    }
+    return { ids, names }
+  }
+
+  function rememberWeekendBases(origin, bases) {
+    const clean = (bases || []).filter((item) => item?.id || item?.name)
+    if (!clean.length) return
+    const store = readUsedBaseStore()
+    const key = weekendSeenKey(origin)
+    const prev = Array.isArray(store[key]) ? store[key] : []
+    const seen = new Set()
+    const merged = []
+    for (const item of [...clean, ...prev]) {
+      const sig = `${item.id || ''}|${item.name || ''}`
+      if (seen.has(sig)) continue
+      seen.add(sig)
+      merged.push({ id: String(item.id || ''), name: String(item.name || '') })
+    }
+    store[key] = merged.slice(0, 200)
+    try {
+      localStorage.setItem(STORAGE_USED_BASES, JSON.stringify(store))
+    } catch {
+      // 本地存储写不进去也不影响本次生成。
+    }
   }
 
   function rememberDefaults(form) {
@@ -697,6 +755,7 @@ export function useTravelStore() {
         facts,
         outlineDay,
         dayIndex,
+        totalDays,
         legs,
         stopRefs,
         startName,
@@ -865,16 +924,19 @@ export function useTravelStore() {
     return Array.from({ length: 8 }, (_, index) => addDays(first, index * 7))
   }
 
-  function buildWeekendPrompt({ form, facts, dates }) {
+  function buildWeekendPrompt({ form, facts, dates, seen }) {
     const ring = weekendRing(form)
+    const seenNames = seen?.names ? [...seen.names].filter(Boolean).slice(0, 24) : []
     // 按距离从远到近列给模型：目的地本来就要选外圈，先看到远处的候选。
     const attractions = [...(facts.attractions || [])]
       .sort((a, b) => (Number(b.distance) || 0) - (Number(a.distance) || 0))
       .slice(0, 36)
-      .map(
-        (poi) =>
-          `- ${poi.id} | ${poi.name} | ${poi.category} | 评分 ${poi.rating ?? '未知'} | ${Math.round((Number(poi.distance) || 0) / 1000)} km`,
-      )
+      .map((poi) => {
+        const seenBefore =
+          (poi.id && seen?.ids?.has(String(poi.id))) ||
+          (poi.name && seen?.names?.has(String(poi.name)))
+        return `- ${poi.id} | ${poi.name} | ${poi.category} | 评分 ${poi.rating ?? '未知'} | ${Math.round((Number(poi.distance) || 0) / 1000)} km${seenBefore ? ' | 去过' : ''}`
+      })
       .join('\n')
     const food = [...(facts.food || [])]
       .sort((a, b) => (Number(b.distance) || 0) - (Number(a.distance) || 0))
@@ -897,6 +959,8 @@ export function useTravelStore() {
 【人数】成人 ${form.adults}、儿童 ${form.children}、老人 ${form.elders}
 【偏好】${(form.interests || []).join('、') || '不限定'}；节奏 ${form.pace}
 【未来 8 个周六】${dates.join('、')}
+【最近已经排过的目的地】（尽量避开，候选确实不够时才重复）
+${seenNames.join('、') || '（无）'}
 
 【候选景点与周边目的地】
 ${attractions || '（无）'}
@@ -916,6 +980,7 @@ ${weather || '（暂无）'}
 - 每个周末只围绕一个 base 目的地，周六、周日各 1-2 个景点；不要每天都跨城。
 - base 必须是候选里距离出发地 ${Math.round(ring.min)} km 以外的地点；能选 ${Math.round(ring.prefer)} km 以外的就不要选近的。
 - 8 个周末的目的地和类型尽量不重复（峪口/山野、古镇古村、县城集市、公园湿地、商场博物馆、亲子农场等都算不同类型）。
+- 优先选择【最近已经排过的目的地】之外的地点；只有候选确实不够时才重复。
 - 餐饮优先选 base 附近的小店/农家乐，不要选出发地附近的连锁店。
 - 只使用候选 id；住宿只在需要过夜时填写。`
 
@@ -956,7 +1021,7 @@ ${weather || '（暂无）'}
     return String(poi?.category || 'other')
   }
 
-  function normalizeWeekendOutline(raw, { form, facts, dates }) {
+  function normalizeWeekendOutline(raw, { form, facts, dates, seen = null }) {
     const map = poiMap(facts)
     const attractions = [...(facts.attractions || [])].sort((a, b) => {
       const rating = (Number(b.rating) || 0) - (Number(a.rating) || 0)
@@ -969,22 +1034,43 @@ ${weather || '（暂无）'}
     }
     const inRing = (poi) => !Number.isFinite(distanceKm(poi)) || distanceKm(poi) >= ring.min
     const inOuter = (poi) => Number.isFinite(distanceKm(poi)) && distanceKm(poi) >= ring.prefer
+    // 以前排过的地方：优先避开，候选真的用完了才允许复用。
+    const seenIds = seen?.ids || new Set()
+    const seenNames = seen?.names || new Set()
+    const isSeen = (poi) =>
+      Boolean(poi) && ((poi.id && seenIds.has(String(poi.id))) || (poi.name && seenNames.has(String(poi.name))))
+    // 复用时用 seed 轮换餐饮/次要景点/主题，避免同一个目的地每次都排成一模一样。
+    const seed = (seen?.ids?.size || 0) + (seen?.names?.size || 0)
+    const reuseThemes = ['慢行', '烟火气', '亲子', '山野', '古镇', '美食', '露营', '摄影']
     const food = [...(facts.food || [])]
     const hotels = [...(facts.hotels || [])]
     const used = new Set()
     const usedBases = new Set()
     const usedKinds = new Set()
-    // 目的地优先外圈；同样条件下同类目的地不连续重复（8 个周末别都是公园）。
+    // 目的地优先“没去过 + 外圈 + 不同类别”，全都去过之后才回头复用。
     const pickBase = () => {
       const free = attractions.filter((poi) => !usedBases.has(poi.id))
-      const groups = [
-        free.filter((poi) => inOuter(poi) && !usedKinds.has(weekendBaseKind(poi))),
-        free.filter((poi) => inRing(poi) && !usedKinds.has(weekendBaseKind(poi))),
-        free.filter((poi) => inOuter(poi)),
-        free.filter((poi) => inRing(poi)),
-        free,
+      const fresh = free.filter((poi) => !isSeen(poi))
+      const freshGroups = [
+        fresh.filter((poi) => inOuter(poi) && !usedKinds.has(weekendBaseKind(poi))),
+        fresh.filter((poi) => inRing(poi) && !usedKinds.has(weekendBaseKind(poi))),
+        fresh.filter((poi) => inOuter(poi)),
+        fresh.filter((poi) => inRing(poi)),
+        fresh,
       ]
-      const chosen = groups.find((group) => group.length)?.[0]
+      let chosen = freshGroups.find((group) => group.length)?.[0] || null
+      if (!chosen) {
+        // 都去过了：按 seed 轮换复用顺序，别每次都从评分最高的那个开始。
+        const reuseGroups = [
+          free.filter((poi) => inOuter(poi) && !usedKinds.has(weekendBaseKind(poi))),
+          free.filter((poi) => inRing(poi) && !usedKinds.has(weekendBaseKind(poi))),
+          free.filter((poi) => inOuter(poi)),
+          free.filter((poi) => inRing(poi)),
+          free,
+        ]
+        const group = reuseGroups.find((item) => item.length)
+        chosen = group ? group[seed % group.length] : null
+      }
       if (chosen) usedKinds.add(weekendBaseKind(chosen))
       return chosen
     }
@@ -992,13 +1078,16 @@ ${weather || '（暂无）'}
     return dates.map((date, index) => {
       const source = rawItems[index] || {}
       let base = map.get(safeText(source.basePoiId))
-      // 模型也可能挑一个家门口的公园：外圈还有得选时不采纳。
+      // 模型也可能挑一个家门口的公园/去过的地方：还有更好的候选时不采纳。
       const outerAvailable = attractions.some(
         (poi) => !usedBases.has(poi.id) && inOuter(poi),
       )
+      const freshAvailable = attractions.some((poi) => !usedBases.has(poi.id) && !isSeen(poi))
       if (
         base &&
-        (!inRing(base) ||
+        (usedBases.has(base.id) ||
+          !inRing(base) ||
+          (freshAvailable && isSeen(base)) ||
           (outerAvailable && Number.isFinite(distanceKm(base)) && distanceKm(base) < ring.prefer))
       ) {
         base = null
@@ -1027,12 +1116,13 @@ ${weather || '（暂无）'}
       let stops2 = orderSights(pickSights(source.stops2), base)
       if (!stops1.length && base) stops1 = [base]
       if (!stops2.length) {
-        const next = attractions.find(
+        const nearby = attractions.filter(
           (poi) =>
             !used.has(poi.id) &&
             poi.id !== base?.id &&
             (!base || haversineKm(base, poi) <= Math.max(15, ring.min)),
         )
+        const next = nearby.length ? nearby[(seed + index) % nearby.length] : null
         if (next) {
           stops2 = [next]
           used.add(next.id)
@@ -1044,7 +1134,18 @@ ${weather || '（暂无）'}
       const pickMeal = (rawId, exclude) => {
         const named = map.get(safeText(rawId))
         if (named && base && haversineKm(base, named) <= 12 && !exclude.has(named.id)) return named
-        return pickNearAnchor(food, base, { maxKm: 12, exclude, kind: 'food' })
+        // 从最近的 3 家里轮换，同一个地点再来时也能换家店。
+        const nearby = food
+          .filter(
+            (poi) =>
+              base &&
+              !exclude.has(poi.id) &&
+              (!poi.kind || poi.kind === 'food') &&
+              haversineKm(base, poi) <= 12,
+          )
+          .sort((a, b) => haversineKm(base, a) - haversineKm(base, b))
+          .slice(0, 3)
+        return nearby.length ? nearby[(seed + index) % nearby.length] : null
       }
       const food1 = pickMeal(source.food1, used)
       const foodUsed = new Set(used)
@@ -1063,7 +1164,11 @@ ${weather || '（暂无）'}
       return {
         date,
         basePoiId: base?.id || '',
-        theme: safeText(source.theme) || base?.category || '周边慢游',
+        theme:
+          safeText(source.theme) ||
+          (base && isSeen(base)
+            ? `${base?.category || '周边'} · ${reuseThemes[(seed + index) % reuseThemes.length]}`
+            : base?.category || '周边慢游'),
         stops1: stops1.map((poi) => poi.id),
         stops2: stops2.map((poi) => poi.id),
         food1: food1?.id || '',
@@ -1074,8 +1179,8 @@ ${weather || '（暂无）'}
     })
   }
 
-  function fallbackWeekendOutline({ form, facts, dates }) {
-    return normalizeWeekendOutline({ weekends: [] }, { form, facts, dates })
+  function fallbackWeekendOutline({ form, facts, dates, seen }) {
+    return normalizeWeekendOutline({ weekends: [] }, { form, facts, dates, seen })
   }
 
   function weekendOutlineDays(item, map, oneDay = false) {
@@ -1172,6 +1277,7 @@ ${weather || '（暂无）'}
           facts,
           outlineDay,
           dayIndex,
+          totalDays,
           legs: info.legs,
           stopRefs: info.stopRefs,
           startName: info.startName,
@@ -1245,6 +1351,9 @@ ${weather || '（暂无）'}
       }
       const facts = await api.collectFacts(toRequest(baseForm))
       if (token !== state.generationToken) return []
+      if (!(facts.attractions || []).length) {
+        throw new Error('周边没有检索到可用的地点，请检查地图 Key 或扩大半径后重试')
+      }
       // 用后端解析后的坐标回填出发点，避免下一次又拿着 0 坐标按名字乱查城市。
       if (facts.origin?.lng && facts.origin?.lat) {
         form.origin = { ...form.origin, ...facts.origin }
@@ -1255,15 +1364,17 @@ ${weather || '（暂无）'}
         await repairHomeOrigin(form.origin)
       }
       setStage('outline', '正在把周边地点排成 8 个周末班次…', 30, modelWaitHint())
+      // 之前排过的目的地：先算出来，模型和确定性编排都按它避让。
+      const seen = weekendSeen(form.origin)
       let outlineItems
       let usedFallback = false
       let modelError = null
       try {
-        const { system, prompt } = buildWeekendPrompt({ form: baseForm, facts, dates })
+        const { system, prompt } = buildWeekendPrompt({ form: baseForm, facts, dates, seen })
         const { raw } = await completeJsonLlm({ prompt, system, temperature: 0.5, maxTokens: 8192 })
-        outlineItems = normalizeWeekendOutline(raw, { form: baseForm, facts, dates })
+        outlineItems = normalizeWeekendOutline(raw, { form: baseForm, facts, dates, seen })
       } catch (error) {
-        outlineItems = fallbackWeekendOutline({ form: baseForm, facts, dates })
+        outlineItems = fallbackWeekendOutline({ form: baseForm, facts, dates, seen })
         usedFallback = true
         modelError = error
       }
@@ -1301,6 +1412,13 @@ ${weather || '（暂无）'}
       state.weekend.seriesId = seriesId
       state.weekend.plans = plans
       state.weekend.lastRun = new Date().toISOString()
+      rememberWeekendBases(
+        form.origin,
+        plans.map((plan) => ({
+          id: plan.weekend?.basePoiId || '',
+          name: plan.destination?.name || plan.destinationName || '',
+        })),
+      )
       await refreshPlans()
       await learnPreferences(form)
       state.view = 'weekend'
@@ -1310,6 +1428,16 @@ ${weather || '（暂无）'}
       if (usedFallback && !api.isMock) {
         const reason = modelError ? friendlyError(modelError) : '模型没有返回可解析的班次'
         state.warning = `模型这次没有返回可用的班次 JSON，已用确定性方案兜底：${reason}；可在班次表里逐个细化。`
+      }
+      // 去过的地方快用完了：如实说明本次有复用，而不是悄悄重复。
+      const reusedCount = plans.filter((plan) => {
+        const id = plan.weekend?.basePoiId
+        const name = plan.destination?.name
+        return (id && seen.ids.has(String(id))) || (name && seen.names.has(String(name)))
+      }).length
+      if (reusedCount > 0 && !api.isMock) {
+        const reuseNote = `周边没去过的目的地已经不多，本次有 ${reusedCount} 个周末复用了之前去过的地方。`
+        state.warning = state.warning ? `${state.warning}；${reuseNote}` : reuseNote
       }
       showToast(
         usedFallback
@@ -1479,6 +1607,7 @@ ${weather || '（暂无）'}
       rebuilt.id = plan.id
       rebuilt.createdAt = plan.createdAt
       rebuilt.locked = plan.locked
+      rebuilt.adoptedAt = plan.adoptedAt || ''
       rebuilt.weekend = plan.weekend
       assertPlanConstraints(rebuilt, {
         center: facts.destination,
@@ -1548,12 +1677,21 @@ ${weather || '（暂无）'}
         radiusKm: 60,
       })
       const ring = weekendRing({ ...form, radiusKm: 60 })
+      const seen = weekendSeen(origin)
+      const isSeen = (poi) =>
+        Boolean(poi) &&
+        ((poi.id && seen.ids.has(String(poi.id))) || (poi.name && seen.names.has(String(poi.name))))
       const candidates = (facts.attractions || []).filter(
         (poi) =>
           !usedNames.has(poi.name) &&
+          !isSeen(poi) &&
           Number(poi.distance) / 1000 >= ring.min,
       )
-      const pool = candidates.length ? candidates : (facts.attractions || []).filter((poi) => !usedNames.has(poi.name))
+      const fresh = (facts.attractions || []).filter((poi) => !usedNames.has(poi.name) && !isSeen(poi))
+      const inRing = (facts.attractions || []).filter(
+        (poi) => !usedNames.has(poi.name) && Number(poi.distance) / 1000 >= ring.min,
+      )
+      const pool = candidates.length ? candidates : fresh.length ? fresh : inRing.length ? inRing : facts.attractions || []
       const base = pool[Math.floor(Math.random() * Math.max(1, pool.length))] || facts.attractions?.[0]
       if (!base) {
         showToast('周边暂时没有新的候选地点', 'error')
@@ -1610,6 +1748,7 @@ ${weather || '（暂无）'}
         entry.id === planId ? saved : entry,
       )
       state.plan = saved
+      rememberWeekendBases(origin, [{ id: base.id, name: base.name }])
       await refreshPlans()
       showToast(`已换成 ${base.name}`, 'success')
     } catch (error) {

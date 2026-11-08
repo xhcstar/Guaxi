@@ -9,6 +9,7 @@
           <span class="tr-badge">{{ plan.kind === 'weekend' ? '周末班次' : '长假出游' }}</span>
           <span class="tr-badge is-quiet">{{ mapSourceLabel(plan.source) }}</span>
           <span v-if="plan.detailLevel === 'draft'" class="tr-badge is-warn">待细化</span>
+          <span v-if="!plan.adoptedAt && plan.kind !== 'snapshot'" class="tr-badge is-warn">未采纳</span>
           <span v-if="plan.adoptedAt" class="tr-badge is-ok">已采纳</span>
           <span v-if="plan.locked" class="tr-badge is-lock"><TravelIcon name="lock" :size="12" /> 已锁定</span>
         </div>
@@ -136,6 +137,17 @@
       </div>
       <button type="button" class="tr-btn is-primary is-small" :disabled="refining" @click="$emit('refine-weekend', plan.id)">
         {{ refining ? '细化中…' : 'AI 细化' }}
+      </button>
+    </div>
+
+    <div v-if="!plan.adoptedAt && plan.kind !== 'snapshot'" class="tr-draft-banner is-adopt">
+      <TravelIcon name="check" :size="18" />
+      <div>
+        <strong>这份方案还没有确认采纳</strong>
+        <p>确认后才会进入最近计划，并自动留一份历史版本；不确认就只是草稿。</p>
+      </div>
+      <button type="button" class="tr-btn is-primary is-small" @click="$emit('adopt-plan', plan.id)">
+        确认采纳
       </button>
     </div>
 

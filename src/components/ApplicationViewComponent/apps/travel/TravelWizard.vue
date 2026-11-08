@@ -4,7 +4,7 @@
       <div class="tr-wizard-head">
         <div>
           <div class="tr-eyebrow"><span></span> {{ form.mode === 'weekend' ? 'WEEKEND SHUTTLE' : 'NEW JOURNEY' }}</div>
-          <h1>{{ form.mode === 'weekend' ? '先定一个出发点，剩下的周末交给行迹。' : '把这次出发，说清楚一点。' }}</h1>
+          <h1>{{ form.mode === 'weekend' ? '先定一个出发点，剩下的周末交给 Guaxi。' : '把这次出发，说清楚一点。' }}</h1>
           <p>
             {{ form.mode === 'weekend'
               ? '以你的城市为圆心检索周边，一次排出未来 8 个周末。最近一个周末会自动细化到时间表。'
@@ -279,7 +279,7 @@
     <aside class="tr-wizard-aside">
       <div class="tr-live-ticket">
         <div class="tr-live-ticket-top">
-          <span>XINGJI · LIVE TICKET</span>
+          <span>GUAXI · LIVE TICKET</span>
           <span>{{ form.mode === 'weekend' ? 'WEEKEND' : 'JOURNEY' }}</span>
         </div>
         <div class="tr-live-route">

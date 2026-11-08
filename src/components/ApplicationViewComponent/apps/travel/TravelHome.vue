@@ -2,10 +2,10 @@
   <div class="tr-home">
     <section class="tr-hero">
       <div class="tr-hero-copy">
-        <div class="tr-eyebrow"><span></span> XINGJI · TRAVEL JOURNAL</div>
+        <div class="tr-eyebrow"><span></span> GUAXI · TRAVEL JOURNAL</div>
         <h1>把周末和远方，<br />排成一趟<span class="tr-underline">可以出发</span>的车。</h1>
         <p>
-          告诉我从哪里出发、想花多少钱、想怎么玩。行迹会把真实地点、逐段路线、天气、吃饭和住宿
+          告诉我从哪里出发、想花多少钱、想怎么玩。Guaxi 会把真实地点、逐段路线、天气、吃饭和住宿
           排成一张能直接执行的行程单。
         </p>
         <div class="tr-hero-actions">
@@ -50,7 +50,7 @@
         </div>
         <div class="tr-hero-ticket-bottom">
           <span class="tr-stamp" :class="{ 'is-empty': !nextPlan }">{{ nextPlan ? '已规划' : '待启程' }}</span>
-          <span class="tr-hero-ticket-note">行迹 · 把时间花在路上，而不是做攻略上</span>
+          <span class="tr-hero-ticket-note">Guaxi · 把时间花在路上，而不是做攻略上</span>
         </div>
         <svg class="tr-hero-contour" viewBox="0 0 420 260" xmlns="http://www.w3.org/2000/svg">
           <g fill="none" stroke="rgba(28,42,39,.16)" stroke-width="1">
@@ -95,10 +95,22 @@
       <div class="tr-section-head">
         <div>
           <div class="tr-eyebrow"><span></span> YOUR PLANS</div>
-          <h2>{{ plans.length ? '最近计划' : '从一张空白车票开始' }}</h2>
+          <h2>{{ scope === 'draft' ? '未采纳的草稿' : adoptedPlans.length ? '最近计划' : '还没有采纳的计划' }}</h2>
         </div>
         <div class="tr-section-actions">
-          <label v-if="plans.length" class="tr-search">
+          <div class="tr-library-tabs">
+            <button
+              type="button"
+              :class="{ active: scope === 'adopted' }"
+              @click="scope = 'adopted'"
+            >
+              已采纳 {{ adoptedPlans.length }}
+            </button>
+            <button type="button" :class="{ active: scope === 'draft' }" @click="scope = 'draft'">
+              草稿 {{ draftPlans.length }}
+            </button>
+          </div>
+          <label v-if="scopePlans.length" class="tr-search">
             <TravelIcon name="search" :size="14" />
             <input v-model="query" type="search" placeholder="搜索计划或目的地" />
           </label>
@@ -142,6 +154,20 @@
         没有匹配「{{ query.trim() }}」的计划。
       </div>
 
+      <div v-else-if="scope === 'draft'" class="tr-search-empty">
+        没有未采纳的草稿；生成的方案会先放在这里。
+      </div>
+
+      <div v-else-if="draftPlans.length" class="tr-draft-hint">
+        <div>
+          <strong>有 {{ draftPlans.length }} 份方案还没有确认采纳</strong>
+          <p>打开方案后点「采纳并记录历史」，才会进入最近计划。</p>
+        </div>
+        <button type="button" class="tr-btn is-ghost is-small" @click="scope = 'draft'">
+          查看草稿
+        </button>
+      </div>
+
       <div v-else class="tr-empty">
         <div class="tr-empty-illustration">
           <svg viewBox="0 0 260 120" xmlns="http://www.w3.org/2000/svg">
@@ -152,7 +178,7 @@
           </svg>
         </div>
         <h3>把下一次出发，变成一张具体的票</h3>
-        <p>先选一个目的地，行迹会帮你把路线、天气、吃饭、住宿和预算一次排好。</p>
+        <p>先选一个目的地，Guaxi 会帮你把路线、天气、吃饭、住宿和预算一次排好。</p>
         <div class="tr-empty-actions">
           <button type="button" class="tr-btn is-primary" @click="$emit('new-trip')">规划第一次出行</button>
           <button type="button" class="tr-btn is-ghost" @click="$emit('load-demo')">查看示例</button>
@@ -219,11 +245,16 @@ const props = defineProps({
 defineEmits(['new-trip', 'new-weekend', 'open-plan', 'load-demo', 'open-weekend', 'open-settings', 'restore-snapshot'])
 
 const query = ref('')
-const tripPlans = computed(() => props.plans.filter((plan) => plan.kind !== 'weekend'))
-const weekendCount = computed(() => props.plans.filter((plan) => plan.kind === 'weekend').length)
+// 只有用户确认采纳的计划才算“计划”；生成出来的先放草稿。
+const scope = ref('adopted')
+const adoptedPlans = computed(() => props.plans.filter((plan) => plan.adoptedAt))
+const draftPlans = computed(() => props.plans.filter((plan) => !plan.adoptedAt))
+const scopePlans = computed(() => (scope.value === 'draft' ? draftPlans.value : adoptedPlans.value))
+const tripPlans = computed(() => adoptedPlans.value.filter((plan) => plan.kind !== 'weekend'))
+const weekendCount = computed(() => adoptedPlans.value.filter((plan) => plan.kind === 'weekend').length)
 const recentPlans = computed(() => {
   const keyword = query.value.trim()
-  return [...props.plans]
+  return [...scopePlans.value]
     .filter((plan) => {
       if (!keyword) return true
       const haystack = `${plan.title || ''} ${plan.destinationName || ''} ${plan.originName || ''}`
@@ -239,7 +270,7 @@ const historyItems = computed(() =>
 )
 const upcomingPlans = computed(() => {
   const today = todayString()
-  return props.plans
+  return adoptedPlans.value
     .filter((plan) => plan.startDate && plan.startDate >= today)
     .sort((a, b) => String(a.startDate).localeCompare(String(b.startDate)))
 })

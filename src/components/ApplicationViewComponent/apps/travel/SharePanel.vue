@@ -107,7 +107,10 @@ import { toPng } from 'html-to-image'
 import TravelIcon from './TravelIcon.vue'
 import PlanPoster from './PlanPoster.vue'
 import { api } from './travelApi.js'
-import { buildShareHtml, mapSourceLabel } from './travelShare.js'
+import { buildPlanPosterMap, buildShareHtml, mapSourceLabel } from './travelShare.js'
+
+// 路线样式改版（绿色 + 白色描边）后，旧海报地图需要重新生成一次。
+const POSTER_MAP_VERSION = 2
 
 const props = defineProps({
   plan: { type: Object, required: true },
@@ -171,10 +174,15 @@ function base64Bytes(dataUrl) {
 async function capture() {
   const node = posterRef.value?.getNode?.()
   if (!node) throw new Error('长图还没有准备好')
+  // 先让界面把“生成中…”画出来，再开始截长图这类重活。
+  await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))
   await nextTick()
   if (document.fonts?.ready) await document.fonts.ready
+  const height = Math.max(1, node.offsetHeight)
+  // 行程很长时降低像素比：既避免超过浏览器画布上限，也减少卡顿。
+  const pixelRatio = Math.max(0.5, Math.min(1, 15000 / height))
   return toPng(node, {
-    pixelRatio: 1.35,
+    pixelRatio,
     backgroundColor: '#f4eee1',
     cacheBust: true,
     skipAutoScale: true,
@@ -187,22 +195,8 @@ async function copyPoster() {
   try {
     const dataUrl = await capture()
     if (api.isTauriRuntime()) {
-      const canvas = document.createElement('canvas')
-      const image = new Image()
-      image.src = dataUrl
-      await image.decode()
-      canvas.width = image.naturalWidth
-      canvas.height = image.naturalHeight
-      const context = canvas.getContext('2d')
-      context.drawImage(image, 0, 0)
-      const rgba = context.getImageData(0, 0, canvas.width, canvas.height).data
-      const [{ Image: TauriImage }, { writeImage }] = await Promise.all([
-        import('@tauri-apps/api/image'),
-        import('@tauri-apps/plugin-clipboard-manager'),
-      ])
-      const tauriImage = await TauriImage.new(rgba, canvas.width, canvas.height)
-      await writeImage(tauriImage)
-      tauriImage.close?.()
+      // 交给 Rust 解码 PNG 再写剪贴板：原始 RGBA 走 IPC 会卡死主线程。
+      await api.copyImage(dataUrl)
       notify('长图已复制。到微信聊天框 Ctrl+V 即可。', 'success')
     } else if (navigator.clipboard?.write && window.ClipboardItem) {
       try {
@@ -263,7 +257,7 @@ function downloadDataUrl(dataUrl) {
 }
 
 function safeFileName(value) {
-  return String(value || '行迹行程').replace(/[\\/:*?"<>|]/g, '-').slice(0, 60)
+  return String(value || 'Guaxi 行程').replace(/[\\/:*?"<>|]/g, '-').slice(0, 60)
 }
 
 async function printPdf() {
@@ -342,31 +336,14 @@ async function refreshPosterMap() {
   }
   posterBusy.value = true
   try {
-    const day = (props.plan.days || []).find((item) =>
-      (item.blocks || []).some((block) => block.route?.polyline),
-    )
-    const block = day?.blocks?.find((item) => item.route?.polyline)
-    if (!block) {
-      notify('这份行程还没有路线数据，暂时用装饰路线图', 'info')
-      return
-    }
-    const points = String(block.route.polyline)
-      .split(';')
-      .map((point) => point.split(',').map(Number))
-      .filter((pair) => pair.length === 2 && pair.every(Number.isFinite))
-    const destination = props.plan.destination
-    if (!destination?.lng || !destination?.lat) return
-    const dataUrl = await api.staticMap({
-      centerLng: Number(destination.lng),
-      centerLat: Number(destination.lat),
-      zoom: 11,
-      width: 900,
-      height: 380,
-      path: points.slice(0, 120),
-    })
+    const dataUrl = await buildPlanPosterMap(props.plan, api)
     if (dataUrl) {
       localPosterMap.value = dataUrl
-      emit('update-plan', { ...props.plan, posterMap: dataUrl })
+      emit('update-plan', {
+        ...props.plan,
+        posterMap: dataUrl,
+        posterMapVersion: POSTER_MAP_VERSION,
+      })
       await nextTick()
       updateScale()
       notify('已更新长图上的路线地图', 'success')
@@ -387,9 +364,18 @@ watch(
     shareStatus.value = null
     qr.value = ''
     notice.value = ''
-    nextTick(updateScale)
+    nextTick(() => {
+      updateScale()
+      ensurePosterMap()
+    })
   },
 )
+
+function ensurePosterMap() {
+  if (api.isMock || props.plan.source !== 'amap' || posterBusy.value) return
+  if (props.plan.posterMap && props.plan.posterMapVersion === POSTER_MAP_VERSION) return
+  refreshPosterMap()
+}
 
 onMounted(async () => {
   await nextTick()
@@ -409,9 +395,7 @@ onMounted(async () => {
   } catch {
     /* 分享状态读取失败不影响页面 */
   }
-  if (!api.isMock && props.plan.source === 'amap' && !props.plan.posterMap) {
-    refreshPosterMap()
-  }
+  ensurePosterMap()
 })
 
 onBeforeUnmount(() => {

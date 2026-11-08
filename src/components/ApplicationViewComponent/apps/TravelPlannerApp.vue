@@ -3,10 +3,10 @@
     <aside class="tr-rail" :style="railStyle">
       <div class="tr-rail-texture" aria-hidden="true"></div>
       <header class="tr-brand" @click="store.showHome()">
-        <span class="tr-seal">行迹</span>
+        <span class="tr-seal">G</span>
         <div class="tr-brand-text">
-          <strong>行迹</strong>
-          <small>XINGJI · TRAVEL JOURNAL</small>
+          <strong>Guaxi</strong>
+          <small>GUAXI · TRAVEL JOURNAL</small>
         </div>
       </header>
       <div v-if="!railCollapsed" class="tr-rail-resize" title="拖动调整侧栏宽度" @mousedown="startRailResize"></div>
@@ -22,7 +22,7 @@
         </button>
       </div>
 
-      <nav class="tr-rail-nav" aria-label="行迹导航">
+      <nav class="tr-rail-nav" aria-label="Guaxi 导航">
         <button type="button" :class="{ active: state.view === 'home' }" @click="store.showHome()">
           <TravelIcon name="book" :size="15" /><span>计划库</span>
         </button>
@@ -45,10 +45,10 @@
       <div class="tr-rail-list">
         <div class="tr-rail-list-head">
           <span>最近计划</span>
-          <small>{{ state.plans.length }}</small>
+          <small>{{ adoptedPlans.length }}</small>
         </div>
         <div v-if="!libraryPlans.length" class="tr-rail-empty">
-          还没有计划。<br />从一张空白车票开始吧。
+          还没有已采纳的计划。<br />生成方案后可在计划页确认采纳。
         </div>
         <button
           v-for="item in libraryPlans"
@@ -88,7 +88,7 @@
             <TravelIcon :name="railCollapsed ? 'chevronRight' : 'chevronLeft'" :size="16" />
           </button>
           <div class="tr-crumb">
-            <span class="tr-crumb-brand">行迹</span>
+            <span class="tr-crumb-brand">Guaxi</span>
             <TravelIcon name="chevronRight" :size="12" />
             <span>{{ viewTitle }}</span>
             <span v-if="state.plan && state.view === 'plan'" class="tr-crumb-plan">{{ state.plan.title }}</span>
@@ -212,7 +212,7 @@
               <text x="284" y="70" font-size="9" fill="#7b8a82">抵达</text>
             </svg>
           </div>
-          <div class="tr-progress-eyebrow">XINGJI IS PLANNING</div>
+          <div class="tr-progress-eyebrow">GUAXI IS PLANNING</div>
           <h3>{{ state.stage.label || '正在编排行程' }}</h3>
           <p v-if="state.stage.detail">{{ state.stage.detail }}</p>
           <div class="tr-progress-bar" :class="{ 'is-indeterminate': !state.stage.percent }">
@@ -244,6 +244,7 @@ import { api } from './travel/travelApi.js'
 import { useTravelStore } from './travel/travelStore.js'
 import { mapProviderLabel } from './travel/travelPreferences.js'
 import { shortDate, todayString } from './travel/travelUtils.js'
+import { buildPlanPosterMap } from './travel/travelShare.js'
 import TravelIcon from './travel/TravelIcon.vue'
 import TravelHome from './travel/TravelHome.vue'
 import TravelWizard from './travel/TravelWizard.vue'
@@ -334,8 +335,10 @@ const viewTitle = computed(() => {
   return '计划库'
 })
 
+// 只有用户确认采纳的计划才进计划库；生成出来的方案先留在草稿里。
+const adoptedPlans = computed(() => state.plans.filter((plan) => plan.adoptedAt))
 const libraryPlans = computed(() => {
-  return [...state.plans]
+  return [...adoptedPlans.value]
     .sort((a, b) => {
       const aDate = a.kind === 'weekend' ? a.weekendStart || a.startDate : a.startDate
       const bDate = b.kind === 'weekend' ? b.weekendStart || b.startDate : b.startDate
@@ -403,6 +406,13 @@ function handleRenamePlan({ id, title } = {}) {
 async function handlePrint(plan) {
   const theme = document.documentElement.dataset.guaxiTheme === 'dark' ? 'dark' : 'light'
   try {
+    // 打印用同一张长图地图：路线样式改版后先补一张新的（绿色路线）。
+    if (!api.isMock && plan?.source === 'amap' && (!plan.posterMap || plan.posterMapVersion !== 2)) {
+      const dataUrl = await buildPlanPosterMap(plan, api)
+      if (dataUrl) {
+        await store.updatePlan(plan, { posterMap: dataUrl, posterMapVersion: 2 })
+      }
+    }
     await api.openPrintWindow(plan.id, theme)
   } catch (error) {
     store.showToast(`打开打印窗口失败：${error?.message || error}`, 'error')

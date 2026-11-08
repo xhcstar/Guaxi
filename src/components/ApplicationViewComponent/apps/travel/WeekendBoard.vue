@@ -11,7 +11,7 @@
         <div>
           <div class="tr-eyebrow is-light"><span></span> 未来 8 个周末</div>
           <h1>周末班次表</h1>
-          <p>不用再想“这周去哪”。以 {{ origin?.city || origin?.name || '你的城市' }} 为圆心，行迹已经排好接下来两个月的周末。</p>
+          <p>不用再想“这周去哪”。以 {{ origin?.city || origin?.name || '你的城市' }} 为圆心，Guaxi 已经排好接下来两个月的周末。</p>
         </div>
         <div class="tr-board-head-actions">
           <button type="button" class="tr-btn is-light is-small" :disabled="loading" @click="$emit('generate')">
@@ -42,7 +42,7 @@
         </svg>
       </div>
       <h2>还没有班次表</h2>
-      <p>先确认出发城市，行迹会检索周边适合两天一夜或当天往返的地点，排成未来 8 个周末。</p>
+      <p>先确认出发城市，Guaxi 会检索周边适合两天一夜或当天往返的地点，排成未来 8 个周末。</p>
       <button type="button" class="tr-btn is-primary" @click="$emit('generate')">
         <TravelIcon name="calendar" :size="17" /> 生成本季周末班次
       </button>

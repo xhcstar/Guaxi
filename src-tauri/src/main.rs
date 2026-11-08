@@ -753,7 +753,7 @@ async fn app_main() {
             commands::p2psync::p2p_sync_cancel,
             commands::templateview::open_application_window,
 
-            // 旅行计划（应用页「行迹 · 旅行计划」卡片）
+            // 旅行计划（应用页「Guaxi · 旅行计划」卡片）
             commands::travel::travel_get_settings,
             commands::travel::travel_set_amap_key,
             commands::travel::travel_get_map_keys,
@@ -769,6 +769,7 @@ async fn app_main() {
             commands::travel::travel_llm_web_complete,
             commands::travel::travel_llm_local_complete,
             commands::travel::travel_static_map,
+            commands::travel::travel_copy_image,
             commands::travel::travel_save_plan,
             commands::travel::travel_list_plans,
             commands::travel::travel_get_plan,

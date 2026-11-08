@@ -70,7 +70,7 @@
                 <small>{{ link.hint }}</small>
               </button>
             </div>
-            <p>跳转到平台搜索结果；价格、房态与营业时间以平台实时信息为准，行迹不抓取这些数据。</p>
+            <p>跳转到平台搜索结果；价格、房态与营业时间以平台实时信息为准，Guaxi 不抓取这些数据。</p>
           </details>
 
           <div v-if="block.route" class="tr-route-line">
