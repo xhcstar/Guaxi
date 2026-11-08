@@ -1,7 +1,7 @@
 // 预览与离线演示数据：真实的应用里这些来自高德/OSM；浏览器预览用同一套结构跑通界面。
 // 示例行程放在杭州，日期取最近的周六，避免预览里出现“已过期”的观感。
 
-import { addDays, nextSaturday, weekdayCn } from './travelUtils.js'
+import { addDays, minutesToTime, nextSaturday, seasonFor, weekdayCn } from './travelUtils.js'
 import { assemblePlan } from './travelPlan.js'
 import { fallbackDay, fallbackOutline } from './travelPrompt.js'
 
@@ -195,6 +195,51 @@ function buildDemoRoutes() {
   return [day1, day2]
 }
 
+function attachDemoWeather(legs, date, weather, dwells = [], startMinutes = 8 * 60 + 30) {
+  let cursor = startMinutes
+  for (const [legIndex, leg] of legs.entries()) {
+    const duration = Math.max(5, Math.round((Number(leg.duration) || 0) / 60))
+    const coords = String(leg.polyline || '')
+      .split(';')
+      .map((pair) => pair.split(',').map(Number))
+      .filter(([lng, lat]) => Number.isFinite(lng) && Number.isFinite(lat))
+    const fractions = (Number(leg.distance) || 0) >= 25 ? [0, 0.5, 1] : [0, 1]
+    leg.weatherPoints = fractions.map((fraction) => {
+      const index = Math.min(coords.length - 1, Math.round(fraction * (coords.length - 1)))
+      const [lng, lat] = coords[index] || [leg.fromLng, leg.fromLat]
+      const rainy = /雨|雪|雷/.test(weather?.dayWeather || '')
+      const temperature = (Number(weather?.dayTemp) || 20) + (fraction === 0.5 ? 1 : 0)
+      return {
+        name: fraction === 0 ? leg.fromName : fraction === 1 ? leg.toName : '',
+        lng,
+        lat,
+        date,
+        time: minutesToTime(cursor + Math.round(duration * fraction)),
+        weather: weather?.dayWeather || '多云',
+        icon: weather?.icon || 'cloud',
+        temperature,
+        feelsLike: temperature - 1,
+        precipitationProbability: rainy ? 70 : 15,
+        precipitation: rainy ? 1.5 : 0,
+        windSpeed: 12,
+        windDirection: 120,
+        visibility: rainy ? 8000 : 15000,
+        elevation: 20,
+        available: true,
+        message: '',
+        source: 'open-meteo',
+        fetchedAt: new Date().toISOString(),
+      }
+    })
+    cursor +=
+      duration +
+      10 +
+      (Number(dwells[legIndex]) || 0) +
+      (legIndex < legs.length - 1 ? 15 : 0)
+  }
+  return legs
+}
+
 export function createDemoFacts(dates) {
   const tripDates = dates || [nextSaturday(), addDays(nextSaturday(), 1)]
   return {
@@ -284,12 +329,14 @@ export function createDemoPlan(overrides = {}) {
   const routes = buildDemoRoutes()
   const days = outline.days.map((outlineDay, index) => {
     const stopRefs = outlineDay.stops.map((item) => map.get(item.poiId)).filter(Boolean)
+    const dwells = (outlineDay.stops || []).map((item) => (item.kind === 'food' ? 60 : 90))
+    const legs = attachDemoWeather(routes[index], outlineDay.date, facts.weather[index], dwells)
     return fallbackDay({
       form,
       facts,
       outlineDay,
       dayIndex: index,
-      legs: routes[index],
+      legs,
       stopRefs,
       startName: index === 0 ? facts.origin.name : map.get(outline.days[index - 1].hotelId)?.name,
     })
@@ -322,6 +369,15 @@ export function createDemoPlan(overrides = {}) {
     note: '香花券 45 元，建议 8:30 前入园',
   })
 
+  const season = seasonFor(form.startDate)
+  const routeWeather = {
+    points: days.flatMap((day) => day.routeWeather || []),
+    season: season.label,
+    seasonTips: season.tips,
+    notes: ['示例数据：沿途天气为本地演示值，真实规划会按路线坐标获取实时预报。'],
+    fetchedAt: new Date().toISOString(),
+    provider: 'Open-Meteo（示例）',
+  }
   const plan = assemblePlan({
     form,
     facts,
@@ -329,6 +385,7 @@ export function createDemoPlan(overrides = {}) {
     days,
     provider: '内置示例',
     detailLevel: 'full',
+    routeWeather,
   })
   plan.id = overrides.id || 'demo-hangzhou-weekend'
   plan.createdAt = new Date(Date.now() - 36 * 3600 * 1000).toISOString()

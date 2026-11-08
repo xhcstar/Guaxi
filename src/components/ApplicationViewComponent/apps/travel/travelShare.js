@@ -133,7 +133,14 @@ function renderRoute(block) {
       return `<div class="route-option${index === 0 ? ' is-primary' : ''}"><div><span>${escapeHtml(option.label || (index === 0 ? '推荐' : `备选 ${index}`))}</span><strong>${minutes ? `${minutes} 分钟` : '—'}</strong></div><small>${escapeHtml(distance ? `${distance} km` : '')}${extra ? ` · ${escapeHtml(extra)}` : ''}</small></div>`
     })
     .join('')
-  return `<div class="route"><div class="route-title">${escapeHtml(leg.summary || '路线方案')}</div><div class="route-options">${optionHtml}</div>${leg.warning ? `<div class="route-warning">${escapeHtml(leg.warning)}</div>` : ''}</div>`
+  const routeWeather = (leg.weatherPoints || [])
+    .map((point) =>
+      point.available === false
+        ? `<span class="unknown">${escapeHtml(point.name || '途经')} 临近更新</span>`
+        : `<span><b>${escapeHtml(point.name || '途经')}</b> ${escapeHtml(point.time || '')} ${weatherIcon(point)} ${escapeHtml(point.weather || '')}${point.temperature != null ? ` ${Math.round(Number(point.temperature))}℃` : ''}</span>`,
+    )
+    .join(' → ')
+  return `<div class="route"><div class="route-title">${escapeHtml(leg.summary || '路线方案')}</div><div class="route-options">${optionHtml}</div>${leg.warning ? `<div class="route-warning">${escapeHtml(leg.warning)}</div>` : ''}</div>${routeWeather ? `<div class="leg-weather">${routeWeather}</div>` : ''}`
 }
 
 function renderBlock(block) {
@@ -253,6 +260,19 @@ export function buildShareHtml(plan, options = {}) {
   const meta = `${dateRangeText(plan)} · ${peopleCount(plan)} 人 · ${transportLabel(plan.transport)} · 人均 ¥${money(plan.budget?.perPerson)}`
   const days = (plan.days || []).map(renderDay).join('')
   const notes = (plan.factsMeta?.notes || []).map((item) => `<li>${escapeHtml(item)}</li>`).join('')
+  const routeWeather = (plan.routeWeather || []).length
+    ? `<section class="panel route-panel">
+  <h2>沿途天气${plan.season?.label ? ` · ${escapeHtml(plan.season.label)}` : ''}</h2>
+  <div class="weather">${plan.routeWeather
+    .map((point) =>
+      point.available === false
+        ? `<div class="unknown"><b>${escapeHtml(point.name || '途经')}</b>${escapeHtml(shortDate(point.date))} ${escapeHtml(point.time || '')}<br/>临近更新<br/><small>${escapeHtml(point.message || '')}</small></div>`
+        : `<div><b>${weatherIcon(point)} ${escapeHtml(point.weather || '')}</b>${escapeHtml(point.name || '途经')} · ${escapeHtml(shortDate(point.date))} ${escapeHtml(point.time || '')}<br/>${point.temperature != null ? ` ${Math.round(Number(point.temperature))}℃` : ''}${Number(point.precipitationProbability) >= 30 ? ` · 降水 ${Math.round(Number(point.precipitationProbability))}%` : ''}</div>`,
+    )
+    .join('')}</div>
+  ${plan.weatherMeta?.notes?.length ? `<small class="meta">${plan.weatherMeta.notes.map((item) => escapeHtml(item)).join(' · ')}${plan.weatherMeta?.fetchedAt ? ` · 更新于 ${escapeHtml(timeAgo(plan.weatherMeta.fetchedAt))}` : ''}</small>` : ''}
+</section>`
+    : ''
   const shareNote = shareUrl
     ? `<div class="share-note">手机查看：${escapeHtml(shareUrl)}<br/><small>同一 Wi-Fi 下有效，电脑关闭或分享停止后失效。</small></div>`
     : ''
@@ -320,6 +340,12 @@ body{font-family:"PingFang SC","Microsoft YaHei",system-ui,sans-serif;line-heigh
 .route-option strong{font-family:ui-monospace,Consolas,monospace;font-size:10px;white-space:nowrap}
 .route-option small{display:block;margin-top:2px;font-size:8.5px;line-height:1.5;color:#7c8a83;overflow-wrap:anywhere}
 .route-warning{margin-top:5px;font-size:10px;line-height:1.5;color:#c4552d;overflow-wrap:anywhere}
+.leg-weather{margin-top:6px;font-size:10.5px;line-height:1.7;color:#7c8a83;overflow-wrap:anywhere}
+.leg-weather b{color:#4f6b57;font-weight:600}
+.leg-weather .unknown{opacity:.6}
+.weather .unknown{opacity:.6}
+.route-panel{padding:14px 16px}
+.route-panel h2{font-size:15px;margin-bottom:2px}
 .block-transit h3{font-size:14px;color:#4f6b57}
 .block-transit .time{color:#4f6b57}
 .block-food h3{color:#8a4a2a}
@@ -379,6 +405,7 @@ body{font-family:"PingFang SC","Microsoft YaHei",system-ui,sans-serif;line-heigh
     )
     .join('')}</div>` : ''}
 
+  ${routeWeather}
   ${days}
   ${renderBudget(plan)}
   ${renderPacking(plan)}

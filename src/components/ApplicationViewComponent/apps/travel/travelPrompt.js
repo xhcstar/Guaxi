@@ -9,6 +9,7 @@ import {
   minutesToTime,
   normalizeTime,
   safeText,
+  seasonFor,
   timeToMinutes,
   uid,
   uniqueBy,
@@ -77,6 +78,7 @@ export function buildOutlinePrompt({ form, facts }) {
   const attractions = (facts.attractions || []).map(compactPoi)
   const food = (facts.food || []).map(compactPoi)
   const hotels = (facts.hotels || []).map(compactPoi)
+  const season = seasonFor(form.startDate)
   const weather = (facts.weather || [])
     .filter((item) => dates.includes(item.date))
     .map(
@@ -106,7 +108,11 @@ ${food.map((poi) => `- ${poi.id} | ${poi.name} | ${poi.category} | 评分 ${poi.
 【候选住宿】
 ${hotels.map((poi) => `- ${poi.id} | ${poi.name} | 评分 ${poi.rating ?? '未知'} | 参考人均 ${poi.cost ?? '未知'}`).join('\n') || '（无）'}
 
-【天气】
+【季节】
+${season.label}
+${season.tips.map((tip) => `- ${tip}`).join('\n')}
+
+【目的地天气】
 ${weather.join('\n') || '（暂无预报，按季节常识提示）'}
 
 请输出整体大纲：
@@ -116,6 +122,7 @@ ${weather.join('\n') || '（暂无预报，按季节常识提示）'}
 - days 必须正好 ${dates.length} 项，日期依次为 ${dates.join('、')}。
 - 每天 2-4 个景点/活动、1-2 个餐饮；stops 的顺序就是当天游览顺序，必须按地理位置聚类。
 - 最后一天不要再安排住宿；多天行程的中间天从候选住宿里选 hotelId。
+- 结合季节与天气安排：雨天减少户外、夏季避开正午暴晒、冬季缩短户外时间，山区早晚加衣。
 - 只使用上面出现的 id；没有合适的就留空并说明。`
 
   return { system: SYSTEM_PROMPT, prompt: user }
@@ -267,6 +274,32 @@ function legPromptLines(legs) {
     .join('\n')
 }
 
+function weatherBrief(point) {
+  if (!point) return ''
+  if (point.available === false) {
+    return `${point.name || '途经'} ${point.time || ''} 临近更新`
+  }
+  const parts = [point.name || '途经', point.time || '', point.weather || '']
+  const temperature = Number(point.temperature)
+  if (Number.isFinite(temperature)) parts.push(`${Math.round(temperature)}℃`)
+  const rainChance = Number(point.precipitationProbability)
+  if (Number.isFinite(rainChance) && rainChance >= 40) parts.push(`降水 ${Math.round(rainChance)}%`)
+  const wind = Number(point.windSpeed)
+  if (Number.isFinite(wind) && wind >= 30) parts.push(`风 ${Math.round(wind)} km/h`)
+  return parts.filter(Boolean).join(' ')
+}
+
+function legWeatherLines(legs) {
+  return (legs || [])
+    .map((leg, index) => {
+      const points = leg.weatherPoints || []
+      if (!points.length) return ''
+      return `- leg ${index}：${points.map(weatherBrief).join(' → ')}`
+    })
+    .filter(Boolean)
+    .join('\n')
+}
+
 export function buildDayPrompt({ form, facts, outlineDay, dayIndex, totalDays, legs, startName }) {
   const map = poiMap(facts)
   const stopLines = (outlineDay.stops || [])
@@ -278,14 +311,16 @@ export function buildDayPrompt({ form, facts, outlineDay, dayIndex, totalDays, l
     .filter(Boolean)
     .join('\n')
   const weather = (facts.weather || []).find((item) => item.date === outlineDay.date)
+  const season = seasonFor(outlineDay.date)
   const food = (facts.food || []).map(compactPoi)
   const hotels = (facts.hotels || []).map(compactPoi)
 
   const user = `【当天信息】
 日期：${outlineDay.date} ${outlineDay.weekday || weekdayCn(outlineDay.date)}；第 ${dayIndex + 1} / ${totalDays} 天
+季节：${season.label}
 当天主题：${outlineDay.theme || ''}；主要区域：${outlineDay.area || ''}
 出发：${startName || facts.origin?.name || '酒店'}
-天气：${weather ? `${weather.dayWeather || ''}，${weather.nightTemp ?? ''}~${weather.dayTemp ?? ''}℃，${weather.wind || ''}` : '暂无预报'}
+目的地天气：${weather ? `${weather.dayWeather || ''}，${weather.nightTemp ?? ''}~${weather.dayTemp ?? ''}℃，${weather.wind || ''}` : '暂无预报'}
 用户节奏：${paceLabel(form.pace)}；兴趣：${(form.interests || []).join('、') || '不限定'}
 当天结束时间：${form.endTime}
 
@@ -294,6 +329,9 @@ ${stopLines || '（没有候选点）'}
 
 【点到点路线】
 ${legPromptLines(legs) || '（当天只有一个点，无路段）'}
+
+【沿途天气】（按出发时间估算）
+${legWeatherLines(legs) || '（沿途天气暂不可用，按季节与目的地天气判断）'}
 
 【可选餐饮】
 ${food.map((poi) => `- ${poi.id} | ${poi.name} | 评分 ${poi.rating ?? '未知'}`).join('\n') || '（无）'}
@@ -314,6 +352,7 @@ ${hotels.map((poi) => `- ${poi.id} | ${poi.name} | 参考人均 ${poi.cost ?? '�
 - 必须为上面每一条 leg 输出一个 kind=transit 且带 legIndex 的块，时间要覆盖该段路程。
 - 每个景点/餐饮/住宿块尽量带 poiId，且只能来自候选；不要编造新地点。
 - 景点 60-150 分钟，餐饮 45-90 分钟；节奏松弛就多留白，紧凑就少留白。
+- 结合沿途与目的地天气：有雨把户外点放到雨势较小的时段或准备室内备选；有雾提醒自驾降速；温差大提醒分层穿衣。
 - 最后一天按用户结束时间收尾，不要再安排入住。
 - 不写预算金额；tips 写排队、预约、停车、穿衣、点菜等真正有用的信息。`
 
@@ -367,6 +406,13 @@ function normalizeBlock(raw, map, fallbackStart = '09:00') {
     legIndex: Number.isInteger(Number(raw?.legIndex)) ? Number(raw.legIndex) : null,
     route: null,
   }
+}
+
+function routeWeatherOf(legs) {
+  return uniqueBy(
+    (legs || []).flatMap((leg) => leg.weatherPoints || []),
+    (point) => `${point.date}|${point.time}|${point.lng}|${point.lat}`,
+  )
 }
 
 function durationMinutes(leg) {
@@ -490,6 +536,7 @@ export function normalizeDay(raw, { form, facts, outlineDay, dayIndex, legs, sto
     theme: safeText(raw.theme) || outlineDay.theme,
     area: outlineDay.area,
     weather: (facts.weather || []).find((item) => item.date === outlineDay.date) || null,
+    routeWeather: routeWeatherOf(legs),
     blocks,
     legs,
     tips: Array.isArray(raw.tips) ? raw.tips.map((item) => safeText(item)).filter(Boolean) : [],
@@ -588,6 +635,7 @@ export function fallbackDay({ form, facts, outlineDay, dayIndex, legs, stopRefs,
     theme: outlineDay.theme,
     area: outlineDay.area,
     weather: (facts.weather || []).find((item) => item.date === outlineDay.date) || null,
+    routeWeather: routeWeatherOf(legs),
     blocks,
     legs,
     tips: [],

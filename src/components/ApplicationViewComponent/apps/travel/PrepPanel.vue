@@ -70,6 +70,7 @@
     <div class="tr-prep-grid">
       <div class="tr-prep-card">
         <h3><TravelIcon name="cloud" :size="16" /> 天气与穿衣</h3>
+        <p v-if="plan.season?.label" class="tr-prep-season">季节：{{ plan.season.label }}</p>
         <p class="tr-prep-lead">{{ weatherAdvice }}</p>
         <div v-if="plan.weather?.length" class="tr-mini-weather">
           <div v-for="item in plan.weather" :key="item.date">
@@ -136,18 +137,33 @@ const bookings = computed(() => {
 })
 const weatherAdvice = computed(() => {
   const days = props.plan.weather || []
-  if (!days.length) return '暂无逐日预报，出发前 48 小时再确认一次。'
+  const route = (props.plan.routeWeather || []).filter((point) => point.available !== false)
+  if (!days.length && !route.length) return '暂无逐日预报，出发前 48 小时再确认一次。'
   const mins = days.map((item) => Number(item.nightTemp)).filter(Number.isFinite)
   const maxs = days.map((item) => Number(item.dayTemp)).filter(Number.isFinite)
-  const rain = days.some((item) => `${item.dayWeather || ''}${item.nightWeather || ''}`.match(/雨|雪|雷/))
+  const routeTemps = route.map((point) => Number(point.temperature)).filter(Number.isFinite)
+  const rain =
+    days.some((item) => `${item.dayWeather || ''}${item.nightWeather || ''}`.match(/雨|雪|雷/)) ||
+    route.some((point) => /雨|雪|雷/.test(point.weather || ''))
+  const fog =
+    route.some((point) => /雾|霾/.test(point.weather || '')) ||
+    route.some((point) => Number(point.visibility) > 0 && Number(point.visibility) < 1000)
+  const windy = route.some((point) => Number(point.windSpeed) >= 40)
   const min = mins.length ? Math.min(...mins) : null
   const max = maxs.length ? Math.max(...maxs) : null
+  const routeMin = routeTemps.length ? Math.min(...routeTemps) : null
+  const routeMax = routeTemps.length ? Math.max(...routeTemps) : null
   const parts = []
-  if (min != null && max != null) parts.push(`行程期间约 ${min}~${max}℃`)
+  if (min != null && max != null) parts.push(`目的地约 ${min}~${max}℃`)
+  if (routeMin != null && routeMax != null && route.length) {
+    parts.push(`沿途采样点约 ${Math.round(routeMin)}~${Math.round(routeMax)}℃`)
+  }
   if (min != null && min < 10) parts.push('早晚偏冷，带一件保暖外套')
   else if (min != null && min < 18) parts.push('早晚温差大，薄外套比短袖更稳')
   if (max != null && max >= 28) parts.push('日间偏热，注意防晒补水')
   if (rain) parts.push('有降水概率，折叠伞和防水鞋套用得上')
+  if (fog) parts.push('沿途有雾，自驾出发前确认能见度与雾灯')
+  if (windy) parts.push('沿途风力较大，注意横风和保暖')
   return `${parts.join('；')}。`
 })
 </script>

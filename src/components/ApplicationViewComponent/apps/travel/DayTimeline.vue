@@ -104,6 +104,21 @@
                 </div>
               </div>
             </div>
+            <div v-if="block.route?.weatherPoints?.length" class="tr-route-weather-line">
+              <TravelIcon name="cloud" :size="12" />
+              <span
+                v-for="(point, pointIndex) in block.route.weatherPoints"
+                :key="pointIndex"
+                :class="{ 'is-unknown': point.available === false }"
+              >
+                <strong>{{ point.name || '途经' }}</strong>
+                <small>{{ point.time }}</small>
+                <template v-if="point.available !== false">
+                  {{ point.weather }} {{ point.temperature != null ? `${Math.round(point.temperature)}℃` : '' }}
+                </template>
+                <template v-else>临近更新</template>
+              </span>
+            </div>
             <button
               v-if="canNavigate(block)"
               type="button"

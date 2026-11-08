@@ -4,7 +4,7 @@
 
 import { invoke } from '@tauri-apps/api/core'
 import { createDemoFacts, createDemoPlan, DEMO_DESTINATION, DEMO_LIBRARY, DEMO_ORIGIN } from './travelData.js'
-import { addDays, enumerateDates, nextSaturday, uid } from './travelUtils.js'
+import { addDays, enumerateDates, nextSaturday, seasonFor, uid } from './travelUtils.js'
 
 export const isTauriRuntime = () =>
   typeof window !== 'undefined' && Boolean(window.__TAURI_INTERNALS__)
@@ -234,6 +234,85 @@ function seedPreview() {
   }
 }
 
+function hashText(text) {
+  let value = 0
+  for (const char of String(text || '')) {
+    value = (value * 31 + char.charCodeAt(0)) % 100000
+  }
+  return value
+}
+
+function mockRouteWeather({ provider = 'osm', seasonDate = '', points = [] }) {
+  const season = seasonFor(seasonDate || points[0]?.date)
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+  return {
+    provider: '浏览器预览 · Open-Meteo 模拟',
+    coordSystem: 'wgs84',
+    fetchedAt: new Date().toISOString(),
+    season: season.label,
+    seasonTips: season.tips,
+    notes: ['浏览器预览使用本地模拟天气；桌面端会按路线坐标请求 Open-Meteo 实时数据。'],
+    points: points.map((point) => {
+      const date = point.date || ''
+      const time = point.time || '12:00'
+      const hour = Number(time.slice(0, 2)) || 12
+      const target = date ? new Date(`${date}T12:00:00`) : today
+      const daysAhead = Math.round((target.getTime() - today.getTime()) / 86400000)
+      const base = {
+        name: point.name || '途经',
+        lng: Number(point.lng) || 0,
+        lat: Number(point.lat) || 0,
+        date,
+        time,
+        source: 'open-meteo',
+        fetchedAt: new Date().toISOString(),
+      }
+      if (!date || daysAhead > 16) {
+        return {
+          ...base,
+          available: false,
+          message: '超过 16 天预报窗口，临近出发再更新',
+          weather: '',
+          icon: 'cloud',
+        }
+      }
+      const month = Number(date.slice(5, 7)) || new Date().getMonth() + 1
+      const seasonal = { 1: 2, 2: 5, 3: 11, 4: 17, 5: 22, 6: 26, 7: 30, 8: 29, 9: 25, 10: 19, 11: 12, 12: 5 }[month] ?? 18
+      const hash = hashText(`${date}|${time}|${point.name}|${point.lng}|${point.lat}`)
+      const hourAdjust = hour < 8 ? -4 : hour < 11 ? 0 : hour < 16 ? 3 : hour < 19 ? 0 : -4
+      const temperature = seasonal + hourAdjust + (hash % 5) - 2
+      const code = hash % 10
+      const [weather, icon] =
+        code <= 3
+          ? ['晴', 'sun']
+          : code <= 6
+            ? ['多云', 'cloud']
+            : code <= 8
+              ? ['小雨', 'rain']
+              : ['有雾', 'fog']
+      const elevation = 20 + (hash % 900)
+      return {
+        ...base,
+        weather,
+        icon,
+        temperature,
+        feelsLike: temperature - (hash % 3),
+        precipitationProbability:
+          icon === 'rain' ? 55 + (hash % 35) : icon === 'fog' ? 20 : icon === 'cloud' ? 15 : 5,
+        precipitation: icon === 'rain' ? 1 + (hash % 4) * 0.5 : 0,
+        windSpeed: 6 + (hash % 22),
+        windDirection: (hash * 37) % 360,
+        visibility: icon === 'fog' ? 350 + (hash % 500) : 9000 + (hash % 9000),
+        elevation,
+        available: true,
+        message: '',
+        source: 'open-meteo',
+      }
+    }),
+  }
+}
+
 export const api = {
   isMock,
   isTauriRuntime,
@@ -291,6 +370,16 @@ export const api = {
     }
     return invoke('travel_build_routes', {
       request: { transport, days, provider: provider || 'auto', alternatives },
+    })
+  },
+
+  async routeWeather({ provider, seasonDate, points }) {
+    if (!isTauriRuntime()) {
+      await delay(220)
+      return mockRouteWeather({ provider, seasonDate, points })
+    }
+    return invoke('travel_route_weather', {
+      request: { provider: provider || 'auto', seasonDate: seasonDate || '', points },
     })
   },
 

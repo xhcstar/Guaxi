@@ -15,10 +15,11 @@ const load = (p) => import(pathToFileURL(path.join(root, p)).href)
 
 const travelDir = 'src/components/ApplicationViewComponent/apps/travel'
 const { createDemoPlan, createDemoFacts } = await load(path.join(travelDir, 'travelData.js'))
-const { computeBudget, assemblePlan } = await load(path.join(travelDir, 'travelPlan.js'))
-const { normalizeOutline, normalizeDay, fallbackOutline, parseModelJson } = await load(
-  path.join(travelDir, 'travelPrompt.js'),
+const { computeBudget, assemblePlan, buildPacking } = await load(
+  path.join(travelDir, 'travelPlan.js'),
 )
+const { normalizeOutline, normalizeDay, fallbackOutline, parseModelJson, buildDayPrompt } =
+  await load(path.join(travelDir, 'travelPrompt.js'))
 const { buildShareHtml, mapSourceLabel } = await load(path.join(travelDir, 'travelShare.js'))
 const { platformSearchLinks } = await load(path.join(travelDir, 'travelLinks.js'))
 const {
@@ -27,9 +28,16 @@ const {
   learnFromForm,
   mapProviderLabel,
 } = await load(path.join(travelDir, 'travelPreferences.js'))
-const { todayString, enumerateDates, extractJson, wgs84ToGcj02, gcj02ToWgs84 } = await load(
-  path.join(travelDir, 'travelUtils.js'),
-)
+const {
+  todayString,
+  enumerateDates,
+  extractJson,
+  wgs84ToGcj02,
+  gcj02ToWgs84,
+  parsePolyline,
+  samplePolyline,
+  seasonFor,
+} = await load(path.join(travelDir, 'travelUtils.js'))
 
 // ── 接入契约 ───────────────────────────────────────────────
 
@@ -50,6 +58,7 @@ test('应用卡片、路由、窗口与命令都已注册', () => {
   for (const command of [
     'travel_collect_facts',
     'travel_build_routes',
+    'travel_route_weather',
     'travel_llm_complete',
     'travel_llm_web_complete',
     'travel_llm_local_complete',
@@ -286,4 +295,79 @@ test('示例行程每条路段都有 2-3 条备选，且不再展示逐段步骤
   assert.ok(!html.includes('展开逐段路线'))
   assert.ok(!html.includes('<details'))
   assert.match(html, /route-options/)
+})
+
+// ── 沿途天气与季节 ─────────────────────────────────────────
+
+test('路线采样、季节与沿途天气进入计划和提示词', () => {
+  assert.equal(seasonFor('2026-11-14').label, '秋季 · 深秋（11 月）')
+  const coords = parsePolyline('120,30;122,30', null, null)
+  assert.deepEqual(samplePolyline(coords, 0.5), [121, 30])
+
+  const plan = createDemoPlan()
+  assert.ok(plan.routeWeather.length >= 6)
+  assert.ok(plan.routeWeather.every((point) => point.date && point.time))
+  assert.match(plan.season.label, /秋/)
+  assert.ok(plan.weatherMeta.total >= plan.routeWeather.length)
+  assert.ok(plan.days.every((day) => (day.routeWeather || []).length > 0))
+  assert.ok(
+    plan.days[0].legs.every((leg) => (leg.weatherPoints || []).length >= 2),
+    '每条路段都应有起终点天气',
+  )
+  const html = buildShareHtml(plan)
+  assert.match(html, /沿途天气/)
+  assert.match(html, /leg-weather/)
+})
+
+test('雾、横风与高海拔会写进行前清单和建议', () => {
+  const form = {
+    startDate: '2026-11-14',
+    endDate: '2026-11-15',
+    transport: 'driving',
+    adults: 2,
+    children: 0,
+    elders: 0,
+    interests: [],
+    pace: 'balanced',
+  }
+  const routeWeather = [
+    {
+      name: '山口',
+      date: '2026-11-14',
+      time: '10:00',
+      weather: '有雾',
+      temperature: 3,
+      windSpeed: 45,
+      elevation: 1800,
+      visibility: 400,
+      available: true,
+    },
+  ]
+  const packing = buildPacking({ form, weather: [], routeWeather })
+  const items = packing.flatMap((group) => group.items).join(' ')
+  assert.match(items, /雾灯/)
+  assert.match(items, /冲锋衣/)
+  assert.match(items, /防风镜/)
+
+  const dayPrompt = buildDayPrompt({
+    form,
+    facts: { weather: [], origin: { name: '上海' }, attractions: [], food: [], hotels: [] },
+    outlineDay: { date: form.startDate, weekday: '周六', theme: '山口', area: '', stops: [] },
+    dayIndex: 0,
+    totalDays: 1,
+    legs: [
+      {
+        mode: 'driving',
+        distance: 80,
+        duration: 5400,
+        fromName: '上海',
+        toName: '山口',
+        weatherPoints: routeWeather,
+      },
+    ],
+    startName: '上海',
+  })
+  assert.match(dayPrompt.prompt, /沿途天气/)
+  assert.match(dayPrompt.prompt, /有雾/)
+  assert.match(dayPrompt.prompt, /季节：秋季/)
 })

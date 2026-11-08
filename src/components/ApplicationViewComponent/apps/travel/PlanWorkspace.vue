@@ -77,6 +77,7 @@
         <span>资料更新于 {{ timeAgo(plan.factsMeta?.collectedAt) }}</span>
         <span>· {{ mapSourceLabel(plan.source) }}</span>
         <span>· 天气/路况为生成时快照（路线缓存 2 小时）</span>
+        <span v-if="plan.weatherMeta?.fetchedAt">· 沿途天气 {{ timeAgo(plan.weatherMeta.fetchedAt) }}</span>
         <span>· POI 缓存 7 天</span>
         <span v-if="plan.factsMeta?.notes?.length">· {{ plan.factsMeta.notes[0] }}</span>
       </div>
@@ -114,6 +115,43 @@
           <span>{{ item.nightTemp ?? '—' }}~{{ item.dayTemp ?? '—' }}℃</span>
           <small>{{ item.wind }}</small>
         </div>
+      </div>
+
+      <div v-if="routeWeatherPoints.length" class="tr-route-weather">
+        <div class="tr-route-weather-head">
+          <div>
+            <div class="tr-eyebrow"><span></span> 沿途天气</div>
+            <strong>{{ plan.season?.label || '实时预报' }}</strong>
+          </div>
+          <small>
+            <template v-if="plan.weatherMeta?.fetchedAt">更新于 {{ timeAgo(plan.weatherMeta.fetchedAt) }} · </template>
+            {{ routeWeatherPoints.length }} 个采样点 · {{ routeWeatherAvailable }} 有预报
+          </small>
+        </div>
+        <div class="tr-route-weather-track">
+          <div
+            v-for="(point, index) in routeWeatherPoints"
+            :key="`${point.date}-${point.time}-${index}`"
+            class="tr-route-weather-point"
+            :class="{ 'is-unknown': point.available === false }"
+          >
+            <span class="tr-route-weather-time">{{ shortDate(point.date) }} {{ point.time }}</span>
+            <strong>{{ point.name || '途经' }}</strong>
+            <div class="tr-route-weather-main">
+              <TravelIcon :name="weatherIcon(point)" :size="16" />
+              <span v-if="point.available !== false">{{ point.weather }} {{ point.temperature != null ? `${Math.round(point.temperature)}℃` : '—' }}</span>
+              <span v-else>临近更新</span>
+            </div>
+            <small v-if="point.available !== false && Number(point.precipitationProbability) >= 30">
+              降水 {{ Math.round(point.precipitationProbability) }}%
+            </small>
+            <small v-else-if="point.available === false">{{ point.message }}</small>
+            <small v-else>{{ point.windSpeed != null ? `风 ${Math.round(point.windSpeed)} km/h` : '实时预报' }}</small>
+          </div>
+        </div>
+        <p v-if="plan.weatherMeta?.notes?.length" class="tr-route-weather-note">
+          {{ plan.weatherMeta.notes.join(' · ') }}
+        </p>
       </div>
 
       <div class="tr-day-switcher">
@@ -225,6 +263,15 @@ const cities = computed(() => ticketCities(props.plan))
 const isWeekend = computed(() => props.plan.kind === 'weekend')
 const people = computed(() => peopleCount(props.plan))
 const currentDay = computed(() => days.value[activeDay.value] || days.value[0] || null)
+const routeWeatherPoints = computed(() => {
+  const points = props.plan.routeWeather || []
+  if (showAllDays.value) return points
+  const date = currentDay.value?.date
+  return date ? points.filter((point) => point.date === date) : points
+})
+const routeWeatherAvailable = computed(
+  () => routeWeatherPoints.value.filter((point) => point.available !== false).length,
+)
 const dateText = computed(() => {
   if (!props.plan.startDate) return '日期待定'
   const start = shortDate(props.plan.startDate)

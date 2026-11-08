@@ -6,6 +6,7 @@ import {
   enumerateDates,
   money,
   parseDate,
+  seasonFor,
   shortDate,
   timeToMinutes,
   todayString,
@@ -76,6 +77,28 @@ function defaultTicket(poi) {
     if (rule.match.some((keyword) => haystack.includes(keyword))) return rule.price
   }
   return 45
+}
+
+/** 同一地点 3 小时内只保留第一次（共享端点、到达与离开）；返程等相隔较久仍保留。 */
+function dedupeRoutePoints(points = []) {
+  const out = []
+  for (const point of points) {
+    if (!point) continue
+    const last = out[out.length - 1]
+    const samePlace =
+      last &&
+      last.date === point.date &&
+      Math.abs(Number(last.lng) - Number(point.lng)) < 0.0001 &&
+      Math.abs(Number(last.lat) - Number(point.lat)) < 0.0001
+    if (samePlace) {
+      const gap = Math.abs(
+        (timeToMinutes(last.time) ?? 0) - (timeToMinutes(point.time) ?? 0),
+      )
+      if (gap < 180) continue
+    }
+    out.push(point)
+  }
+  return out
 }
 
 function planNights(form, days) {
@@ -211,22 +234,59 @@ export function computeBudget({ form, days, facts }) {
   }
 }
 
-function weatherRange(weather = []) {
-  const mins = weather.map((item) => Number(item.nightTemp ?? item.dayTemp)).filter(Number.isFinite)
-  const maxs = weather.map((item) => Number(item.dayTemp ?? item.nightTemp)).filter(Number.isFinite)
+function weatherStats(weather = [], routePoints = []) {
+  const mins = []
+  const maxs = []
+  for (const item of weather) {
+    const min = Number(item.nightTemp ?? item.dayTemp)
+    const max = Number(item.dayTemp ?? item.nightTemp)
+    if (Number.isFinite(min)) mins.push(min)
+    if (Number.isFinite(max)) maxs.push(max)
+  }
+  const routeTemps = []
+  let maxElevation = null
+  let minVisibility = null
+  for (const point of routePoints) {
+    if (!point || point.available === false) continue
+    const temperature = Number(point.temperature)
+    if (Number.isFinite(temperature)) {
+      routeTemps.push(temperature)
+      mins.push(temperature - 2)
+      maxs.push(temperature + 2)
+    }
+    const elevation = Number(point.elevation)
+    if (Number.isFinite(elevation)) {
+      maxElevation = maxElevation == null ? elevation : Math.max(maxElevation, elevation)
+    }
+    const visibility = Number(point.visibility)
+    if (Number.isFinite(visibility) && visibility > 0) {
+      minVisibility = minVisibility == null ? visibility : Math.min(minVisibility, visibility)
+    }
+  }
+  const texts = [
+    ...weather.map((item) => `${item.dayWeather || ''}${item.nightWeather || ''}`),
+    ...routePoints.filter((point) => point?.available !== false).map((point) => point.weather || ''),
+  ].join(' ')
   return {
     min: mins.length ? Math.min(...mins) : null,
     max: maxs.length ? Math.max(...maxs) : null,
-    rain: weather.some((item) =>
-      `${item.dayWeather || ''}${item.nightWeather || ''}`.match(/雨|雪|雷/),
-    ),
+    spread:
+      routeTemps.length > 1 ? Math.max(...routeTemps) - Math.min(...routeTemps) : null,
+    rain: /雨|雪|雷/.test(texts),
+    snow: /雪|冻雨/.test(texts),
+    fog: /雾|霾/.test(texts) || (minVisibility != null && minVisibility < 1000),
+    windy: routePoints.some((point) => Number(point?.windSpeed) >= 40),
     strongSun: maxs.length ? Math.max(...maxs) >= 28 : false,
     cold: mins.length ? Math.min(...mins) <= 8 : false,
+    maxElevation,
+    minVisibility,
+    routeCount: routePoints.length,
+    routeAvailable: routePoints.filter((point) => point?.available !== false).length,
   }
 }
 
-export function buildPacking({ form, weather }) {
-  const range = weatherRange(weather)
+export function buildPacking({ form, weather, routeWeather = [] }) {
+  const range = weatherStats(weather, routeWeather)
   const groups = [
     {
       category: '证件与预订',
@@ -242,7 +302,8 @@ export function buildPacking({ form, weather }) {
       category: '衣物',
       items: [
         '舒适步行鞋',
-        range.cold ? '保暖外套 / 薄羽绒' : range.min != null && range.min < 18 ? '薄外套' : '透气短袖',
+        range.cold || range.maxElevation >= 1500 ? '保暖外套 / 薄羽绒' : range.min != null && range.min < 18 ? '薄外套' : '透气短袖',
+        range.maxElevation >= 1200 ? '防风冲锋衣 / 抓绒（山区温差大）' : '',
         range.strongSun ? '遮阳帽 / 防晒衣' : '',
         range.rain ? '折叠伞 / 轻便雨衣' : '',
         '换洗衣物（按天数 + 1 套）',
@@ -254,6 +315,8 @@ export function buildPacking({ form, weather }) {
         '手机、充电器',
         '充电宝（随身携带）',
         form.transport === 'driving' ? '车充、车载支架' : '',
+        form.transport === 'driving' && (range.rain || range.fog) ? '检查雾灯、雨刮与三角牌' : '',
+        form.transport === 'driving' && range.maxElevation >= 1200 ? '下载山区离线地图' : '',
         form.interests?.includes('摄影') ? '相机、备用电池、存储卡' : '',
         '离线地图 / 行程截图',
       ].filter(Boolean),
@@ -264,6 +327,8 @@ export function buildPacking({ form, weather }) {
         '常用药、创可贴',
         form.transport === 'driving' || form.transport === 'transit' ? '晕车药' : '',
         range.strongSun ? '防晒霜、润唇膏' : '',
+        range.windy ? '防风镜 / 护膝' : '',
+        range.maxElevation >= 2500 ? '便携氧气 / 高反药（按需）' : '',
         form.interests?.includes('徒步') ? '登山杖、护膝' : '',
         form.children > 0 ? '儿童湿巾、小零食' : '',
         '水杯 / 保温杯',
@@ -338,11 +403,13 @@ export function buildChecklist({ form, days }) {
   }))
 }
 
-export function buildAdvice({ form, facts, outline, weather }) {
-  const range = weatherRange(weather)
+export function buildAdvice({ form, facts, outline, weather, routeWeather = [] }) {
+  const range = weatherStats(weather, routeWeather)
+  const season = seasonFor(form.startDate)
   const advice = [
     ...(outline?.advice || []),
     ...(outline?.mustKnow || []),
+    ...season.tips,
   ].filter((item) => typeof item === 'string' && item.trim())
 
   if (form.pace === 'relaxed') {
@@ -351,7 +418,23 @@ export function buildAdvice({ form, facts, outline, weather }) {
     advice.push('紧凑行程最怕晚起：把第一站定在 8:30 前，午餐选景点附近以减少往返。')
   }
   if (range.rain) {
-    advice.push('预报有雨：把户外观景改到上午，午后安排博物馆、茶馆或商场作为室内备选。')
+    advice.push(
+      range.routeAvailable
+        ? '沿途或目的地有雨：把户外观景放到雨势较小的时段，鞋子选防滑的，室内备选提前记好。'
+        : '预报有雨：把户外观景改到上午，午后安排博物馆、茶馆或商场作为室内备选。',
+    )
+  }
+  if (range.fog) {
+    advice.push('沿途部分路段有雾或能见度低：自驾开启雾灯、降速并加大车距，尽量避开清晨和夜间山路。')
+  }
+  if (range.windy) {
+    advice.push('沿途风力较大：山口、高架桥注意横风，自驾握稳方向，徒步和骑行注意保暖。')
+  }
+  if (range.spread != null && range.spread >= 8) {
+    advice.push(`出发地与沿途温差约 ${Math.round(range.spread)}℃：用可穿脱的分层穿衣，车上备一件外套。`)
+  }
+  if (range.maxElevation != null && range.maxElevation >= 1200) {
+    advice.push(`沿途采样点最高海拔约 ${Math.round(range.maxElevation)} 米：上坡慢行、注意补水，冬季留意暗冰。`)
   }
   if (range.strongSun) {
     advice.push('日间紫外线强：11:00-15:00 减少暴晒，帽子和防晒霜随身带。')
@@ -373,10 +456,10 @@ export function buildAdvice({ form, facts, outline, weather }) {
   return uniqueBy(advice, (item) => item)
 }
 
-export function buildAlternatives({ form, facts, weather }) {
-  const rainy = weather.some((item) =>
-    `${item.dayWeather || ''}${item.nightWeather || ''}`.match(/雨|雪|雷/),
-  )
+export function buildAlternatives({ form, facts, weather, routeWeather = [] }) {
+  const rainy =
+    weather.some((item) => `${item.dayWeather || ''}${item.nightWeather || ''}`.match(/雨|雪|雷/)) ||
+    routeWeather.some((point) => point?.available !== false && /雨|雪|雷/.test(point.weather || ''))
   const museums = (facts?.attractions || []).filter((poi) =>
     `${poi.name}${poi.category}`.match(/博物馆|美术馆|纪念馆|展/),
   )
@@ -415,8 +498,16 @@ export function assemblePlan({
   detailLevel = 'full',
   seriesId = '',
   weekendStart = '',
+  routeWeather = null,
 }) {
   const tripDates = enumerateDates(form.startDate, form.endDate)
+  const routePoints = dedupeRoutePoints((routeWeather?.points || []).filter(Boolean))
+  const season = seasonFor(form.startDate)
+  const seasonLabel = routeWeather?.season || season.label
+  const seasonTips =
+    Array.isArray(routeWeather?.seasonTips) && routeWeather.seasonTips.length
+      ? routeWeather.seasonTips
+      : season.tips
   const matchedWeather = (facts.weather || []).filter((item) => tripDates.includes(item.date))
   const weather =
     matchedWeather.length > 0
@@ -444,13 +535,20 @@ export function assemblePlan({
       day.weather ||
       weather.find((item) => item.date === (day.date || tripDates[index])) ||
       null,
+    routeWeather: dedupeRoutePoints(
+      day.routeWeather ||
+        uniqueBy(
+          (day.legs || []).flatMap((leg) => leg.weatherPoints || []),
+          (point) => `${point.date}|${point.time}|${point.lng}|${point.lat}`,
+        ),
+    ),
   }))
 
   const budget = computeBudget({ form, days: normalizedDays, facts })
-  const packing = buildPacking({ form, weather })
+  const packing = buildPacking({ form, weather, routeWeather: routePoints })
   const checklist = buildChecklist({ form, days: normalizedDays })
-  const advice = buildAdvice({ form, facts, outline, weather })
-  const alternatives = buildAlternatives({ form, facts, weather })
+  const advice = buildAdvice({ form, facts, outline, weather, routeWeather: routePoints })
+  const alternatives = buildAlternatives({ form, facts, weather, routeWeather: routePoints })
   const now = new Date().toISOString()
   const title = (outline?.title || '').trim() || defaultPlanTitle(form, normalizedDays)
 
@@ -492,6 +590,18 @@ export function assemblePlan({
           ? 'bd09'
           : 'wgs84'),
     weather,
+    routeWeather: routePoints,
+    season: {
+      label: seasonLabel,
+      tips: seasonTips,
+    },
+    weatherMeta: {
+      fetchedAt: routeWeather?.fetchedAt || '',
+      provider: routeWeather?.provider || '',
+      notes: routeWeather?.notes || [],
+      total: routePoints.length,
+      available: routePoints.filter((point) => point.available !== false).length,
+    },
     days: normalizedDays,
     budget,
     packing,

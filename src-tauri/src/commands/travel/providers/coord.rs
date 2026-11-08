@@ -69,6 +69,14 @@ pub fn bd09_to_wgs84(lng: f64, lat: f64) -> (f64, f64) {
     gcj02_to_wgs84(g_lng, g_lat)
 }
 
+pub fn to_gcj02(provider: MapProvider, lng: f64, lat: f64) -> (f64, f64) {
+    match provider {
+        MapProvider::Amap | MapProvider::Tencent => (lng, lat),
+        MapProvider::Baidu => bd09_to_gcj02(lng, lat),
+        _ => wgs84_to_gcj02(lng, lat),
+    }
+}
+
 pub fn to_wgs84(provider: MapProvider, lng: f64, lat: f64) -> (f64, f64) {
     match provider {
         MapProvider::Amap | MapProvider::Tencent => gcj02_to_wgs84(lng, lat),

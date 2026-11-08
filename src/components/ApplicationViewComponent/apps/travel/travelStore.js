@@ -25,10 +25,15 @@ import {
   deepClone,
   enumerateDates,
   formatDate,
+  minutesToTime,
   nextSaturday,
   parseDate,
+  parsePolyline,
   runWithConcurrency,
   safeText,
+  samplePolyline,
+  timeToMinutes,
+  todayString,
   uid,
   uniqueBy,
   weekdayCn,
@@ -381,6 +386,149 @@ export function useTravelStore() {
     }
   }
 
+  function routeWeatherKey(point) {
+    return `${point.date}|${String(point.time || '').slice(0, 2)}|${Number(point.lng).toFixed(3)}|${Number(point.lat).toFixed(3)}`
+  }
+
+  function evenIndexes(length, count) {
+    if (length <= count) return Array.from({ length }, (_, index) => index)
+    const picked = new Set()
+    for (let index = 0; index < count; index += 1) {
+      picked.add(Math.round((index * (length - 1)) / (count - 1)))
+    }
+    return [...picked]
+  }
+
+  /** 沿真实路线折线采样出发地、途经地区与目的地，再批量取逐时天气。 */
+  async function attachRouteWeather({ form, facts, routeInfo }) {
+    const requestPoints = []
+    const indexByKey = new Map()
+    const pushPoint = (point) => {
+      const key = routeWeatherKey(point)
+      if (indexByKey.has(key)) return indexByKey.get(key)
+      const index = requestPoints.length
+      indexByKey.set(key, index)
+      requestPoints.push(point)
+      return index
+    }
+
+    const forecastHorizon = formatDate(addDays(todayString(), 16))
+    routeInfo.forEach((info) => {
+      let cursor = timeToMinutes(form.startTime)
+      if (cursor == null) cursor = 9 * 60
+      const offline = Boolean(info.date && info.date > forecastHorizon)
+      const daySamples = []
+      const samplesByLeg = []
+      ;(info.legs || []).forEach((leg, legIndex) => {
+        const duration = Math.max(5, Math.round((Number(leg.duration) || 0) / 60))
+        const distance = Number(leg.distance) || 0
+        const mode = leg.mode || form.transport
+        const corridor = ['driving', 'walking', 'transit'].includes(mode) && distance >= 25
+        const fractions = corridor
+          ? distance >= 120
+            ? [0, 0.25, 0.5, 0.75, 1]
+            : [0, 0.5, 1]
+          : [0, 1]
+        const coords = parsePolyline(
+          leg.polyline,
+          { lng: leg.fromLng, lat: leg.fromLat },
+          { lng: leg.toLng, lat: leg.toLat },
+        )
+        const samples = []
+        for (const fraction of fractions) {
+          const position = samplePolyline(coords, fraction)
+          if (!position) continue
+          const [lng, lat] = position
+          const time = minutesToTime(cursor + Math.round(duration * fraction))
+          const name =
+            fraction === 0
+              ? leg.fromName || info.startName || '出发地'
+              : fraction === 1
+                ? leg.toName || '目的地'
+                : ''
+          const point = { name, lng, lat, date: info.date, time }
+          const sample = offline
+            ? {
+                ...point,
+                local: {
+                  ...point,
+                  weather: '',
+                  icon: 'cloud',
+                  available: false,
+                  message: '超过 16 天预报窗口，临近出发再更新',
+                  source: 'open-meteo',
+                  fetchedAt: new Date().toISOString(),
+                },
+                fraction,
+              }
+            : { ...point, index: pushPoint(point), fraction }
+          samples.push(sample)
+          daySamples.push(sample)
+        }
+        samplesByLeg.push(samples)
+        const stop = info.stopRefs?.[legIndex]
+        const dwell = stop ? (stop.kind === 'food' ? 60 : stop.kind === 'hotel' ? 20 : 90) : 0
+        cursor += duration + 10 + dwell + (legIndex < info.legs.length - 1 ? 15 : 0)
+      })
+      info.weatherSamples = daySamples
+      info.weatherByLeg = samplesByLeg
+    })
+
+    let result = null
+    let errorNote = ''
+    const resolved = new Map()
+    if (requestPoints.length) {
+      const selected = evenIndexes(requestPoints.length, 40)
+      try {
+        result = await api.routeWeather({
+          provider: facts.source,
+          seasonDate: form.startDate,
+          points: selected.map((index) => requestPoints[index]),
+        })
+        ;(result?.points || []).forEach((point, index) => {
+          resolved.set(selected[index], point)
+        })
+      } catch (error) {
+        errorNote = `沿途天气暂不可用：${friendlyError(error)}`
+      }
+    }
+    routeInfo.forEach((info) => {
+      ;(info.legs || []).forEach((leg, legIndex) => {
+        const samples = info.weatherByLeg?.[legIndex] || []
+        const weatherPoints = samples
+          .map((sample, index) => {
+            const point = sample.local || resolved.get(sample.index)
+            return point ? { ...point, fraction: sample.fraction, sampleIndex: index } : null
+          })
+          .filter(Boolean)
+        if (weatherPoints.length) {
+          leg.weatherPoints = uniqueBy(weatherPoints, (item) => routeWeatherKey(item))
+        }
+      })
+      info.routeWeather = uniqueBy(
+        (info.weatherSamples || [])
+          .map((sample) => sample.local || resolved.get(sample.index))
+          .filter(Boolean),
+        routeWeatherKey,
+      )
+    })
+    const notes = [...(result?.notes || [])]
+    if (errorNote) notes.push(errorNote)
+    if (!requestPoints.length) {
+      notes.push('所选日期超出 16 天预报窗口，临近出发再更新')
+    } else if (requestPoints.length > 40) {
+      notes.push('采样点较多，已均匀抽取 40 个代表点')
+    }
+    return {
+      points: routeInfo.flatMap((info) => info.routeWeather || []),
+      season: result?.season || '',
+      seasonTips: result?.seasonTips || [],
+      notes,
+      fetchedAt: result?.fetchedAt || new Date().toISOString(),
+      provider: result?.provider || '',
+    }
+  }
+
   async function buildRoutesForOutline({ form, facts, outline, totalDays, map, alternatives = true }) {
     const days = outline.days.map((outlineDay, index) =>
       buildStopsForDay({ form, facts, outline, outlineDay, dayIndex: index, totalDays, map }),
@@ -406,7 +554,7 @@ export function useTravelStore() {
           ),
       }))
     }
-    return days.map((item, index) => {
+    const output = days.map((item, index) => {
       const legs = (routeDays[index]?.legs || []).map((leg, legIndex) => ({
         ...leg,
         fromName: item.routeStops[legIndex]?.name || leg.fromName || '',
@@ -419,6 +567,9 @@ export function useTravelStore() {
         startName: item.startName,
       }
     })
+    const weatherMeta = await attachRouteWeather({ form, facts, routeInfo: output })
+    output.weatherMeta = weatherMeta
+    return output
   }
 
   async function createOutline({ form, facts }) {
@@ -541,7 +692,7 @@ export function useTravelStore() {
       const outlineResult = await createOutline({ form, facts })
       if (token !== state.generationToken) return null
       if (outlineResult.warning) state.warning = outlineResult.warning
-      setStage('routes', '正在计算点到点路线与路况…', 42)
+      setStage('routes', '正在计算路线并获取沿途实时天气…', 42)
       const map = poiMap(facts)
       const totalDays = outlineResult.outline.days.length
       const routeInfo = await buildRoutesForOutline({
@@ -584,6 +735,7 @@ export function useTravelStore() {
         outline: outlineResult.outline,
         days,
         provider: outlineResult.provider,
+        routeWeather: routeInfo.weatherMeta,
       })
       const saved = await api.savePlan(plan)
       if (token !== state.generationToken) return null
@@ -856,6 +1008,7 @@ ${weather || '（暂无）'}
       detailLevel: detailed ? 'full' : 'draft',
       seriesId,
       weekendStart: item.date,
+      routeWeather: routeInfo.weatherMeta,
     })
     plan.id = `wk_${seriesId}_${item.date.replaceAll('-', '')}`
     plan.kind = 'weekend'
@@ -1064,6 +1217,7 @@ ${weather || '（暂无）'}
         detailLevel: 'full',
         seriesId: plan.seriesId,
         weekendStart: plan.weekendStart,
+        routeWeather: routeInfo.weatherMeta,
       })
       rebuilt.id = plan.id
       rebuilt.createdAt = plan.createdAt

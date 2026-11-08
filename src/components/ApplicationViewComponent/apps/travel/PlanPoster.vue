@@ -28,6 +28,7 @@
       <span>{{ people }} 人</span>
       <span>{{ transportLabel(plan.transport) }}</span>
       <span>人均 ¥{{ money(plan.budget?.perPerson) }}</span>
+      <span v-if="plan.season?.label">{{ plan.season.label }}</span>
     </div>
 
     <div class="tr-poster-map">
@@ -57,6 +58,12 @@
           <em>{{ day.theme }}</em>
           <small v-if="day.weather">{{ day.weather.dayWeather }} {{ day.weather.nightTemp ?? '—' }}~{{ day.weather.dayTemp ?? '—' }}℃</small>
         </div>
+        <p v-if="day.routeWeather?.length" class="tr-poster-route-weather">
+          沿途
+          <template v-for="(point, pointIndex) in day.routeWeather.slice(0, 4)" :key="pointIndex">
+            <span>{{ point.name || '途经' }} {{ pointText(point) }}</span>
+          </template>
+        </p>
         <ul>
           <li v-for="block in day.blocks" :key="block.id">
             <span class="tr-poster-time">{{ block.start }}–{{ block.end }}</span>
@@ -130,4 +137,11 @@ const transportIcon = computed(() => {
   return mode === 'transit' ? 'train' : mode === 'walking' ? 'walk' : mode === 'tour' ? 'users' : 'car'
 })
 const topChecklist = computed(() => (props.plan.checklist || []).slice(0, 6))
+
+function pointText(point) {
+  if (point?.available === false) return '临近更新'
+  const temperature =
+    point?.temperature != null ? ` ${Math.round(Number(point.temperature))}℃` : ''
+  return `${point?.weather || ''}${temperature}`.trim()
+}
 </script>

@@ -83,6 +83,73 @@ export function todayString() {
   return formatDate(new Date())
 }
 
+/** 季节与当季出行提示：规划时与天气一起进入提示词和行前建议。 */
+export function seasonFor(value) {
+  const date = parseDate(value)
+  const month = date ? date.getMonth() + 1 : new Date().getMonth() + 1
+  const table = {
+    1: ['winter', '冬季 · 隆冬（1 月）', ['冬季低温，羽绒服、手套和保暖鞋是刚需。', '山区和桥面可能结冰，自驾减速、避免急刹。', '日照时间短，尽量把户外行程放在中午前后。']],
+    2: ['winter', '冬季 · 晚冬（2 月）', ['冬季低温，羽绒服、手套和保暖鞋是刚需。', '山区和桥面可能结冰，自驾减速、避免急刹。', '日照时间短，尽量把户外行程放在中午前后。']],
+    3: ['spring', '春季 · 早春（3 月）', ['春季昼夜温差大，早晚加一件薄外套。', '春雨来得快，随身带折叠伞，户外点留室内备选。', '花期与踏青人流集中，热门景区尽量早到。']],
+    4: ['spring', '春季 · 仲春（4 月）', ['春季昼夜温差大，早晚加一件薄外套。', '春雨来得快，随身带折叠伞，户外点留室内备选。', '花期与踏青人流集中，热门景区尽量早到。']],
+    5: ['spring', '春季 · 暮春（5 月）', ['春季昼夜温差大，早晚加一件薄外套。', '春雨来得快，随身带折叠伞，户外点留室内备选。', '花期与踏青人流集中，热门景区尽量早到。']],
+    6: ['summer', '夏季 · 初夏（6 月）', ['夏季高温，11:00-15:00 减少暴晒，备足饮水。', '午后易有雷阵雨，户外行程留出室内备选。', '山区蚊虫多，穿长裤并带驱蚊用品。']],
+    7: ['summer', '夏季 · 盛夏（7 月）', ['夏季高温，11:00-15:00 减少暴晒，备足饮水。', '午后易有雷阵雨，户外行程留出室内备选。', '山区蚊虫多，穿长裤并带驱蚊用品。']],
+    8: ['summer', '夏季 · 夏末（8 月）', ['夏季高温，11:00-15:00 减少暴晒，备足饮水。', '午后易有雷阵雨，户外行程留出室内备选。', '山区蚊虫多，穿长裤并带驱蚊用品。']],
+    9: ['autumn', '秋季 · 初秋（9 月）', ['秋季昼夜温差大，清晨和山顶明显更冷。', '秋雨与晨雾会影响能见度，自驾注意车灯和车速。', '日落提前，下午的户外点尽量安排在 16:30 前。']],
+    10: ['autumn', '秋季 · 金秋（10 月）', ['秋季昼夜温差大，清晨和山顶明显更冷。', '秋雨与晨雾会影响能见度，自驾注意车灯和车速。', '日落提前，下午的户外点尽量安排在 16:30 前。']],
+    11: ['autumn', '秋季 · 深秋（11 月）', ['秋季昼夜温差大，清晨和山顶明显更冷。', '秋雨与晨雾会影响能见度，自驾注意车灯和车速。', '日落提前，下午的户外点尽量安排在 16:30 前。']],
+    12: ['winter', '冬季 · 初冬（12 月）', ['冬季低温，羽绒服、手套和保暖鞋是刚需。', '山区和桥面可能结冰，自驾减速、避免急刹。', '日照时间短，尽量把户外行程放在中午前后。']],
+  }
+  const [key, label, tips] = table[month] || ['mild', `${month} 月`, []]
+  return { key, label, month, tips }
+}
+
+/** 解析 "lng,lat;lng,lat" 折线；没有折线时退回两个端点。 */
+export function parsePolyline(polyline, from, to) {
+  const points = String(polyline || '')
+    .split(';')
+    .map((pair) => pair.split(',').map(Number))
+    .filter(([lng, lat]) => Number.isFinite(lng) && Number.isFinite(lat))
+  if (points.length >= 2) return points
+  const fallback = []
+  if (from && Number.isFinite(Number(from.lng)) && Number.isFinite(Number(from.lat))) {
+    fallback.push([Number(from.lng), Number(from.lat)])
+  }
+  if (to && Number.isFinite(Number(to.lng)) && Number.isFinite(Number(to.lat))) {
+    fallback.push([Number(to.lng), Number(to.lat)])
+  }
+  return fallback
+}
+
+/** 按累计长度取折线上的某个比例位置。 */
+export function samplePolyline(points, fraction) {
+  if (!Array.isArray(points) || !points.length) return null
+  if (points.length === 1) return points[0]
+  const ratio = clamp(Number(fraction) || 0, 0, 1)
+  const segments = []
+  let total = 0
+  for (let index = 1; index < points.length; index += 1) {
+    const [aLng, aLat] = points[index - 1]
+    const [bLng, bLat] = points[index]
+    const length = Math.hypot(bLng - aLng, bLat - aLat)
+    segments.push(length)
+    total += length
+  }
+  if (total <= 0) return points[0]
+  let target = total * ratio
+  for (let index = 0; index < segments.length; index += 1) {
+    if (target <= segments[index] || index === segments.length - 1) {
+      const local = segments[index] > 0 ? target / segments[index] : 0
+      const [aLng, aLat] = points[index]
+      const [bLng, bLat] = points[index + 1]
+      return [aLng + (bLng - aLng) * local, aLat + (bLat - aLat) * local]
+    }
+    target -= segments[index]
+  }
+  return points[points.length - 1]
+}
+
 export function nextSaturday(from = new Date()) {
   const date = new Date(from)
   date.setHours(12, 0, 0, 0)

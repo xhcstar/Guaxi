@@ -329,6 +329,43 @@ pub struct RouteDayResult {
     pub legs: Vec<RouteLeg>,
 }
 
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct RouteWeatherPoint {
+    #[serde(default)]
+    pub name: String,
+    pub lng: f64,
+    pub lat: f64,
+    #[serde(default)]
+    pub date: String,
+    #[serde(default)]
+    pub time: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct RouteWeatherRequest {
+    /// auto | amap | baidu | tencent | google | mapbox | osm
+    #[serde(default)]
+    pub provider: String,
+    #[serde(default)]
+    pub season_date: String,
+    #[serde(default)]
+    pub points: Vec<RouteWeatherPoint>,
+}
+
+#[derive(Debug, Clone, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct RouteWeatherResult {
+    pub provider: String,
+    pub coord_system: String,
+    pub fetched_at: String,
+    pub season: String,
+    pub season_tips: Vec<String>,
+    pub points: Vec<weather::WeatherPoint>,
+    pub notes: Vec<String>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StaticMapRequest {
@@ -1413,6 +1450,118 @@ pub async fn travel_build_routes(request: RoutePlanRequest) -> Result<Vec<RouteD
         });
     }
     Ok(results)
+}
+
+// ── 命令：沿途天气 ─────────────────────────────────────────
+
+/// 按路线采样点批量获取逐时天气。坐标统一转换为 WGS84 后再查询 Open-Meteo；
+/// 途经点没有名称时，用高德（有 Key）或 Nominatim 逆地理编码补上地区名。
+#[tauri::command]
+pub async fn travel_route_weather(
+    request: RouteWeatherRequest,
+) -> Result<RouteWeatherResult, String> {
+    if request.points.is_empty() {
+        return Ok(RouteWeatherResult::default());
+    }
+    if request.points.len() > 40 {
+        return Err("沿途天气采样点过多".to_string());
+    }
+    let requested = providers::normalize(&request.provider);
+    let provider = match requested {
+        providers::MapProvider::Auto => {
+            if amap_key().trim().is_empty() {
+                providers::MapProvider::Osm
+            } else {
+                providers::MapProvider::Amap
+            }
+        }
+        other => other,
+    };
+    let season_date = if request.season_date.trim().is_empty() {
+        request
+            .points
+            .iter()
+            .find(|point| !point.date.trim().is_empty())
+            .map(|point| point.date.clone())
+            .unwrap_or_default()
+    } else {
+        request.season_date.clone()
+    };
+
+    let tasks = request.points.iter().map(|point| {
+        let name = point.name.clone();
+        let date = point.date.clone();
+        let time = if point.time.trim().is_empty() {
+            "12:00".to_string()
+        } else {
+            point.time.clone()
+        };
+        let (lng, lat) = providers::coord::to_wgs84(provider, point.lng, point.lat);
+        async move {
+            let mut weather_point = weather::point_weather(name, lat, lng, &date, &time).await;
+            weather_point.lng = lng;
+            weather_point.lat = lat;
+            weather_point
+        }
+    });
+    let mut points = futures_util::future::join_all(tasks).await;
+
+    // 只给没有名字的途经点补地区名，最多 3 个，避免拖慢生成和触发限流。
+    let mut named = 0;
+    for (index, point) in points.iter_mut().enumerate() {
+        if named >= 3 {
+            break;
+        }
+        if !point.name.trim().is_empty() && !point.name.starts_with("途经") {
+            continue;
+        }
+        let source = &request.points[index];
+        let resolved = match provider {
+            providers::MapProvider::Amap => {
+                let key = amap_key();
+                if key.trim().is_empty() {
+                    None
+                } else {
+                    let (lng, lat) =
+                        providers::coord::to_gcj02(provider, source.lng, source.lat);
+                    amap::regeo(&key, lng, lat).await.ok()
+                }
+            }
+            providers::MapProvider::Osm => osm::reverse(source.lat, source.lng).await.ok(),
+            _ => None,
+        };
+        if let Some(place) = resolved {
+            let label = if place.city.trim().is_empty() {
+                truncate(place.name.trim(), 18)
+            } else {
+                place.city.clone()
+            };
+            if !label.trim().is_empty() {
+                point.name = label;
+                named += 1;
+            }
+        }
+    }
+
+    let mut notes = Vec::new();
+    let unavailable = points.iter().filter(|point| !point.available).count();
+    if unavailable > 0 {
+        notes.push(format!(
+            "{unavailable} 个采样点暂无逐时预报，界面标为「临近更新」"
+        ));
+    }
+    if points.len() > 1 && provider == providers::MapProvider::Osm {
+        notes.push("途经地区名称来自 OpenStreetMap，天气来自 Open-Meteo".to_string());
+    }
+    Ok(RouteWeatherResult {
+        provider: providers::display_name(provider).to_string(),
+        coord_system: "wgs84".to_string(),
+        fetched_at: chrono::Local::now().to_rfc3339(),
+        season: weather::season_label(&season_date),
+        season_tips: weather::season_tips(&season_date),
+        points,
+        notes,
+    })
 }
 
 // ── 命令：LLM ──────────────────────────────────────────────

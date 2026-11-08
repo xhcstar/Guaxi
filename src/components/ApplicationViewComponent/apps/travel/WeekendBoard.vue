@@ -86,7 +86,8 @@
           <template v-if="weatherOf(plan)">
             <TravelIcon :name="weatherIcon(weatherOf(plan))" :size="20" />
             <strong>{{ weatherOf(plan).dayWeather }}</strong>
-            <small>{{ weatherOf(plan).nightTemp ?? '—' }}~{{ weatherOf(plan).dayTemp ?? '—' }}℃</small>
+            <small v-if="weatherOf(plan).single">{{ weatherOf(plan).dayTemp }}℃</small>
+            <small v-else>{{ weatherOf(plan).nightTemp ?? '—' }}~{{ weatherOf(plan).dayTemp ?? '—' }}℃</small>
           </template>
           <span v-else class="is-muted">临近更新</span>
         </div>
@@ -164,7 +165,26 @@ function weekday(value) {
 function weatherOf(plan) {
   const days = plan.days || []
   const first = days[0]
-  return first?.weather || plan.weather?.[0] || null
+  if (first?.weather) return first.weather
+  if (plan.weather?.[0]) return plan.weather[0]
+  const points = (plan.routeWeather || []).filter((point) => point.available !== false)
+  const destination = plan.destination || {}
+  const distance2 = (item) =>
+    (Number(item.lng) - Number(destination.lng)) ** 2 +
+    (Number(item.lat) - Number(destination.lat)) ** 2
+  const point = points.reduce(
+    (best, item) => (!best || distance2(item) < distance2(best) ? item : best),
+    null,
+  )
+  if (!point) return null
+  return {
+    dayWeather: point.weather,
+    icon: point.icon,
+    dayTemp: point.temperature != null ? Math.round(Number(point.temperature)) : null,
+    nightTemp: null,
+    single: true,
+    source: point.source,
+  }
 }
 
 function weatherIcon(item) {

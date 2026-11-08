@@ -33,6 +33,7 @@
           <span>{{ transportLabel(plan.transport) }}</span>
           <span>预算 ¥{{ money(plan.budget?.total) }} · 人均 ¥{{ money(plan.budget?.perPerson) }}</span>
           <span>{{ plan.source === 'amap' ? '高德数据' : 'OSM 数据' }}</span>
+          <span v-if="plan.season?.label">{{ plan.season.label }}</span>
         </div>
       </header>
 
@@ -42,6 +43,9 @@
           <strong>{{ shortDate(day.date) }} · {{ day.weekday }} · {{ day.theme }}</strong>
           <em v-if="day.weather">{{ day.weather.dayWeather }} {{ day.weather.nightTemp ?? '—' }}~{{ day.weather.dayTemp ?? '—' }}℃</em>
         </div>
+        <p v-if="day.routeWeather?.length" class="tr-print-route-weather">
+          沿途天气：{{ routeWeatherText(day) }}
+        </p>
         <table class="tr-print-table">
           <tbody>
             <tr v-for="block in day.blocks" :key="block.id">
@@ -135,6 +139,17 @@ const dateText = computed(() => {
 
 function kindLabel(kind) {
   return { transit: '交通', sight: '游览', food: '餐饮', hotel: '住宿', rest: '休息', activity: '体验' }[kind] || ''
+}
+
+function routeWeatherText(day) {
+  return (day.routeWeather || [])
+    .map((point) => {
+      if (point.available === false) return `${point.name || '途经'} 临近更新`
+      const temperature =
+        point.temperature != null ? ` ${Math.round(Number(point.temperature))}℃` : ''
+      return `${point.name || '途经'} ${point.time || ''} ${point.weather || ''}${temperature}`.trim()
+    })
+    .join(' → ')
 }
 
 function print() {

@@ -312,7 +312,7 @@
         </div>
         <div class="tr-live-note">
           <TravelIcon name="info" :size="14" />
-          生成后会包含逐段导航、天气、餐饮住宿、预算和行前清单
+          生成后会包含多条路线方案、沿途实时天气、餐饮住宿、预算和行前清单
         </div>
         <div class="tr-live-stamp">PLANNING</div>
         <div class="tr-live-perforation" aria-hidden="true"></div>
