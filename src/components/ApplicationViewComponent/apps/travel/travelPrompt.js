@@ -428,11 +428,15 @@ function buildPoiMatcher(map) {
 function normalizeBlock(raw, map, fallbackStart = '09:00', matchPoi = null) {
   const start = normalizeTime(raw?.start, fallbackStart)
   const end = normalizeTime(raw?.end, addMinutes(start, 60))
-  const kind = normalizeKind(raw?.kind)
+  let kind = normalizeKind(raw?.kind)
   const poiId = safeText(raw?.poiId)
   let poi = map.get(poiId)
   if (!poi && matchPoi && kind !== 'transit') {
     poi = matchPoi(raw?.title, kind) || null
+  }
+  // 模型常把景点写成 activity；挂了景点 POI 就归为 sight，别让整份安排被判“没有景点”。
+  if (kind === 'activity' && poi && poi.kind !== 'food' && poi.kind !== 'hotel') {
+    kind = 'sight'
   }
   return {
     id: uid('blk'),
@@ -474,7 +478,7 @@ function describeLeg(leg, fromName, toName) {
   return `${mode} ${Number(leg.distance || 0).toFixed(1)} km，约 ${durationText(leg.duration) || '—'}`
 }
 
-export function normalizeDay(raw, { form, facts, outlineDay, dayIndex, legs, stopRefs, startName }) {
+export function normalizeDay(raw, { form, facts, outlineDay, dayIndex, totalDays = 1, legs, stopRefs, startName }) {
   const map = poiMap(facts)
   if (!raw || !Array.isArray(raw.blocks)) {
     throw new Error('模型当天安排缺少 blocks')
@@ -544,47 +548,108 @@ export function normalizeDay(raw, { form, facts, outlineDay, dayIndex, legs, sto
     blocks.splice(insertAt, 0, block)
   })
 
-  // 模型可能漏掉餐饮/住宿块：按 POI 补齐，保证行程完整。
-  const hasFood = blocks.some((block) => block.kind === 'food')
-  if (!hasFood) {
-    const foodStop = stopRefs.find((poi) => poi?.kind === 'food')
-    if (foodStop) {
-      const start = '12:00'
-      blocks.push({
-        id: uid('blk'),
-        start,
-        end: '13:00',
-        kind: 'food',
-        title: foodStop.name,
-        detail: foodStop.category || '当地餐饮',
-        poiId: foodStop.id,
-        poi: foodStop,
-        tips: [],
-        booking: null,
-        legIndex: null,
-        route: null,
-      })
-    }
+  // 模型漏掉的午餐/晚餐：在时间窗里找空档补上，优先用当天附近的真实餐饮。
+  const overlapsMealWindow = (block, from, to) => {
+    const start = timeToMinutes(block?.start)
+    const end = timeToMinutes(block?.end)
+    return start != null && end != null && start < to && end > from
   }
-  const hasHotel = blocks.some((block) => block.kind === 'hotel')
-  if (!hasHotel && outlineDay.hotelId) {
-    const hotel = map.get(outlineDay.hotelId)
-    if (hotel) {
-      blocks.push({
-        id: uid('blk'),
-        start: '19:30',
-        end: '20:00',
-        kind: 'hotel',
-        title: `入住 ${hotel.name}`,
-        detail: hotel.address || '放下行李，附近吃晚饭',
-        poiId: hotel.id,
-        poi: hotel,
-        tips: [],
-        booking: null,
-        legIndex: null,
-        route: null,
-      })
+  const findFreeSlot = (from, to, duration) => {
+    const sorted = [...blocks].sort(
+      (a, b) => (timeToMinutes(a.start) || 0) - (timeToMinutes(b.start) || 0),
+    )
+    let cursor = from
+    for (const block of sorted) {
+      const start = timeToMinutes(block?.start)
+      const end = timeToMinutes(block?.end)
+      if (start == null || end == null) continue
+      if (end <= cursor) continue
+      if (start >= to) break
+      if (start - cursor >= duration) return cursor
+      cursor = Math.max(cursor, end)
+      if (cursor >= to) return null
     }
+    return to - cursor >= duration ? cursor : null
+  }
+  const endMinutes = timeToMinutes(form.endTime) ?? 0
+  const mealSpecs = []
+  if (endMinutes >= 13 * 60) {
+    mealSpecs.push({ key: 'lunch', from: 11 * 60 + 30, to: 15 * 60, label: '午餐' })
+  }
+  if (endMinutes >= 19 * 60) {
+    mealSpecs.push({ key: 'dinner', from: 17 * 60 + 30, to: 20 * 60 + 30, label: '晚餐' })
+  }
+  const usedFood = new Set(
+    blocks.filter((block) => block.poi?.kind === 'food').map((block) => block.poi.id),
+  )
+  for (const spec of mealSpecs) {
+    if (blocks.some((block) => block.kind === 'food' && overlapsMealWindow(block, spec.from, spec.to))) {
+      continue
+    }
+    const slot = findFreeSlot(spec.from, spec.to, 60)
+    if (slot == null) continue
+    const before = [...blocks]
+      .filter((block) => (timeToMinutes(block.end) ?? 0) <= slot)
+      .sort((a, b) => (timeToMinutes(b.end) || 0) - (timeToMinutes(a.end) || 0))[0]
+    const after = blocks.find((block) => (timeToMinutes(block.start) ?? 0) >= slot + 60)
+    const anchor =
+      before?.poi ||
+      after?.poi ||
+      stopRefs.find((poi) => poi?.kind === 'sight') ||
+      facts.destination
+    const near = pickNearAnchor(facts.food || [], anchor, {
+      maxKm: 12,
+      exclude: usedFood,
+      kind: 'food',
+    })
+    if (near) usedFood.add(near.id)
+    blocks.push({
+      id: uid('blk'),
+      start: minutesToTime(slot),
+      end: minutesToTime(slot + 60),
+      kind: 'food',
+      title: near ? near.name : `${spec.label} · 附近小店（现场选择）`,
+      detail: near
+        ? `位于${near.address || near.city || '附近'}，${spec.key === 'lunch' ? '避开 12:00-13:00 的排队高峰' : '就近吃晚饭，不为了网红店折返'}。`
+        : '当天附近有多家小馆，按口味现场选即可。',
+      poiId: near?.id || '',
+      poi: near || null,
+      freeMeal: !near,
+      tips: [],
+      booking: null,
+      legIndex: null,
+      route: null,
+    })
+  }
+  // 需要过夜但模型没排住宿：用候选酒店或占位块补上，保证计划可执行。
+  const needHotel = form.startDate !== form.endDate && dayIndex < totalDays - 1
+  if (needHotel && !blocks.some((block) => block.kind === 'hotel')) {
+    const lastPoi = [...blocks]
+      .filter((block) => block.poi)
+      .sort((a, b) => (timeToMinutes(b.end) || 0) - (timeToMinutes(a.end) || 0))[0]?.poi
+    const hotel =
+      (outlineDay.hotelId ? map.get(outlineDay.hotelId) : null) ||
+      pickNearAnchor(facts.hotels || [], lastPoi || facts.destination, { maxKm: 15, kind: 'hotel' })
+    const latestEnd = Math.max(
+      0,
+      ...blocks.map((block) => timeToMinutes(block.end) ?? 0),
+    )
+    const hotelStart = Math.max(19 * 60, latestEnd + 15)
+    blocks.push({
+      id: uid('blk'),
+      start: minutesToTime(hotelStart),
+      end: minutesToTime(hotelStart + 30),
+      kind: 'hotel',
+      title: hotel ? `入住 ${hotel.name}` : '入住目的地附近酒店（现场预订）',
+      detail: hotel?.address || '目的地附近酒店较多，按预算现场预订即可。',
+      poiId: hotel?.id || '',
+      poi: hotel || null,
+      freeHotel: !hotel,
+      tips: [],
+      booking: null,
+      legIndex: null,
+      route: null,
+    })
   }
 
   blocks = blocks.sort((a, b) => (timeToMinutes(a.start) || 0) - (timeToMinutes(b.start) || 0))

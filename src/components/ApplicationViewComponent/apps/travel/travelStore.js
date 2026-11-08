@@ -118,6 +118,7 @@ function modelWaitHint() {
 function assertPlanConstraints(plan, options) {
   const report = validatePlan(plan, api.isMock ? { ...options, radiusKm: 0 } : options)
   if (report.ok) return
+  console.warn('[travel] 计划未通过约束校验：', report.problems.slice(0, 5).join('；'))
   throw new Error(`生成结果未通过约束校验：${formatProblems(report.problems)}`)
 }
 
@@ -786,6 +787,7 @@ export function useTravelStore() {
         facts,
         outlineDay,
         dayIndex,
+        totalDays,
         legs,
         stopRefs,
         startName,
@@ -869,7 +871,7 @@ export function useTravelStore() {
           ? `${state.warning}；其中 ${fallbackDays} 天使用了确定性编排。`
           : `其中 ${fallbackDays} 天的模型细化失败，已使用确定性编排，可在计划页重新生成。`
       }
-      const plan = assemblePlan({
+      let plan = assemblePlan({
         form,
         facts,
         outline: outlineResult.outline,
@@ -877,11 +879,44 @@ export function useTravelStore() {
         provider: outlineResult.provider,
         routeWeather: routeInfo.weatherMeta,
       })
-      assertPlanConstraints(plan, {
+      const constraints = {
         center: facts.destination,
         radiusKm: Number(form.radiusKm) || 20,
         expectedDates: enumerateDates(form.startDate, form.endDate),
-      })
+      }
+      try {
+        assertPlanConstraints(plan, constraints)
+      } catch (error) {
+        // 模型方案没通过校验：整份改用确定性编排重建，仍然保证能出计划。
+        console.warn('[travel] 行程未通过约束校验，改用确定性编排重建：', error?.message || error)
+        const rebuiltDays = outlineResult.outline.days.map((outlineDay, index) => {
+          const info = routeInfo[index]
+          const day = fallbackDay({
+            form,
+            facts,
+            outlineDay,
+            dayIndex: index,
+            totalDays,
+            legs: info.legs,
+            stopRefs: info.stopRefs,
+            startName: info.startName,
+          })
+          day.source = 'fallback'
+          return day
+        })
+        plan = assemblePlan({
+          form,
+          facts,
+          outline: outlineResult.outline,
+          days: rebuiltDays,
+          provider: '确定性编排',
+          routeWeather: routeInfo.weatherMeta,
+        })
+        assertPlanConstraints(plan, constraints)
+        state.warning = state.warning
+          ? `${state.warning}；模型方案未通过约束校验，已用确定性编排重建。`
+          : '模型方案未通过约束校验，已用确定性编排重建。'
+      }
       const saved = await api.savePlan(plan)
       if (token !== state.generationToken) return null
       state.plan = saved
@@ -892,6 +927,7 @@ export function useTravelStore() {
       showToast('行程已生成，可以查看地图、预算和分享', 'success')
       return saved
     } catch (error) {
+      console.warn('[travel] 行程生成失败：', error?.message || error)
       state.error = friendlyError(error)
       state.stage = { key: '', label: '', detail: '', percent: 0 }
       return null

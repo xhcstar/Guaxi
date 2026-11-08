@@ -115,7 +115,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import TravelIcon from '../components/ApplicationViewComponent/apps/travel/TravelIcon.vue'
 import { api } from '../components/ApplicationViewComponent/apps/travel/travelApi.js'
 import { ticketCities, transportLabel, peopleCount } from '../components/ApplicationViewComponent/apps/travel/travelShare.js'
@@ -164,6 +164,16 @@ async function closeWindow() {
     window.close()
   }
 }
+
+// 主应用的 html/body/#app 是 100% 高度 + overflow:hidden，会把打印文档限制成一页；
+// 打印页临时解除这个高度约束，让内容自然分页。
+onMounted(() => {
+  document.documentElement.classList.add('tr-print-mode')
+})
+
+onBeforeUnmount(() => {
+  document.documentElement.classList.remove('tr-print-mode')
+})
 
 onMounted(async () => {
   const params = new URLSearchParams(window.location.search)

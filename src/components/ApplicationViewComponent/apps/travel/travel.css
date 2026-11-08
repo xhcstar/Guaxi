@@ -1700,7 +1700,17 @@
 .tr-place-field:focus-within,
 .tr-place-field.is-open {
   border-color: var(--tr-accent);
-  box-shadow: 0 0 0 3px rgba(196, 85, 45, 0.1);
+}
+
+/* 只保留外层字段的聚焦边框：浏览器自带的 focus ring 会和它叠成双层框。 */
+.tr-app input:focus,
+.tr-app input:focus-visible,
+.tr-app textarea:focus,
+.tr-app textarea:focus-visible,
+.tr-app select:focus,
+.tr-app select:focus-visible {
+  outline: none !important;
+  box-shadow: none !important;
 }
 
 .tr-place-field > input {
@@ -6733,8 +6743,30 @@
   margin: 12mm;
 }
 
+/* 打印页专用窗口：解除主应用的整屏高度/裁剪，否则 PDF 只会输出一页。 */
+html.tr-print-mode,
+html.tr-print-mode body,
+html.tr-print-mode #app {
+  height: auto !important;
+  min-height: 100% !important;
+  overflow: visible !important;
+}
+
 @media print {
+  @page {
+    size: A4;
+    margin: 12mm;
+  }
+  html.tr-print-mode,
+  html.tr-print-mode body,
+  html.tr-print-mode #app {
+    height: auto !important;
+    min-height: 0 !important;
+    overflow: visible !important;
+    background: #fff !important;
+  }
   .tr-print {
+    min-height: 0;
     background: #fff;
   }
   .tr-print-toolbar {
