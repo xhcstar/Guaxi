@@ -6,6 +6,7 @@ use base64::Engine as _;
 use blake3::Hasher;
 use chrono::{DateTime, Duration, Utc};
 use copia::{Delta, Signature, Sync, SyncBuilder};
+use futures_util::future::join_all;
 use hex;
 use iroh::{
     endpoint::{
@@ -1574,40 +1575,53 @@ async fn connect_trusted(endpoint: &Endpoint, peer_id: &str) -> Result<Connectio
     connect_peer(endpoint, &peer).await
 }
 
-/// 遍历可信设备，取其开放的库清单，合并返回（带来源与色带）。单个设备失败不影响其余。
+/// 发现页是手动触发的交互，单台离线设备不能拖住整个列表：
+/// 各设备并发探测，每台最多等这么久（connect_peer 自身的 30s 超时在这里被外层截断）。
+const FEDERATION_DISCOVERY_PEER_TIMEOUT_SECS: u64 = 5;
+
+/// 遍历可信设备，取其开放的库清单，合并返回（带来源与色带）。单个设备失败/超时不影响其余。
 pub async fn federation_list_peer_libraries() -> Result<Vec<PeerLibrary>, String> {
     let endpoint = ensure_p2p_endpoint().await?;
     let peers = read_state_file()?.trusted_peers;
+    let probes = peers.into_iter().map(|peer| {
+        let endpoint = endpoint.clone();
+        async move {
+            let band = peer_band(&peer.peer_id);
+            let attempt = async {
+                let conn = connect_peer(&endpoint, &peer).await?;
+                let resp: P2PLibrariesResponse = request_response(
+                    &conn,
+                    &P2PWireRequest::ListLibraries {},
+                    P2P_FRAME_LIMIT,
+                )
+                .await?;
+                Ok::<_, String>((peer, band, resp))
+            };
+            match timeout(
+                StdDuration::from_secs(FEDERATION_DISCOVERY_PEER_TIMEOUT_SECS),
+                attempt,
+            )
+            .await
+            {
+                Ok(Ok((peer, band, resp))) if resp.ok => resp
+                    .libraries
+                    .into_iter()
+                    .map(|lib| PeerLibrary {
+                        id: format!("peer:{}:{}", peer.peer_id, lib.target),
+                        name: lib.name,
+                        peer: peer.device_name.clone(),
+                        peer_id: peer.peer_id.clone(),
+                        count: lib.count,
+                        band: band.clone(),
+                    })
+                    .collect::<Vec<_>>(),
+                _ => Vec::new(),
+            }
+        }
+    });
     let mut out = Vec::new();
-    for peer in peers {
-        let band = peer_band(&peer.peer_id);
-        let conn = match connect_peer(&endpoint, &peer).await {
-            Ok(c) => c,
-            Err(_) => continue,
-        };
-        let resp: P2PLibrariesResponse = match request_response(
-            &conn,
-            &P2PWireRequest::ListLibraries {},
-            P2P_FRAME_LIMIT,
-        )
-        .await
-        {
-            Ok(r) => r,
-            Err(_) => continue,
-        };
-        if !resp.ok {
-            continue;
-        }
-        for lib in resp.libraries {
-            out.push(PeerLibrary {
-                id: format!("peer:{}:{}", peer.peer_id, lib.target),
-                name: lib.name,
-                peer: peer.device_name.clone(),
-                peer_id: peer.peer_id.clone(),
-                count: lib.count,
-                band: band.clone(),
-            });
-        }
+    for mut part in join_all(probes).await {
+        out.append(&mut part);
     }
     Ok(out)
 }

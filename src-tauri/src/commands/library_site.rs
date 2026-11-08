@@ -15,8 +15,9 @@ use serde_json::json;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use crate::commands::p2psync::PeerLibrary;
 use crate::state::SharedState;
 
 const INDEX_HTML: &str = include_str!("../../library_site/index.html");
@@ -436,7 +437,17 @@ async fn api_libraries(req: HttpRequest, auth: web::Data<SiteAuth>) -> HttpRespo
     if !guard(&req, auth.get_ref()) {
         return HttpResponse::Unauthorized().finish();
     }
-    HttpResponse::Ok().json(json!({ "local": enumerate_local(), "peers": peer_libs().await }))
+    // 本机库立即返回;对端库只给缓存,过期就后台刷新,不让页面卡在「正在读取索引…」。
+    let fresh = peer_cache_fresh();
+    if !fresh {
+        spawn_background_discovery();
+    }
+    let peers = peer_libs_snapshot();
+    HttpResponse::Ok().json(json!({
+        "local": enumerate_local(),
+        "peers": peer_libs_json(&peers),
+        "discovering": !fresh,
+    }))
 }
 
 async fn api_list(req: HttpRequest, auth: web::Data<SiteAuth>, q: web::Query<HashMap<String, String>>) -> HttpResponse {
@@ -600,33 +611,129 @@ fn file_response(bytes: Vec<u8>, mime: &str, fname: &str, download: bool) -> Htt
     builder.body(bytes)
 }
 
-/// 联邦来源(其他设备的库):向可信设备查询开放的库清单,带来源设备名与色带。
-/// 任一步失败都返回空,不阻断本机库展示。
-async fn peer_libs() -> Vec<serde_json::Value> {
-    match crate::commands::p2psync::federation_list_peer_libraries().await {
-        Ok(libs) => libs
-            .into_iter()
-            .map(|l| {
-                json!({
-                    "id": l.id,
-                    "name": l.name,
-                    "peer": l.peer,
-                    "count": l.count,
-                    "band": l.band,
-                })
-            })
-            .collect(),
-        Err(_) => Vec::new(),
+/// 联邦来源(其他设备的库):探测是慢操作(要连所有可信设备),缓存起来,
+/// 列表接口先返回缓存、后台刷新;手动「发现」在固定预算内等一次结果。
+const PEER_CACHE_TTL: Duration = Duration::from_secs(30);
+const PEER_DISCOVERY_BUDGET: Duration = Duration::from_secs(8);
+
+struct PeerLibsCache {
+    libs: Vec<PeerLibrary>,
+    updated: Option<Instant>,
+    refreshing: bool,
+}
+
+static PEER_LIBS_CACHE: Lazy<Mutex<PeerLibsCache>> = Lazy::new(|| {
+    Mutex::new(PeerLibsCache {
+        libs: Vec::new(),
+        updated: None,
+        refreshing: false,
+    })
+});
+static PEER_DISCOVERY_LOCK: Lazy<tokio::sync::Mutex<()>> =
+    Lazy::new(|| tokio::sync::Mutex::new(()));
+
+fn peer_libs_snapshot() -> Vec<PeerLibrary> {
+    PEER_LIBS_CACHE
+        .lock()
+        .map(|c| c.libs.clone())
+        .unwrap_or_default()
+}
+
+fn peer_cache_updated_at() -> Option<Instant> {
+    PEER_LIBS_CACHE.lock().ok().and_then(|c| c.updated)
+}
+
+fn peer_cache_fresh() -> bool {
+    peer_cache_updated_at()
+        .map(|t| t.elapsed() < PEER_CACHE_TTL)
+        .unwrap_or(false)
+}
+
+fn begin_background_discovery() -> bool {
+    match PEER_LIBS_CACHE.lock() {
+        Ok(mut c) => {
+            if c.refreshing {
+                false
+            } else {
+                c.refreshing = true;
+                true
+            }
+        }
+        Err(_) => false,
     }
+}
+
+fn end_background_discovery() {
+    if let Ok(mut c) = PEER_LIBS_CACHE.lock() {
+        c.refreshing = false;
+    }
+}
+
+/// 跑一次发现并写缓存。`force` 用于手动「发现」；等锁期间若别的任务已刷新，直接复用。
+async fn refresh_peer_libs(force: bool) -> Vec<PeerLibrary> {
+    let started = Instant::now();
+    let deadline = tokio::time::Instant::now() + PEER_DISCOVERY_BUDGET;
+    let Ok(_guard) = tokio::time::timeout_at(deadline, PEER_DISCOVERY_LOCK.lock()).await else {
+        return peer_libs_snapshot();
+    };
+    if peer_cache_updated_at().map(|t| t >= started).unwrap_or(false) {
+        return peer_libs_snapshot();
+    }
+    if !force && peer_cache_fresh() {
+        return peer_libs_snapshot();
+    }
+    let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+    if !remaining.is_zero() {
+        if let Ok(Ok(libs)) = tokio::time::timeout(
+            remaining,
+            crate::commands::p2psync::federation_list_peer_libraries(),
+        )
+        .await
+        {
+            if let Ok(mut cache) = PEER_LIBS_CACHE.lock() {
+                cache.libs = libs;
+                cache.updated = Some(Instant::now());
+            }
+        }
+    }
+    peer_libs_snapshot()
+}
+
+fn peer_libs_json(libs: &[PeerLibrary]) -> Vec<serde_json::Value> {
+    libs.iter()
+        .map(|l| {
+            json!({
+                "id": l.id,
+                "name": l.name,
+                "peer": l.peer,
+                "count": l.count,
+                "band": l.band,
+            })
+        })
+        .collect()
+}
+
+fn spawn_background_discovery() {
+    if !begin_background_discovery() {
+        return;
+    }
+    tauri::async_runtime::spawn(async move {
+        let _ = refresh_peer_libs(false).await;
+        end_background_discovery();
+    });
 }
 
 async fn api_discover(req: HttpRequest, auth: web::Data<SiteAuth>) -> HttpResponse {
     if !guard(&req, auth.get_ref()) {
         return HttpResponse::Unauthorized().finish();
     }
-    // 触发发现:探测可信 peer 的开放库清单并返回。
-    let peers = peer_libs().await;
-    HttpResponse::Ok().json(json!({ "ok": true, "peers": peers, "ts": now_secs() }))
+    // 手动发现:最多等 PEER_DISCOVERY_BUDGET,拿不到就返回缓存,不让按钮一直转。
+    let peers = refresh_peer_libs(true).await;
+    HttpResponse::Ok().json(json!({
+        "ok": true,
+        "peers": peer_libs_json(&peers),
+        "ts": now_secs()
+    }))
 }
 
 /// 联邦库分页:拉对端清单后按 sort 排序、切片。band 由 peer_id 哈希得到,和侧栏一致。

@@ -303,22 +303,33 @@
   });
 
   // —— 库列表 / 联邦发现 ——
-  async function loadLibraries() {
+  let libsRetryTimer = null;
+  async function loadLibraries(opts = {}) {
+    const retry = Number(opts.retry) || 0;
     let data;
     try { data = await api("libraries"); }
     catch { data = DEMO_LIBS; }
     renderLibList(el.localLibs, data.local || [], false);
     renderLibList(el.peerLibs, data.peers || [], true);
-    const first = (data.local || [])[0];
-    if (first) selectLib(first.id, first.name, null);
-    else loadDemo();
+    // 后台发现刷新后不要重置当前选中的库；当前库不在了才回到第一个本机库。
+    const current = [...(data.local || []), ...(data.peers || [])].find((lib) => lib.id === state.lib);
+    if (!current) {
+      const first = (data.local || [])[0];
+      if (first) selectLib(first.id, first.name, null);
+      else loadDemo();
+    }
+    // 首次打开时对端库可能还在后台发现：稍后再拉一次缓存，最多补两次。
+    if (data.discovering && retry < 2) {
+      clearTimeout(libsRetryTimer);
+      libsRetryTimer = setTimeout(() => loadLibraries({ retry: retry + 1 }), 3500);
+    }
   }
 
   function renderLibList(ul, libs, isPeer) {
     ul.innerHTML = "";
     libs.forEach((lib) => {
       const li = document.createElement("li");
-      li.className = "lib-item" + (isPeer ? " lib-peer" : "");
+      li.className = "lib-item" + (isPeer ? " lib-peer" : "") + (lib.id === state.lib ? " is-active" : "");
       li.dataset.lib = lib.id;
       if (lib.band) li.style.setProperty("--band", lib.band);
       li.innerHTML = `<span class="lib-name"${isPeer ? ` data-peer="${escapeHtml(lib.peer || "")}"` : ""}>${escapeHtml(lib.name)}</span>
@@ -328,11 +339,21 @@
     });
   }
 
+  let discovering = false;
   el.discoverBtn.addEventListener("click", async () => {
+    if (discovering) return;
+    discovering = true;
+    el.discoverBtn.disabled = true;
     el.discoverBtn.textContent = "发现中…";
-    try { await api("discover"); await loadLibraries(); }
-    catch {}
-    el.discoverBtn.textContent = "发现";
+    try {
+      await api("discover");
+      await loadLibraries({ retry: 1 });
+    } catch {
+    } finally {
+      discovering = false;
+      el.discoverBtn.disabled = false;
+      el.discoverBtn.textContent = "发现";
+    }
   });
 
   // —— 主题 ——
