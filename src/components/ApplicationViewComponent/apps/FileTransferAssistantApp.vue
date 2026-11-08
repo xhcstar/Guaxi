@@ -22,45 +22,114 @@
       <button type="button" @click="transferNotice = ''">×</button>
     </div>
 
-    <div class="ftc-layout">
-      <aside class="ftc-devices">
-        <div class="ftc-section-title">附近设备 <span>{{ peers.length }}</span></div>
-        <div class="ftc-device-list">
-          <button
-            v-for="peer in peers"
-            :key="peer.peerId"
-            type="button"
-            class="ftc-device"
-            :class="{ 'is-selected': selectedPeerId === peer.peerId }"
-            @click="selectPeer(peer)"
-          >
-            <span class="ftc-avatar">{{ peerInitials(peer.name) }}</span>
-            <span class="ftc-device-info">
-              <strong>{{ peer.name }}</strong>
-              <small>{{ peer.addr }} · {{ formatLastSeen(peer.lastSeenMs) }}</small>
-            </span>
-            <span v-if="peer.requiresToken" class="ftc-lock">配对码</span>
-            <span v-if="selectedPeerId === peer.peerId" class="ftc-selected" aria-hidden="true">●</span>
-          </button>
-          <div v-if="!peers.length" class="ftc-empty-mini">
-            还没有发现设备
-            <small>双方打开「可被发现」即可</small>
-          </div>
-        </div>
+    <nav class="ftc-tabs">
+      <button
+        v-for="tab in tabs"
+        :key="tab.id"
+        type="button"
+        class="ftc-tab"
+        :class="{ 'is-active': activeTab === tab.id }"
+        @click="activeTab = tab.id"
+      >
+        {{ tab.label }}
+        <span v-if="tab.id === 'lan' && peers.length" class="ftc-tab-badge">{{ peers.length }}</span>
+        <span v-else-if="tab.id === 'p2p' && p2pPeers.length" class="ftc-tab-badge">{{ p2pPeers.length }}</span>
+        <span v-else-if="tab.id === 'share' && httpShareStatus?.running" class="ftc-tab-dot" aria-hidden="true" />
+      </button>
+    </nav>
 
-        <div class="ftc-section-title">P2P 已配对 <span>{{ p2pPeers.length }}</span></div>
-        <div class="ftc-device-list">
-          <div v-for="peer in p2pPeers" :key="peer.peer_id" class="ftc-device is-static" :title="'P2P 用于目录同步，不用于临时文件'">
-            <span class="ftc-avatar is-p2p">P2P</span>
-            <span class="ftc-device-info">
-              <strong>{{ peer.device_name || '未命名设备' }}</strong>
-              <small>{{ p2pStatusLabel(peer.online_status) }} · {{ String(peer.peer_id || '').slice(0, 8) }}</small>
-            </span>
-            <button type="button" class="ftc-mini" :disabled="!!p2pBusyId" @click="p2pSend(peer, false)">发送</button>
-            <button type="button" class="ftc-mini" :disabled="!!p2pBusyId" @click="p2pSend(peer, true)">文件夹</button>
-            <button type="button" class="ftc-mini" :disabled="!!p2pBusyId" @click="syncP2PResourceRepo(peer)">同步</button>
+    <div class="ftc-panes">
+      <section v-show="activeTab === 'lan'" class="ftc-pane ftc-lan">
+        <aside class="ftc-side">
+          <div class="ftc-section-title">附近设备 <span>{{ peers.length }}</span></div>
+          <div class="ftc-device-list">
+            <button
+              v-for="peer in peers"
+              :key="peer.peerId"
+              type="button"
+              class="ftc-device"
+              :class="{ 'is-selected': selectedPeerId === peer.peerId }"
+              @click="selectPeer(peer)"
+            >
+              <span class="ftc-avatar">{{ peerInitials(peer.name) }}</span>
+              <span class="ftc-device-info">
+                <strong>{{ peer.name }}</strong>
+                <small>{{ peer.addr }} · {{ formatLastSeen(peer.lastSeenMs) }}</small>
+              </span>
+              <span v-if="peer.requiresToken" class="ftc-lock">配对码</span>
+              <span v-if="selectedPeerId === peer.peerId" class="ftc-selected" aria-hidden="true">●</span>
+            </button>
+            <div v-if="!peers.length" class="ftc-empty-mini">
+              还没有发现设备
+              <small>双方打开「可被发现」即可</small>
+            </div>
           </div>
-          <div v-if="!p2pPeers.length" class="ftc-empty-mini">还没有 P2P 配对设备</div>
+
+          <label class="ftc-token">
+            <span>对方配对码</span>
+            <input v-model="peerToken" class="ftc-input" placeholder="设备需要时填写" />
+          </label>
+
+          <div class="ftc-addr-block">
+            <div class="ftc-addr-head">
+              <span>本机地址</span>
+              <em :class="{ 'is-on': receiverStatus?.running }">
+                {{ receiverStatus?.running ? `HTTP 已开启 · ${receiverPortValue}` : 'HTTP 未开启' }}
+              </em>
+            </div>
+            <n-select
+              v-model:value="selectedLocalIp"
+              size="small"
+              :options="localIpOptions"
+              :consistent-menu-width="false"
+              placeholder="未发现可用网卡"
+            />
+            <div class="ftc-addr-actions">
+              <button type="button" :disabled="!selectedLocalUrl" @click="copyMyUrl">复制地址</button>
+              <button type="button" :disabled="!selectedLocalUrl" @click="openSelectedLocalUrl">打开页面</button>
+            </div>
+            <button type="button" class="ftc-server-toggle" @click="toggleHttpServer">
+              {{ receiverStatus?.running ? '停止 HTTP 服务' : '开启 HTTP 服务' }}
+            </button>
+          </div>
+        </aside>
+
+        <main class="ftc-send">
+          <section class="ftc-drop" :class="{ 'is-active': dropActive, 'has-target': selectedPeer }">
+            <div class="ftc-drop-glyph" aria-hidden="true">↓</div>
+            <h2>{{ targetLabel }}</h2>
+            <p>{{ selectedPeer ? '拖入文件或文件夹，或从本机选择' : '拖入文件或文件夹，然后点左侧设备发送' }}</p>
+            <div class="ftc-drop-actions">
+              <button type="button" class="ftc-primary" @click="pickAndSend('files')">选择文件</button>
+              <button type="button" @click="pickAndSend('folder')">选择文件夹</button>
+            </div>
+            <small>文件夹会保留目录结构；同名文件自动改名，不覆盖。</small>
+            <div v-if="pendingPaths.length" class="ftc-pending">
+              已选择 {{ pendingPaths.length }} 项，点左侧设备发送
+            </div>
+          </section>
+        </main>
+      </section>
+
+      <section v-show="activeTab === 'p2p'" class="ftc-pane ftc-single">
+        <div class="ftc-card">
+          <div class="ftc-section-title">P2P 已配对 <span>{{ p2pPeers.length }}</span></div>
+          <div class="ftc-device-list">
+            <div v-for="peer in p2pPeers" :key="peer.peer_id" class="ftc-device is-static">
+              <span class="ftc-avatar is-p2p">P2P</span>
+              <span class="ftc-device-info">
+                <strong>{{ peer.device_name || '未命名设备' }}</strong>
+                <small>{{ p2pStatusLabel(peer.online_status) }} · {{ String(peer.peer_id || '').slice(0, 8) }}</small>
+              </span>
+              <button type="button" class="ftc-mini" :disabled="!!p2pBusyId" @click="p2pSend(peer, false)">发送</button>
+              <button type="button" class="ftc-mini" :disabled="!!p2pBusyId" @click="p2pSend(peer, true)">文件夹</button>
+              <button type="button" class="ftc-mini" :disabled="!!p2pBusyId" @click="syncP2PResourceRepo(peer)">同步</button>
+            </div>
+            <div v-if="!p2pPeers.length" class="ftc-empty-mini">
+              还没有 P2P 配对设备
+              <small>在设置中配对后可直接传文件、同步资源库</small>
+            </div>
+          </div>
           <div v-if="p2pProgress && p2pProgress.status === 'running'" class="ftc-p2p-progress">
             <span class="ftc-p2p-name">{{ p2pProgress.file || p2pProgress.device_name }}</span>
             <span class="ftc-task-bar">
@@ -68,156 +137,69 @@
             </span>
             <small>{{ formatBytes(p2pProgress.bytes_current) }} / {{ formatBytes(p2pProgress.bytes_total) }}</small>
           </div>
+          <p class="ftc-muted">
+            P2P 走已配对设备之间的加密直连，适合大文件；未配对的临时传输请用「局域网」标签。
+          </p>
+        </div>
+      </section>
+
+      <section v-show="activeTab === 'remote'" class="ftc-pane ftc-single">
+        <div class="ftc-card">
+          <h4>HTTP 直连</h4>
+          <label class="ftc-field">
+            <span>对方地址</span>
+            <input v-model="customPeerUrl" class="ftc-input" placeholder="http://203.0.113.10:39190" />
+          </label>
+          <label class="ftc-field">
+            <span>对方配对码（可选）</span>
+            <input v-model="peerToken" class="ftc-input" />
+          </label>
+          <div class="ftc-actions">
+            <button type="button" class="ftc-primary" @click="sendFilesToCustomUrl">选择文件发送</button>
+            <button type="button" @click="sendFolderToCustomUrl">选择文件夹发送</button>
+          </div>
         </div>
 
-        <label class="ftc-token">
-          <span>对方配对码</span>
-          <input v-model="peerToken" class="ftc-input" placeholder="设备需要时填写" />
-        </label>
-
-        <div class="ftc-section-title">远程</div>
-        <button type="button" class="ftc-device is-remote" @click="showRemote = true">
-          <span class="ftc-avatar is-remote">#</span>
-          <span class="ftc-device-info">
-            <strong>房间码 / 地址</strong>
-            <small>{{ webrtcSignalJoined ? `已加入 ${webrtcRoomCode}` : '信令房间或 HTTP 直连' }}</small>
-          </span>
-        </button>
-
-        <div class="ftc-device-foot">
-          <div class="ftc-addr-head">
-            <span>本机地址</span>
-            <em :class="{ 'is-on': receiverStatus?.running }">
-              {{ receiverStatus?.running ? `HTTP 已开启 · ${receiverPortValue}` : 'HTTP 未开启' }}
-            </em>
+        <div class="ftc-card">
+          <h4>WebRTC 房间码</h4>
+          <div class="ftc-kv">
+            <span>信令</span>
+            <span class="ftc-mono">{{ webrtcSignalUrl || '未配置（设置 → 外观与系统）' }}</span>
           </div>
-          <div v-if="!localIps.length" class="ftc-empty-mini">未发现可用网卡</div>
-          <button
-            v-for="ip in localIps"
-            :key="`${ip.name}-${ip.address}`"
-            type="button"
-            class="ftc-addr"
-            :class="{ 'is-active': selectedLocalIp === ip.address }"
-            title="在系统浏览器中打开"
-            @click="openLocalIp(ip)"
-          >
-            <span class="ftc-addr-ip">{{ ip.address }}</span>
-            <span class="ftc-addr-name">{{ ip.name }}</span>
-          </button>
-          <div class="ftc-addr-actions">
-            <button type="button" @click="toggleHttpServer">
-              {{ receiverStatus?.running ? '停止 HTTP 服务' : '开启 HTTP 服务' }}
-            </button>
-            <button type="button" :disabled="!selectedLocalUrl" @click="copyMyUrl">复制地址</button>
-          </div>
-        </div>
-      </aside>
-
-      <main class="ftc-main">
-        <section class="ftc-drop" :class="{ 'is-active': dropActive, 'has-target': selectedPeer }">
-          <div class="ftc-drop-glyph" aria-hidden="true">↓</div>
-          <h2>{{ targetLabel }}</h2>
-          <p>{{ selectedPeer ? '拖入文件或文件夹，或从本机选择' : '拖入文件或文件夹，然后点右侧设备发送' }}</p>
-          <div class="ftc-drop-actions">
-            <button type="button" class="ftc-primary" @click="pickAndSend('files')">选择文件</button>
-            <button type="button" @click="pickAndSend('folder')">选择文件夹</button>
-          </div>
-          <small>文件夹会保留目录结构；同名文件自动改名，不覆盖。</small>
-          <div v-if="pendingPaths.length" class="ftc-pending">
-            已选择 {{ pendingPaths.length }} 项，点右侧设备发送
-          </div>
-        </section>
-
-        <section class="ftc-queue">
-          <div class="ftc-section-head">
-            <h3>传输队列</h3>
-            <div>
-              <span>{{ activeTasks.length }} 进行中</span>
-              <button type="button" @click="clearFinished">清除已完成</button>
-            </div>
-          </div>
-
-          <div v-if="!tasks.length" class="ftc-empty">还没有传输任务</div>
-
-          <div v-for="task in visibleTasks" :key="task.id" class="ftc-task" :data-status="task.status">
-            <span class="ftc-task-dir" :data-direction="task.direction">{{ task.direction === 'send' ? '↑' : '↓' }}</span>
-            <div class="ftc-task-main">
-              <div class="ftc-task-title">
-                <span class="ftc-task-name" :title="task.fileName">{{ task.fileName }}</span>
-                <span class="ftc-task-status">{{ taskStatusLabel(task.status) }}</span>
-              </div>
-              <div class="ftc-task-sub">
-                {{ task.peer }} · {{ formatBytes(task.transferredBytes) }} / {{ formatBytes(task.totalBytes) }}
-                <span v-if="task.error" class="ftc-error"> · {{ task.error }}</span>
-              </div>
-              <div class="ftc-task-bar">
-                <span :style="{ width: `${percent(task.transferredBytes, task.totalBytes)}%` }" />
-              </div>
-            </div>
-            <div class="ftc-task-actions">
-              <button v-if="task.status === 'running'" type="button" @click="pauseTask(task.id)">暂停</button>
-              <button v-else-if="task.status === 'paused'" type="button" @click="resumeTask(task.id)">继续</button>
-              <button
-                v-if="['error', 'interrupted', 'canceled'].includes(task.status)"
-                type="button"
-                @click="retryTask(task.id)"
-              >
-                重试
-              </button>
-              <button
-                v-if="!['done', 'canceled', 'interrupted'].includes(task.status)"
-                type="button"
-                class="is-danger"
-                @click="cancelTask(task.id)"
-              >
-                取消
-              </button>
-            </div>
-          </div>
-        </section>
-      </main>
-    </div>
-
-    <n-drawer v-model:show="showAdvanced" :width="440" placement="right">
-      <n-drawer-content title="高级设置" closable>
-        <div class="ftc-adv">
-          <h4>接收服务</h4>
+          <label class="ftc-field">
+            <span>STUN servers（每行一个）</span>
+            <textarea v-model="webrtcIceServersText" class="ftc-input is-area" rows="3" />
+          </label>
           <div class="ftc-row">
-            <label class="ftc-field"><span>监听地址</span><input v-model="receiverBindAddr" class="ftc-input" /></label>
-            <label class="ftc-field is-narrow"><span>端口</span><input v-model.number="receiverPort" type="number" class="ftc-input" /></label>
-          </div>
-          <label class="ftc-field">
-            <span>保存目录</span>
-            <div class="ftc-pick">
-              <input v-model="receiverSaveDir" class="ftc-input" placeholder="留空使用默认 incoming 目录" />
-              <button type="button" @click="pickReceiverSaveDir">选择</button>
+            <label class="ftc-field"><span>房间码</span><input v-model="webrtcRoomCode" class="ftc-input" /></label>
+            <div class="ftc-actions">
+              <button type="button" @click="webrtcGenerateRoomCode">生成</button>
+              <button type="button" :disabled="!webrtcCanJoinRoom" @click="webrtcJoinRoom">加入</button>
+              <button type="button" :disabled="!webrtcSignalJoined" @click="webrtcLeaveRoom">退出</button>
             </div>
-          </label>
-          <label class="ftc-field">
-            <span>配对码（可选）</span>
-            <input v-model="receiverToken" class="ftc-input" placeholder="留空则允许局域网直接发送" />
-          </label>
-          <div class="ftc-actions">
-            <button type="button" :disabled="!!receiverStatus?.running" @click="startReceiver">启动接收</button>
-            <button type="button" :disabled="!receiverStatus?.running" @click="stopReceiver">停止</button>
-            <span class="ftc-mono">
-              {{ receiverStatus?.running ? `监听 ${receiverStatus.bindAddr}:${receiverStatus.port}（所有网卡）` : '未启动' }}
-            </span>
           </div>
-
-          <h4>局域网发现</h4>
-          <label class="ftc-field is-narrow">
-            <span>发现端口</span>
-            <input v-model.number="discoveryPort" type="number" class="ftc-input" />
-          </label>
-          <div class="ftc-actions">
-            <button type="button" :disabled="discoveryRunning" @click="startDiscovery">开启发现</button>
-            <button type="button" :disabled="!discoveryRunning" @click="stopDiscovery">关闭发现</button>
+          <div class="ftc-actions is-muted">
+            <span>{{ webrtcSignalText }}</span>
+            <span>{{ webrtcConnStateText }}</span>
+            <span v-if="webrtcTargetPeerId">对端 {{ webrtcTargetPeerId }}</span>
           </div>
+          <div class="ftc-actions">
+            <button type="button" :disabled="!webrtcCanSend" @click="webrtcPickAndSendFiles">选择文件发送</button>
+            <button type="button" :disabled="!webrtcCanSend" @click="webrtcPickAndSendFolder">选择文件夹发送</button>
+            <button type="button" @click="webrtcClose">断开</button>
+          </div>
+          <p v-if="webrtcLastError" class="ftc-error">{{ webrtcLastError }}</p>
+        </div>
+      </section>
 
+      <section v-show="activeTab === 'share'" class="ftc-pane ftc-single">
+        <div class="ftc-card">
           <h4>HTTP 目录分享</h4>
           <div class="ftc-row">
-            <label class="ftc-field"><span>监听地址</span><input v-model="shareBindAddr" class="ftc-input" /></label>
+            <div class="ftc-field">
+              <span>监听地址</span>
+              <n-select v-model:value="shareBindAddr" size="small" :options="bindAddrOptions" />
+            </div>
             <label class="ftc-field is-narrow"><span>端口</span><input v-model.number="sharePort" type="number" class="ftc-input" /></label>
           </div>
           <label class="ftc-field">
@@ -240,88 +222,105 @@
           <div class="ftc-actions">
             <button type="button" :disabled="!!httpShareStatus?.running" @click="startHttpShare">启动分享</button>
             <button type="button" :disabled="!httpShareStatus?.running" @click="stopHttpShare">停止</button>
-            <span class="ftc-mono">{{ httpShareStatus?.baseUrl || '未启动' }}</span>
+            <button type="button" :disabled="!sharePageUrl" @click="openSharePage">打开页面</button>
+            <span class="ftc-mono">{{ sharePageUrl || '未启动' }}</span>
           </div>
+          <p class="ftc-muted">只读开启时只允许浏览和下载；关闭后可通过 PUT 上传到分享目录。</p>
+        </div>
+      </section>
+    </div>
 
-          <h4>WebRTC</h4>
-          <label class="ftc-field">
-            <span>信令服务</span>
-            <span class="ftc-mono">{{ webrtcSignalUrl || '未配置（设置 → 外观与系统）' }}</span>
-          </label>
-          <label class="ftc-field">
-            <span>STUN servers（每行一个）</span>
-            <textarea v-model="webrtcIceServersText" class="ftc-input is-area" rows="3" />
-          </label>
+    <section class="ftc-queue">
+      <div class="ftc-section-head">
+        <h3>传输队列</h3>
+        <div>
+          <span>{{ activeTasks.length }} 进行中</span>
+          <button type="button" @click="clearFinished">清除已完成</button>
+        </div>
+      </div>
+
+      <div v-if="!tasks.length" class="ftc-empty">还没有传输任务</div>
+
+      <div v-for="task in visibleTasks" :key="task.id" class="ftc-task" :data-status="task.status">
+        <span class="ftc-task-dir" :data-direction="task.direction">{{ task.direction === 'send' ? '↑' : '↓' }}</span>
+        <div class="ftc-task-main">
+          <div class="ftc-task-title">
+            <span class="ftc-task-name" :title="task.fileName">{{ task.fileName }}</span>
+            <span class="ftc-task-status">{{ taskStatusLabel(task.status) }}</span>
+          </div>
+          <div class="ftc-task-sub">
+            {{ task.peer }} · {{ formatBytes(task.transferredBytes) }} / {{ formatBytes(task.totalBytes) }}
+            <span v-if="task.error" class="ftc-error"> · {{ task.error }}</span>
+          </div>
+          <div class="ftc-task-bar">
+            <span :style="{ width: `${percent(task.transferredBytes, task.totalBytes)}%` }" />
+          </div>
+        </div>
+        <div class="ftc-task-actions">
+          <button v-if="task.status === 'running'" type="button" @click="pauseTask(task.id)">暂停</button>
+          <button v-else-if="task.status === 'paused'" type="button" @click="resumeTask(task.id)">继续</button>
+          <button
+            v-if="['error', 'interrupted', 'canceled'].includes(task.status)"
+            type="button"
+            @click="retryTask(task.id)"
+          >
+            重试
+          </button>
+          <button
+            v-if="!['done', 'canceled', 'interrupted'].includes(task.status)"
+            type="button"
+            class="is-danger"
+            @click="cancelTask(task.id)"
+          >
+            取消
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <n-drawer v-model:show="showAdvanced" :width="420" placement="right">
+      <n-drawer-content title="高级设置" closable>
+        <div class="ftc-adv">
+          <h4>接收服务</h4>
           <div class="ftc-row">
-            <label class="ftc-field"><span>房间码</span><input v-model="webrtcRoomCode" class="ftc-input" /></label>
-            <div class="ftc-actions">
-              <button type="button" @click="webrtcGenerateRoomCode">生成</button>
-              <button type="button" :disabled="!webrtcCanJoinRoom" @click="webrtcJoinRoom">加入</button>
-              <button type="button" :disabled="!webrtcSignalJoined" @click="webrtcLeaveRoom">退出</button>
+            <div class="ftc-field">
+              <span>监听地址</span>
+              <n-select v-model:value="receiverBindAddr" size="small" :options="bindAddrOptions" />
             </div>
+            <label class="ftc-field is-narrow"><span>端口</span><input v-model.number="receiverPort" type="number" class="ftc-input" /></label>
           </div>
-          <div class="ftc-actions is-muted">
-            <span>{{ webrtcSignalText }}</span>
-            <span>{{ webrtcConnStateText }}</span>
-            <span v-if="webrtcTargetPeerId">对端 {{ webrtcTargetPeerId }}</span>
-          </div>
+          <label class="ftc-field">
+            <span>保存目录</span>
+            <div class="ftc-pick">
+              <input v-model="receiverSaveDir" class="ftc-input" placeholder="留空使用默认 incoming 目录" />
+              <button type="button" @click="pickReceiverSaveDir">选择</button>
+            </div>
+          </label>
+          <label class="ftc-field">
+            <span>配对码（可选）</span>
+            <input v-model="receiverToken" class="ftc-input" placeholder="留空则允许局域网直接发送" />
+          </label>
           <div class="ftc-actions">
-            <button type="button" :disabled="!webrtcCanSend" @click="webrtcPickAndSendFiles">通过 WebRTC 发送</button>
-            <button type="button" :disabled="!webrtcCanSend" @click="webrtcPickAndSendFolder">发送文件夹</button>
-            <button type="button" @click="webrtcClose">断开连接</button>
+            <button type="button" :disabled="!!receiverStatus?.running" @click="startReceiver">启动接收</button>
+            <button type="button" :disabled="!receiverStatus?.running" @click="stopReceiver">停止</button>
+            <span class="ftc-mono">
+              {{ receiverStatus?.running ? `监听 ${receiverStatus.bindAddr}:${receiverStatus.port}` : '未启动' }}
+            </span>
           </div>
-          <p v-if="webrtcLastError" class="ftc-error">{{ webrtcLastError }}</p>
 
-          <h4>任务记录</h4>
+          <h4>局域网发现</h4>
+          <label class="ftc-field is-narrow">
+            <span>发现端口</span>
+            <input v-model.number="discoveryPort" type="number" class="ftc-input" />
+          </label>
           <div class="ftc-actions">
-            <button type="button" @click="clearFinished">清除已完成 / 已取消</button>
-            <span class="ftc-muted">记录最多保留 300 条</span>
+            <button type="button" :disabled="discoveryRunning" @click="startDiscovery">开启发现</button>
+            <button type="button" :disabled="!discoveryRunning" @click="stopDiscovery">关闭发现</button>
           </div>
+          <p class="ftc-muted">地址选择会记住上次使用的选项；换网络后在下拉里重新选择即可。</p>
         </div>
       </n-drawer-content>
     </n-drawer>
-
-    <n-modal v-model:show="showRemote" preset="card" class="ftc-modal" title="远程设备" :bordered="false">
-      <div class="ftc-adv">
-        <h4>HTTP 直连</h4>
-        <label class="ftc-field">
-          <span>对方地址</span>
-          <input v-model="customPeerUrl" class="ftc-input" placeholder="http://203.0.113.10:39190" />
-        </label>
-        <label class="ftc-field">
-          <span>对方配对码（可选）</span>
-          <input v-model="peerToken" class="ftc-input" />
-        </label>
-        <div class="ftc-actions">
-          <button type="button" class="ftc-primary" @click="sendFilesToCustomUrl">选择文件发送</button>
-          <button type="button" @click="sendFolderToCustomUrl">选择文件夹发送</button>
-        </div>
-
-        <h4>WebRTC 房间码</h4>
-        <label class="ftc-field">
-          <span>信令</span>
-          <span class="ftc-mono">{{ webrtcSignalUrl || '未配置' }}</span>
-        </label>
-        <div class="ftc-row">
-          <label class="ftc-field"><span>房间码</span><input v-model="webrtcRoomCode" class="ftc-input" /></label>
-          <div class="ftc-actions">
-            <button type="button" @click="webrtcGenerateRoomCode">生成</button>
-            <button type="button" :disabled="!webrtcCanJoinRoom" @click="webrtcJoinRoom">加入</button>
-            <button type="button" :disabled="!webrtcSignalJoined" @click="webrtcLeaveRoom">退出</button>
-          </div>
-        </div>
-        <div class="ftc-actions is-muted">
-          <span>{{ webrtcSignalText }}</span>
-          <span>{{ webrtcConnStateText }}</span>
-        </div>
-        <div class="ftc-actions">
-          <button type="button" :disabled="!webrtcCanSend" @click="webrtcPickAndSendFiles">选择文件发送</button>
-          <button type="button" :disabled="!webrtcCanSend" @click="webrtcPickAndSendFolder">选择文件夹发送</button>
-          <button type="button" @click="webrtcClose">断开</button>
-        </div>
-        <p v-if="webrtcLastError" class="ftc-error">{{ webrtcLastError }}</p>
-      </div>
-    </n-modal>
   </div>
 </template>
 
@@ -373,8 +372,15 @@ const selectedPeerId = ref('')
 const pendingPaths = ref([])
 const dropActive = ref(false)
 const showAdvanced = ref(false)
-const showRemote = ref(false)
 const transferNotice = ref('')
+
+const tabs = [
+  { id: 'lan', label: '局域网' },
+  { id: 'p2p', label: 'P2P 同步' },
+  { id: 'remote', label: '远程' },
+  { id: 'share', label: 'HTTP 分享' },
+]
+const activeTab = ref('lan')
 
 const selectedPeer = computed(() => peers.value.find((peer) => peer.peerId === selectedPeerId.value) || null)
 const discoverable = computed(() => Boolean(receiverStatus.value?.running) && discoveryRunning.value)
@@ -387,6 +393,32 @@ const selectedLocalUrl = computed(() => {
   if (!ip) return ''
   const host = ip.family === 'ipv6' ? `[${ip.address}]` : ip.address
   return `http://${host}:${receiverPortValue.value}`
+})
+
+const localIpOptions = computed(() => localIps.value.map((ip) => ({
+  label: `${ip.address} · ${ip.name}`,
+  value: ip.address,
+})))
+
+const bindAddrOptions = computed(() => {
+  const options = [{ label: '0.0.0.0 · 所有网卡', value: '0.0.0.0' }]
+  for (const ip of localIps.value) {
+    options.push({ label: `${ip.address} · ${ip.name}`, value: ip.address })
+  }
+  for (const current of [receiverBindAddr.value, shareBindAddr.value]) {
+    if (current && !options.some((item) => item.value === current)) {
+      options.push({ label: current, value: current })
+    }
+  }
+  return options
+})
+
+const sharePageUrl = computed(() => {
+  const st = httpShareStatus.value
+  if (!st?.running) return ''
+  const bind = String(st.bindAddr || '')
+  const host = bind && bind !== '0.0.0.0' && bind !== '::' ? bind : String(selectedLocalIp.value || '127.0.0.1')
+  return `http://${host.includes(':') ? `[${host}]` : host}:${st.port || sharePort.value}`
 })
 
 const webrtcIceServersText = ref('stun:stun.cloudflare.com:3478\nstun:stun.l.google.com:19302')
@@ -565,6 +597,7 @@ const loadTransferPrefs = () => {
     if (typeof value?.shareRootDir === 'string') shareRootDir.value = value.shareRootDir
     if (typeof value?.shareReadOnly === 'boolean') shareReadOnly.value = value.shareReadOnly
     if (typeof value?.selectedLocalIp === 'string') selectedLocalIp.value = value.selectedLocalIp
+    if (tabs.some((tab) => tab.id === value?.activeTab)) activeTab.value = value.activeTab
   } catch (error) {
     logger.warn('[FTA] load prefs failed:', error)
   }
@@ -585,6 +618,7 @@ const scheduleSaveTransferPrefs = () => {
         shareRootDir: shareRootDir.value,
         shareReadOnly: shareReadOnly.value,
         selectedLocalIp: selectedLocalIp.value,
+        activeTab: activeTab.value,
       }))
     } catch (error) {
       logger.warn('[FTA] save prefs failed:', error)
@@ -593,7 +627,7 @@ const scheduleSaveTransferPrefs = () => {
 }
 
 watch(
-  [receiverBindAddr, receiverPort, receiverSaveDir, discoveryPort, shareBindAddr, sharePort, shareRootDir, shareReadOnly, selectedLocalIp],
+  [receiverBindAddr, receiverPort, receiverSaveDir, discoveryPort, shareBindAddr, sharePort, shareRootDir, shareReadOnly, selectedLocalIp, activeTab],
   scheduleSaveTransferPrefs
 )
 
@@ -659,7 +693,7 @@ const pickAndSend = async (kind) => {
     if (!list.length) return
     if (!selectedPeer.value) {
       pendingPaths.value = list
-      transferNotice.value = `已选择 ${list.length} 项，点右侧设备发送`
+      transferNotice.value = `已选择 ${list.length} 项，点左侧设备发送`
       return
     }
     await sendPathsTo(selectedPeer.value, list)
@@ -700,8 +734,7 @@ const toggleHttpServer = async () => {
   await refreshAll()
 }
 
-const openLocalIp = async (ip) => {
-  selectedLocalIp.value = ip.address
+const openSelectedLocalUrl = async () => {
   if (!receiverStatus.value?.running) {
     transferNotice.value = '先开启 HTTP 服务，再在浏览器打开'
     return
@@ -716,6 +749,16 @@ const openLocalIp = async (ip) => {
   } catch (error) {
     logger.error('[FTA] open local url failed:', error)
     transferNotice.value = String(error?.message || error || '打开浏览器失败')
+  }
+}
+
+const openSharePage = async () => {
+  if (!sharePageUrl.value) return
+  try {
+    await openUrl(sharePageUrl.value)
+  } catch (error) {
+    logger.error('[FTA] open share page failed:', error)
+    message.error(String(error?.message || error || '打开浏览器失败'))
   }
 }
 
@@ -773,10 +816,11 @@ const setupDropTarget = async () => {
       dropActive.value = false
       const paths = Array.isArray(payload.paths) ? payload.paths : []
       if (!paths.length) return
+      activeTab.value = 'lan'
       if (selectedPeer.value) await sendPathsTo(selectedPeer.value, paths)
       else {
         pendingPaths.value = paths
-        transferNotice.value = `已选择 ${paths.length} 项，点右侧设备发送`
+        transferNotice.value = `已选择 ${paths.length} 项，点左侧设备发送`
       }
     })
   } catch (error) {
@@ -1825,18 +1869,107 @@ onUnmounted(async () => {
 }
 .ftc-notice button { border: 0; background: transparent; color: inherit; cursor: pointer; font-size: 14px; line-height: 1; opacity: 0.65; }
 
-.ftc-layout {
+.ftc-tabs {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 14px;
+  border-bottom: 1px solid var(--guaxi-border-weak);
+  background: var(--guaxi-header-bg);
+}
+.ftc-tab {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 36px;
+  padding: 0 12px;
+  border: 0;
+  background: transparent;
+  color: var(--guaxi-text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+}
+.ftc-tab:hover { color: var(--guaxi-text-primary); }
+.ftc-tab.is-active { color: var(--guaxi-text-primary); font-weight: 600; }
+.ftc-tab.is-active::after {
+  content: '';
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  bottom: -1px;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--ftc-accent);
+}
+.ftc-tab-badge {
+  min-width: 16px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: rgba(95, 179, 161, 0.16);
+  color: var(--ftc-accent);
+  font-size: 9.5px;
+  font-weight: 600;
+  line-height: 16px;
+  text-align: center;
+}
+.ftc-tab-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--ftc-accent); }
+
+.ftc-panes {
   flex: 1 1 auto;
   min-height: 0;
-  display: grid;
-  grid-template-columns: 232px minmax(0, 1fr);
+  display: flex;
 }
+.ftc-pane { flex: 1; min-width: 0; min-height: 0; overflow: auto; }
 
-.ftc-devices {
+.ftc-lan { display: grid; grid-template-columns: 248px minmax(0, 1fr); height: 100%; overflow: hidden; }
+.ftc-side {
   min-height: 0;
   overflow: auto;
   padding: 14px 10px;
   border-right: 1px solid var(--guaxi-border-weak);
+}
+.ftc-send {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+}
+.ftc-send .ftc-drop { flex: 1 1 auto; display: flex; flex-direction: column; justify-content: center; }
+
+.ftc-single {
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.ftc-single > * { width: 100%; max-width: 760px; margin: 0 auto; }
+.ftc-card {
+  padding: 14px 16px 16px;
+  border: 1px solid var(--guaxi-border-weak);
+  border-radius: 12px;
+  background: var(--guaxi-panel-bg);
+}
+.ftc-card h4 {
+  margin: 0 0 10px;
+  color: var(--guaxi-text-secondary);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.ftc-card .ftc-field + .ftc-field { margin-top: 8px; }
+.ftc-card .ftc-actions { margin-top: 10px; }
+.ftc-kv {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 8px;
+  color: var(--guaxi-text-secondary);
+  font-size: 10.5px;
 }
 .ftc-section-title {
   display: flex;
@@ -1883,7 +2016,6 @@ onUnmounted(async () => {
   font-weight: 700;
   letter-spacing: 0.02em;
 }
-.ftc-avatar.is-remote { color: var(--ftc-accent); background: rgba(95, 179, 161, 0.1); }
 .ftc-avatar.is-p2p { color: #7f9fe0; background: rgba(109, 143, 209, 0.14); font-size: 8.5px; letter-spacing: 0; }
 .ftc-device.is-static { cursor: default; }
 .ftc-device.is-static:hover { background: transparent; }
@@ -1957,28 +2089,15 @@ onUnmounted(async () => {
 }
 .ftc-empty-mini small { display: block; font-size: 10px; opacity: 0.75; }
 
-.ftc-device-foot {
+.ftc-addr-block {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 6px;
   margin: 14px 4px 0;
   padding-top: 12px;
   border-top: 1px solid var(--guaxi-border-weak);
 }
-.ftc-device-foot button {
-  border: 0;
-  background: transparent;
-  color: var(--guaxi-text-secondary);
-  text-align: left;
-  font-size: 10.5px;
-  padding: 3px 4px;
-  border-radius: 4px;
-  cursor: pointer;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.ftc-device-foot button:hover { color: var(--guaxi-text-primary); background: var(--guaxi-hover-bg); }
+.ftc-addr-block :deep(.n-select) { width: 100%; }
 
 .ftc-addr-head {
   display: flex;
@@ -1991,55 +2110,25 @@ onUnmounted(async () => {
 }
 .ftc-addr-head em { font-style: normal; opacity: 0.8; white-space: nowrap; }
 .ftc-addr-head em.is-on { color: var(--ftc-accent); opacity: 1; }
-.ftc-addr {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 6px;
-  padding: 5px 6px !important;
-  border: 1px solid transparent !important;
-  border-radius: 6px;
-  text-align: left;
-}
-.ftc-addr.is-active {
-  border-color: rgba(95, 179, 161, 0.42) !important;
-  background: rgba(95, 179, 161, 0.09);
-}
-.ftc-addr-ip {
-  flex: 0 0 auto;
-  color: var(--guaxi-text-primary);
-  font-family: var(--guaxi-editor-font-family);
-  font-size: 10px;
-}
-.ftc-addr-name {
-  min-width: 0;
-  color: var(--guaxi-text-secondary);
-  font-size: 9.5px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.ftc-addr-actions { display: flex; gap: 5px; margin-top: 3px; }
-.ftc-addr-actions button {
+.ftc-addr-actions { display: flex; gap: 5px; }
+.ftc-addr-actions button,
+.ftc-server-toggle {
   flex: 1;
   min-width: 0;
-  padding: 5px 4px !important;
-  border: 1px solid var(--guaxi-border) !important;
+  padding: 5px 4px;
+  border: 1px solid var(--guaxi-border);
   border-radius: 5px;
+  background: transparent;
+  color: var(--guaxi-text-secondary);
+  font-size: 10.5px;
   text-align: center;
   white-space: nowrap;
+  cursor: pointer;
 }
+.ftc-addr-actions button:hover:not(:disabled),
+.ftc-server-toggle:hover { color: var(--guaxi-text-primary); background: var(--guaxi-hover-bg); }
 .ftc-addr-actions button:disabled { opacity: 0.5; cursor: default; }
-
-.ftc-main {
-  min-width: 0;
-  min-height: 0;
-  overflow: auto;
-  padding: 16px 18px 20px;
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
+.ftc-server-toggle { width: 100%; }
 
 .ftc-drop {
   flex: 0 0 auto;
@@ -2103,18 +2192,24 @@ onUnmounted(async () => {
 }
 
 .ftc-queue {
-  border: 1px solid var(--guaxi-border-weak);
-  border-radius: 12px;
+  flex: 0 0 auto;
+  max-height: 36%;
+  min-height: 0;
+  overflow: auto;
+  border-top: 1px solid var(--guaxi-border-weak);
   background: var(--guaxi-panel-bg);
-  overflow: hidden;
 }
 .ftc-section-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
   padding: 10px 14px;
   border-bottom: 1px solid var(--guaxi-border-weak);
+  background: var(--guaxi-panel-bg);
 }
 .ftc-section-head h3 { margin: 0; font-size: 12.5px; font-weight: 600; }
 .ftc-section-head > div { display: flex; align-items: center; gap: 10px; color: var(--guaxi-text-secondary); font-size: 10.5px; }
@@ -2260,11 +2355,13 @@ onUnmounted(async () => {
   font-size: 10.5px;
   white-space: nowrap;
 }
-.ftc-modal { width: min(520px, 92vw); }
+.ftc-card :deep(.n-select) { width: 100%; }
+.ftc-adv :deep(.n-select) { width: 100%; }
 
 @media (max-width: 820px) {
-  .ftc-layout { grid-template-columns: 196px minmax(0, 1fr); }
-  .ftc-main { padding: 12px; }
+  .ftc-lan { grid-template-columns: 210px minmax(0, 1fr); }
+  .ftc-send { padding: 12px; }
   .ftc-drop { padding: 20px 14px 18px; }
+  .ftc-single { padding: 12px; }
 }
 </style>
