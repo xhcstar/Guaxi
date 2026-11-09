@@ -40,6 +40,46 @@ fn ensure_ok(value: &Value) -> Result<(), String> {
     ))
 }
 
+/// 行政区层级落在 `district` 里（“省份+城市+区县”连写），而 `place/text` 的 `city`
+/// 参数只认城市级名称或 adcode：原样传整串路径会静默返回 0 条候选。
+const MUNICIPALITIES: [&str; 4] = ["北京市", "上海市", "天津市", "重庆市"];
+const PROVINCE_SUFFIXES: [&str; 3] = ["特别行政区", "自治区", "省"];
+// 按“后缀结束位置最早”取，避免把「伊犁哈萨克自治州伊宁市」误判成伊宁市。
+const CITY_SUFFIXES: [&str; 5] = ["自治州", "地区", "盟", "市", "州"];
+
+/// 从高德的 `district` 串收敛出城市级名称；解析不出来时回退到调用方给的城市提示。
+pub(crate) fn city_from_district(district: &str, fallback: &str) -> String {
+    let text = district.trim();
+    if text.is_empty() {
+        return fallback.trim().to_string();
+    }
+    for city in MUNICIPALITIES {
+        if text.starts_with(city) {
+            return city.to_string();
+        }
+    }
+    let rest = match PROVINCE_SUFFIXES
+        .iter()
+        .filter_map(|suffix| text.find(suffix).map(|pos| pos + suffix.len()))
+        .min()
+    {
+        Some(end) if end < text.len() => &text[end..],
+        _ => text,
+    };
+    let mut best: Option<usize> = None;
+    for suffix in CITY_SUFFIXES {
+        if let Some(end) = rest.find(suffix).map(|pos| pos + suffix.len()) {
+            if end < rest.len() {
+                best = Some(best.map_or(end, |current| current.min(end)));
+            }
+        }
+    }
+    match best {
+        Some(end) => rest[..end].to_string(),
+        None => rest.to_string(),
+    }
+}
+
 fn parse_location(raw: &str) -> Option<(f64, f64)> {
     let mut parts = raw.split(',');
     let lng = parts.next()?.trim().parse::<f64>().ok()?;
@@ -53,10 +93,10 @@ fn parse_location(raw: &str) -> Option<(f64, f64)> {
 fn place_from_json(value: &Value) -> Option<Place> {
     let (lng, lat) = parse_location(&val_text(value.get("location")))?;
     let province = val_text(value.get("province"));
-    let mut city = val_text(value.get("city"));
-    if city.is_empty() {
-        city = province.clone();
-    }
+    let raw_city = val_text(value.get("city"));
+    let district = val_text(value.get("district"));
+    // 直辖市的 city 字段为空，这时用省名兜底（「北京市」），按城市检索才不会落空。
+    let city = if raw_city.is_empty() { province.clone() } else { raw_city };
     let adcode = val_text(value.get("adcode"));
     let city_code = val_text(value.get("citycode"));
     let formatted = val_text(value.get("formatted_address"));
@@ -69,7 +109,6 @@ fn place_from_json(value: &Value) -> Option<Place> {
         id: format!("amap-{adcode}-{lng:.6},{lat:.6}"),
         name,
         address: {
-            let district = val_text(value.get("district"));
             let township = val_text(value.get("township"));
             [province, city.clone(), district, township]
                 .into_iter()
@@ -171,6 +210,84 @@ pub async fn geocode(key: &str, address: &str, city: &str) -> Result<Place, Stri
         .ok_or_else(|| format!("「{}」的坐标格式无法解析", address))
 }
 
+/// 省/自治区下的地级行政区：用户只知道「新疆」时，先把保底城市摆出来。
+///
+/// 高德对直辖市返回的是「北京城区」「上海城区」这类虚拟节点，它们不是可检索的城市，
+/// 所以直辖市的省级查询直接返回省本身，让上层按城市检索。
+pub async fn districts(key: &str, keyword: &str) -> Result<Vec<Place>, String> {
+    let url = build_url(
+        "/v3/config/district",
+        &[
+            ("key", key.to_string()),
+            ("keywords", keyword.to_string()),
+            ("subdistrict", "1".to_string()),
+            ("extensions", "base".to_string()),
+        ],
+    )?;
+    let value = cached_json(&url, GEO_TTL.min(Duration::from_secs(24 * 3600))).await?;
+    ensure_ok(&value)?;
+    let mut out = Vec::new();
+    for district in value
+        .get("districts")
+        .and_then(|item| item.as_array())
+        .cloned()
+        .unwrap_or_default()
+    {
+        let name = val_text(district.get("name"));
+        let adcode = val_text(district.get("adcode"));
+        let level = val_text(district.get("level"));
+        let (Some((lng, lat)), false) = (parse_location(&val_text(district.get("center"))), name.is_empty())
+        else {
+            continue;
+        };
+        if level == "country" {
+            continue;
+        }
+        if level == "province" && MUNICIPALITIES.iter().any(|item| name.starts_with(item)) {
+            out.push(Place {
+                id: format!("amap-{adcode}-{lng:.6},{lat:.6}"),
+                name: name.clone(),
+                address: name.clone(),
+                city: name.clone(),
+                adcode: adcode.clone(),
+                city_code: String::new(),
+                lng,
+                lat,
+                source: "amap".to_string(),
+            });
+            continue;
+        }
+        for child in district
+            .get("districts")
+            .and_then(|item| item.as_array())
+            .cloned()
+            .unwrap_or_default()
+        {
+            let child_name = val_text(child.get("name"));
+            let child_level = val_text(child.get("level"));
+            if child_name.is_empty() || !matches!(child_level.as_str(), "city" | "district") {
+                continue;
+            }
+            let Some((child_lng, child_lat)) = parse_location(&val_text(child.get("center"))) else {
+                continue;
+            };
+            let child_adcode = val_text(child.get("adcode"));
+            out.push(Place {
+                id: format!("amap-{child_adcode}-{child_lng:.6},{child_lat:.6}"),
+                name: child_name.clone(),
+                address: format!("{name}{child_name}"),
+                city: child_name,
+                adcode: child_adcode,
+                city_code: String::new(),
+                lng: child_lng,
+                lat: child_lat,
+                source: "amap".to_string(),
+            });
+        }
+    }
+    Ok(out)
+}
+
 pub async fn regeo(key: &str, lng: f64, lat: f64) -> Result<Place, String> {
     let url = build_url(
         "/v3/geocode/regeo",
@@ -244,6 +361,9 @@ pub async fn inputtips(key: &str, keyword: &str, city: &str) -> Result<Vec<Place
         };
         let district = val_text(tip.get("district"));
         let adcode = val_text(tip.get("adcode"));
+        // inputtips 的 `city` 字段常年返回空数组，真正的省市县信息都在 `district`
+        // 里（连写）。直接把它塞进 `city` 会让后续按城市检索全部落空。
+        let place_city = city_from_district(&district, city);
         out.push(Place {
             id: val_text(tip.get("id")),
             name,
@@ -255,11 +375,7 @@ pub async fn inputtips(key: &str, keyword: &str, city: &str) -> Result<Vec<Place
                     address
                 }
             },
-            city: if district.is_empty() {
-                city.to_string()
-            } else {
-                district
-            },
+            city: place_city,
             adcode,
             city_code: String::new(),
             lng,

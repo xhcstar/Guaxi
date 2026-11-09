@@ -24,11 +24,32 @@
         <div v-if="scope === 'province'" class="tr-explore-bases">
           <div class="tr-explore-bases-head">
             <div>
-              <h2>先定基地城市</h2>
-              <p>目的地是省级范围，一次扫全省既慢又排不出行程。选 2–4 个落脚城市，再按基地检索。</p>
+              <h2>{{ bases.length ? '还可以再加一个落脚城市' : '先定基地城市' }}</h2>
+              <p v-if="bases.length">按基地分别扫描景点、餐饮、博物馆、街区与夜市，加得越多扫得越慢。</p>
+              <p v-else>这个省太大，一次扫全省既慢又排不出行程。先点一个城市当落脚点（省会已排在最前），也可以直接搜索。</p>
             </div>
             <span class="tr-explore-bases-count">{{ bases.length }}/4</span>
           </div>
+
+          <div v-if="!bases.length && baseCandidates.length" class="tr-explore-base-suggested">
+            <p class="tr-explore-base-suggested-head">
+              <TravelIcon name="sparkles" :size="13" />
+              按离省会由近到远挑了这些，点一个就能开始：
+            </p>
+            <div class="tr-explore-base-suggested-grid">
+              <button
+                v-for="city in baseCandidates"
+                :key="city.id || city.name"
+                type="button"
+                class="tr-explore-base-city"
+                @click="chooseBase(city)"
+              >
+                <strong>{{ city.name }}</strong>
+                <small>{{ cityCaption(city) }}</small>
+              </button>
+            </div>
+          </div>
+
           <div class="tr-explore-base-chips">
             <button
               v-for="(base, index) in bases"
@@ -47,7 +68,7 @@
             <input
               v-model="baseKeyword"
               type="text"
-              placeholder="搜索基地城市，例如：大理、丽江"
+              placeholder="搜索基地城市，例如：乌鲁木齐、伊宁、喀什"
               autocomplete="off"
               @input="onBaseInput(baseKeyword)"
               @keydown.esc="clearBaseSearch"
@@ -185,14 +206,25 @@
           </div>
         </template>
 
-        <div v-else-if="scope === 'province'" class="tr-explore-empty">
+        <div v-else-if="scope === 'province' && !bases.length" class="tr-explore-empty">
           <TravelIcon name="route" :size="24" />
-          <p>添加基地城市后，会按基地分别扫描景点、餐饮、博物馆、街区与夜市。</p>
+          <template v-if="baseCandidates.length">
+            <p>点上面任意一个城市当落脚点，我立刻按它检索景点、餐饮与住宿；也可以直接开始编排。</p>
+            <button type="button" class="tr-btn is-ghost is-small" :disabled="busy" @click="$emit('fallback')">
+              不等候选，直接按 {{ destinationName }} 编排
+            </button>
+          </template>
+          <p v-else>添加基地城市后，会按基地分别扫描景点、餐饮、博物馆、街区与夜市。</p>
         </div>
         <div v-else class="tr-explore-empty">
           <TravelIcon name="warning" :size="24" />
-          <p>{{ error || '没有扫描到候选地点。可以直接编排，或换个目的地再试。' }}</p>
-          <button type="button" class="tr-btn is-ghost is-small" @click="$emit('refresh')">重新扫描</button>
+          <p>{{ error || (bases.length ? `「${bases.map((item) => item.name).join('、')}」附近这次没扫到候选。可以直接编排，我会按目的地城市补齐地点；排不顺时会再和你商量怎么放宽条件。` : '这个范围内没有扫描到候选地点。可以直接编排，我会按目的地城市补齐地点；排不顺时会再和你商量怎么放宽条件。') }}</p>
+          <div class="tr-explore-empty-actions">
+            <button type="button" class="tr-btn is-ghost is-small" @click="$emit('refresh')">重新扫描</button>
+            <button type="button" class="tr-btn is-primary is-small" :disabled="busy" @click="$emit('fallback')">
+              直接编排
+            </button>
+          </div>
         </div>
       </template>
     </section>
@@ -225,10 +257,16 @@
           </p>
         </div>
         <div class="tr-explore-actions">
-          <button type="button" class="tr-btn is-ghost is-small" @click="$emit('autopick')">
+          <button
+            v-if="candidates.length"
+            type="button"
+            class="tr-btn is-ghost is-small"
+            @click="$emit('autopick')"
+          >
             <TravelIcon name="sparkles" :size="14" />帮我挑
           </button>
           <button
+            v-if="candidates.length"
             type="button"
             class="tr-btn is-ghost is-small"
             :disabled="!selected.length"
@@ -239,16 +277,21 @@
           <button
             type="button"
             class="tr-btn is-primary is-large"
-            :disabled="!selected.length || busy"
+            :disabled="busy || (!!candidates.length && !selected.length)"
             @click="$emit('submit')"
           >
-            {{ busy ? '正在编排…' : '用这些地点开始编排' }}
+            {{ busy ? '正在编排…' : candidates.length ? '用这些地点开始编排' : '按当前条件直接编排' }}
           </button>
-          <button type="button" class="tr-btn is-ghost is-small" @click="$emit('skip')">
+          <button
+            v-if="candidates.length"
+            type="button"
+            class="tr-btn is-ghost is-small"
+            @click="$emit('skip')"
+          >
             不挑，直接编排
           </button>
         </div>
-        <p class="tr-explore-hint">
+        <p v-if="candidates.length" class="tr-explore-hint">
           {{ hotelCount }} 家住宿候选会自动带上；勾选的才会进入行程，没勾餐饮时会补 2 个备选。
         </p>
         <p v-if="isMock" class="tr-explore-hint">
@@ -287,7 +330,7 @@ const props = defineProps({
   dayCount: { type: Number, default: 1 },
 })
 
-const emit = defineEmits(['toggle', 'autopick', 'clear', 'submit', 'skip', 'back', 'add-base', 'remove-base', 'refresh'])
+const emit = defineEmits(['toggle', 'autopick', 'clear', 'submit', 'skip', 'back', 'add-base', 'remove-base', 'refresh', 'fallback'])
 
 const SORTS = [
   { value: 'score', label: '综合推荐' },
@@ -308,6 +351,7 @@ let baseTimer = null
 const candidates = computed(() => props.data?.candidates || [])
 const groups = computed(() => props.data?.groups || [])
 const bases = computed(() => props.data?.bases || [])
+const baseCandidates = computed(() => (bases.value.length ? [] : props.data?.baseCandidates || []))
 const scope = computed(() => props.data?.scope || 'poi')
 const notes = computed(() => props.data?.notes || [])
 const sourceLabel = computed(() => (props.data?.source === 'amap' ? '高德数据' : 'OpenStreetMap'))
@@ -368,6 +412,16 @@ function scoreLevel(score) {
   if (score >= 82) return 'is-high'
   if (score >= 68) return 'is-mid'
   return 'is-low'
+}
+
+/** 保底城市卡片的副标题：优先说“离省会多远”，否则退回地址。 */
+function cityCaption(city) {
+  const km = Number(city?.distanceKm) || 0
+  if (km > 0) return `离省会 ${Math.round(km)} km`
+  const address = String(city?.address || '').trim()
+  const name = String(city?.name || '').trim()
+  if (address && address !== name) return address
+  return '可作为落脚城市'
 }
 
 function durationText(minutes) {

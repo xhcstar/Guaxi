@@ -478,6 +478,24 @@ test('候选池：帮我挑按天数凑量、包含必去且不重复', () => {
   assert.ok(ids.length <= 2 * 3 + 2 * 2)
 })
 
+test('省级目的地：给出保底城市，省会排第一且直辖市不拆', async () => {
+  const { provinceOf, fallbackCities } = await load(path.join(travelDir, 'travelRegions.js'))
+  const xinjiang = provinceOf('新疆维吾尔自治区')
+  assert.ok(xinjiang, '应识别出新疆')
+  const cities = fallbackCities(xinjiang, 8)
+  assert.ok(cities.length >= 6)
+  assert.equal(cities[0].name, '乌鲁木齐市')
+  // 其余城市也必须是地级行政区（市 / 地区 / 自治州），不能是「北京城区」这类虚拟节点。
+  assert.ok(cities.slice(1).every((city) => /市$|地区$|自治州$|盟$/.test(city.name)))
+  // 全路径地名也要能落回省份，而不是把「新疆维吾尔自治区乌鲁木齐市」当成一个省。
+  assert.equal(provinceOf('新疆维吾尔自治区乌鲁木齐市')?.name, '新疆维吾尔自治区')
+  // 用户常只写简称，必须也能命中。
+  assert.equal(provinceOf('新疆')?.name, '新疆维吾尔自治区')
+  assert.equal(provinceOf('内蒙')?.name, '内蒙古自治区')
+  // 直辖市自我兜底：当作城市目的地，不拆分。
+  assert.equal(provinceOf('北京市')?.name, '北京市')
+})
+
 test('候选池：事实包只带选中地点，住宿自动附上', () => {
   const context = buildContext({ form: exploreForm })
   const result = enrichCandidates(
@@ -513,4 +531,18 @@ test('候选池：后端命令与扫描模块已接通', () => {
     read('src-tauri/src/commands/travel/explore.rs'),
     /pub async fn explore\(/,
   )
+})
+
+// 高德 inputtips 的 city 字段恒为空、district 是「省+市+区」连写；原样塞进
+// place/text 的 city 参数会静默返回 0 条候选——截图里四个基地全扫空的根因。
+test('候选池：基地城市名必须收敛到城市级，扫描需有坐标兜底', () => {
+  const amap = read('src-tauri/src/commands/travel/amap.rs')
+  assert.match(amap, /fn city_from_district\(/)
+  assert.match(amap, /city_from_district\(&district, city\)/)
+  // 文本检索空手时按基地坐标再扫一遍，不能依赖城市名解析成功。
+  const explore = read('src-tauri/src/commands/travel/explore.rs')
+  assert.match(explore, /place_around\(/)
+  // 省级目的地未选基地时要给出可点的保底城市。
+  assert.match(explore, /base_candidates/)
+  assert.match(read('src-tauri/src/main.rs'), /commands::travel::travel_suggest_bases/)
 })

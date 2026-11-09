@@ -153,6 +153,7 @@
           @add-base="store.addExploreBase"
           @remove-base="store.removeExploreBase"
           @refresh="store.refreshExplore"
+          @fallback="store.exploreFallbackGenerate"
         />
 
         <PlanWorkspace

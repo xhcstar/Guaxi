@@ -12,6 +12,7 @@ mod explore;
 mod osm;
 mod preferences;
 mod providers;
+mod regions;
 mod share;
 mod store;
 mod weather;
@@ -1515,6 +1516,38 @@ pub async fn travel_explore(
     };
     let provider = providers::normalize(raw);
     explore::explore(&request, provider).await
+}
+
+/// 省级目的地先摆出可点的落脚城市：用户不懂陌生的省，不该只给一个空输入框。
+#[tauri::command]
+pub async fn travel_suggest_bases(destination: PlaceRef) -> Result<Vec<Place>, String> {
+    let key = amap_key();
+    let use_amap = !key.trim().is_empty();
+    let place = resolve_place(&destination, if use_amap { &key } else { "" }).await?;
+    let mut cities = if use_amap {
+        amap::districts(&key, &place.name).await.unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    if cities.is_empty() {
+        cities = regions::province_cities(&place.name);
+    }
+    if cities.is_empty() {
+        // 直辖市（北京/上海/天津/重庆）没有下级城市，目的地本身就是落脚点。
+        let mut own = place.clone();
+        own.name = place.city.trim().to_string();
+        if own.name.is_empty() {
+            own.name = place.name.clone();
+        }
+        return Ok(vec![own]);
+    }
+    cities.sort_by(|a, b| {
+        haversine_km(place.lng, place.lat, a.lng, a.lat)
+            .partial_cmp(&haversine_km(place.lng, place.lat, b.lng, b.lat))
+            .unwrap()
+    });
+    cities.truncate(8);
+    Ok(cities)
 }
 
 // ── 命令：路线 ─────────────────────────────────────────────

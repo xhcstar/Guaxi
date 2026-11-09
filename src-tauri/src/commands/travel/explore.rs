@@ -9,8 +9,8 @@ use std::collections::HashSet;
 
 use super::providers::{coord, MapProvider};
 use super::{
-    amap, amap_key, haversine_km, is_infra_poi, osm, poi_matches_avoid, resolve_place, truncate,
-    weather, Place, PlaceRef, Poi, WeatherDay,
+    amap, amap_key, haversine_km, is_infra_poi, osm, poi_matches_avoid, regions, resolve_place,
+    truncate, weather, Place, PlaceRef, Poi, WeatherDay,
 };
 
 const DEFAULT_LIMIT_PER_CATEGORY: usize = 12;
@@ -201,6 +201,10 @@ pub struct ExploreResult {
     pub origin: Place,
     pub destination: Place,
     pub bases: Vec<ExploreBase>,
+    /// 省级目的地还没选基地时，按省市区划给出的保底落地城市（省会优先）。
+    /// 用户不懂陌生的省，先把「乌鲁木齐市」这类选项摆出来，而不是甩一个空输入框。
+    #[serde(default)]
+    pub base_candidates: Vec<ExploreBase>,
     pub candidates: Vec<ExploreCandidate>,
     pub hotels: Vec<Poi>,
     pub weather: Vec<WeatherDay>,
@@ -213,6 +217,12 @@ pub struct ExploreResult {
 fn scope_of(place: &Place) -> &'static str {
     let name = place.name.as_str();
     let adcode = place.adcode.trim();
+    // 直辖市的 adcode 也以 0000 结尾，但它们本身就是城市级目的地（「去北京」不需要
+    // 先挑基地城市），必须先按名字判定再落到 adcode。
+    const MUNICIPALITIES: [&str; 4] = ["北京市", "上海市", "天津市", "重庆市"];
+    if MUNICIPALITIES.iter().any(|item| name.starts_with(item)) {
+        return "city";
+    }
     if name.contains('省') || name.contains("自治区") || (adcode.len() == 6 && adcode.ends_with("0000")) {
         return "province";
     }
@@ -335,8 +345,12 @@ fn filter_candidates(
     dedupe_candidates(keep)
 }
 
+/// 单个基地的类别扫描半径。城市级文本检索不用它，只有文本检索失败时按坐标兜底。
+const BASE_RADIUS_M: f64 = 60_000.0;
+
 async fn sweep_amap(key: &str, base: &Place, origin: &Place, request: &ExploreRequest) -> (Vec<ExploreCandidate>, Vec<Poi>, Vec<String>) {
-    // 优先用城市名而不是区县 adcode：景点通常落在某个区，按区检索会把同城其他区漏掉。
+    // 城市名必须收敛到城市级：高德 `place/text` 的 `city` 参数不认「省+市+区」整串
+    // 路径（会静默返回 0 条），所以先用解析出的城市名，退而用 adcode。
     let city = if !base.city.trim().is_empty() {
         base.city.clone()
     } else if !base.adcode.trim().is_empty() {
@@ -364,16 +378,26 @@ async fn sweep_amap(key: &str, base: &Place, origin: &Place, request: &ExploreRe
                 continue;
             }
         }
-        match amap::place_text_typed(key, category.keywords, &city, category.types, true).await {
-            Ok(items) => {
-                let mut bucket: Vec<ExploreCandidate> = items
-                    .into_iter()
-                    .map(|poi| candidate_from(poi, category, base, origin, false))
-                    .collect();
-                sort_by_quality(&mut bucket);
-                candidates.extend(bucket.into_iter().take(limit));
-            }
-            Err(error) => {
+        let (mut items, text_error) =
+            match amap::place_text_typed(key, category.keywords, &city, category.types, true).await {
+                Ok(items) => (items, None),
+                Err(error) => (Vec::new(), Some(error)),
+            };
+        // 城市级检索空手而归时按基地坐标兜底：文本检索依赖城市名，坐标检索不受影响。
+        if items.is_empty() {
+            items = amap::place_around(
+                key,
+                base.lng,
+                base.lat,
+                BASE_RADIUS_M,
+                category.types,
+                category.keywords,
+            )
+            .await
+            .unwrap_or_default();
+        }
+        if items.is_empty() {
+            if let Some(error) = text_error {
                 failures += 1;
                 if failures == 1 {
                     notes.push(format!(
@@ -383,33 +407,52 @@ async fn sweep_amap(key: &str, base: &Place, origin: &Place, request: &ExploreRe
                     ));
                 }
             }
+            continue;
         }
+        let mut bucket: Vec<ExploreCandidate> = items
+            .into_iter()
+            .map(|poi| candidate_from(poi, category, base, origin, false))
+            .collect();
+        sort_by_quality(&mut bucket);
+        candidates.extend(bucket.into_iter().take(limit));
     }
 
-    if let Ok(items) = amap::place_text_typed(key, "", &city, HOTEL_TYPES, true).await {
-        hotels.extend(items);
+    let mut stays =
+        amap::place_text_typed(key, "", &city, HOTEL_TYPES, true)
+            .await
+            .unwrap_or_default();
+    if stays.is_empty() {
+        stays = amap::place_around(key, base.lng, base.lat, BASE_RADIUS_M, HOTEL_TYPES, "").await
+            .unwrap_or_default();
     }
+    hotels.extend(stays);
 
     for must in &request.must_visit {
         let keyword = must.trim();
         if keyword.is_empty() {
             continue;
         }
-        if let Ok(items) = amap::place_text_typed(key, keyword, &city, "", true).await {
-            let marker = CategoryDef {
-                key: "must",
-                label: "必去",
-                types: "",
-                keywords: "",
-                kind: "sight",
-            };
-            let bucket: Vec<ExploreCandidate> = items
-                .into_iter()
-                .take(3)
-                .map(|poi| candidate_from(poi, &marker, base, origin, true))
-                .collect();
-            candidates.extend(bucket);
+        let mut items = amap::place_text_typed(key, keyword, &city, "", true)
+            .await
+            .unwrap_or_default();
+        if items.is_empty() {
+            items = amap::place_around(key, base.lng, base.lat, BASE_RADIUS_M, "", keyword)
+                .await
+                .unwrap_or_default();
         }
+        let marker = CategoryDef {
+            key: "must",
+            label: "必去",
+            types: "",
+            keywords: "",
+            kind: "sight",
+        };
+        let bucket: Vec<ExploreCandidate> = items
+            .into_iter()
+            .take(3)
+            .map(|poi| candidate_from(poi, &marker, base, origin, true))
+            .collect();
+        candidates.extend(bucket);
     }
 
     (candidates, hotels, notes)
@@ -538,6 +581,51 @@ fn dedupe_hotels(mut items: Vec<Poi>) -> Vec<Poi> {
     items
 }
 
+/// 省级目的地还没定基地时，给出可点的保底城市。
+///
+/// 用户往往只知道「想去新疆」，不知道新疆有哪些城市值得落脚。这里按行政区划把
+/// 地级市按离省中心由近到远排好，省会自然排在最前；直辖市没有上级城市，直接返回自身。
+/// 高德可用时实时取区划，否则退回内嵌静态表（OSM 链路没有区划数据）。
+async fn provincial_base_candidates(
+    key: &str,
+    destination: &Place,
+    origin: &Place,
+    use_amap: bool,
+) -> Vec<ExploreBase> {
+    let mut places = if use_amap {
+        amap::districts(key, &destination.name).await.unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    if places.is_empty() {
+        places = regions::province_cities(&destination.name);
+    }
+    if places.is_empty() {
+        return Vec::new();
+    }
+    let mut out: Vec<ExploreBase> = places
+        .into_iter()
+        .filter(|place| haversine_km(origin.lng, origin.lat, place.lng, place.lat) > 0.5)
+        .map(|place| ExploreBase {
+            id: place.adcode.clone(),
+            name: place.name.clone(),
+            city: place.city.clone(),
+            adcode: place.adcode.clone(),
+            lng: place.lng,
+            lat: place.lat,
+            // 这里表达“离省会多远”，用户关心的是落脚点在省内哪个位置，而不是离家多远。
+            distance_km: (haversine_km(destination.lng, destination.lat, place.lng, place.lat)
+                * 10.0)
+                .round()
+                / 10.0,
+        })
+        .collect();
+    // 省中心（高德给的就是省会坐标）最近的城市排最前，于是省会自然出现在第一个。
+    out.sort_by(|a, b| a.distance_km.partial_cmp(&b.distance_km).unwrap());
+    out.truncate(8);
+    out
+}
+
 async fn collect_weather(key: &str, place: &Place) -> Vec<WeatherDay> {
     let mut from_amap = Vec::new();
     if !key.trim().is_empty() && !place.adcode.trim().is_empty() {
@@ -577,12 +665,21 @@ pub async fn explore(
     let scope = scope_of(&destination);
     let mut notes = Vec::new();
     let mut bases = Vec::new();
+    let mut base_candidates = Vec::new();
     let base_places: Vec<Place> = if scope == "province" {
         if request.bases.is_empty() {
-            notes.push(
-                "这是一个省级目的地。先添加 2–4 个基地城市，再按基地扫描候选，避免整天在路上。"
-                    .to_string(),
-            );
+            base_candidates = provincial_base_candidates(&key, &destination, &origin, use_amap).await;
+            if base_candidates.is_empty() {
+                notes.push(
+                    "这是一个省级目的地。先添加 2–4 个基地城市，再按基地扫描候选，避免整天在路上。"
+                        .to_string(),
+                );
+            } else {
+                notes.push(
+                    "这是一个省级目的地：先从上面前三到四个基地城市里挑落脚点（已按离省会由近到远排序），再按基地检索候选。"
+                        .to_string(),
+                );
+            }
             Vec::new()
         } else {
             let mut resolved = Vec::new();
@@ -658,6 +755,7 @@ pub async fn explore(
         origin,
         destination,
         bases,
+        base_candidates,
         candidates,
         hotels,
         weather: weather_days,

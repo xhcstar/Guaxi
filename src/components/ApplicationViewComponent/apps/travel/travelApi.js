@@ -4,6 +4,7 @@
 
 import { invoke } from '@tauri-apps/api/core'
 import { createDemoFacts, createDemoPlan, DEMO_DESTINATION, DEMO_LIBRARY, DEMO_ORIGIN } from './travelData.js'
+import { fallbackCities, provinceOf } from './travelRegions.js'
 import { addDays, enumerateDates, nextSaturday, seasonFor, uid } from './travelUtils.js'
 
 export const isTauriRuntime = () =>
@@ -256,10 +257,19 @@ function mockExplore(args) {
       origin: facts.origin,
       destination,
       bases: [],
+      baseCandidates: fallbackCities(provinceOf(destination.name), 8).map((city, index) => ({
+        id: city.adcode || `demo-base-${index}`,
+        name: city.name,
+        city: city.name,
+        adcode: city.adcode || '',
+        lng: city.lng,
+        lat: city.lat,
+        distanceKm: 0,
+      })),
       candidates: [],
       hotels: [],
       weather: facts.weather,
-      notes: ['浏览器预览：省级目的地需要先添加基地城市，再按基地扫描候选。'],
+      notes: ['浏览器预览：省级目的地先选落脚城市，再按基地扫描候选。'],
       collectedAt: new Date().toISOString(),
       total: 0,
       truncated: false,
@@ -312,6 +322,7 @@ function mockExplore(args) {
     origin: facts.origin,
     destination,
     bases: baseList,
+    baseCandidates: [],
     candidates,
     hotels: (facts.hotels || []).map((poi) => ({ ...poi })),
     weather: facts.weather,
@@ -470,6 +481,22 @@ export const api = {
       return mockExplore({ request })
     }
     return invoke('travel_explore', { request })
+  },
+
+  async suggestBases(destination) {
+    if (!isTauriRuntime()) {
+      await delay(160)
+      const name = destination?.name || destination?.city || ''
+      const province = provinceOf(name)
+      return fallbackCities(province, 8).map((city) => ({
+        ...city,
+        id: `region-${city.adcode}`,
+        address: `${province?.name || ''}${city.name}`,
+        city: city.name,
+        source: 'region',
+      }))
+    }
+    return invoke('travel_suggest_bases', { destination })
   },
 
   async buildRoutes({ transport, days, provider, alternatives = true }) {

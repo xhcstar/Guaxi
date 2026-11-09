@@ -82,6 +82,8 @@ const state = reactive({
     data: null,
     selectedIds: [],
     form: null,
+    // 用户手动加/删过基地后，省级目的地就不再自动补省会。
+    basesTouched: false,
   },
   weekend: {
     seriesId: '',
@@ -237,7 +239,7 @@ export function useTravelStore() {
     state.wizard = applyPreferencesToForm(draft, state.preferences)
     state.defaultOrigin = state.wizard.origin
     state.view = 'wizard'
-    state.explore = { loading: false, error: '', data: null, selectedIds: [], form: null }
+    state.explore = { loading: false, error: '', data: null, selectedIds: [], form: null, basesTouched: false }
     state.error = ''
     state.warning = ''
     state.stage = { key: '', label: '', detail: '', percent: 0 }
@@ -464,8 +466,54 @@ export function useTravelStore() {
       const context = buildContext({ form, weather: data.weather, dates })
       const enriched = enrichCandidates(data, context)
       state.explore.data = enriched
-      state.explore.selectedIds = [...(enriched.selectedIds || [])]
+      // 一进来就按天数挑好一批：用户不勾也能直接点「用这些地点开始编排」，
+      // 挑不挑是把主动权交还给用户，而不是拿一屏空候选逼他自己从零开始。
+      const picked =
+        enriched.selectedIds?.length || !enriched.candidates?.length
+          ? enriched.selectedIds || []
+          : autoPickCandidates(enriched.candidates, {
+              form,
+              dayCount: Math.max(1, dates.length),
+            })
+      state.explore.selectedIds = [...picked]
       state.wizard = form
+      // 省级目的地还没选基地：软件先替用户把省会选上，而不是让他对着空输入框。
+      // 用户一旦手动加/删过基地就不再自动补，否则“删掉最后一个”会被立刻加回来。
+      if (
+        enriched.scope === 'province' &&
+        !(enriched.bases || []).length &&
+        !state.explore.basesTouched
+      ) {
+        const seed = enriched.baseCandidates?.[0]
+        if (seed?.name) {
+          form.bases = [{ ...placeRef(seed), city: seed.city || seed.name, address: seed.address || '' }]
+          state.wizard = form
+          const reseeded = await api.explore(toExploreRequest(form))
+          if (token !== state.generationToken) return false
+          const refined = enrichCandidates(
+            reseeded,
+            buildContext({ form, weather: reseeded.weather, dates }),
+          )
+          // 后端已带回 baseCandidates，就不再补发请求。
+          state.explore.data = refined
+          state.explore.form = JSON.parse(JSON.stringify(form))
+          state.explore.selectedIds = refined.candidates?.length
+            ? autoPickCandidates(refined.candidates, {
+                form,
+                dayCount: Math.max(1, dates.length),
+              })
+            : []
+          if (!refined.candidates?.length) {
+            showToast(`已把${seed.name}设为落脚城市，但这个范围内没扫到候选，可直接编排`, 'info', 4200)
+          }
+          return true
+        }
+        loadBaseCandidates(form).then((items) => {
+          if (items.length && state.explore.data) {
+            state.explore.data = { ...state.explore.data, baseCandidates: items }
+          }
+        })
+      }
       return true
     } catch (error) {
       if (token !== state.generationToken) return false
@@ -479,6 +527,7 @@ export function useTravelStore() {
         weather: [],
         notes: [],
         bases: [],
+        baseCandidates: [],
       }
       showToast(`候选检索失败：${state.explore.error}`, 'error')
       return false
@@ -514,6 +563,7 @@ export function useTravelStore() {
   async function addExploreBase(place) {
     if (!place?.name) return
     if (!state.wizard) return
+    state.explore.basesTouched = true
     const list = state.wizard.bases || (state.wizard.bases = [])
     const same = list.some(
       (item) =>
@@ -534,6 +584,7 @@ export function useTravelStore() {
 
   async function removeExploreBase(index) {
     if (!state.wizard?.bases) return
+    state.explore.basesTouched = true
     state.wizard.bases.splice(index, 1)
     await openExplore(state.wizard)
   }
@@ -543,10 +594,37 @@ export function useTravelStore() {
     await openExplore(state.wizard)
   }
 
+  /**
+   * 省级目的地的采集中心要落在基地城市上，而不是全省质心：全省质心可能离用户选
+   * 的喀什上千公里，采集回来的候选会全部违反半径约束。没有基地时退回原目的地。
+   */
+  function withBaseCenter(form) {
+    const base = (form?.bases || []).find((item) => item?.name && Number(item.lng) && Number(item.lat))
+    if (!base) return form
+    return {
+      ...form,
+      destination: {
+        ...form.destination,
+        name: base.name,
+        address: base.address || form.destination?.address || '',
+        city: base.city || base.name,
+        adcode: base.adcode || form.destination?.adcode || '',
+        cityCode: base.cityCode || '',
+        lng: Number(base.lng) || 0,
+        lat: Number(base.lat) || 0,
+      },
+    }
+  }
+
   async function submitExplore() {
     const data = state.explore.data
     const form = state.explore.form || state.wizard
     if (!data || !form) return
+    if (!data.candidates?.length) {
+      // 没有候选可挑时不把用户挡在门口：按基地/目的地直接采集事实，仍走完整编排。
+      await generateTrip(withBaseCenter(form))
+      return
+    }
     if (!state.explore.selectedIds.length) {
       showToast('先勾选想去的地方，或点「帮我挑」', 'info')
       return
@@ -557,7 +635,28 @@ export function useTravelStore() {
 
   async function skipExplore() {
     if (!state.wizard) return
-    await generateTrip(state.wizard)
+    await generateTrip(withBaseCenter(state.wizard))
+  }
+
+  /** 扫描失败/一只候选都没扫到时，仍要保证能出计划：按基地/目的地直接采集事实再编排。 */
+  async function exploreFallbackGenerate() {
+    if (!state.wizard) return
+    await generateTrip(withBaseCenter(state.wizard))
+  }
+
+  /** 省级目的地：拿到可点的保底城市（省会优先），用户点一下就能当基地。 */
+  async function loadBaseCandidates(form) {
+    if (!form?.destination?.name) return []
+    try {
+      const items = await api.suggestBases({
+        ...placeRef(form.destination),
+        city: form.destination.city || form.destination.name,
+      })
+      return Array.isArray(items) ? items : []
+    } catch (error) {
+      console.warn('[travel] 保底城市建议失败：', error?.message || error)
+      return []
+    }
   }
 
   function backToWizard() {
@@ -2229,6 +2328,8 @@ ${weather || '（暂无）'}
     refreshExplore,
     submitExplore,
     skipExplore,
+    exploreFallbackGenerate,
+    loadBaseCandidates,
     backToWizard,
     generateTrip,
     generateWeekend,
