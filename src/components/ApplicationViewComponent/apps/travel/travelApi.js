@@ -221,6 +221,110 @@ function mockCollectFacts(args) {
   return facts
 }
 
+function classifyDemoPoi(poi) {
+  if (poi.kind === 'food') return 'food'
+  const haystack = `${poi.name || ''} ${poi.category || ''} ${(poi.tags || []).join(' ')}`
+  const rules = [
+    [/夜市/, 'night'],
+    [/市场|集市|菜场/, 'market'],
+    [/博物馆|美术馆|展览|纪念馆/, 'museum'],
+    [/剧院|剧场|演出|音乐厅/, 'show'],
+    [/温泉/, 'hotspring'],
+    [/乐园|动物园|海洋|水族|亲子/, 'family'],
+    [/寺|庙|道观/, 'temple'],
+    [/遗址|古塔|塔|桥|运河|故居|古城/, 'heritage'],
+    [/街|商场|商圈|步行/, 'street'],
+    [/湿地|溪|湖|山|古道|公园|茶园|村|烟树|岛/, 'nature'],
+  ]
+  for (const [pattern, key] of rules) {
+    if (pattern.test(haystack)) return key
+  }
+  return 'landmark'
+}
+
+function mockExplore(args) {
+  const request = args?.request || {}
+  const facts = mockCollectFacts({ request })
+  const destination = facts.destination
+  const province = /省|自治区/.test(String(destination.name || ''))
+  const bases = (request.bases || []).filter((item) => item?.name)
+  if (province && !bases.length) {
+    return {
+      scope: 'province',
+      source: 'osm',
+      coordSystem: 'gcj02',
+      origin: facts.origin,
+      destination,
+      bases: [],
+      candidates: [],
+      hotels: [],
+      weather: facts.weather,
+      notes: ['浏览器预览：省级目的地需要先添加基地城市，再按基地扫描候选。'],
+      collectedAt: new Date().toISOString(),
+      total: 0,
+      truncated: false,
+    }
+  }
+  const baseList = bases.length
+    ? bases.map((item, index) => ({
+        id: item.adcode || `demo-base-${index}`,
+        name: item.name,
+        city: item.city || item.name,
+        adcode: item.adcode || '',
+        lng: Number(item.lng) || destination.lng,
+        lat: Number(item.lat) || destination.lat,
+        distanceKm: 0,
+      }))
+    : [
+        {
+          id: destination.adcode || 'demo-base',
+          name: destination.name,
+          city: destination.city,
+          adcode: destination.adcode || '',
+          lng: destination.lng,
+          lat: destination.lat,
+          distanceKm: Math.round(
+            haversineKm(facts.origin, destination) * 10,
+          ) / 10,
+        },
+      ]
+  const base = baseList[0]
+  const candidates = [...(facts.attractions || []), ...(facts.food || [])]
+    .map((poi, index) => {
+      const categoryKey = classifyDemoPoi(poi)
+      const distanceKm = Math.round(haversineKm(base, poi) * 10) / 10
+      return {
+        ...poi,
+        categoryKey,
+        categoryLabel: '',
+        baseId: base.id,
+        baseName: base.name,
+        distanceBaseKm: distanceKm,
+        distanceOriginKm: Math.round(haversineKm(facts.origin, poi) * 10) / 10,
+        must: index === 0 && (request.mustVisit || []).length > 0,
+      }
+    })
+    .filter((poi) => poi.lng && poi.lat)
+  return {
+    scope: province ? 'province' : /市/.test(String(destination.name || '')) ? 'city' : 'poi',
+    source: 'osm',
+    coordSystem: 'gcj02',
+    origin: facts.origin,
+    destination,
+    bases: baseList,
+    candidates,
+    hotels: (facts.hotels || []).map((poi) => ({ ...poi })),
+    weather: facts.weather,
+    notes: [
+      '浏览器预览：候选为杭州示例地点，接入桌面端后会替换为高德/OSM 的真实检索结果。',
+      '评分、人均与距离为示例值，用于检查筛选与勾选流程。',
+    ],
+    collectedAt: new Date().toISOString(),
+    total: candidates.length,
+    truncated: false,
+  }
+}
+
 function savedPlans() {
   const plans = readLocalPlans()
   if (plans.length) return plans
@@ -358,6 +462,14 @@ export const api = {
       return mockCollectFacts({ request })
     }
     return invoke('travel_collect_facts', { request })
+  },
+
+  async explore(request) {
+    if (!isTauriRuntime()) {
+      await delay(620)
+      return mockExplore({ request })
+    }
+    return invoke('travel_explore', { request })
   },
 
   async buildRoutes({ transport, days, provider, alternatives = true }) {

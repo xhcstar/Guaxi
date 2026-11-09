@@ -5,6 +5,12 @@ import { computed, reactive } from 'vue'
 import { api, createLocalDraft, createWeekendDraft } from './travelApi.js'
 import { createDemoPlan } from './travelData.js'
 import { homeGuardKm, orderSights, pickNearAnchor, tooCloseToHome } from './travelEngine.js'
+import {
+  autoPickCandidates,
+  buildContext,
+  buildExploreFacts,
+  enrichCandidates,
+} from './travelExplore.js'
 import { assemblePlan, computeBudget, defaultPlanTitle } from './travelPlan.js'
 import { formatProblems, validatePlan } from './travelValidate.js'
 import {
@@ -70,6 +76,13 @@ const state = reactive({
   preferences: mergePreferences({}),
   preferOsm: false,
   wizard: null,
+  explore: {
+    loading: false,
+    error: '',
+    data: null,
+    selectedIds: [],
+    form: null,
+  },
   weekend: {
     seriesId: '',
     plans: [],
@@ -224,6 +237,7 @@ export function useTravelStore() {
     state.wizard = applyPreferencesToForm(draft, state.preferences)
     state.defaultOrigin = state.wizard.origin
     state.view = 'wizard'
+    state.explore = { loading: false, error: '', data: null, selectedIds: [], form: null }
     state.error = ''
     state.warning = ''
     state.stage = { key: '', label: '', detail: '', percent: 0 }
@@ -401,6 +415,153 @@ export function useTravelStore() {
       source: state.preferOsm ? 'osm' : form.source || 'auto',
       mapProvider: form.mapProvider || state.preferences.mapProvider || 'auto',
     }
+  }
+
+  function placeRef(place) {
+    return {
+      name: place?.name || '',
+      address: place?.address || '',
+      city: place?.city || '',
+      adcode: place?.adcode || '',
+      cityCode: place?.cityCode || '',
+      lng: Number(place?.lng) || 0,
+      lat: Number(place?.lat) || 0,
+    }
+  }
+
+  function toExploreRequest(form) {
+    return {
+      ...toRequest(form),
+      bases: (form.bases || []).filter((item) => item?.name).map(placeRef),
+    }
+  }
+
+  function exploreDayCount(form) {
+    return Math.max(1, enumerateDates(form.startDate, form.endDate).length)
+  }
+
+  // 候选池是“先看再编”：只检索、不调用模型，用户可以反复筛选，命中缓存的二次扫描几乎零请求。
+  async function openExplore(form) {
+    const error = validationError(form)
+    if (error) {
+      showToast(error, 'error')
+      return false
+    }
+    if (form.mode === 'weekend') return generateWeekend(form)
+    const token = ++state.generationToken
+    state.explore.loading = true
+    state.explore.error = ''
+    state.explore.data = null
+    state.explore.selectedIds = []
+    state.explore.form = JSON.parse(JSON.stringify(form))
+    state.error = ''
+    state.warning = ''
+    state.view = 'explore'
+    try {
+      const data = await api.explore(toExploreRequest(form))
+      if (token !== state.generationToken) return false
+      const dates = enumerateDates(form.startDate, form.endDate)
+      const context = buildContext({ form, weather: data.weather, dates })
+      const enriched = enrichCandidates(data, context)
+      state.explore.data = enriched
+      state.explore.selectedIds = [...(enriched.selectedIds || [])]
+      state.wizard = form
+      return true
+    } catch (error) {
+      if (token !== state.generationToken) return false
+      state.explore.error = friendlyError(error)
+      state.explore.data = {
+        scope: 'poi',
+        source: 'osm',
+        candidates: [],
+        groups: [],
+        hotels: [],
+        weather: [],
+        notes: [],
+        bases: [],
+      }
+      showToast(`候选检索失败：${state.explore.error}`, 'error')
+      return false
+    } finally {
+      if (token === state.generationToken) state.explore.loading = false
+    }
+  }
+
+  function toggleExploreCandidate(id) {
+    if (!id) return
+    const set = new Set(state.explore.selectedIds)
+    if (set.has(id)) set.delete(id)
+    else set.add(id)
+    state.explore.selectedIds = [...set]
+  }
+
+  function pickExploreCandidates() {
+    const data = state.explore.data
+    const form = state.explore.form || state.wizard
+    if (!data || !form) return
+    const ids = autoPickCandidates(data.candidates || [], {
+      form,
+      dayCount: exploreDayCount(form),
+    })
+    state.explore.selectedIds = ids
+    showToast(`已按 ${exploreDayCount(form)} 天节奏挑好 ${ids.length} 个地点`, 'success')
+  }
+
+  function clearExploreSelection() {
+    state.explore.selectedIds = []
+  }
+
+  async function addExploreBase(place) {
+    if (!place?.name) return
+    if (!state.wizard) return
+    const list = state.wizard.bases || (state.wizard.bases = [])
+    const same = list.some(
+      (item) =>
+        (place.adcode && item.adcode === place.adcode) ||
+        (item.name && item.name === place.name),
+    )
+    if (same) {
+      showToast('这个基地已经在列表里了', 'info')
+      return
+    }
+    if (list.length >= 4) {
+      showToast('最多先加 4 个基地城市，避免一次扫描太多', 'info')
+      return
+    }
+    list.push({ ...place })
+    await openExplore(state.wizard)
+  }
+
+  async function removeExploreBase(index) {
+    if (!state.wizard?.bases) return
+    state.wizard.bases.splice(index, 1)
+    await openExplore(state.wizard)
+  }
+
+  async function refreshExplore() {
+    if (!state.wizard) return
+    await openExplore(state.wizard)
+  }
+
+  async function submitExplore() {
+    const data = state.explore.data
+    const form = state.explore.form || state.wizard
+    if (!data || !form) return
+    if (!state.explore.selectedIds.length) {
+      showToast('先勾选想去的地方，或点「帮我挑」', 'info')
+      return
+    }
+    const facts = buildExploreFacts(data, state.explore.selectedIds, form)
+    await generateTrip(form, { facts })
+  }
+
+  async function skipExplore() {
+    if (!state.wizard) return
+    await generateTrip(state.wizard)
+  }
+
+  function backToWizard() {
+    if (state.wizard) state.view = 'wizard'
   }
 
   function poiMap(facts) {
@@ -800,7 +961,7 @@ export function useTravelStore() {
     }
   }
 
-  async function generateTrip(form) {
+  async function generateTrip(form, options = {}) {
     const error = validationError(form)
     if (error) {
       showToast(error, 'error')
@@ -810,11 +971,14 @@ export function useTravelStore() {
     state.busy = true
     state.error = ''
     state.warning = ''
-    state.stage = { key: 'collect', label: '正在解析地点与检索周边…', detail: '', percent: 4 }
+    state.explore.loading = false
+    state.stage = options.facts
+      ? { key: 'collect', label: '正在整理你挑选的地点…', detail: '', percent: 10 }
+      : { key: 'collect', label: '正在解析地点与检索周边…', detail: '', percent: 4 }
     try {
       const request = toRequest(form)
       rememberDefaults(form)
-      const facts = await api.collectFacts(request)
+      const facts = options.facts || (await api.collectFacts(request))
       if (token !== state.generationToken) return null
       // 用后端解析后的坐标回填出发点，避免下一次又拿着 0 坐标按名字乱查城市。
       if (facts.origin?.lng && facts.origin?.lat) {
@@ -881,7 +1045,15 @@ export function useTravelStore() {
       })
       const constraints = {
         center: facts.destination,
-        radiusKm: Number(form.radiusKm) || 20,
+        radiusKm: options.facts
+          ? Math.max(
+              Number(form.radiusKm) || 20,
+              [...(facts.attractions || []), ...(facts.food || [])].reduce((max, poi) => {
+                const km = haversineKm(facts.destination, poi)
+                return Number.isFinite(km) ? Math.max(max, km) : max
+              }, 0) + 3,
+            )
+          : Number(form.radiusKm) || 20,
         expectedDates: enumerateDates(form.startDate, form.endDate),
       }
       try {
@@ -1499,9 +1671,10 @@ ${weather || '（暂无）'}
 
   // 只是放弃这次结果：在途请求仍在后端跑，token 已变，回来时会被丢弃。
   function cancelGeneration() {
-    if (!state.busy) return
+    if (!state.busy && !state.explore.loading) return
     state.generationToken += 1
     state.busy = false
+    state.explore.loading = false
     state.weekend.loading = false
     state.weekend.refiningId = ''
     state.stage = { key: '', label: '', detail: '', percent: 0 }
@@ -2047,6 +2220,16 @@ ${weather || '（暂无）'}
     editWizard,
     locateOrigin,
     searchPlaces,
+    openExplore,
+    toggleExploreCandidate,
+    pickExploreCandidates,
+    clearExploreSelection,
+    addExploreBase,
+    removeExploreBase,
+    refreshExplore,
+    submitExplore,
+    skipExplore,
+    backToWizard,
     generateTrip,
     generateWeekend,
     cancelGeneration,

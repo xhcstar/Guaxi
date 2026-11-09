@@ -317,6 +317,34 @@ out center tags 90;"#
     Ok((sights, food, hotels))
 }
 
+/// 候选池的广度检索：一次 Overpass 把景点、古迹、餐饮、市场、剧场、商场和住宿都拿回来，
+/// 分类在 `explore` 模块按标签做。半径收在 30 km 内，避免省级查询超时。
+pub async fn explore_pois(lat: f64, lng: f64, radius_m: f64) -> Result<Vec<Poi>, String> {
+    let radius = radius_m.clamp(3000.0, 30_000.0) as i64;
+    let query = format!(
+        r#"[out:json][timeout:45];
+(
+  nwr(around:{radius},{lat:.6},{lng:.6})["tourism"~"attraction|museum|gallery|viewpoint|zoo|theme_park|aquarium|artwork|hotel|guest_house|hostel"];
+  nwr(around:{radius},{lat:.6},{lng:.6})["historic"~"monument|memorial|castle|ruins|archaeological_site|fort|temple|manor"];
+  nwr(around:{radius},{lat:.6},{lng:.6})["amenity"~"restaurant|cafe|marketplace|theatre|cinema|planetarium|food_court|place_of_worship"];
+  nwr(around:{radius},{lat:.6},{lng:.6})["leisure"~"park|nature_reserve|garden|water_park"];
+  nwr(around:{radius},{lat:.6},{lng:.6})["shop"~"mall|department_store"];
+  nwr(around:{radius},{lat:.6},{lng:.6})["natural"~"peak|waterfall|cave_entrance|hot_spring"];
+);
+out center tags 300;"#
+    );
+    let value = cached_post_json(OVERPASS, vec![("data", query)], POI_TTL).await?;
+    let elements = value
+        .get("elements")
+        .and_then(|item| item.as_array())
+        .cloned()
+        .unwrap_or_default();
+    Ok(elements
+        .iter()
+        .filter_map(|element| poi_from_element(element, (lng, lat)))
+        .collect())
+}
+
 fn decode_polyline(encoded: &str) -> Vec<(f64, f64)> {
     let bytes = encoded.as_bytes();
     let mut index = 0usize;

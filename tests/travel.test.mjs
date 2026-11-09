@@ -21,6 +21,8 @@ const { computeBudget, assemblePlan, buildPacking } = await load(
 const { normalizeOutline, normalizeDay, fallbackOutline, parseModelJson, buildDayPrompt } =
   await load(path.join(travelDir, 'travelPrompt.js'))
 const { buildShareHtml, mapSourceLabel } = await load(path.join(travelDir, 'travelShare.js'))
+const { buildContext, enrichCandidates, scoreCandidate, autoPickCandidates, buildExploreFacts } =
+  await load(path.join(travelDir, 'travelExplore.js'))
 const { platformSearchLinks } = await load(path.join(travelDir, 'travelLinks.js'))
 const {
   mergePreferences,
@@ -57,6 +59,7 @@ test('应用卡片、路由、窗口与命令都已注册', () => {
   assert.match(commandsRs, /pub mod travel;/)
   for (const command of [
     'travel_collect_facts',
+    'travel_explore',
     'travel_build_routes',
     'travel_route_weather',
     'travel_llm_complete',
@@ -215,7 +218,7 @@ test('分享 HTML 转义标题与地点，不执行用户输入', () => {
   assert.ok(!html.includes('<script>alert(1)</script>'))
   assert.ok(!html.includes('<img src=x onerror=alert(1)>'))
   assert.ok(html.includes('&lt;script&gt;alert(1)&lt;/script&gt;'))
-  assert.match(html, /由行迹生成/)
+  assert.match(html, /由 Guaxi生成/)
 })
 
 // ── 个人偏好与多地图 ───────────────────────────────────────
@@ -370,4 +373,144 @@ test('雾、横风与高海拔会写进行前清单和建议', () => {
   assert.match(dayPrompt.prompt, /沿途天气/)
   assert.match(dayPrompt.prompt, /有雾/)
   assert.match(dayPrompt.prompt, /季节：秋季/)
+})
+
+// ── 目的地候选池 ───────────────────────────────────────────
+
+const exploreForm = {
+  startDate: '2026-11-14',
+  endDate: '2026-11-15',
+  transport: 'driving',
+  budgetLevel: 'comfort',
+  adults: 2,
+  children: 0,
+  elders: 0,
+  interests: ['自然风光'],
+  pace: 'balanced',
+}
+
+const exploreCandidate = (overrides = {}) => ({
+  id: 'c1',
+  name: '西湖',
+  kind: 'sight',
+  categoryKey: 'nature',
+  categoryLabel: '',
+  baseName: '杭州',
+  baseId: '330100',
+  lng: 120.13,
+  lat: 30.24,
+  distanceBaseKm: 4,
+  distanceOriginKm: 180,
+  rating: 4.7,
+  cost: 0,
+  tags: ['风景区', '湖'],
+  source: 'amap',
+  must: false,
+  ...overrides,
+})
+
+test('候选池：评分偏向口碑好、离基地近的地点', () => {
+  const context = buildContext({ form: exploreForm })
+  const good = scoreCandidate(
+    exploreCandidate({ id: 'good', rating: 4.9, distanceBaseKm: 2 }),
+    context,
+  )
+  const weak = scoreCandidate(
+    exploreCandidate({ id: 'weak', rating: 3.8, distanceBaseKm: 55, name: '远山' }),
+    context,
+  )
+  assert.ok(Number.isInteger(good.score) && good.score >= 0 && good.score <= 100)
+  assert.ok(good.score > weak.score)
+  assert.match(good.reason, /评分 4\.9/)
+  assert.ok(good.metrics.access > weak.metrics.access)
+})
+
+test('候选池：雨天室内场馆得分高于纯户外', () => {
+  const rainContext = buildContext({
+    form: { ...exploreForm, interests: ['博物馆'] },
+    weather: [{ date: '2026-11-14', dayWeather: '中雨', dayTemp: 16 }],
+    dates: ['2026-11-14', '2026-11-15'],
+  })
+  const museum = scoreCandidate(
+    exploreCandidate({ id: 'museum', categoryKey: 'museum', name: '浙江省博物馆', tags: ['博物馆'] }),
+    rainContext,
+  )
+  const nature = scoreCandidate(
+    exploreCandidate({ id: 'nature', categoryKey: 'nature', name: '九溪烟树', tags: ['溪谷'] }),
+    rainContext,
+  )
+  assert.ok(museum.indoor)
+  assert.ok(!nature.indoor)
+  assert.ok(museum.score > nature.score)
+  assert.match(museum.reason, /室内/)
+})
+
+test('候选池：必去地点置顶并保留推荐理由', () => {
+  const context = buildContext({ form: exploreForm })
+  const must = scoreCandidate(exploreCandidate({ id: 'must', must: true, rating: 3.9 }), context)
+  assert.ok(must.score >= 96)
+  assert.match(must.reason, /必去/)
+})
+
+test('候选池：帮我挑按天数凑量、包含必去且不重复', () => {
+  const context = buildContext({ form: exploreForm })
+  const candidates = enrichCandidates(
+    {
+      candidates: [
+        exploreCandidate({ id: 'must-1', name: '灵隐寺', categoryKey: 'temple', must: true }),
+        exploreCandidate({ id: 'n1', name: '西湖', categoryKey: 'nature' }),
+        exploreCandidate({ id: 'h1', name: '河坊街', categoryKey: 'street' }),
+        exploreCandidate({ id: 'm1', name: '省博', categoryKey: 'museum' }),
+        exploreCandidate({ id: 'k1', name: '九溪', categoryKey: 'hike' }),
+        exploreCandidate({ id: 'l1', name: '雷峰塔', categoryKey: 'heritage' }),
+        exploreCandidate({ id: 'f1', name: '楼外楼', kind: 'food', categoryKey: 'food' }),
+        exploreCandidate({ id: 'f2', name: '知味观', kind: 'food', categoryKey: 'food' }),
+        exploreCandidate({ id: 'f3', name: '绿茶', kind: 'food', categoryKey: 'food' }),
+      ],
+      hotels: [{ id: 'hotel-1', name: '全季', kind: 'hotel' }],
+    },
+    context,
+  )
+  const ids = autoPickCandidates(candidates.candidates, { form: exploreForm, dayCount: 2 })
+  assert.equal(new Set(ids).size, ids.length)
+  assert.ok(ids.includes('must-1'))
+  assert.ok(ids.length >= 3)
+  assert.ok(ids.length <= 2 * 3 + 2 * 2)
+})
+
+test('候选池：事实包只带选中地点，住宿自动附上', () => {
+  const context = buildContext({ form: exploreForm })
+  const result = enrichCandidates(
+    {
+      source: 'amap',
+      coordSystem: 'gcj02',
+      origin: { name: '上海', city: '上海', lng: 121.43, lat: 31.18 },
+      destination: { name: '杭州', city: '杭州', lng: 120.13, lat: 30.24 },
+      candidates: [
+        exploreCandidate({ id: 'a1', name: '西湖', score: 90 }),
+        exploreCandidate({ id: 'a2', name: '灵隐寺', categoryKey: 'temple' }),
+        exploreCandidate({ id: 'f1', name: '楼外楼', kind: 'food', categoryKey: 'food' }),
+      ],
+      hotels: [{ id: 'hotel-1', name: '全季', kind: 'hotel' }],
+      weather: [],
+      notes: ['示例'],
+    },
+    context,
+  )
+  const facts = buildExploreFacts(result, ['a1', 'f1'], exploreForm)
+  assert.deepEqual(facts.attractions.map((poi) => poi.id), ['a1'])
+  assert.deepEqual(facts.food.map((poi) => poi.id), ['f1'])
+  assert.equal(facts.hotels[0].kind, 'hotel')
+  assert.equal(facts.attractions[0].kind, 'sight')
+  assert.ok(!('score' in facts.attractions[0]))
+  assert.match(facts.notes.join(''), /勾选的才会/)
+})
+
+test('候选池：后端命令与扫描模块已接通', () => {
+  assert.match(read('src-tauri/src/main.rs'), /commands::travel::travel_explore/)
+  assert.ok(fs.existsSync(path.join(root, 'src-tauri/src/commands/travel/explore.rs')))
+  assert.match(
+    read('src-tauri/src/commands/travel/explore.rs'),
+    /pub async fn explore\(/,
+  )
 })

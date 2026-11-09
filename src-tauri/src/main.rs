@@ -763,6 +763,7 @@ async fn app_main() {
             commands::travel::travel_ip_location,
             commands::travel::travel_search_places,
             commands::travel::travel_collect_facts,
+            commands::travel::travel_explore,
             commands::travel::travel_build_routes,
             commands::travel::travel_route_weather,
             commands::travel::travel_llm_complete,

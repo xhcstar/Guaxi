@@ -133,6 +133,28 @@
           @cancel="handleCancelWizard"
         />
 
+        <ExploreBoard
+          v-else-if="state.view === 'explore'"
+          :data="state.explore.data"
+          :loading="state.explore.loading"
+          :error="state.explore.error"
+          :selected-ids="state.explore.selectedIds"
+          :form="state.explore.form || state.wizard"
+          :search="store.searchPlaces"
+          :busy="state.busy"
+          :is-mock="api.isMock"
+          :day-count="exploreDayCount"
+          @toggle="store.toggleExploreCandidate"
+          @autopick="store.pickExploreCandidates"
+          @clear="store.clearExploreSelection"
+          @submit="store.submitExplore"
+          @skip="store.skipExplore"
+          @back="store.backToWizard"
+          @add-base="store.addExploreBase"
+          @remove-base="store.removeExploreBase"
+          @refresh="store.refreshExplore"
+        />
+
         <PlanWorkspace
           v-else-if="state.view === 'plan' && state.plan"
           :plan="state.plan"
@@ -243,11 +265,12 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { api } from './travel/travelApi.js'
 import { useTravelStore } from './travel/travelStore.js'
 import { mapProviderLabel } from './travel/travelPreferences.js'
-import { shortDate, todayString } from './travel/travelUtils.js'
+import { shortDate, todayString, enumerateDates } from './travel/travelUtils.js'
 import { buildPlanPosterMap } from './travel/travelShare.js'
 import TravelIcon from './travel/TravelIcon.vue'
 import TravelHome from './travel/TravelHome.vue'
 import TravelWizard from './travel/TravelWizard.vue'
+import ExploreBoard from './travel/ExploreBoard.vue'
 import PlanWorkspace from './travel/PlanWorkspace.vue'
 import WeekendBoard from './travel/WeekendBoard.vue'
 import TravelSettings from './travel/TravelSettings.vue'
@@ -329,10 +352,17 @@ function stopRailResize() {
 
 const viewTitle = computed(() => {
   if (state.view === 'wizard') return state.wizard?.mode === 'weekend' ? '生成周末班次' : '规划新行程'
+  if (state.view === 'explore') return '目的地候选'
   if (state.view === 'plan') return state.plan?.kind === 'weekend' ? '周末计划' : '行程详情'
   if (state.view === 'weekend') return '周末班次表'
   if (state.view === 'settings') return '设置'
   return '计划库'
+})
+
+const exploreDayCount = computed(() => {
+  const form = state.explore.form || state.wizard
+  if (!form?.startDate) return 1
+  return Math.max(1, enumerateDates(form.startDate, form.endDate || form.startDate).length)
 })
 
 // 只有用户确认采纳的计划才进计划库；生成出来的方案先留在草稿里。
@@ -364,7 +394,7 @@ async function handleSubmit(form) {
   if (form.mode === 'weekend') {
     await store.generateWeekend(form)
   } else {
-    await store.generateTrip(form)
+    await store.openExplore(form)
   }
 }
 

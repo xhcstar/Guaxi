@@ -345,18 +345,34 @@ async fn place_around_page(
 }
 
 pub async fn place_text(key: &str, keyword: &str, city: &str) -> Result<Vec<Poi>, String> {
-    let url = build_url(
-        "/v3/place/text",
-        &[
-            ("key", key.to_string()),
-            ("keywords", keyword.to_string()),
-            ("city", city.to_string()),
-            ("citylimit", "false".to_string()),
-            ("offset", "20".to_string()),
-            ("page", "1".to_string()),
-            ("extensions", "all".to_string()),
-        ],
-    )?;
+    place_text_typed(key, keyword, city, "", false).await
+}
+
+/// 候选池按类别检索：`types` 收窄大类，`keywords` 用 `|` 合并同类词；
+/// `city_limit` 保证城市级扫描不会把邻市的同名地点混进来。
+pub async fn place_text_typed(
+    key: &str,
+    keyword: &str,
+    city: &str,
+    types: &str,
+    city_limit: bool,
+) -> Result<Vec<Poi>, String> {
+    let mut params: Vec<(&str, String)> = vec![
+        ("key", key.to_string()),
+        ("keywords", keyword.to_string()),
+        ("city", city.to_string()),
+        (
+            "citylimit",
+            if city_limit { "true" } else { "false" }.to_string(),
+        ),
+        ("offset", "25".to_string()),
+        ("page", "1".to_string()),
+        ("extensions", "all".to_string()),
+    ];
+    if !types.trim().is_empty() {
+        params.push(("types", types.to_string()));
+    }
+    let url = build_url("/v3/place/text", &params)?;
     let value = cached_json(&url, POI_TTL).await?;
     ensure_ok(&value)?;
     let pois = value

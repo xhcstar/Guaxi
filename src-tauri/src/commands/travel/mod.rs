@@ -8,6 +8,7 @@
 
 mod amap;
 mod cache;
+mod explore;
 mod osm;
 mod preferences;
 mod providers;
@@ -790,7 +791,7 @@ pub async fn travel_search_places(keyword: String, city: Option<String>) -> Resu
 
 // ── 命令：事实采集 ─────────────────────────────────────────
 
-async fn resolve_place(input: &PlaceRef, key: &str) -> Result<Place, String> {
+pub(crate) async fn resolve_place(input: &PlaceRef, key: &str) -> Result<Place, String> {
     if input.lng.abs() > 0.0001 && input.lat.abs() > 0.0001 {
         return Ok(Place {
             name: input.name.clone(),
@@ -848,7 +849,7 @@ fn dedupe_pois(items: &mut Vec<Poi>) {
     });
 }
 
-fn poi_matches_avoid(poi: &Poi, avoid: &[String]) -> bool {
+pub(crate) fn poi_matches_avoid(poi: &Poi, avoid: &[String]) -> bool {
     if avoid.is_empty() {
         return false;
     }
@@ -862,7 +863,7 @@ fn poi_matches_avoid(poi: &Poi, avoid: &[String]) -> bool {
 
 /// 公交站、停车场、收费站这类“途经设施”不能当出游目的地/景点，
 /// 但搜索「峪口」时经常会把同名公交站排在前面。
-fn is_infra_poi(poi: &Poi) -> bool {
+pub(crate) fn is_infra_poi(poi: &Poi) -> bool {
     const INFRA: &[&str] = &[
         "公交站",
         "地铁站",
@@ -1499,6 +1500,21 @@ pub async fn travel_collect_facts(request: TravelRequest) -> Result<TravelFacts,
             collect_provider(&request, other, &key).await
         }
     }
+}
+
+// ── 命令：目的地候选池 ─────────────────────────────────────
+
+#[tauri::command]
+pub async fn travel_explore(
+    request: explore::ExploreRequest,
+) -> Result<explore::ExploreResult, String> {
+    let raw = if request.map_provider.trim().is_empty() {
+        request.source.as_str()
+    } else {
+        request.map_provider.as_str()
+    };
+    let provider = providers::normalize(raw);
+    explore::explore(&request, provider).await
 }
 
 // ── 命令：路线 ─────────────────────────────────────────────
