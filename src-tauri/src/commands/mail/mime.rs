@@ -12,7 +12,7 @@ use lettre::Message;
 use mail_parser::{MessageParser, MimeHeaders};
 use once_cell::sync::Lazy;
 use regex::{Captures, Regex};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// 解析后的来信。正文 HTML 已经清洗过。
 pub struct ParsedMessage {
@@ -219,7 +219,7 @@ fn replace_cid_sources(html: &str, images: &HashMap<String, String>) -> String {
     static CID_SRC: Lazy<Regex> =
         Lazy::new(|| Regex::new(r#"(?i)src\s*=\s*"cid:([^"]+)""#).unwrap());
     static CID_URL: Lazy<Regex> =
-        Lazy::new(|| Regex::new(r#"(?i)url\(\s*['"]?cid:([^'")]+)['"]?\s*\)"#).unwrap());
+        Lazy::new(|| Regex::new(r#"(?i)url\(\s*['"]?cid:([^'")\s]+)['"]?\s*\)"#).unwrap());
     let replaced = CID_SRC.replace_all(html, |caps: &Captures| {
         match images.get(&normalize_cid(&caps[1])) {
             Some(data) => format!("src=\"{data}\""),
@@ -234,6 +234,22 @@ fn replace_cid_sources(html: &str, images: &HashMap<String, String>) -> String {
             }
         })
         .into_owned()
+}
+
+/// HTML 里实际以 `cid:` 引用到的全部 Content-ID（已归一化）。
+///
+/// 只有被正文引用的部件才算「正文里的图」；解析出图片却没有被引用的 cid
+/// 部件仍然要留在附件列表里，否则用户就再也看不到这张图了。
+fn cid_references(html: &str) -> HashSet<String> {
+    static CID_SRC: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r#"(?i)src\s*=\s*"cid:([^"]+)""#).unwrap());
+    static CID_URL: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r#"(?i)url\(\s*['"]?cid:([^'")\s]+)['"]?\s*\)"#).unwrap());
+    CID_SRC
+        .captures_iter(html)
+        .chain(CID_URL.captures_iter(html))
+        .map(|caps| normalize_cid(&caps[1]))
+        .collect()
 }
 
 pub fn parse(raw: &[u8], block_remote_images: bool) -> Option<ParsedMessage> {
@@ -271,16 +287,33 @@ pub fn parse(raw: &[u8], block_remote_images: bool) -> Option<ParsedMessage> {
             .unwrap_or_default()
     };
 
+    // 内联图只算一次：既用于把 `cid:` 换成 data URI，也用于判断哪些部件
+    // 已经是正文的一部分、不该再出现在附件列表里。
+    let inline_images = collect_inline_images(&msg);
+    let mut body_cids: HashSet<String> = HashSet::new();
     let html = raw_html.as_deref().map(|html| {
         let quoted = sanitize::mark_quotes(html);
         let sanitized = sanitize::ensure_viewport(&sanitize::sanitize(&quoted, block_remote_images));
         // `cid:` 是邮件协议里的内联图引用，WebView 不认识这个 scheme，必须换成
         // data URI 才能真正显示出来（否则控制台报 ERR_UNKNOWN_URL_SCHEME）。
-        replace_cid_sources(&sanitized, &collect_inline_images(&msg))
+        for cid in cid_references(&sanitized) {
+            if inline_images.contains_key(&cid) {
+                body_cids.insert(cid);
+            }
+        }
+        replace_cid_sources(&sanitized, &inline_images)
     });
 
     let mut attachments: Vec<AttachmentMeta> = Vec::new();
     for (idx, part) in msg.attachments().enumerate() {
+        // 正文里已经显示的图片属于正文，不是附件；附件是对方主动加上去的文件。
+        if part
+            .content_id()
+            .map(|raw| body_cids.contains(&normalize_cid(raw)))
+            .unwrap_or(false)
+        {
+            continue;
+        }
         let filename = part
             .attachment_name()
             .map(|s| s.to_string())
@@ -903,5 +936,57 @@ iVBORw0KGgo=\r\n\
             "内联图应替换为 data URI: {html}"
         );
         assert!(!html.contains("cid:img1@x"));
+        // 正文里已经显示出来的图不该再出现在附件列表里。
+        assert!(parsed.attachments.is_empty(), "内联图不应算附件");
+        assert!(!parsed.has_attachments);
+    }
+
+    #[test]
+    fn parse_keeps_real_attachment_and_unreferenced_cid_part() {
+        let raw = b"From: a@example.com\r\n\
+To: b@example.com\r\n\
+Subject: mixed\r\n\
+MIME-Version: 1.0\r\n\
+Content-Type: multipart/mixed; boundary=\"outer\"\r\n\
+\r\n\
+--outer\r\n\
+Content-Type: multipart/related; boundary=\"rel\"\r\n\
+\r\n\
+--rel\r\n\
+Content-Type: text/html; charset=utf-8\r\n\
+\r\n\
+<html><body><img src=\"cid:shown@x\"></body></html>\r\n\
+--rel\r\n\
+Content-Type: image/png\r\n\
+Content-ID: <shown@x>\r\n\
+Content-Transfer-Encoding: base64\r\n\
+Content-Disposition: inline; filename=\"shown.png\"\r\n\
+\r\n\
+iVBORw0KGgo=\r\n\
+--rel\r\n\
+Content-Type: image/png\r\n\
+Content-ID: <orphan@x>\r\n\
+Content-Transfer-Encoding: base64\r\n\
+Content-Disposition: inline; filename=\"orphan.png\"\r\n\
+\r\n\
+iVBORw0KGgo=\r\n\
+--rel--\r\n\
+--outer\r\n\
+Content-Type: application/pdf\r\n\
+Content-Disposition: attachment; filename=\"report.pdf\"\r\n\
+Content-Transfer-Encoding: base64\r\n\
+\r\n\
+JVBERi0=\r\n\
+--outer--\r\n";
+        let parsed = parse(raw, false).unwrap();
+        let names: Vec<&str> = parsed
+            .attachments
+            .iter()
+            .map(|a| a.filename.as_str())
+            .collect();
+        // 正文里引用的 shown.png 已经显示在正文中；没被引用的 orphan.png
+        // 在正文里看不到，必须留在附件里，否则用户无法取出这张图。
+        assert_eq!(names, vec!["orphan.png", "report.pdf"]);
+        assert!(parsed.has_attachments);
     }
 }

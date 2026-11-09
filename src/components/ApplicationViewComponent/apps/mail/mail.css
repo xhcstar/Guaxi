@@ -1070,6 +1070,9 @@
   --mail-noimg-bg: rgba(255, 255, 255, 0.05);
   --mail-noimg-line: rgba(255, 255, 255, 0.1);
   --mail-noimg-icon: rgba(255, 255, 255, 0.28);
+  /* 浅色单元格在暗色下会被抬到 #2c2d33 左右；表格边框不能沿用纸面边框色
+     （同亮度＝看不见），这里单独给一条确实可见的分隔线。 */
+  --mail-doc-line: #4e5563;
   /* 深色纸面：系统处于深色模式时，正文里残留的原生滚动条也跟着变暗。 */
   color-scheme: dark;
 }
@@ -1240,11 +1243,15 @@
 }
 
 /* 暗色主题下只统一边框颜色，不改变「有没有边框」：邮件里的 #fff / #ccc
-   边框落在深色纸面上会消失，换成主题边框色。浅色主题保留发件人写的颜色。 */
+   边框落在深色纸面上会消失，换成主题边框色。浅色主题保留发件人写的颜色。
+   注意不能用 --mail-border（#2a3038）：浅色单元格在暗色下被抬到 #2c2d33 左右，
+   同亮度的线等于没画——`border="1"` 这类表现属性（Word / 工单模板常用）的表格
+   在暗色里就会「整张表没有框线」。这里用比表面亮一档的 --mail-doc-line。 */
+.mail-doc-dark .mail-body table,
 .mail-doc-dark .mail-body table td,
 .mail-doc-dark .mail-body table th,
 .mail-doc-dark .mail-body table tr {
-  border-color: var(--mail-border);
+  border-color: var(--mail-doc-line);
 }
 
 /* 老式邮件用 align 属性居中表格；把它显式映射成自动外边距，

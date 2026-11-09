@@ -69,8 +69,20 @@ pub const MAIL_SYNC_EVENT: &str = "mail-sync-progress";
 pub const MAIL_NEW_EVENT: &str = "mail-new-messages";
 
 static INITED: OnceLock<()> = OnceLock::new();
+/// 启动时前端会并发调用一批命令（设置、主题、账户、未读…），它们都会走 `ensure_init`。
+/// 建库 / 迁移 / 补表必须串行：两个线程同时跑迁移时，其中一个会拿到 SQLITE_BUSY
+/// 直接把整个命令打回。主题列表就这么被吞过一次——设置页的「主题」整块空白，
+/// 而其它命令看起来都正常。
+static INIT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 fn ensure_init(app: &AppHandle) -> Result<(), String> {
+    if INITED.get().is_some() {
+        return Ok(());
+    }
+    let _guard = INIT_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    // 等锁期间可能已经有别的命令初始化完成。
     if INITED.get().is_some() {
         return Ok(());
     }
@@ -1777,14 +1789,29 @@ pub async fn mail_get_message(
     // 已经被剥掉，重新打开时要按原文重新解析一次才能恢复。只对含 <table> 的
     // 旧缓存触发，避免所有邮件都重新下载一遍。
     let render_version = store::body_render_version(&account_id, &folder, uid).unwrap_or(0);
-    let stale_table_render = render_version < store::RENDER_VERSION
+    let stale_table_render = render_version < store::TABLE_RENDER_VERSION
         && cached_html
             .as_deref()
             .map(|html| html.to_ascii_lowercase().contains("<table"))
             .unwrap_or(false);
+    // 附件的判定也改过：旧缓存会把正文里以 `cid:` 引用的内联图列成附件。
+    // 这类缓存按版本号重新解析一次；重解析后版本号更新，只会发生一次。
+    let stale_inline_attachments = render_version < store::RENDER_VERSION
+        && cached_html.is_some()
+        && serde_json::from_str::<Vec<model::AttachmentMeta>>(&cached_attachments)
+            .map(|list| {
+                list.iter().any(|a| {
+                    a.content_id
+                        .as_deref()
+                        .is_some_and(|cid| !cid.trim().is_empty())
+                        && a.content_type.to_ascii_lowercase().starts_with("image/")
+                })
+            })
+            .unwrap_or(false);
     if fetched
         && !cached_needs_inline
         && !stale_table_render
+        && !stale_inline_attachments
         && (!cached_text.is_empty() || cached_html.is_some())
     {
         detail.html = cached_html.map(|html| {
@@ -1892,7 +1919,9 @@ pub async fn mail_get_message(
             &attachments_json,
         )?;
         summary.message_id = summary.message_id.or(parsed.message_id.clone());
-        summary.has_attachments = summary.has_attachments || parsed.has_attachments;
+        // 这一份是完整报文解析的结果：直接覆盖，而不是只在为真时保留。
+        // 旧库把正文里的内联图记成了附件，`||` 会让回形针永远留在那一行上。
+        summary.has_attachments = parsed.has_attachments;
         // 顺手把引用链补进摘要：老库里的邮件是这套字段上线前入库的，
         // 只要用户打开过一封，它就能凭 References 找回自己的会话，
         // 历史上被主题拆开的几段会话也会在这一刻并回去。

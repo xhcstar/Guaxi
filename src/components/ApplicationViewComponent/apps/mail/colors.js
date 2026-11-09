@@ -407,8 +407,14 @@ function isNeutralNearWhiteGradient(value) {
  * 到了深色纸面上却成了一圈刺眼的亮边（用户看到的「莫名其妙的亮色边框」）。
  * 规则与底色相反：**浅色边框在深色纸面上要压暗**，深色边框要提亮，
  * 彩色边框保留色相、把明度调到与纸面成比例的位置。
+ *
+ * `overLightSurface` 表示这条线在原始设计里压着浅色表面（表格单元格最常见的
+ * `bgcolor="#fff"` / `#fafafa`）。这类表面在暗色下会被抬到纸面上方一档
+ * （约 #2c2d33），边框如果继续按「贴近纸面」压暗，就会比自己的底色还暗——
+ * 整张表的框线看起来就像丢了（用户反馈的「表格又没边框了」）。
+ * 这时按「比该表面亮一档」取色，保证线始终看得见。
  */
-export function mapBorderColor(value, mode = 'dark') {
+export function mapBorderColor(value, mode = 'dark', { overLightSurface = false } = {}) {
   if (mode !== 'dark') return null
   const color = parseCssColor(value)
   if (!color) return null
@@ -422,15 +428,26 @@ export function mapBorderColor(value, mode = 'dark') {
   // 在浅色纸面上很克制，但压在 0.019 的深色纸面上就是一条明晃晃的亮线。
   // 所以只有「本来就该在深底上可见」的深色边框才保留原样。
   if (lum <= paper * 1.6) {
-    // 深色边框：在深色纸面上本来就看不见，抬到纸面上方一点点，保持「有分隔感」。
-    return formatColor(hslToRgb(h, Math.min(s, 0.3), 0.2), color.a)
+    // 深色边框（Word / Outlook 的 `windowtext` 黑边）：在浅色单元格里要提亮到
+    // 明显高于映射后的单元格表面，否则黑线压在深灰底上同样看不见。
+    return overLightSurface
+      ? formatColor(hslToRgb(h, Math.min(s, 0.3), 0.44), Math.max(color.a, 0.9))
+      : formatColor(hslToRgb(h, Math.min(s, 0.3), 0.2), color.a)
+  }
+
+  const closeness = Math.min(1, Math.max(0, (lum - paper) / 0.9))
+  if (overLightSurface) {
+    // 原来越浅的线压得越淡，但上限必须高于单元格映射后的表面亮度。
+    return formatColor(
+      hslToRgb(h, Math.min(s, 0.4), 0.46 - closeness * 0.06),
+      Math.max(color.a, 0.8),
+    )
   }
 
   // 其余一律压成纸面附近的一条细线：
   // - 越接近纯白（#fff / #f1f1f1），在原设计里越「隐形」，这里压得越贴近纸面；
   // - 中间灰（#888a85 / #bbb）在原设计里是一条可见的线，压完要比纸面稍亮一点，
   //   否则整张卡片会失去轮廓。
-  const closeness = Math.min(1, Math.max(0, (lum - paper) / 0.9))
   const level = 0.155 + closeness * 0.03
   return formatColor(hslToRgb(h, Math.min(s, 0.35), level), Math.max(color.a, 0.5))
 }
@@ -581,12 +598,15 @@ export function applyBodyThemeToElements(targets, mode = 'dark') {
     const own = declared(el)
     const originals = own.borders.map((value) => value || '')
     if (!originals.some(Boolean)) continue
+    // 此刻底色已经还原成邮件原值，这里能看到「这条线原本压在什么底上」：
+    // 表格单元格的浅色底会被抬成深色表面，边框就必须按该表面来取色。
+    const overLightSurface = backdropLuminance(el, paperLum) >= 0.45
     const next = originals.map((value, index) => {
       if (!value) return ''
       // 只有真的画了线（style 不是 none）才值得改颜色。
       const styleValue = own.borderStyle[index]
       if (styleValue === 'none' || styleValue === 'hidden') return ''
-      return mapBorderColor(value, mode) || ''
+      return mapBorderColor(value, mode, { overLightSurface }) || ''
     })
     if (!next.some(Boolean)) continue
     el.setAttribute(ORIG.border, serializeBorders(originals))

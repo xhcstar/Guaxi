@@ -413,3 +413,30 @@ test('写信区：引用卡片用同一套映射，序列化前能还原成邮�
   assert.equal(darkText.style.color, '#222222')
   assert.equal(card.style.backgroundColor, 'rgba(127, 127, 127, 0.07)')
 })
+
+// 现象（用户截图）：暗色下工单 / Word 生成的表格整张没有框线。
+// 原因：浅色单元格的底色在暗色下被抬到纸面上方一档（约 #2c2d33），
+// 而边框仍按「贴近纸面」压暗（≈ #2e2e2e）——线比自己的底色还暗，等于没画。
+test('浅色单元格里的边框必须比映射后的单元格表面亮，否则整张表像没有框线', async () => {
+  const { mapBorderColor, mapBackgroundColor } = await import(
+    '../src/components/ApplicationViewComponent/apps/mail/colors.js'
+  )
+  // 单元格最典型的浅色底：纯白 / #fafafa / #f5f5f7，映射后落在同一档表面。
+  const surface = lumOf(mapBackgroundColor('#ffffff'))
+  assert.ok(surface > luminance(DARK_PAPER), '先决条件：浅色单元格映射后要比纸面亮一档')
+  // Word / Outlook 的 `border: 1pt solid windowtext` 与常见浅灰边框都要看得见。
+  for (const original of ['windowtext', '#dddddd', '#eeeeee', '#888a85']) {
+    const line = mapBorderColor(original, 'dark', { overLightSurface: true })
+    assert.ok(line, `${original} 应给出映射结果`)
+    const lum = lumOf(line)
+    assert.ok(
+      lum > surface + 0.02,
+      `${original} 映射成 ${line} 后仍比单元格表面暗：线会消失`,
+    )
+    // 也不能亮成一条白线：仍然要比正文文字暗。
+    assert.ok(lum < 0.25, `${original} 映射成 ${line} 太扎眼`)
+  }
+  // 没压在浅色表面上的边框保持原来的克制映射，避免整封邮件到处都是亮边。
+  assert.equal(mapBorderColor('#dddddd'), mapBorderColor('#dddddd', 'dark', { overLightSurface: false }))
+  assert.ok(lumOf(mapBorderColor('#dddddd')) < surface, '纸面上的细线仍要贴近纸面')
+})

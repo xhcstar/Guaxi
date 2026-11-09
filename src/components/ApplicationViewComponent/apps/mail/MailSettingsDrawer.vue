@@ -130,7 +130,8 @@
         </section>
 
         <section v-show="activeTab === 'receive'" class="mail-settings-panel">
-        <div class="mail-section-divider"></div>
+        <!-- 页签的第一块内容直接贴着说明往下排：这里原本还画了一条分隔线，
+             它自带 20px + 16px 外边距，在页签顶部空出一大块，看起来像内容丢了。 -->
         <div class="mail-flabel" style="margin-bottom: 8px">网络代理（收发信都走它）</div>
         <div class="mail-field-row">
           <div class="mail-field">
@@ -285,7 +286,6 @@
         <section v-show="activeTab === 'security'" class="mail-settings-panel">
         <!-- 本地存储加密：直接决定每封新邮件写库时是否做 AES 加解密，
              是用户能感知到的性能开关，所以放在安全页最前面、说明写清楚。 -->
-        <div class="mail-section-divider"></div>
         <div class="mail-flabel" style="margin-bottom: 6px">本地存储加密（性能）</div>
         <label class="mail-check">
           <input
@@ -449,8 +449,6 @@
 
         <section v-show="activeTab === 'data'" class="mail-settings-panel">
         <!-- 诊断 -->
-
-        <div class="mail-section-divider"></div>
         <div class="mail-flabel" style="margin-bottom: 6px">诊断</div>
         <p class="mail-hint" style="margin: 0 0 8px">
           导出报告包含账户配置、同步状态、待发/离线队列与错误信息；<strong>不含</strong>

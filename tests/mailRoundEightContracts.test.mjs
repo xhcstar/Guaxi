@@ -37,11 +37,12 @@ test('检索：MATCH 不能出现在 OR 条件里，也不能写成 column MATCH
 })
 
 test('收信正文：align=center 的表格要居中，不被嵌套规则抹掉', () => {
-  const nested = withoutComments(
-    css.slice(css.indexOf('.mail-body table table,'), css.indexOf('.mail-body table[align')),
+  // 表格的边框 / 内边距 / 外边距都已交还给邮件原文（见「恢复邮件表格保真度」）：
+  // 不能再有任何「嵌套表格清零外边距」的规则，否则居中被吃掉；居中只靠下面的映射。
+  assert.ok(
+    !/\.mail-body table table\s*\{[\s\S]{0,160}margin/.test(css),
+    '不能再有清零嵌套表格外边距的规则（会吃掉居中）',
   )
-  assert.ok(!/margin:\s*0/.test(nested), '嵌套表格不能整体清零外边距（会吃掉居中）')
-  assert.ok(/margin-top:\s*0/.test(nested) && /margin-bottom:\s*0/.test(nested), '只收上下外边距')
   assert.ok(/\.mail-body table\[align='center'\]\s*\{[\s\S]{0,120}margin-left:\s*auto/.test(css), '显式把 align=center 映射成自动外边距')
 })
 

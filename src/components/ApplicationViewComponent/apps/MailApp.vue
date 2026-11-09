@@ -481,7 +481,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { useMailStore } from '../../../stores/mailStore'
 import { groupRecipientToken } from '../../../stores/contactsStore'
 import { createLogger } from '../../../utils/logger'
-import { avatarSeed, densityMetrics, monoFontStack, readingFontStack, themeToStyle } from './mail/theme'
+import { FALLBACK_THEMES, avatarSeed, densityMetrics, monoFontStack, readingFontStack, themeToStyle } from './mail/theme'
 import { flattenQuoteHtml } from './mail/quoteCards'
 import { selectableMoveTargets } from './mail/folderTree'
 import { SHORTCUT_LIST, useMailShortcuts } from './mail/useMailShortcuts'
@@ -531,7 +531,12 @@ let pendingTimer = null
 const shortcutList = SHORTCUT_LIST
 
 const settings = computed(() => store.settings)
-const themes = computed(() => [...store.builtinThemes, ...(settings.value.customThemes || [])])
+const themes = computed(() => {
+  const list = [...store.builtinThemes, ...(settings.value.customThemes || [])]
+  // 后端主题接口在启动并发 / 老版本里可能暂时为空。主题选择器绝不能因此整块留白：
+  // 退回前端内置的两套明暗主题，至少保证明暗切换始终可选。
+  return list.length ? list : Object.values(FALLBACK_THEMES)
+})
 
 const rootStyle = computed(() => {
   const metrics = densityMetrics(settings.value.density, settings.value.readingSize)
@@ -708,7 +713,18 @@ watch(
   () => store.detail,
   (detail) => {
     const key = detail ? `${detail.accountId}:${detail.folder}:${detail.uid}` : ''
-    if (key) activeKey.value = key
+    // 会话视图里的 detail 是「会话中最新的一封」，它可能在已发送等其它文件夹里，
+    // 对不上列表上的聚合行。以前直接把 detail 的 key 写进 activeKey，按键导航
+    // 下一步在列表里就找不到当前行，于是每次都从第二封重新开始（真实反馈：
+    // 方向键只能往下移动一次）。
+    if (key) {
+      const row =
+        store.messages.find((m) => store.keyOf(m) === key) ||
+        store.messages.find((m) =>
+          (m.threadUids || []).some((item) => store.keyOf(item) === key),
+        )
+      if (row) activeKey.value = store.keyOf(row)
+    }
     // 内联回复跟着当前邮件走：换一封/关掉阅读区时把它存进草稿箱，
     // 否则回复卡片会挂在另一封邮件头上。
     if (detailKey && detailKey !== key && store.composing) onCloseCompose()
@@ -732,15 +748,21 @@ let keyboardBase = []
 
 function step(delta, extend = false) {
   if (!store.messages.length) return
-  const index = store.messages.findIndex((m) => store.keyOf(m) === activeKey.value)
-  const current = index < 0 ? 0 : index
+  let index = store.messages.findIndex((m) => store.keyOf(m) === activeKey.value)
+  if (index < 0 && store.selected) {
+    // 当前打开的那封可能不在列表里（会话里最新一封在已发送、或从通讯录打开）：
+    // 退回到选中的那一行继续走，而不是每次都从头数到第二封。
+    index = store.messages.findIndex((m) => store.keyOf(m) === store.keyOf(store.selected))
+  }
+  const current = index < 0 ? -1 : index
   const next = Math.max(0, Math.min(store.messages.length - 1, current + delta))
   const row = store.messages[next]
   if (!row) return
 
   if (extend) {
     if (!keyboardAnchor) {
-      keyboardAnchor = activeKey.value || store.keyOf(store.messages[current])
+      keyboardAnchor =
+        activeKey.value || store.keyOf(store.messages[Math.max(0, current)])
       keyboardBase = [...store.selectedKeys]
     }
     const anchorIndex = store.messages.findIndex(

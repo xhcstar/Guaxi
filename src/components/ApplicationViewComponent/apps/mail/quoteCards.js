@@ -87,6 +87,27 @@ export function pruneEmptyQuotes(root) {
 }
 
 /**
+ * 把「回信套回信」攒出的嵌套引用压平到 `keep` 层。
+ *
+ * 每层 blockquote 都有 2px 左竖线 + 14px 缩进：嵌套几十层时，正文被推到半个屏
+ * 之外，左侧同时出现一整排竖线（用户反馈的「左侧大量竖线」）。这些层里承载的是
+ * 正文本身，不能像空壳那样直接删，只能把内层的 blockquote 换成它的子节点——
+ * 内容原样保留，只去掉多余的引用框。
+ */
+export function collapseNestedQuotes(root, keep = 1) {
+  if (!root?.querySelectorAll) return
+  // 从最里层往外拆：先拆外层会让内层「层数」发生位移，判断就不准了。
+  const quotes = [...root.querySelectorAll('blockquote')].reverse()
+  for (const block of quotes) {
+    let depth = 0
+    for (let node = block.parentElement; node; node = node.parentElement) {
+      if (node.tagName === 'BLOCKQUOTE') depth += 1
+    }
+    if (depth >= keep) block.replaceWith(...block.childNodes)
+  }
+}
+
+/**
  * 把嵌套的引用卡片提到同一层，就地修改传入的 DOM 子树。
  *
  * `A > B > C` 会变成 `A, B, C` 三个兄弟：B 紧跟在 A 后面，C 紧跟在 B 后面，

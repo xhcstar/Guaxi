@@ -76,3 +76,22 @@ test('空引用壳要收掉，否则正文底部只剩一排引用竖线', () =>
   )
 })
 
+// 现象（用户截图）：正文左侧一整排等距竖线，正文被推到屏幕中间。
+// 原因：别的客户端整段套着回信，几十层 <blockquote> 每层都带竖线和 14px 缩进，
+// 而里面装的是正文本身——不能像空壳那样删掉，只能把多余的层拆掉。
+test('非空的嵌套引用压平到一层，不再缩进半屏、排出一片竖线', () => {
+  assert.ok(/export function collapseNestedQuotes/.test(cards), '应导出嵌套引用压平')
+  assert.ok(
+    /if \(depth >= keep\) block\.replaceWith\(\.\.\.block\.childNodes\)/.test(cards),
+    '内层引用要把子节点提上来：内容保留，只去掉多余的引用框',
+  )
+  assert.ok(
+    /querySelectorAll\('blockquote'\)\]\.reverse\(\)/.test(cards),
+    '从最里层开始拆，层数判断才不会被自己改动影响',
+  )
+  assert.ok(
+    /collapseNestedQuotes\(doc\.body, 1\)/.test(reader),
+    '阅读侧渲染时要调用压平（保留一层引用框）',
+  )
+})
+

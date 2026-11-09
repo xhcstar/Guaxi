@@ -110,9 +110,15 @@ pub const SCHEMA_VERSION: i32 = 11;
 /// 正文渲染 / 清洗规则版本。
 ///
 /// 清洗规则变化后（例如恢复表格的 border / cellpadding / bgcolor），旧的缓存
-/// 正文仍然是旧结果；打开邮件时按版本号决定是否从原文重新解析。只对含表格的
+/// 正文仍然是旧结果；打开邮件时按版本号决定是否从原文重新解析。只对受影响的
 /// 旧缓存触发重拉，避免一刀切重下所有邮件。
-pub const RENDER_VERSION: i32 = 2;
+///
+/// 版本 3：正文里以 `cid:` 引用的内联图不再计入附件列表，旧缓存需要重解析。
+pub const RENDER_VERSION: i32 = 3;
+
+/// 表格清洗规则开始生效的版本（见 `mod.rs` 里的 `stale_table_render`）。
+/// 与 `RENDER_VERSION` 分开记，避免后续再升版本时把所有含表格的邮件又重拉一遍。
+pub const TABLE_RENDER_VERSION: i32 = 2;
 
 pub fn init(app: &AppHandle) -> Result<(), String> {
     let path = db_path(app)?;

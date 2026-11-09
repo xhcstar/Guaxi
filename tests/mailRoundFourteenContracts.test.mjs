@@ -15,8 +15,13 @@ const css = read('src/components/ApplicationViewComponent/apps/mail/mail.css')
 const store = read('src/stores/mailStore.js')
 
 test('收信表格：只统一边框颜色，不新增边框', () => {
-  const block = css.slice(css.indexOf('.mail-body table td,'), css.indexOf('.mail-body table td,') + 400)
-  assert.ok(/border-color: var\(--mail-border\)/.test(block), '把单元格边框颜色统一成主题色')
+  const start = css.indexOf('.mail-doc-dark .mail-body table,')
+  assert.ok(start >= 0, '暗色下要统一表格边框颜色')
+  const block = css.slice(start, start + 600)
+  // 用比映射后的单元格表面亮一档的 --mail-doc-line，而不是纸面边框色：
+  // 浅色单元格在暗色下被抬到 #2c2d33 左右，同亮度的线会整片消失（用户反馈的「表格没边框」）。
+  assert.ok(/border-color:\s*var\(--mail-doc-line\)/.test(block), '边框颜色要换成深色下看得见的分隔线')
+  assert.ok(/--mail-doc-line:\s*#[0-9a-f]{6}/i.test(css), '分隔线颜色本身要定义在深色纸面变量里')
   assert.ok(!/border:\s*1px solid/.test(block), '不能给所有单元格加边框（排版表会被刷成套娃框）')
 })
 
