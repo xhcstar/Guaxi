@@ -133,7 +133,7 @@ Codex 引擎下**不会**弹出原来那种"AI 请求执行写操作，请确认
 ## 七、常见问题
 
 **Q：状态面板显示「Codex 引擎 未内置」**
-开发环境：在项目根执行 `npm run codex:fetch`。`npm run tauri dev` / `tauri build` 也会自动前置执行它。
+开发环境：在项目根执行 `npm run codex:fetch`。`npm run tauri -- dev` / `npm run tauri -- build` 也会自动前置执行它。
 下载约 100MB，成功后会在 `src-tauri/utils/codex/` 生成 `codex.exe` 和 `.codex-version.json`。
 
 **Q：下载一直失败或超时**
@@ -169,7 +169,7 @@ codex 0.149 起不再支持 chat 协议。Guaxi 生成给 codex 的配置固定�
 ```bash
 npm run codex:fetch          # 幂等获取（已是固定版本则跳过）
 npm run codex:fetch:force    # 强制重新下载
-npm run tauri dev            # 会自动前置执行 codex:fetch
+npm run tauri -- dev         # 会自动前置执行 codex:fetch
 ```
 
 升级 codex 版本的步骤：

@@ -12,7 +12,7 @@
 |---|---|
 | 日常开发 | `npm run tauri -- dev` |
 | 正式发布（`utils` 有变化） | `npm run tauri -- build` |
-| 正式发布（`utils` 没变，只改了前端/Rust） | `npm run tauri:build:reuse` |
+| 正式发布（`utils` 没变，只改了前端/Rust） | `npm run tauri -- build --reuse-utils-zip` |
 | 只重新生成 `utils` 分包（不构建安装器） | `npm run prepare:tauri-utils` |
 | 发布 GPU 版 | `npm run sherpa:fetch:cuda`，再 `npm run tauri -- build -- --no-default-features --features gpu` |
 | 分包机制冒烟测试 | `cargo run --manifest-path src-tauri/Cargo.toml --bin verify_utils_bundle_roundtrip` |
@@ -83,27 +83,43 @@ Windows 发布时，下面这些必须放在**同一个目录**一起分发：
 
 ## 3. npm 脚本速查
 
-### 3.1 开发
+### 3.1 唯一入口：`npm run tauri -- <子命令>`
+
+Tauri 相关命令**只有一种写法**：`npm run tauri -- <子命令> [参数]`。`npm run tauri` 指向 `tools/run_tauri_with_utils.mjs`，
+子命令与参数原样透传给 Tauri CLI（`--` 之后的内容再转给 cargo）。
+
+```bash
+npm run tauri -- dev                          # 开发
+npm run tauri -- build                        # 完整 release 构建（推荐）
+npm run tauri -- build --reuse-utils-zip      # 复用已有分包，不重扫 utils
+npm run tauri -- bundle                       # 只打包，不重新编译
+npm run tauri -- build -- --no-default-features --features gpu   # GPU 版
+```
+
+`package.json` 里**不再有** `tauri:build` / `tauri:build:reuse` / `tauri:bundle` / `tauri:bundle:reuse` 这类平行别名——
+同一件事只有一种写法，避免文档与肌肉记忆分叉。唯一保留的别名是 `tauri:gpu`（Rust 运行时的提示文案会引用它，
+且它固化了 `static` / `shared` 互斥时必须带 `--no-default-features` 这个易错点）。
+
+### 3.2 开发
 
 | 脚本 | 说明 |
 |---|---|
 | `npm run dev` | 只起 Vite |
 | `npm run tauri -- dev` | Tauri 开发模式（走编排层） |
 
-### 3.2 构建
+### 3.3 构建
 
 | 脚本 | 说明 |
 |---|---|
 | `npm run build` | 构建前端产物到 `dist/`（末尾带 `check:reader-chunks`） |
 | `npm run tauri -- build` | 完整 release 构建（推荐） |
-| `npm run tauri:build` | 等价写法（`build`） |
-| `npm run tauri:build:reuse` | 等价于 `build --reuse-utils-zip`：**信任已有清单、不重扫 `utils`** |
-| `npm run tauri -- bundle` / `npm run tauri:bundle` | 只做打包（不重新编译） |
-| `npm run tauri:bundle:reuse` | 上述 + 复用分包 |
+| `npm run tauri -- build --reuse-utils-zip` | **信任已有清单、不重扫 `utils`**（唯一会跳过扫描的写法） |
+| `npm run tauri -- bundle` | 只做打包（不重新编译） |
 | `npm run prepare:tauri-assets` | 单独复制 Excalidraw/Vditor 资源 |
 | `npm run prepare:tauri-utils` | 单独生成分包（等价 `cargo run --bin prepare_utils_zip`） |
+| `npm run tauri:gpu` | GPU 开发模式（= `dev -- --no-default-features --features gpu`） |
 
-### 3.3 依赖预取
+### 3.4 依赖预取
 
 | 脚本 | 说明 |
 |---|---|
@@ -113,15 +129,28 @@ Windows 发布时，下面这些必须放在**同一个目录**一起分发：
 | `npm run sherpa:verify:cuda` | 单独跑 CUDA 自检（脚本只带了 `--`，需自行追加 `--dir <release 产物目录>`） |
 | `npm run rsshub:prepare` / `:force` | 构建 RSSHub 运行环境 |
 
-### 3.4 关于那些「历史命名」
+### 3.5 关于那些「历史命名」
 
 以下名字里都带 `zip`，但**产物早已不是 zip**，现在一律是 `tar.zst` 分包：
 
-- 参数 `--reuse-utils-zip`（内部转成 `--reuse-existing`）
+- 参数 `--reuse-utils-zip`
 - 环境变量 `GUAXI_REUSE_UTILS_ZIP`
 - 二进制 `prepare_utils_zip`、npm 脚本 `prepare:tauri-utils`
 
 保留它们只是为了不打断已有的本地命令和 CI。**语义以本文为准**：`reuse` = 复用已生成的 `*.tar.zst` 分包。
+
+**当前行为，两点值得记住：**
+
+- `--reuse-utils-zip` 现在**整段跳过** S2（不再多起一个 `cargo run`），只把 `GUAXI_REUSE_UTILS_ZIP=1` 传给 `tauri`，由 `build.rs` 里的 167ms 快路径判断清单是否完整。
+- `prepare_utils_zip` 的 `--keep-existing` 别名已删除（全仓无调用方），统一用 `--reuse-existing`。
+
+**已删除的历史入口**（2026-11-10 逐个确认全仓零引用后删除，不要照着旧博客/旧笔记再找它们）：
+
+- `tools/prepare_tauri_bundled_resources.ps1` / `.sh`：早期把 `utils` 打成 zip 的方案，脚本里的目标目录（`sherpa-onnx`、`whisper`、`Models/whisper_models`）早已退役。
+- `tools/prepare_utils_zip/`：只剩空 `src` 的目录残留。
+- `package.json` 的 `tauri:build` / `tauri:build:reuse` / `tauri:bundle` / `tauri:bundle:reuse`：与 `npm run tauri -- <子命令>` 完全重复，属于平行别名。
+
+> `apps/guaxi-capture/package.json` 里还有一个同名 `tauri:build`，那是独立的采集端小应用（直接调 Tauri CLI，不经本编排层），与本管线无关，不要顺手删。
 
 ---
 
@@ -199,7 +228,7 @@ release
 | S1 | `copy_excalidraw_assets.mjs` | 中止 |
 | S1 | `build_chart_preview_bundle.mjs` | 中止（Rust 侧 `include_str!` 依赖该产物） |
 | S1 | `prepare_rsshub_env.mjs` | **忽略**，缺 RSSHub 只降级聚合功能 |
-| S2 | `cargo run --bin prepare_utils_zip`（带 `--reuse-utils-zip` 时追加 `-- --reuse-existing`） | 中止 |
+| S2 | `cargo run --bin prepare_utils_zip`；**带 `--reuse-utils-zip` 时整段跳过**（由 S4 的 `build.rs` 直接信任清单，167ms） | 中止 |
 | S3 | 仅 Windows：`cargo build --release --bin extract_utils_bundles` | 中止 |
 | S4 | `tauri build/bundle`（含 `beforeBuildCommand = npm run build`） | 中止 |
 | S5 | 仅 GPU：`verify_cuda_runtime --dir target/release` | 退出码 2 中止；其它非 0 只告警 |
@@ -208,7 +237,7 @@ release
 要点补充：
 
 - **S2 必须在 S4 之前**：`prepare_utils_zip` 生成的清单要先进位，S4 里 `build.rs` 才能「信任清单」而不是重扫十几万文件。
-- **S3 为什么要单独设环境变量**：helper 也是本包的一个 bin，release 编译会再触发一次 `build.rs`。所以 S3 显式传 `GUAXI_SKIP_BUNDLE_PREPARE=1`（复用模式下再加 `GUAXI_REUSE_UTILS_ZIP=1`），否则会出现「主流程已备好分包，helper 又重打一遍」。
+- **S3 为什么要单独设环境变量**：helper 也是本包的一个 bin，release 编译会再触发一次 `build.rs`。所以 S3 无条件传 `GUAXI_SKIP_BUNDLE_PREPARE=1`（分包要么已在 S2 备好、要么马上由 S4 处理），否则会出现「主流程已备好分包，helper 又重打一遍」。`skip` 的判断在 `reuse` 之前，因此这里不需要再叠加 `GUAXI_REUSE_UTILS_ZIP`。
 - **S4 传给 `tauri` 的环境**：`GUAXI_REUSE_UTILS_ZIP=1`（让 `build.rs` 信任刚生成的清单）；GPU 构建再加 `SHERPA_ONNX_LIB_DIR`（只注入这一层，不能挂到 `process.env`，否则前面以默认 `static` 特性跑的辅助构建会找不到静态库）。
 - **Windows 内存优化**：`releaseCargoEnv()` 在 Windows 上固定 `CARGO_BUILD_JOBS=1`、`CARGO_INCREMENTAL=0`。这个 crate 的 release 链接/codegen 峰值很高，串行化 + 关增量能显著降低 rustc/LLVM OOM 概率。
 
@@ -216,8 +245,8 @@ release
 
 | 变量 | 设置者 | 作用 |
 |---|---|---|
-| `GUAXI_REUSE_UTILS_ZIP=1` | 编排层 | `build.rs` 信任已有 `bundle-manifest.json`，不重扫 `utils` |
-| `GUAXI_SKIP_BUNDLE_PREPARE=1` | 编排层（helper 编译） | `build.rs` 完全跳过分包准备 |
+| `GUAXI_REUSE_UTILS_ZIP=1` | 编排层（调 `tauri` 那一层） | 告诉 `build.rs`：清单可信，别重扫 `utils` |
+| `GUAXI_SKIP_BUNDLE_PREPARE=1` | 编排层（仅 helper 编译） | `build.rs` 完全跳过分包准备 |
 | `SHERPA_ONNX_ARCHIVE_DIR` | `.cargo/config.toml` | 静态库归档位置，构建期零联网 |
 | `SHERPA_ONNX_LIB_DIR` | 编排层（仅 GPU 的最终调用） | 动态库（CUDA）目录 |
 | `CARGO_BUILD_JOBS` / `CARGO_INCREMENTAL` | 编排层（仅 Windows release） | 降低 release 构建内存峰值 |
@@ -309,11 +338,11 @@ src-tauri/target/release/bundle/nsis/
 
 | 层级 | 触发条件 | 省掉什么 |
 |---|---|---|
-| ① 整树跳过 | `--reuse-existing` + 清单完整（schema 对、所有包存在且大小一致） | **连扫描都省**（十几万文件的 stat） |
-| ② 单包复用 | 无该开关时，逐包比对 `digest` 且归档大小一致 | 只重压变化的包 |
+| ① 整树跳过 | `--reuse-utils-zip`（→ `build.rs` 收到 `GUAXI_REUSE_UTILS_ZIP=1`）+ 清单完整（schema 对、所有包存在且大小一致） | **连扫描都省**（120,805 个文件的 stat，实测 20.5s → 0.17s） |
+| ② 单包复用 | 不走 ① 时，逐包比对 `digest` 且归档大小一致 | 只重压变化的包 |
 | ③ 文件级跳过 | 安装端：安装状态文件里的 key 与清单一致，且目标文件 size/mtime 匹配 | 不重写已就位的文件 |
 
-**注意 ① 的副作用**：`npm run tauri:build:reuse` 不会重新扫描 `utils`。如果你刚往 `utils` 里加了文件却又用 reuse 命令，新文件**不会**进包（日志里是 `[utils.bundle] reusing existing`）。这种时候要么跑一次不带 reuse 的 `npm run tauri -- build`，要么先 `npm run prepare:tauri-utils`。
+**注意 ① 的副作用**：`npm run tauri -- build --reuse-utils-zip` 不会重新扫描 `utils`。如果你刚往 `utils` 里加了文件却又用了 `--reuse-utils-zip`，新文件**不会**进包（日志里是 `[utils.bundle] reusing existing`）。这种时候要么跑一次不带该参数的 `npm run tauri -- build`，要么先 `npm run prepare:tauri-utils`。
 
 ### 7.6 什么不进包
 
@@ -405,7 +434,7 @@ npm run tauri -- dev   -- --no-default-features --features gpu
 npm run tauri -- build -- --no-default-features --features gpu
 ```
 
-> `package.json` 里的 `tauri:gpu` 是 `dev --features gpu`，没有关默认特性。要 GPU 请用上面两条显式写法。
+> `npm run tauri:gpu` 就是上面第一条的快捷方式（`dev -- --no-default-features --features gpu`）。注意 `tauri dev/build` 本身**没有** `--no-default-features` 选项，必须放在 `--` 之后交给 cargo。
 
 `SHERPA_ONNX_LIB_DIR` 不用手设：编排层识别到 `--features gpu` 会自动指向装配好的 `cuda-lib` 目录；目录不存在则直接报错并提示先跑 `npm run sherpa:fetch:cuda`。
 
@@ -674,6 +703,7 @@ npm run prepare:tauri-utils
 | 自检退出码 2 | 安装目录缺 CUDA DLL（打包缺陷） | 重新装配后重打，别发布 |
 | 「资源清单版本不兼容」 | 新分包配了旧 helper | 安装器与分包必须同批发布 |
 | release 链接阶段 OOM | Windows 内存峰值 | 确认 `releaseCargoEnv()` 生效（job=1 / incremental=0） |
+| `failed to open: ...\.cargo-build-lock`（os error 5） | 机器上已有另一个 cargo 构建（IDE 里点过构建、或另一个终端在跑），release 目录被独占 | 等对方结束再重跑；并发跑两个 release 构建没有意义 |
 
 ---
 
