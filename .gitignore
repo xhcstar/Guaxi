@@ -36,6 +36,8 @@ dist-ssr
 # Generated runtime assets (do not commit)
 src-tauri/utils/MarkdownConvertor/
 src-tauri/utils/Models/surya_models/
+# Tectonic 预热缓存（bundles + formats，约 80MB），由开发机预热后随 release 分包
+src-tauri/utils/tectonic_cache/
 
 # Generated runtime assets (do not commit)
 src-tauri/utils/MarkdownConvertor/*

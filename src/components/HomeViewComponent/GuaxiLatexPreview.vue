@@ -21,6 +21,7 @@
       fit-mode="width"
       :source-path="sourcePath"
       :building="building"
+      :building-text="buildStatus"
       :error-text="errorText"
       :theme="theme"
       :engine="engineKind"
@@ -128,6 +129,8 @@ const props = defineProps({
   // 源文件路径（.tex / .typ）：双向定位需要
   sourcePath: { type: String, default: '' },
   building: { type: Boolean, default: false },
+  // 构建中的状态文案（首次构建下载宏包/字体时显示进度）
+  buildStatus: { type: String, default: '' },
   errorText: { type: String, default: '' },
   theme: { type: String, default: 'light' },
   // 'LaTeX' | 'Typst'

@@ -325,7 +325,7 @@
 
       <div v-if="building" class="gpv__overlay">
         <span class="gpv__spinner" />
-        <span>正在构建…</span>
+        <span class="gpv__overlay-text">{{ buildingText || '正在构建…' }}</span>
       </div>
     </div>
   </div>
@@ -363,6 +363,8 @@ const props = defineProps({
   // 源文件路径（.tex / .typ）：双向定位需要
   sourcePath: { type: String, default: '' },
   building: { type: Boolean, default: false },
+  // 构建中的状态文案（例如首次构建正在下载宏包/字体），留空显示“正在构建…”。
+  buildingText: { type: String, default: '' },
   errorText: { type: String, default: '' },
   theme: { type: String, default: 'light' },
   // '' | 'latex' | 'typst'
@@ -2861,6 +2863,14 @@ onBeforeUnmount(() => {
   background: var(--gpv-overlay-bg);
   color: var(--gpv-overlay-text);
   font-size: 13px;
+  padding: 0 24px;
+}
+.gpv__overlay-text {
+  max-width: min(80%, 560px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
   backdrop-filter: blur(1px);
 }
 .gpv__spinner {

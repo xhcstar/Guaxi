@@ -1340,10 +1340,11 @@
         :pdf-path="latexPreviewPdfPath"
         :source-path="latexPreviewSourcePath"
         :building="latexPreviewBuilding"
+        :build-status="latexPreviewProgress"
         :error-text="latexPreviewError"
         :theme="settingsStore.appearanceTheme"
         :title-label="pdfPreviewLabel"
-        @rebuild="buildLatexPreview"
+        @rebuild="() => buildLatexPreview({ force: true })"
         @export="handleLatexExport"
         @ready="handleLatexPreviewReady"
         @reverse-jump="handlePreviewReverseJump"
@@ -21224,7 +21225,12 @@ const latexPreviewPdfPath = ref('')
 // 就等于继续显示上一份文档的 PDF，而且不报错；用它判断"显示的还不是当前文件"。
 const latexPreviewBuiltForPath = ref('')
 const latexPreviewBuilding = ref(false)
+// 构建中的状态文案：首次遇到未缓存的宏包/字体时，后端把 tectonic 的下载进度推过来。
+const latexPreviewProgress = ref('')
 const latexPreviewError = ref('')
+// 上一次成功构建的内容指纹：内容没变（只是移动光标/切焦点）就不再重编。
+let latexPreviewBuiltContent = ''
+let latexPreviewProgressUnlisten = null
 let latexBuildDebounceTimer = null
 let latexBuildSeq = 0
 
@@ -21392,18 +21398,39 @@ const onDictationClickOutside = () => {
   dictationCardVisible.value = false
 }
 
-const buildLatexPreview = async () => {
+// 懒注册构建进度监听：只有 LaTeX 预览真正在构建时才需要。
+const ensureLatexPreviewProgressListener = async () => {
+  if (latexPreviewProgressUnlisten) return
+  latexPreviewProgressUnlisten = await listen('latex-preview-progress', (event) => {
+    const payload = event?.payload || {}
+    const file = String(payload.file || '').trim()
+    if (!file) return
+    const count = Number(payload.count || 0)
+    latexPreviewProgress.value = `正在下载缺失的宏包/字体：${file}${count > 0 ? `（第 ${count} 个）` : ''}`
+  })
+}
+
+const buildLatexPreview = async ({ force = false } = {}) => {
   const sourcePath = selectedFile.value?.path || fileTreeStore.activeTab || ''
   const isTyp = /\.typ$/i.test(sourcePath)
   if (!sourcePath || !(/\.tex$/i.test(sourcePath) || isTyp)) return
+  const content = getCurrentTexContent()
+  // 同一文件、同样内容就不必重编：切换焦点、移动光标、保存都会走到这里。
+  // 上一次构建失败后改回已成功的内容时，也要把错误提示清掉——预览里本来就是那份 PDF。
+  if (!force && latexPreviewBuiltForPath.value === sourcePath && latexPreviewBuiltContent === content) {
+    latexPreviewError.value = ''
+    return
+  }
+  if (!isTyp) await ensureLatexPreviewProgressListener()
   const seq = ++latexBuildSeq
   latexPreviewBuilding.value = true
+  latexPreviewProgress.value = ''
   latexPreviewError.value = ''
   try {
-    const content = getCurrentTexContent()
     const command = isTyp ? 'build_typ_pdf_preview' : 'build_tex_pdf_preview'
     const pdfPath = await invoke(command, { sourcePath, content })
     if (seq !== latexBuildSeq) return // 被更晚的构建取代
+    latexPreviewBuiltContent = content
     // 加 query 触发 pane 的 watch（即便路径相同也重新加载）
     latexPreviewPdfPath.value = `${pdfPath}?v=${seq}`
     latexPreviewBuiltForPath.value = sourcePath
@@ -21412,14 +21439,17 @@ const buildLatexPreview = async () => {
     latexPreviewError.value = String(err?.message || err || '构建失败')
     logger.error('[LatexPreview] build failed', { error: latexPreviewError.value })
   } finally {
-    if (seq === latexBuildSeq) latexPreviewBuilding.value = false
+    if (seq === latexBuildSeq) {
+      latexPreviewBuilding.value = false
+      latexPreviewProgress.value = ''
+    }
   }
 }
 
 // 实时预览：编辑停顿后防抖重建
-// 400ms：配合后端的"新构建先杀掉上一轮"，过期构建不会堆积，所以可以压得比原来（1200ms）低，
-// 手感更接近实时。真正的整篇重渲代价由阅读器的增量对账消化，不靠拉长防抖来省。
-const LATEX_PREVIEW_REBUILD_DEBOUNCE_MS = 400
+// 700ms：400ms 时连续输入会不停杀掉刚启动的构建，预览反而一直出不来；
+// 整篇重渲的代价由阅读器的增量对账消化，不靠拉长防抖来省。
+const LATEX_PREVIEW_REBUILD_DEBOUNCE_MS = 700
 const scheduleLatexPreviewRebuild = () => {
   if (!latexPreviewVisible.value || !isPdfPreviewDoc.value) return
   if (latexBuildDebounceTimer) clearTimeout(latexBuildDebounceTimer)
@@ -25665,6 +25695,10 @@ onUnmounted(() => {
   if (pythonRuntimeOpLogUnlisten) {
     try { Promise.resolve(pythonRuntimeOpLogUnlisten()).catch(() => {}) } catch {}
     pythonRuntimeOpLogUnlisten = null
+  }
+  if (latexPreviewProgressUnlisten) {
+    try { Promise.resolve(latexPreviewProgressUnlisten()).catch(() => {}) } catch {}
+    latexPreviewProgressUnlisten = null
   }
   if (docReaderBridgeUnlisten) {
     try { Promise.resolve(docReaderBridgeUnlisten()).catch(() => {}) } catch {}

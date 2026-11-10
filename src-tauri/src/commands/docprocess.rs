@@ -1560,6 +1560,127 @@ fn find_tectonic_exe_for_export() -> Result<(PathBuf, bool), String> {
     }
 }
 
+/// 随包分发的 TeX 资源种子缓存版本。重新生成 `utils/tectonic_cache` 时要递增。
+const TECTONIC_SEED_VERSION: &str = "1";
+
+static TECTONIC_SEED_LOCK: Mutex<()> = Mutex::new(());
+
+fn copy_dir_contents(src: &Path, dst: &Path) -> std::io::Result<()> {
+    fs::create_dir_all(dst)?;
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        let from = entry.path();
+        let to = dst.join(entry.file_name());
+        if from.is_dir() {
+            copy_dir_contents(&from, &to)?;
+        } else {
+            fs::copy(&from, &to)?;
+        }
+    }
+    Ok(())
+}
+
+/// TeX 资源缓存目录。tectonic 默认按需从 relay 逐文件下载宏包与字体，
+/// 冷文档要几十秒；这里把随包分发的种子缓存复制到 config 目录，之后编译全部命中本地。
+/// 没有种子缓存时返回 None，保持 tectonic 默认行为（不覆盖用户已有的预热缓存）。
+fn tectonic_cache_dir_blocking() -> Option<PathBuf> {
+    let config_path = crate::commands::settingview::get_config_path();
+    let dir = config_path.parent()?.join("tectonic_cache");
+    let marker = dir.join(".guaxi_seed_version");
+    let seeded = || {
+        fs::read_to_string(&marker)
+            .map(|value| value.trim() == TECTONIC_SEED_VERSION)
+            .unwrap_or(false)
+    };
+    if seeded() {
+        return Some(dir);
+    }
+
+    let _guard = TECTONIC_SEED_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if seeded() {
+        return Some(dir);
+    }
+
+    let seed = bundled_resources::ensure_relative_dir("utils/tectonic_cache").ok()?;
+    if !seed.is_dir() {
+        return None;
+    }
+    if let Err(error) = copy_dir_contents(&seed, &dir) {
+        warn!(
+            seed = %seed.display(),
+            error = %error,
+            "[LatexPreview] 复制 TeX 种子缓存失败，首次构建可能仍需联网下载"
+        );
+        return Some(dir);
+    }
+    if let Err(error) = fs::write(&marker, TECTONIC_SEED_VERSION) {
+        warn!(error = %error, "[LatexPreview] 写入 TeX 种子缓存标记失败");
+    }
+    Some(dir)
+}
+
+async fn tectonic_cache_dir() -> Option<PathBuf> {
+    tokio::task::spawn_blocking(tectonic_cache_dir_blocking)
+        .await
+        .ok()
+        .flatten()
+}
+
+/// tectonic 只按 PATH 查找 biber 这类外部工具，和它放在同一目录并不会被搜索到，
+/// 所以把 tectonic 所在目录以及解析到的 biber 目录都前置进子进程 PATH。
+fn tectonic_tool_path(tectonic_path: &Path) -> Option<std::ffi::OsString> {
+    fn push_dir(dirs: &mut Vec<PathBuf>, dir: &Path) {
+        if !dirs.iter().any(|existing| existing == dir) {
+            dirs.push(dir.to_path_buf());
+        }
+    }
+
+    let mut dirs: Vec<PathBuf> = Vec::new();
+    if let Some(parent) = tectonic_path.parent() {
+        push_dir(&mut dirs, parent);
+    }
+    let biber_rel = if cfg!(windows) {
+        "utils/biber.exe"
+    } else {
+        "utils/biber"
+    };
+    if let Ok(biber) = bundled_resources::ensure_relative_dir(biber_rel) {
+        if biber.is_file() {
+            if let Some(parent) = biber.parent() {
+                push_dir(&mut dirs, parent);
+            }
+        }
+    }
+    dirs.extend(std::env::split_paths(
+        &std::env::var_os("PATH").unwrap_or_default(),
+    ));
+    std::env::join_paths(dirs).ok()
+}
+
+fn apply_tectonic_child_env_std(cmd: &mut Command, tectonic_path: &Path) {
+    if let Some(path) = tectonic_tool_path(tectonic_path) {
+        cmd.env("PATH", path);
+    }
+    if let Some(cache_dir) = tectonic_cache_dir_blocking() {
+        cmd.env("TECTONIC_CACHE_DIR", cache_dir);
+    }
+}
+
+fn apply_tectonic_child_env_tokio(
+    cmd: &mut TokioCommand,
+    tectonic_path: &Path,
+    cache_dir: Option<&Path>,
+) {
+    if let Some(path) = tectonic_tool_path(tectonic_path) {
+        cmd.env("PATH", path);
+    }
+    if let Some(cache_dir) = cache_dir {
+        cmd.env("TECTONIC_CACHE_DIR", cache_dir);
+    }
+}
+
 #[tauri::command]
 pub async fn export_tex_pdf_tectonic(input_path: String, output_path: String) -> Result<(), String> {
     // 说明：用于“当前文件是 .tex，导出为 PDF”的场景；保留相对路径依赖（图片/\input）时，必须在 tex 文件所在目录运行。
@@ -1609,6 +1730,9 @@ pub async fn export_tex_pdf_tectonic(input_path: String, output_path: String) ->
 
     #[cfg(windows)]
     cmd.creation_flags(CREATE_NO_WINDOW);
+
+    // 导出同样要能找到 biber，并复用随包分发的资源缓存。
+    apply_tectonic_child_env_std(&mut cmd, &tectonic_path);
 
     cmd.current_dir(&input_dir)
         .arg("-X")
@@ -1757,6 +1881,48 @@ fn kill_previous_latex_preview(key: &str) {
     }
 }
 
+#[derive(Clone, Serialize)]
+struct LatexPreviewProgress {
+    source_path: String,
+    file: String,
+    count: u32,
+}
+
+/// 逐行读子进程输出：把 tectonic 的 `note: downloading ...` 转成前端进度事件，
+/// 同时把完整输出留给失败时的错误信息。
+async fn collect_latex_pipe<R>(
+    pipe: Option<R>,
+    progress: Option<(tauri::AppHandle, String)>,
+) -> String
+where
+    R: tokio::io::AsyncRead + Unpin,
+{
+    let Some(pipe) = pipe else {
+        return String::new();
+    };
+    let mut lines = BufReader::new(pipe).lines();
+    let mut text = String::new();
+    let mut count = 0u32;
+    while let Ok(Some(line)) = lines.next_line().await {
+        if let Some((app, source_path)) = progress.as_ref() {
+            if let Some(file) = line.trim().strip_prefix("note: downloading ") {
+                count += 1;
+                let _ = app.emit(
+                    "latex-preview-progress",
+                    LatexPreviewProgress {
+                        source_path: source_path.clone(),
+                        file: file.trim().to_string(),
+                        count,
+                    },
+                );
+            }
+        }
+        text.push_str(&line);
+        text.push('\n');
+    }
+    text
+}
+
 /// 为 LaTeX 实时预览构建 PDF：
 /// - `source_path`：当前 .tex 文件路径（用于定位其所在目录，保证 \input/图片等相对依赖可解析）。
 /// - `content`：编辑器当前内容（未必已落盘）；写入源目录下的临时 .tex 再编译，从而支持"实时预览"。
@@ -1765,7 +1931,11 @@ fn kill_previous_latex_preview(key: &str) {
 /// 输出路径**稳定**（见 `latex_preview_build_dir`）并保留中间文件：既让前端能增量渲染，
 /// 也让多趟（目录/交叉引用）收敛更快。`.synctex.gz` 与 PDF 同目录，`synctex_path_for` 仍能派生。
 #[tauri::command]
-pub async fn build_tex_pdf_preview(source_path: String, content: String) -> Result<String, String> {
+pub async fn build_tex_pdf_preview(
+    app: tauri::AppHandle,
+    source_path: String,
+    content: String,
+) -> Result<String, String> {
     let source = PathBuf::from(source_path.trim());
     let input_dir = source
         .parent()
@@ -1801,6 +1971,10 @@ pub async fn build_tex_pdf_preview(source_path: String, content: String) -> Resu
     #[cfg(windows)]
     cmd.creation_flags(CREATE_NO_WINDOW);
 
+    // 种子缓存让常见宏包/字体直接命中本地；biber 需要靠 PATH 才能被 tectonic 找到。
+    let cache_dir = tectonic_cache_dir().await;
+    apply_tectonic_child_env_tokio(&mut cmd, &tectonic_path, cache_dir.as_deref());
+
     cmd.current_dir(&input_dir)
         .arg("-X")
         .arg("compile")
@@ -1809,12 +1983,13 @@ pub async fn build_tex_pdf_preview(source_path: String, content: String) -> Resu
         .arg("--synctex") // 生成 <stem>.synctex.gz，供内嵌阅读器做双向定位
         .arg("--keep-intermediates") // 保留 .aux/.toc：多趟交叉引用收敛更快
         .arg("--untrusted")
+        .arg("-p") // 输出 chatter：下载宏包/字体时前端能显示进度
         .arg(&tmp_tex)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
 
-    let child = match cmd.spawn() {
+    let mut child = match cmd.spawn() {
         Ok(child) => child,
         Err(e) => {
             let _ = fs::remove_file(&tmp_tex);
@@ -1831,7 +2006,14 @@ pub async fn build_tex_pdf_preview(source_path: String, content: String) -> Resu
         }
     }
 
-    let out = child.wait_with_output().await;
+    let stdout_task = tokio::spawn(collect_latex_pipe(child.stdout.take(), None));
+    let stderr_task = tokio::spawn(collect_latex_pipe(
+        child.stderr.take(),
+        Some((app.clone(), source_path.clone())),
+    ));
+    let status = child.wait().await;
+    let stdout = stdout_task.await.unwrap_or_default();
+    let stderr = stderr_task.await.unwrap_or_default();
 
     // 无论成功失败都清理：登记表 + 源目录里的临时 .tex。
     // 注意只在登记的还是自己这个 PID 时才删，否则会把下一轮（更新）的登记抹掉，
@@ -1845,18 +2027,16 @@ pub async fn build_tex_pdf_preview(source_path: String, content: String) -> Resu
     }
     let _ = fs::remove_file(&tmp_tex);
 
-    let out = out.map_err(|e| format!("等待 tectonic 结束失败: {e}"))?;
+    let status = status.map_err(|e| format!("等待 tectonic 结束失败: {e}"))?;
 
-    if !out.status.success() {
-        let stdout = String::from_utf8_lossy(&out.stdout).to_string();
-        let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    if !status.success() {
         let mut hint = String::new();
         if !is_bundled {
             hint.push_str("\n\nHint: 未找到内置 tectonic，可将对应平台二进制放到 src-tauri/utils 下，或确保系统 PATH 中存在 tectonic。");
         }
         return Err(format!(
             "tectonic 构建失败 (code={:?})\n{}\n{}{}",
-            out.status.code(),
+            status.code(),
             stdout,
             stderr,
             hint
