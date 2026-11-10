@@ -140,10 +140,16 @@ export const useContactsStore = defineStore('contacts', {
     async open(id) {
       this.activeLoading = true
       this.activeMessages = []
+      this.error = ''
       try {
+        // 往来邮件是详情页的附属列表：它挂了（比如 SQL 出错）不该让人物也打不开，
+        // 否则右侧只剩一片空白，用户连这个人的邮箱都看不到。
         const [contact, messages] = await Promise.all([
           invoke('mail_get_contact', { id }),
-          invoke('mail_contact_messages', { id, limit: 40 }),
+          invoke('mail_contact_messages', { id, limit: 40 }).catch((error) => {
+            logger.warn('加载往来邮件失败', error)
+            return []
+          }),
         ])
         this.active = contact || null
         this.activeMessages = messages || []

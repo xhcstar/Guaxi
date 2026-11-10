@@ -2066,18 +2066,6 @@ pub fn refresh_received_times(
     Ok(updated)
 }
 
-pub fn body_render_version(account_id: &str, folder: &str, uid: u32) -> Result<i32, String> {
-    let conn = open()?;
-    conn.query_row(
-        "SELECT render_version FROM message_bodies WHERE account_id=?1 AND folder=?2 AND uid=?3",
-        params![account_id, folder, uid],
-        |row| row.get(0),
-    )
-    .optional()
-    .map(|value| value.unwrap_or(0))
-    .map_err(|e| e.to_string())
-}
-
 pub fn get_body(
     account_id: &str,
     folder: &str,
@@ -2156,6 +2144,140 @@ pub fn get_summary(
     )
     .optional()
     .map_err(|e| e.to_string())
+}
+
+/// 打开一封邮件所需的全部内容：摘要 + 正文 + 渲染版本，一次连接读完。
+///
+/// 以前是 `get_summary` / `body_render_version` / `get_body` / `load_settings`
+/// 各自 `open()` 一次：4.9GB 的库上每次打开约 50ms，一封邮件就要 200ms 以上，
+/// 会话里 14 封串起来接近 4 秒（用户反馈「读信做不到秒开」）。库打开成本跟
+/// 要读的行数无关，所以把这些点查并成一次连接是纯收益。
+pub struct OpenRecords {
+    pub summary: Option<MessageSummary>,
+    pub body: Option<(Option<String>, String, String, bool)>,
+    pub render_version: i32,
+}
+
+pub fn open_records(account_id: &str, folder: &str, uid: u32) -> Result<OpenRecords, String> {
+    let conn = open()?;
+    let summary = conn
+        .query_row(
+            &format!(
+                "SELECT {MSG_COLS} FROM messages WHERE account_id=?1 AND folder=?2 AND uid=?3"
+            ),
+            params![account_id, folder, uid],
+            row_to_summary,
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+    let render_version: i32 = conn
+        .query_row(
+            "SELECT render_version FROM message_bodies WHERE account_id=?1 AND folder=?2 AND uid=?3",
+            params![account_id, folder, uid],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?
+        .unwrap_or(0);
+    let body = conn
+        .query_row(
+            "SELECT html, text, attachments_json, body_fetched FROM message_bodies
+             WHERE account_id=?1 AND folder=?2 AND uid=?3",
+            params![account_id, folder, uid],
+            |row| {
+                Ok((
+                    row.get::<_, Option<String>>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, i32>(3)? != 0,
+                ))
+            },
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+    let unseal = |value: &str| -> String {
+        match super::crypto::decrypt(account_id, value) {
+            Ok(Some(plain)) => plain,
+            Ok(None) => value.to_string(),
+            Err(_) => "⚠ 这封邮件的内容无法解密（加密密钥已变更或数据来自另一台设备）".to_string(),
+        }
+    };
+    let body = body.map(|(html, text, attachments, fetched)| {
+        let html = html.map(|value| unseal(&value)).filter(|value| !value.is_empty());
+        (html, unseal(&text), unseal(&attachments), fetched)
+    });
+    Ok(OpenRecords {
+        summary,
+        body,
+        render_version,
+    })
+}
+
+/// 会话视图：一次连接读完一整条会话。
+///
+/// 会话里每封都要「摘要 + 正文 + 渲染版本」；逐封调用 `open_records` 就是
+/// 每封开一次 4.9GB 的库。这里只开一次连，按 uid 逐条点查。
+pub fn open_thread_records(
+    keys: &[(String, String, u32)],
+) -> Result<Vec<OpenRecords>, String> {
+    let conn = open()?;
+    let mut out = Vec::with_capacity(keys.len());
+    for (account_id, folder, uid) in keys {
+        let summary = conn
+            .query_row(
+                &format!(
+                    "SELECT {MSG_COLS} FROM messages WHERE account_id=?1 AND folder=?2 AND uid=?3"
+                ),
+                params![account_id, folder, uid],
+                row_to_summary,
+            )
+            .optional()
+            .map_err(|e| e.to_string())?;
+        let render_version: i32 = conn
+            .query_row(
+                "SELECT render_version FROM message_bodies WHERE account_id=?1 AND folder=?2 AND uid=?3",
+                params![account_id, folder, uid],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?
+            .unwrap_or(0);
+        let body = conn
+            .query_row(
+                "SELECT html, text, attachments_json, body_fetched FROM message_bodies
+                 WHERE account_id=?1 AND folder=?2 AND uid=?3",
+                params![account_id, folder, uid],
+                |row| {
+                    Ok((
+                        row.get::<_, Option<String>>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, i32>(3)? != 0,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(|e| e.to_string())?;
+        let unseal = |value: &str| -> String {
+            match super::crypto::decrypt(account_id, value) {
+                Ok(Some(plain)) => plain,
+                Ok(None) => value.to_string(),
+                Err(_) => {
+                    "⚠ 这封邮件的内容无法解密（加密密钥已变更或数据来自另一台设备）".to_string()
+                }
+            }
+        };
+        let body = body.map(|(html, text, attachments, fetched)| {
+            let html = html.map(|value| unseal(&value)).filter(|value| !value.is_empty());
+            (html, unseal(&text), unseal(&attachments), fetched)
+        });
+        out.push(OpenRecords {
+            summary,
+            body,
+            render_version,
+        });
+    }
+    Ok(out)
 }
 
 /// 本地文件夹之间整批搬行（POP3 / 纯本地文件夹）。
@@ -2245,36 +2367,73 @@ pub fn move_messages_to_folder(
 pub fn delete_message(account_id: &str, folder: &str, uid: u32) -> Result<(), String> {
     let mut conn = open()?;
     let tx = conn.transaction().map_err(|e| e.to_string())?;
-    if fts_available_conn(&tx) {
-        if let Some(rowid) = tx
-            .query_row(
-                "SELECT rowid FROM messages WHERE account_id=?1 AND folder=?2 AND uid=?3",
-                params![account_id, folder, uid],
-                |r| r.get::<_, i64>(0),
-            )
-            .optional()
-            .map_err(|e| e.to_string())?
+    delete_message_rows(&tx, account_id, folder, &[uid])?;
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// 整批删除本地行（服务器已经搬走 / 删掉之后清本地镜像）。
+///
+/// 以前是在循环里对每封调 `delete_message`：一封一次 `open()` + 一次事务提交，
+/// 4.9GB 的库上实测每封 640ms，一批 1600 封的规则分类就卡十几分钟。
+/// 这里一个事务删完整批：同一件事从十几分钟降到一两秒。
+pub fn delete_messages(account_id: &str, folder: &str, uids: &[u32]) -> Result<(), String> {
+    if uids.is_empty() {
+        return Ok(());
+    }
+    let mut conn = open()?;
+    let tx = conn.transaction().map_err(|e| e.to_string())?;
+    delete_message_rows(&tx, account_id, folder, uids)?;
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+fn delete_message_rows(
+    tx: &Connection,
+    account_id: &str,
+    folder: &str,
+    uids: &[u32],
+) -> Result<(), String> {
+    if fts_available_conn(tx) {
+        let mut rowids: Vec<i64> = Vec::with_capacity(uids.len());
         {
+            let mut stmt = tx
+                .prepare(
+                    "SELECT rowid FROM messages WHERE account_id=?1 AND folder=?2 AND uid=?3",
+                )
+                .map_err(|e| e.to_string())?;
+            for uid in uids {
+                if let Some(rowid) = stmt
+                    .query_row(params![account_id, folder, uid], |r| r.get::<_, i64>(0))
+                    .optional()
+                    .map_err(|e| e.to_string())?
+                {
+                    rowids.push(rowid);
+                }
+            }
+        }
+        for rowid in rowids {
             tx.execute("DELETE FROM messages_fts WHERE rowid=?1", params![rowid])
                 .ok();
         }
     }
-    tx.execute(
-        "DELETE FROM messages WHERE account_id=?1 AND folder=?2 AND uid=?3",
-        params![account_id, folder, uid],
-    )
-    .ok();
-    tx.execute(
-        "DELETE FROM message_bodies WHERE account_id=?1 AND folder=?2 AND uid=?3",
-        params![account_id, folder, uid],
-    )
-    .ok();
-    tx.execute(
-        "DELETE FROM remote_ids WHERE account_id=?1 AND folder=?2 AND uid=?3",
-        params![account_id, folder, uid],
-    )
-    .ok();
-    tx.commit().map_err(|e| e.to_string())?;
+    for uid in uids {
+        tx.execute(
+            "DELETE FROM messages WHERE account_id=?1 AND folder=?2 AND uid=?3",
+            params![account_id, folder, uid],
+        )
+        .ok();
+        tx.execute(
+            "DELETE FROM message_bodies WHERE account_id=?1 AND folder=?2 AND uid=?3",
+            params![account_id, folder, uid],
+        )
+        .ok();
+        tx.execute(
+            "DELETE FROM remote_ids WHERE account_id=?1 AND folder=?2 AND uid=?3",
+            params![account_id, folder, uid],
+        )
+        .ok();
+    }
     Ok(())
 }
 
@@ -2310,6 +2469,57 @@ pub fn set_local_flags(
                 params![v, account_id, folder, uid],
             )
             .ok();
+        }
+    }
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// 一行的标记改动：`seen` / `flagged` 为 `None` 表示不动这一列。
+///
+/// 字段都是拥有所有权的值：规则分类在循环里逐封累积这份清单，
+/// 借用的 `&str` 活不过循环体。
+pub struct FlagChange {
+    pub account_id: String,
+    pub folder: String,
+    pub uid: u32,
+    pub seen: Option<bool>,
+    pub flagged: Option<bool>,
+    pub labels: Option<String>,
+}
+
+/// 整批标记改动：一次连接、一个事务。
+///
+/// 规则分类要对几千封邮件逐行写结果，而每封单独走一次 `set_local_flags` 就是
+/// 「开一次 4.9GB 的库 + 一次事务提交」——实测每封 639ms，1000 封就是十分钟。
+/// 同一个事务里写完 600 行只要 0.4 秒。这里按行接收改动，循环里累积、最后一次性写。
+pub fn apply_flag_changes(changes: &[FlagChange]) -> Result<(), String> {
+    if changes.is_empty() {
+        return Ok(());
+    }
+    let mut conn = open()?;
+    let tx = conn.transaction().map_err(|e| e.to_string())?;
+    {
+        let mut seen_stmt = tx
+            .prepare("UPDATE messages SET seen=?1 WHERE account_id=?2 AND folder=?3 AND uid=?4")
+            .map_err(|e| e.to_string())?;
+        let mut flagged_stmt = tx
+            .prepare("UPDATE messages SET flagged=?1 WHERE account_id=?2 AND folder=?3 AND uid=?4")
+            .map_err(|e| e.to_string())?;
+        let mut labels_stmt = tx
+            .prepare("UPDATE messages SET labels=?1 WHERE account_id=?2 AND folder=?3 AND uid=?4")
+            .map_err(|e| e.to_string())?;
+        for change in changes {
+            if let Some(v) = change.seen {
+                let _ = seen_stmt.execute(params![v as i32, change.account_id, change.folder, change.uid]);
+            }
+            if let Some(v) = change.flagged {
+                let _ =
+                    flagged_stmt.execute(params![v as i32, change.account_id, change.folder, change.uid]);
+            }
+            if let Some(labels) = change.labels.as_deref() {
+                let _ = labels_stmt.execute(params![labels, change.account_id, change.folder, change.uid]);
+            }
         }
     }
     tx.commit().map_err(|e| e.to_string())?;

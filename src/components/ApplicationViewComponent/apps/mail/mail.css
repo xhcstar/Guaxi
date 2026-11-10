@@ -1296,6 +1296,16 @@
 /* 链接颜色不做全局覆盖：没有写颜色的链接沿用浏览器默认（与 Outlook 一致），
    邮件写死的颜色原样保留；暗色下看不清的链接由 colors.js 按对比度补救。 */
 
+/* 工单系统（Trac / Bugzilla）会把附件清单写成一串「孤儿」<li>：
+   没有 <ul> 包着，直接躺在 <td> 里。列表项标记默认画在内容盒之外（outside），
+   在带 cellpadding 的单元格里就一直往左挤，最后越过表格边框、落在纸面上
+   （用户反馈的「黑色圆点跑到了表格外」）。把这种不在列表容器里的 <li>
+   改成 inside，圆点回到文字行首，表格内外都成立。
+   真正的 <ul>/<ol> 列表保持默认位置，缩进与悬挂缩进都不变。 */
+.mail-body li:not(ul li):not(ol li):not(menu li) {
+  list-style-position: inside;
+}
+
 .mail-body blockquote {
   margin: 14px 0;
   padding: 2px 0 2px 14px;

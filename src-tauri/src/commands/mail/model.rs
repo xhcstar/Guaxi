@@ -954,3 +954,12 @@ pub struct AttachmentCheck {
     pub level: String,
     pub detail: String,
 }
+
+/// 会话里一封邮件的定位：批量读正文时一次传整条会话的 keys。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MessageKey {
+    pub account_id: String,
+    pub folder: String,
+    pub uid: u32,
+}

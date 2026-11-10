@@ -1520,15 +1520,32 @@ export const useMailStore = defineStore('mail', {
         deltas.set(key, entry)
       }
       try {
+        // 先用一条命令把「本地正文已就绪」的整批读出来：逐封调用后端命令时，
+        // 每封都要重新打开一次 4.9GB 的邮件库，十几封的会话光这一项就要好几秒。
+        // 返回 null 的那几封说明本地没有可用缓存，再按原路径逐封补拉。
+        let prefetched = []
+        try {
+          const keys = rows.map((item) => ({
+            accountId: item.accountId,
+            folder: item.folder,
+            uid: item.uid,
+          }))
+          prefetched = (await invoke('mail_thread_details', { keys })) || []
+        } catch (error) {
+          logger.warn('批量读取会话正文失败，退回逐封读取', error)
+          prefetched = []
+        }
         const details = await Promise.all(
-          rows.map((item) =>
-            invoke('mail_get_message', {
+          rows.map((item, index) => {
+            const ready = prefetched[index]
+            if (ready) return Promise.resolve(ready)
+            return invoke('mail_get_message', {
               accountId: item.accountId,
               folder: item.folder,
               uid: item.uid,
               force: false,
-            }).catch(() => null),
-          ),
+            }).catch(() => null)
+          }),
         )
         // 取不到正文的那几封也要留在会话里：直接 filter 掉等于「静默少一封」，
         // 而用户最不能接受的就是这个。用摘要拼一张占位卡片，把原因写在正文位置。

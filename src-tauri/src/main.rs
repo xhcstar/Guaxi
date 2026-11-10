@@ -843,6 +843,7 @@ async fn app_main() {
             commands::mail::mail_suggest,
             commands::mail::mail_labels,
             commands::mail::mail_thread,
+            commands::mail::mail_thread_details,
             commands::mail::mail_get_message,
             commands::mail::mail_set_seen,
             commands::mail::mail_set_flagged,

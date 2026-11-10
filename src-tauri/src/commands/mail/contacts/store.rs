@@ -696,15 +696,17 @@ fn score_match(text: &str, q: &str) -> u32 {
 // 与邮件的往来
 // ---------------------------------------------------------------------------
 
-/// 列出与某联系人的往来邮件。`direction` 由「发件人是否是他」推出。
-pub fn messages_with(contact: &Contact, limit: u32) -> Result<Vec<ContactMessage>, String> {
-    let emails = contact.all_emails();
-    if emails.is_empty() {
-        return Ok(Vec::new());
-    }
-    let conn = store::connection()?;
-    let placeholders = (0..emails.len())
-        .map(|i| format!("?{}", i + 1))
+/// `messages_with` 的 SQL 与参数。
+///
+/// 拆成纯函数是为了能直接核对「占位符个数 == 参数个数」：`?1..?n` 这组编号在
+/// `direction` 与 `WHERE` 里各出现一次（SQLite 允许复用编号，只算一个参数），
+/// 收件人 LIKE 必须从 `?n+1` 往后排。老代码按「两遍地址」算了偏移，
+/// 1 个地址时绑 4 个参数给 3 个占位符，rusqlite 直接报
+/// 「Wrong number of parameters passed to query」，联系人详情整块打不开。
+fn messages_with_sql(emails: &[String], limit: u32) -> (String, Vec<Box<dyn rusqlite::ToSql>>) {
+    let n = emails.len();
+    let placeholders = (1..=n)
+        .map(|i| format!("?{i}"))
         .collect::<Vec<_>>()
         .join(",");
     let sql = format!(
@@ -713,20 +715,27 @@ pub fn messages_with(contact: &Contact, limit: u32) -> Result<Vec<ContactMessage
          FROM messages
          WHERE LOWER(from_addr) IN ({placeholders}) OR LOWER(to_json) LIKE ?{}
          ORDER BY date DESC LIMIT ?{}",
-        emails.len() + 1,
-        emails.len() + 2
+        n + 1,
+        n + 2
     );
-    let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
     let mut args: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
-    for email in &emails {
-        args.push(Box::new(email.clone()));
-    }
-    for email in &emails {
+    for email in emails {
         args.push(Box::new(email.clone()));
     }
     args.push(Box::new(format!("%{}%", emails[0])));
     args.push(Box::new(limit as i64));
+    (sql, args)
+}
 
+/// 列出与某联系人的往来邮件。`direction` 由「发件人是否是他」推出。
+pub fn messages_with(contact: &Contact, limit: u32) -> Result<Vec<ContactMessage>, String> {
+    let emails = contact.all_emails();
+    if emails.is_empty() {
+        return Ok(Vec::new());
+    }
+    let conn = store::connection()?;
+    let (sql, args) = messages_with_sql(&emails, limit);
+    let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
     let refs: Vec<&dyn rusqlite::ToSql> = args.iter().map(|b| b.as_ref()).collect();
     let rows = stmt
         .query_map(refs.as_slice(), |r| {
@@ -1540,6 +1549,53 @@ mod tests {
     fn score_prefers_prefix() {
         assert!(score_match("张三", "张") > score_match("我是张三", "张"));
         assert!(score_match("Zhang San", "zh") > score_match("San Zhang", "zh"));
+    }
+
+    // 详情页打不开就是因为这里：占位符多了/少了，rusqlite 直接报
+    // 「Wrong number of parameters passed to query」。
+    #[test]
+    fn messages_with_binds_exactly_the_placeholders_it_declares() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE messages (
+                account_id TEXT, folder TEXT, uid INTEGER, subject TEXT, date INTEGER,
+                snippet TEXT, from_addr TEXT, to_json TEXT, cc_json TEXT
+            );",
+        )
+        .unwrap();
+        conn.execute_batch(
+            "INSERT INTO messages VALUES
+                ('a','INBOX',1,'收到','2026-01-02','s','alice@x.com','[]','[]'),
+                ('a','INBOX',2,'发出','2026-01-03','s','me@x.com',
+                 '[{\"address\":\"alice@x.com\"}]','[]'),
+                ('a','INBOX',3,'无关','2026-01-04','s','bob@x.com',
+                 '[{\"address\":\"bob@x.com\"}]','[]');",
+        )
+        .unwrap();
+
+        for n in 1..=3usize {
+            let emails: Vec<String> = (0..n).map(|i| format!("alice{i}@x.com")).collect();
+            let (sql, args) = messages_with_sql(&emails, 50);
+            let refs: Vec<&dyn rusqlite::ToSql> = args.iter().map(|b| b.as_ref()).collect();
+            let mut stmt = conn.prepare(&sql).unwrap();
+            let rows = stmt
+                .query_map(refs.as_slice(), |r| r.get::<_, u32>(2))
+                .unwrap();
+            rows.collect::<rusqlite::Result<Vec<_>>>().unwrap_or_else(|e| {
+                panic!("{n} 个地址时查询失败: {e}\nSQL: {sql}")
+            });
+        }
+
+        let (sql, args) = messages_with_sql(&["alice@x.com".to_string()], 50);
+        let refs: Vec<&dyn rusqlite::ToSql> = args.iter().map(|b| b.as_ref()).collect();
+        let uids: Vec<u32> = conn
+            .prepare(&sql)
+            .unwrap()
+            .query_map(refs.as_slice(), |r| r.get(2))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+        assert_eq!(uids, vec![2, 1], "收发两个方向都要命中，且按日期倒序");
     }
 
     fn email_member(email: &str) -> GroupMember {

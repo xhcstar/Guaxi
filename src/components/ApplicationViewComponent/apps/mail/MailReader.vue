@@ -240,7 +240,7 @@
                 :title="`用系统默认程序打开 ${att.filename}`"
                 @click="$emit('open-attachment', { attachment: att, detail })"
               >
-                <span aria-hidden="true">{{ iconFor(att.contentType) }}</span>
+                <Icon :icon="attachmentIcon(att)" width="16" height="16" aria-hidden="true" />
                 <span class="mail-attachment-name">{{ att.filename }}</span>
                 <span class="mail-attachment-size">{{ sizeLabel(att.size) }}</span>
               </button>
@@ -352,7 +352,7 @@
                     :title="`用系统默认程序打开 ${att.filename}`"
                     @click="$emit('open-attachment', { attachment: att, detail: msg })"
                   >
-                    <span aria-hidden="true">{{ iconFor(att.contentType) }}</span>
+                    <Icon :icon="attachmentIcon(att)" width="16" height="16" aria-hidden="true" />
                     <span class="mail-attachment-name">{{ att.filename }}</span>
                     <span class="mail-attachment-size">{{ sizeLabel(att.size) }}</span>
                   </button>
@@ -396,6 +396,7 @@
 <script setup>
 import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, onUpdated, ref, watch } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
+import { Icon } from '@iconify/vue'
 import { avatarSeed } from './theme'
 import { applyBodyTheme } from './colors'
 import { useMailReaderTools } from './useMailReaderTools'
@@ -403,6 +404,7 @@ import MailAddressCard from './MailAddressCard.vue'
 import { useMailSelectionTranslate } from './useMailSelectionTranslate'
 import { clearHighlight, highlightHtml, searchTokens } from './highlight'
 import { collectQuoteCards, collapseNestedQuotes, flattenQuoteCards, pruneEmptyQuotes } from './quoteCards'
+import { attachmentIcon } from './attachmentIcons'
 
 // 翻译面板是邮件页里唯一依赖 naive-ui 的组件：只在真正划词时加载。
 const GuaxiSelectionTranslatePanel = defineAsyncComponent(
@@ -590,6 +592,34 @@ function applyThemeColors() {
   applyBodyTheme(scrollRef.value, props.themeMode === 'light' ? 'light' : 'dark')
 }
 
+/**
+ * 正文 DOM 的「内容指纹」：主题、图片状态与正文本身。
+ *
+ * 颜色映射要对整棵正文树逐元素做 `getComputedStyle`（会话视图里是几十张卡片、
+ * 上万节点），而 `onUpdated` 是在**每次** patch 后都会跑的——点一下星标、切换
+ * 已读状态都会触发。指纹没变说明正文 DOM 没被重设，跳过这次映射：
+ * 映射是幂等的，重复跑只会白花时间。
+ */
+const bodySignature = computed(() =>
+  [
+    props.themeMode,
+    imagesBlocked.value ? 'blocked' : 'shown',
+    props.detail ? `${props.detail.accountId}:${props.detail.folder}:${props.detail.uid}` : '',
+    (props.thread || []).map((m) => `${m.accountId}:${m.folder}:${m.uid}:${m.html?.length || 0}`).join(','),
+    renderedHtml.value.length,
+    highlightTokens.value.join('\u0000'),
+  ].join('|'),
+)
+let appliedSignature = ''
+
+function reapplyBodyDecor() {
+  const signature = bodySignature.value
+  if (signature === appliedSignature) return
+  appliedSignature = signature
+  applyThemeColors()
+  applySearchHighlight()
+}
+
 const renderedHtml = computed(() => {
   const html = props.detail?.html
   if (!html) return ''
@@ -624,22 +654,20 @@ function applySearchHighlight() {
 watch(
   [renderedHtml, () => props.themeMode, () => props.thread, imagesAllowed, highlightTokens],
   () => {
-    applyThemeColors()
-    applySearchHighlight()
+    appliedSignature = ''
+    reapplyBodyDecor()
   },
   { flush: 'post' },
 )
 onMounted(() => {
-  applyThemeColors()
-  applySearchHighlight()
+  appliedSignature = ''
+  reapplyBodyDecor()
 })
 // Vue 在每次组件更新时都会无条件重设 v-html 的 innerHTML；颜色映射与高亮写在 DOM 上，
 // 会被下一次更新（标记已读、工具栏状态变化等）整个冲掉。只在 watch 里跑不够，
-// 这里在每次 patch 之后补一遍。两者都是幂等的，重复执行不会越改越暗 / 越包越深。
-onUpdated(() => {
-  applyThemeColors()
-  applySearchHighlight()
-})
+// 这里在每次 patch 之后补一遍。两者都是幂等的；指纹没变时直接跳过，
+// 否则每点一次星标都要把整条会话的正文重新走一遍映射。
+onUpdated(reapplyBodyDecor)
 
 /** 点面板以外的地方收起译文（「固定」时不收，用户要它留着对照看）。 */
 function onTranslateOutside(event) {
@@ -685,18 +713,39 @@ function threadCcList(message) {
   return (message.cc || []).filter((item) => item?.address).slice(0, 4)
 }
 
-/** 会话里每封邮件的正文：历史和嵌套引用已经由上方卡片呈现，这里直接去掉。 */
+/**
+ * 会话里每封邮件的正文：历史和嵌套引用已经由上方卡片呈现，这里直接去掉。
+ *
+ * 结果按「邮件 + 是否允许图片」缓存：这是模板里的函数调用，每次组件 patch 都会
+ * 重跑；不缓存的话，点一下星标就要把整条会话的正文重新解析 + 摘卡片 + 序列化一遍
+ * （十几封的会话每次几十毫秒，而且会连带把颜色映射整棵重跑）。
+ * 缓存本身很小（一串 HTML 字符串），跟着会话存亡即可。
+ */
+const threadBodies = new Map() // 见 threadBody 的缓存键
+
 function threadBody(message) {
-  if (message.html) {
-    const prepared = imagesBlocked.value
-      ? maskBlockedImages(message.html)
-      : restoreRemoteImages(message.html)
-    return upgradeQuoteCards(prepared, { dropQuotes: true })
-  }
-  return `<pre class="mail-body--plain" style="white-space:pre-wrap;margin:0">${escapeHtml(
-    message.text || '',
-  )}</pre>`
+  const cacheKey = `${message.accountId}:${message.folder}:${message.uid}:${
+    imagesBlocked.value ? 'b' : 's'
+  }:${message.html?.length || 0}`
+  const hit = threadBodies.get(cacheKey)
+  if (hit !== undefined) return hit
+  const html = message.html
+    ? upgradeQuoteCards(
+        imagesBlocked.value ? maskBlockedImages(message.html) : restoreRemoteImages(message.html),
+        { dropQuotes: true },
+      )
+    : `<pre class="mail-body--plain" style="white-space:pre-wrap;margin:0">${escapeHtml(
+        message.text || '',
+      )}</pre>`
+  threadBodies.set(cacheKey, html)
+  return html
 }
+
+// 换会话 / 换邮件就把上一批正文丢掉：留着只是白占内存。
+watch(
+  () => [props.detail?.accountId, props.detail?.folder, props.detail?.uid, props.thread],
+  () => threadBodies.clear(),
+)
 
 function escapeHtml(text) {
   return String(text)
@@ -1009,17 +1058,5 @@ function sizeLabel(bytes) {
   if (n < 1024) return `${n} B`
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`
   return `${(n / 1024 / 1024).toFixed(1)} MB`
-}
-
-function iconFor(contentType) {
-  const type = String(contentType || '').toLowerCase()
-  if (type.startsWith('image/')) return '🖼'
-  if (type.startsWith('audio/')) return '♪'
-  if (type.startsWith('video/')) return '▶'
-  if (type.includes('pdf')) return 'PDF'
-  if (type.includes('zip') || type.includes('compressed')) return '⌸'
-  if (type.includes('word') || type.includes('document')) return 'W'
-  if (type.includes('sheet') || type.includes('excel')) return 'X'
-  return '📄'
 }
 </script>

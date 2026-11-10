@@ -1230,6 +1230,9 @@ async fn apply_rules_to_new(
     let mut moves: HashMap<(String, String), Vec<u32>> = HashMap::new();
     let mut flag_batches: HashMap<(String, bool, bool), Vec<u32>> = HashMap::new();
     let mut forwards: Vec<(usize, Vec<String>)> = Vec::new();
+    // 本地标记改动累积到循环末尾一次写：逐封写就是逐封开一次 4.9GB 的库，
+    // 实测每封 639ms（几千封＝十几分钟），同一个事务里写整批只要零点几秒。
+    let mut flag_changes: Vec<store::FlagChange> = Vec::new();
 
     for (index, msg) in messages.iter().enumerate() {
         if msg.outgoing {
@@ -1295,16 +1298,14 @@ async fn apply_rules_to_new(
 
         let labels =
             rules::apply_label_delta(&msg.labels, &merged.add_labels, &merged.remove_labels);
-        if let Err(e) = store::set_local_flags(
-            &msg.account_id,
-            &msg.folder,
-            &[msg.uid],
-            if merged.mark_read { Some(true) } else { None },
-            if merged.star { Some(true) } else { None },
-            Some(&labels),
-        ) {
-            warn!(error = %e, "mail: 写入规则结果失败");
-        }
+        flag_changes.push(store::FlagChange {
+            account_id: msg.account_id.clone(),
+            folder: msg.folder.clone(),
+            uid: msg.uid,
+            seen: if merged.mark_read { Some(true) } else { None },
+            flagged: if merged.star { Some(true) } else { None },
+            labels: Some(labels),
+        });
 
         if merged.mark_read || merged.star {
             flag_batches
@@ -1331,6 +1332,11 @@ async fn apply_rules_to_new(
         if !merged.forward_to.is_empty() {
             forwards.push((index, merged.forward_to));
         }
+    }
+
+    // 本地标记（已读 / 星标 / 标签）整批一次写完：逐封写就是逐封开一次库。
+    if let Err(e) = store::apply_flag_changes(&flag_changes) {
+        warn!(error = %e, count = flag_changes.len(), "mail: 写入规则结果失败");
     }
 
     // 转发要在搬运之前：它读的是原文件夹里的原文，邮件被搬走之后就取不到了。
@@ -1420,9 +1426,7 @@ async fn apply_rule_move_batch(account: &Account, folder: &str, uids: &[u32], ta
             .await
         {
             Ok(Ok(())) => {
-                for uid in uids {
-                    let _ = store::delete_message(&account.id, folder, *uid);
-                }
+                let _ = store::delete_messages(&account.id, folder, uids);
             }
             Ok(Err(e)) => error!(error = %e, "mail: 规则移动邮件失败（Graph）"),
             Err(e) => error!(error = %e, "mail: 规则移动任务失败（Graph）"),
@@ -1436,9 +1440,7 @@ async fn apply_rule_move_batch(account: &Account, folder: &str, uids: &[u32], ta
             .await
         {
             Ok(Ok(())) => {
-                for uid in uids {
-                    let _ = store::delete_message(&account.id, folder, *uid);
-                }
+                let _ = store::delete_messages(&account.id, folder, uids);
             }
             Ok(Err(e)) => error!(error = %e, "mail: 规则移动邮件失败（EWS）"),
             Err(e) => error!(error = %e, "mail: 规则移动任务失败（EWS）"),
@@ -1455,9 +1457,7 @@ async fn apply_rule_move_batch(account: &Account, folder: &str, uids: &[u32], ta
     .await;
     match moved {
         Ok(Ok(())) => {
-            for uid in uids {
-                let _ = store::delete_message(&account.id, folder, *uid);
-            }
+            let _ = store::delete_messages(&account.id, folder, uids);
         }
         Ok(Err(e)) => error!(
             error = %e,
@@ -1767,13 +1767,18 @@ pub async fn mail_get_message(
     force: Option<bool>,
 ) -> Result<MessageDetail, String> {
     ensure_init(&app)?;
-    let mut summary = store::get_summary(&account_id, &folder, uid)?
+    // 摘要 / 正文 / 渲染版本一次连接读完：打开 4.9GB 的库约 50ms，而点查本身是
+    // 微秒级。分成四五次 open 的话，一封邮件光在打开库上就要两百毫秒。
+    let records = store::open_records(&account_id, &folder, uid)?;
+    let mut summary = records
+        .summary
         .ok_or_else(|| "本地没有这封邮件的记录".to_string())?;
+    let render_version = records.render_version;
 
     let cached = if force.unwrap_or(false) {
         None
     } else {
-        store::get_body(&account_id, &folder, uid)?
+        records.body
     };
     let (cached_html, cached_text, cached_attachments, fetched) =
         cached.unwrap_or((None, String::new(), "[]".into(), false));
@@ -1788,7 +1793,6 @@ pub async fn mail_get_message(
     // 表格排版的清洗规则变过：旧的缓存正文里 border / cellpadding / bgcolor
     // 已经被剥掉，重新打开时要按原文重新解析一次才能恢复。只对含 <table> 的
     // 旧缓存触发，避免所有邮件都重新下载一遍。
-    let render_version = store::body_render_version(&account_id, &folder, uid).unwrap_or(0);
     let stale_table_render = render_version < store::TABLE_RENDER_VERSION
         && cached_html
             .as_deref()
@@ -1995,6 +1999,83 @@ pub async fn mail_get_message(
     Ok(detail)
 }
 
+/// 一条会话里所有「本地正文已就绪」的邮件：一次连接读完。
+///
+/// 会话视图逐封调用 `mail_get_message` 时，每封都要重新打开一次 4.9GB 的库；
+/// 十四封的会话光打开库就要几秒（用户反馈「读信做不到秒开」）。这里只开一次连接，
+/// 能直接用缓存的直接返回详情，需要回服务器补正文的返回 `null` —— 前端再按原路
+/// 逐封补拉。渲染结果与单封路径完全一致（同一套渲染版本判定）。
+#[command]
+pub async fn mail_thread_details(
+    app: AppHandle,
+    keys: Vec<model::MessageKey>,
+) -> Result<Vec<Option<MessageDetail>>, String> {
+    ensure_init(&app)?;
+    let keys: Vec<(String, String, u32)> = keys
+        .into_iter()
+        .map(|k| (k.account_id, k.folder, k.uid))
+        .collect();
+    let records = store::open_thread_records(&keys)?;
+    let mut out = Vec::with_capacity(records.len());
+    let mut unseen_folders: Vec<String> = Vec::new();
+    for record in records {
+        let Some(summary) = record.summary else {
+            out.push(None);
+            continue;
+        };
+        let Some((cached_html, cached_text, cached_attachments, fetched)) = record.body else {
+            out.push(None);
+            continue;
+        };
+        let fresh = fetched
+            && !cached_needs_refetch(cached_html.as_deref())
+            && !cached_html
+                .as_deref()
+                .is_some_and(|html| html.to_ascii_lowercase().contains("<style"))
+            && record.render_version >= store::RENDER_VERSION
+            && record.render_version >= store::TABLE_RENDER_VERSION;
+        if !fresh {
+            out.push(None);
+            continue;
+        }
+        let mut detail = store::base_detail(&summary);
+        detail.html = cached_html;
+        detail.text = cached_text;
+        detail.attachments = serde_json::from_str(&cached_attachments).unwrap_or_default();
+        detail.seen = summary.seen;
+        // 打开即已读：单封路径本来就由后端落库，批量路径不能把这件事漏掉，
+        // 否则会话读完后列表里仍是粗体。按文件夹合并成一次写入。
+        if !summary.seen {
+            unseen_folders.push(summary.folder.clone());
+            detail.seen = true;
+        }
+        out.push(Some(detail));
+    }
+    // 逐封写已读就是逐封开库；按文件夹整批写一次（同一账户的会话）。
+    unseen_folders.sort();
+    unseen_folders.dedup();
+    if let Some((account_id, _, _)) = keys.first() {
+        for folder in unseen_folders {
+            let uids: Vec<u32> = keys
+                .iter()
+                .filter(|(acc, f, _)| acc == account_id && *f == folder)
+                .map(|(_, _, uid)| *uid)
+                .collect();
+            // 服务器端的标记仍走单封路径同一条通道（离线可重放），
+            // 本地行由它内部一并写，不重复提交。
+            let _ = mark_seen_inner(account_id, &folder, &uids, true).await;
+        }
+    }
+    Ok(out)
+}
+
+/// 缓存正文是否需要回服务器重新解析（`cid:` 内联图 / 旧渲染版本）。
+fn cached_needs_refetch(cached_html: Option<&str>) -> bool {
+    cached_html
+        .map(|html| html.to_ascii_lowercase().contains("cid:"))
+        .unwrap_or(false)
+}
+
 #[command]
 pub async fn mail_set_seen(
     app: AppHandle,
@@ -2006,7 +2087,6 @@ pub async fn mail_set_seen(
     ensure_init(&app)?;
     mark_seen_inner(&account_id, &folder, &uids, seen).await
 }
-
 async fn mark_seen_inner(
     account_id: &str,
     folder: &str,
@@ -2179,9 +2259,7 @@ pub async fn mail_move_messages(
         tauri::async_runtime::spawn_blocking(move || graph::move_messages(&acc, &f, &u, &t))
             .await
             .map_err(|e| format!("移动任务失败: {e}"))??;
-        for uid in &uids {
-            let _ = store::delete_message(&account_id, &folder, *uid);
-        }
+        let _ = store::delete_messages(&account_id, &folder, &uids);
         return Ok(());
     }
     if ews::is_ews(&account) {
@@ -2190,9 +2268,7 @@ pub async fn mail_move_messages(
         tauri::async_runtime::spawn_blocking(move || ews::move_messages(&acc, &f, &u, &t))
             .await
             .map_err(|e| format!("移动任务失败: {e}"))??;
-        for uid in &uids {
-            let _ = store::delete_message(&account_id, &folder, *uid);
-        }
+        let _ = store::delete_messages(&account_id, &folder, &uids);
         return Ok(());
     }
     let acc = account.clone();
@@ -2201,9 +2277,7 @@ pub async fn mail_move_messages(
     })
     .await
     .map_err(|e| format!("移动任务失败: {e}"))?;
-    for uid in &uids {
-        let _ = store::delete_message(&account_id, &folder, *uid);
-    }
+    let _ = store::delete_messages(&account_id, &folder, &uids);
     match server {
         Ok(()) => Ok(()),
         Err(e) => write_with_fallback(&account, op, || Err(e)),
@@ -2227,9 +2301,7 @@ fn pop3_delete_to_trash(account: &Account, folder: &str, uids: &[u32]) -> Result
             return move_locally(&account.id, folder, uids, &trash);
         }
     }
-    for uid in uids {
-        let _ = store::delete_message(&account.id, folder, *uid);
-    }
+    let _ = store::delete_messages(&account.id, folder, uids);
     if folder == pop3_sync::INBOX {
         let _ = pop3_sync::sync_counts(account);
     }
@@ -2295,9 +2367,7 @@ pub async fn mail_delete_messages(
         })
         .await
         .map_err(|e| format!("删除任务失败: {e}"))??;
-        for uid in &uids {
-            let _ = store::delete_message(&account_id, &folder, *uid);
-        }
+        let _ = store::delete_messages(&account_id, &folder, &uids);
         return Ok(());
     }
     if ews::is_ews(&account) {
@@ -2309,9 +2379,7 @@ pub async fn mail_delete_messages(
         })
         .await
         .map_err(|e| format!("删除任务失败: {e}"))??;
-        for uid in &uids {
-            let _ = store::delete_message(&account_id, &folder, *uid);
-        }
+        let _ = store::delete_messages(&account_id, &folder, &uids);
         return Ok(());
     }
 
@@ -2335,9 +2403,7 @@ pub async fn mail_delete_messages(
             .map_err(|e| format!("删除任务失败: {e}"))??;
         }
     }
-    for uid in &uids {
-        let _ = store::delete_message(&account_id, &folder, *uid);
-    }
+    let _ = store::delete_messages(&account_id, &folder, &uids);
     Ok(())
 }
 
@@ -2660,9 +2726,7 @@ async fn move_batch(
         tauri::async_runtime::spawn_blocking(move || graph::move_messages(&acc, &f, &batch, &t))
             .await
             .map_err(|e| format!("移动任务失败: {e}"))??;
-        for uid in uids {
-            let _ = store::delete_message(account_id, folder, *uid);
-        }
+        let _ = store::delete_messages(account_id, folder, uids);
         return Ok(());
     }
     if ews::is_ews(&account) {
@@ -2671,9 +2735,7 @@ async fn move_batch(
         tauri::async_runtime::spawn_blocking(move || ews::move_messages(&acc, &f, &batch, &t))
             .await
             .map_err(|e| format!("移动任务失败: {e}"))??;
-        for uid in uids {
-            let _ = store::delete_message(account_id, folder, *uid);
-        }
+        let _ = store::delete_messages(account_id, folder, uids);
         return Ok(());
     }
     let password = account_password(&account)?;
@@ -2682,9 +2744,7 @@ async fn move_batch(
     tauri::async_runtime::spawn_blocking(move || imap::move_messages(&acc, &password, &f, &batch, &t))
         .await
         .map_err(|e| format!("移动任务失败: {e}"))??;
-    for uid in uids {
-        let _ = store::delete_message(account_id, folder, *uid);
-    }
+    let _ = store::delete_messages(account_id, folder, uids);
     Ok(())
 }
 
@@ -2777,9 +2837,7 @@ pub async fn mail_batch_delete(
         })
         .await
         .map_err(|e| format!("删除任务失败: {e}"))??;
-        for uid in &uids {
-            let _ = store::delete_message(&account_id, &folder, *uid);
-        }
+        let _ = store::delete_messages(&account_id, &folder, &uids);
         return Ok(());
     }
     if ews::is_ews(&account_for_protocol) {
@@ -2789,9 +2847,7 @@ pub async fn mail_batch_delete(
         tauri::async_runtime::spawn_blocking(move || ews::delete_messages(&acc, &f, &u, permanent))
             .await
             .map_err(|e| format!("删除任务失败: {e}"))??;
-        for uid in &uids {
-            let _ = store::delete_message(&account_id, &folder, *uid);
-        }
+        let _ = store::delete_messages(&account_id, &folder, &uids);
         return Ok(());
     }
 
@@ -2811,9 +2867,7 @@ pub async fn mail_batch_delete(
             move_batch(&app, &account_id, &folder, &uids, &trash).await?;
         }
     }
-    for uid in &uids {
-        let _ = store::delete_message(&account_id, &folder, *uid);
-    }
+    let _ = store::delete_messages(&account_id, &folder, &uids);
     Ok(())
 }
 

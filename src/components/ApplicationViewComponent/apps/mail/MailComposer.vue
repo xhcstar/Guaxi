@@ -658,7 +658,8 @@
           :title="warningFor(att.name) || `移除 ${att.path}`"
           @click="removeAttachment(att.path)"
         >
-          <span>{{ isDangerous(att.name) ? '⚠' : '📄' }}</span>
+          <MailIcon v-if="isDangerous(att.name)" name="warning" :size="15" />
+          <Icon v-else :icon="attachmentIcon({ filename: att.name })" width="16" height="16" />
           <span class="mail-attachment-name">{{ att.name }}</span>
           <span v-if="sizeHint(att.path)" class="mail-attachment-size">{{ sizeHint(att.path) }}</span>
           <span class="mail-attachment-size">×</span>
@@ -1107,6 +1108,7 @@
 <script setup>
 import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { NIcon } from 'naive-ui'
+import { Icon } from '@iconify/vue'
 import { ContractOutline, ExpandOutline } from '@vicons/ionicons5'
 import { open } from '@tauri-apps/plugin-dialog'
 import { convertFileSrc, invoke } from '@tauri-apps/api/core'
@@ -1124,6 +1126,7 @@ import {
 } from './palette'
 import { buildTableHtml } from './composeTable'
 import { flattenQuoteCards } from './quoteCards'
+import { attachmentIcon } from './attachmentIcons'
 import { applyBodyThemeToElements } from './colors'
 import { useMailSelectionTranslate } from './useMailSelectionTranslate'
 import {
