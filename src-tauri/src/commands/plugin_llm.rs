@@ -58,6 +58,8 @@ fn resolve_provider(model_id: Option<i32>) -> Result<ResolvedProvider, String> {
     ))
 }
 
+// 只服务于下面的单元测试：生产路径直接用 extract_text_ex 拿 (文本, 是否 reasoning)。
+#[cfg(test)]
 fn extract_text(v: &Value) -> Option<String> {
     extract_text_ex(v).map(|(text, _)| text)
 }

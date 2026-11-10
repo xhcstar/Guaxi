@@ -44,7 +44,7 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 #[cfg(all(windows, not(debug_assertions)))]
 fn apply_no_window(cmd: &mut Command) {
-    use std::os::windows::process::CommandExt;
+    // tokio::process::Command 在 Windows 上自带 creation_flags，无需 std 的 CommandExt trait。
     cmd.creation_flags(CREATE_NO_WINDOW);
 }
 
