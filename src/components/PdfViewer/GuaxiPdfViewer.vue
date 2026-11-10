@@ -2864,14 +2864,13 @@ onBeforeUnmount(() => {
   color: var(--gpv-overlay-text);
   font-size: 13px;
   padding: 0 24px;
+  backdrop-filter: blur(1px);
 }
 .gpv__overlay-text {
   max-width: min(80%, 560px);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-  backdrop-filter: blur(1px);
 }
 .gpv__spinner {
   width: 16px;
