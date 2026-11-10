@@ -96,10 +96,18 @@ Guaxi 是一款面向**个人知识工作流**的桌面软件。它不要求你�
 
 | 场景 | 亮色 | 暗色 |
 |:--|:-:|:-:|
+| **知识编辑**<br/>多标签 Markdown、大纲树与实时预览 | <img src="docs/assets/screens/knowledge-light.png" width="420" /> | <img src="docs/assets/screens/knowledge-dark.png" width="420" /> |
 | **Agent 工作台**<br/>任务目录、工具调用、运行账本与右侧仪表 | <img src="docs/assets/screens/agent-light.png" width="420" /> | <img src="docs/assets/screens/agent-dark.png" width="420" /> |
 | **仓库 · 书架**<br/>知识库筛选与文档封面 | <img src="docs/assets/screens/library-light.png" width="420" /> | <img src="docs/assets/screens/library-dark.png" width="420" /> |
 | **知识源**<br/>分类、文章流与收藏 | <img src="docs/assets/screens/feeds-light.png" width="420" /> | <img src="docs/assets/screens/feeds-dark.png" width="420" /> |
 | **大脑 · 认知层**<br/>当日简报、提醒与收件箱 | <img src="docs/assets/screens/cognition-light.png" width="420" /> | <img src="docs/assets/screens/cognition-dark.png" width="420" /> |
+
+编辑器里公式与图表都是本地渲染的块级元素，不依赖外部服务：
+
+| 数学公式 | 图表 |
+|:-:|:-:|
+| <img src="docs/assets/screens/knowledge-math.png" width="420" /> | <img src="docs/assets/screens/knowledge-charts.png" width="420" /> |
+| 行内与块级 LaTeX，由 Vditor 内置 KaTeX 渲染 | ECharts 图表，支持自定义 `option` 与导出 SVG / PNG |
 
 ## 系统要求
 
