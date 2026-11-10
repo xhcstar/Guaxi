@@ -16,7 +16,14 @@ import {
   weekdayCn,
 } from './travelUtils.js'
 import { PACE_OPTIONS, TRANSPORT_OPTIONS } from './travelPlan.js'
-import { homeGuardKm, pickNearAnchor } from './travelEngine.js'
+import {
+  dailyDetourBudgetKm,
+  dailyTransitLimitMinutes,
+  homeGuardKm,
+  mealGuardKm,
+  pickNearAnchor,
+  pruneStopsByDetour,
+} from './travelEngine.js'
 import { validateDayBlocks } from './travelValidate.js'
 
 const SYSTEM_PROMPT = `你是一名资深中文旅行规划师，擅长把真实 POI 与真实路线编排成可执行的行程。
@@ -62,6 +69,13 @@ function topPois(items, count, used = new Set()) {
 
 function transportLabel(value) {
   return TRANSPORT_OPTIONS.find((item) => item.value === value)?.label || '自驾'
+}
+
+// 一天的可用时长：出发到结束，用来把「在途占比」换算成分钟上限。
+function dayWindowMinutes(form) {
+  const start = timeToMinutes(form?.startTime || '08:30')
+  const end = timeToMinutes(form?.endTime || '20:30')
+  return start != null && end != null && end > start ? end - start : 0
 }
 
 function paceLabel(value) {
@@ -195,12 +209,34 @@ export function normalizeOutline(raw, { form, facts }) {
     }
     if (index === dates.length - 1) hotelId = ''
 
+    // 模型常把一天塞到 5-6 个点，真实路线一算就是整天赶路。
+    // 先按绕行预算裁掉绕得最远的那一站，再交给路线计算，避免"看着很满、其实没玩到"。
+    const startPoint = index === 0 ? facts.origin : facts.destination || facts.origin
+    const endPoint = index === dates.length - 1 ? facts.origin : facts.destination || facts.origin
+    const ordered = mixed
+      .slice(0, 6)
+      .map((stop) => ({ stop, poi: map.get(stop.poiId) }))
+      .filter((item) => item.poi)
+    const pruned = pruneStopsByDetour(
+      ordered.map((item) => item.poi),
+      {
+        start: startPoint,
+        end: endPoint,
+        budgetKm: dailyDetourBudgetKm(form, dayWindowMinutes(form)),
+        keepIds: new Set(ordered.filter((item) => item.poi.must).map((item) => item.poi.id)),
+      },
+    )
+    const keptIds = new Set(pruned.stops.map((poi) => poi.id))
+    const trimmed = ordered
+      .filter((item) => keptIds.has(item.poi.id))
+      .map((item) => item.stop)
+
     return {
       date,
       weekday: weekdayCn(date),
       theme: safeText(source.theme) || (index === 0 ? '抵达与初见' : '慢慢逛'),
       area: safeText(source.area),
-      stops: mixed.slice(0, 6),
+      stops: trimmed,
       hotelId,
       paceNote: safeText(source.paceNote),
     }
@@ -302,6 +338,19 @@ function legWeatherLines(legs) {
     .join('\n')
 }
 
+// 沿途餐馆单独成段：跨城那天午饭本就该在途中城镇解决，混在普通餐饮里模型会忽略。
+function alongFoodLines(facts) {
+  const along = (facts.food || []).filter((poi) => poi.alongTime)
+  if (!along.length) return ''
+  return `【沿途顺路餐饮】（跨城路段中途，优先用于这一段路上的午饭/晚饭）
+${along
+  .map(
+    (poi) =>
+      `- ${poi.id} | ${poi.name} | ${poi.alongMeal === 'lunch' ? '午餐' : '晚餐'} ${poi.alongTime} 前后 | 评分 ${poi.rating ?? '未知'}`,
+  )
+  .join('\n')}`
+}
+
 export function buildDayPrompt({ form, facts, outlineDay, dayIndex, totalDays, legs, startName }) {
   const map = poiMap(facts)
   const stopLines = (outlineDay.stops || [])
@@ -316,6 +365,9 @@ export function buildDayPrompt({ form, facts, outlineDay, dayIndex, totalDays, l
   const season = seasonFor(outlineDay.date)
   const food = (facts.food || []).map(compactPoi)
   const hotels = (facts.hotels || []).map(compactPoi)
+  // 当天在途预算：给出分钟数，模型才知道“别把一天排成跨城赶路”。
+  const transitBudget = dailyTransitLimitMinutes(form, dayWindowMinutes(form))
+  const transitUsed = (legs || []).reduce((sum, leg) => sum + (Number(leg?.duration) || 0) / 60, 0)
   // 当天往返（含周末一日）不能出现住宿；多日行程只有非最后一晚才写酒店。
   const allowHotel = form.startDate !== form.endDate && dayIndex < totalDays - 1
   const startTime = form.startTime || '09:00'
@@ -331,6 +383,7 @@ export function buildDayPrompt({ form, facts, outlineDay, dayIndex, totalDays, l
 目的地天气：${weather ? `${weather.dayWeather || ''}，${weather.nightTemp ?? ''}~${weather.dayTemp ?? ''}℃，${weather.wind || ''}` : '暂无预报'}
 用户节奏：${paceLabel(form.pace)}；兴趣：${(form.interests || []).join('、') || '不限定'}
 当天结束时间：${form.endTime}
+当天的路段（已按真实路线算好，不要再增删停留点）：${legs?.length || 0} 段，在途约 ${Math.round(transitUsed)} 分钟
 
 【当天顺序】（已按地理位置排好）
 ${stopLines || '（没有候选点）'}
@@ -342,7 +395,8 @@ ${legPromptLines(legs) || '（当天只有一个点，无路段）'}
 ${legWeatherLines(legs) || '（沿途天气暂不可用，按季节与目的地天气判断）'}
 
 【可选餐饮】
-${food.map((poi) => `- ${poi.id} | ${poi.name} | 评分 ${poi.rating ?? '未知'}`).join('\n') || '（无）'}
+${food.map((poi) => `- ${poi.id} | ${poi.name} | 评分 ${poi.rating ?? '未知'}${poi.alongTime ? ` | 沿途 ${poi.alongMeal === 'lunch' ? '午餐' : '晚餐'} ${poi.alongTime} 前后` : ''}`).join('\n') || '（无）'}
+${alongFoodLines(facts)}
 ${allowHotel ? `
 【可选住宿】
 ${hotels.map((poi) => `- ${poi.id} | ${poi.name} | 参考人均 ${poi.cost ?? '未知'}`).join('\n') || '（无）'}
@@ -360,8 +414,10 @@ ${hotelExample}]}
 - 每个景点/餐饮/住宿块尽量带 poiId，且只能来自候选；不要编造新地点。
 - 景点 60-150 分钟，餐饮 45-90 分钟；节奏松弛就多留白，紧凑就少留白。
 - 结合沿途与目的地天气：有雨把户外点放到雨势较小的时段或准备室内备选；有雾提醒自驾降速；温差大提醒分层穿衣。
-- 第一天从 ${startTime} 之后开始，最后按用户结束时间 ${form.endTime} 收尾。
+- 第一天从 ${startTime} 之后开始，最后的活动在用户结束时间 ${form.endTime} 前结束（返程可以排在这之后）。
 - 时间覆盖 11:00-15:00 必须安排午餐；覆盖 17:00-20:30 必须安排晚餐。候选里没有合适的店时，写一顿“附近小店/简餐”，不要省略。
+- 午餐/晚餐必须安排在当天其他停留点附近（同城、12 km 内），不要排在家门口或返程终点附近。
+- 当天在途预算约 ${transitBudget} 分钟；上面的路段已经算好，不要为了多塞景点再加绕路。
 - 当天往返和最后一天不要安排住宿；需要过夜的那几天必须安排住宿。
 - 不写预算金额；tips 写排队、预约、停车、穿衣、点菜等真正有用的信息。`
 
@@ -655,6 +711,8 @@ export function normalizeDay(raw, { form, facts, outlineDay, dayIndex, totalDays
   blocks = blocks.sort((a, b) => (timeToMinutes(a.start) || 0) - (timeToMinutes(b.start) || 0))
   // 模型自由发挥的地点、超出半径的地点、时间倒挂的排法都在这里拦下，
   // 由调用方退回确定性编排，避免把不满足约束的计划交给用户。
+  // 收尾偏晚、当天在途过长不在这里判失败：这两项靠单日重排消除不了，
+  // 判失败会让所有长线行程都退回确定性编排；由最终计划校验给出提示。
   const problems = validateDayBlocks(
     { blocks, weather: null },
     {
@@ -664,6 +722,11 @@ export function normalizeDay(raw, { form, facts, outlineDay, dayIndex, totalDays
       allowHotel: form.startDate !== form.endDate,
       home: facts.origin,
       homeGuard: homeGuardKm(form),
+      mealGuard: mealGuardKm({
+        ...form,
+        origin: facts.origin,
+        destination: facts.destination,
+      }),
       requireLunch: (timeToMinutes(form.endTime) ?? 0) >= 13 * 60,
       requireDinner: (timeToMinutes(form.endTime) ?? 0) >= 19 * 60,
       requireHotel: form.startDate !== form.endDate && dayIndex < totalDays - 1,

@@ -52,15 +52,37 @@
 
           <div class="tr-explore-base-chips">
             <button
+              v-if="bases.length > 1"
+              type="button"
+              class="tr-chip is-plain"
+              :class="{ active: activeBase === 'all' }"
+              @click="$emit('switch-base', 'all')"
+            >
+              全部基地
+            </button>
+            <span
               v-for="(base, index) in bases"
               :key="base.id || base.name"
-              type="button"
-              class="tr-chip is-plain is-removable"
-              @click="$emit('remove-base', index)"
+              class="tr-explore-base-tab"
+              :class="{ active: isActiveBase(base) }"
             >
-              {{ base.name }}
-              <TravelIcon name="x" :size="11" />
-            </button>
+              <button
+                type="button"
+                class="tr-explore-base-tab-name"
+                :title="`查看 ${base.name} 的候选（不重新检索）`"
+                @click="$emit('switch-base', base.id || base.name)"
+              >
+                {{ base.name }}
+              </button>
+              <button
+                type="button"
+                class="tr-explore-base-tab-x"
+                :title="`移除 ${base.name}`"
+                @click="$emit('remove-base', index)"
+              >
+                <TravelIcon name="x" :size="11" />
+              </button>
+            </span>
             <span v-if="!bases.length" class="tr-explore-base-empty">还没有基地城市</span>
           </div>
           <div class="tr-explore-base-search">
@@ -86,6 +108,27 @@
             </div>
           </div>
         </div>
+
+        <div class="tr-explore-command">
+          <TravelIcon name="sparkles" :size="14" />
+          <input
+            v-model="commandText"
+            type="text"
+            placeholder="说一句话：重新检索 / 扩大到 150 公里 / 切换到伊犁 / 只要博物馆 / 帮我挑 / 清空"
+            autocomplete="off"
+            :disabled="commandBusy"
+            @keydown.enter="runCommand"
+          />
+          <button
+            type="button"
+            class="tr-btn is-ghost is-small"
+            :disabled="commandBusy || !commandText.trim()"
+            @click="runCommand"
+          >
+            {{ commandBusy ? '解析中…' : '执行' }}
+          </button>
+        </div>
+        <p v-if="commandFeedback" class="tr-explore-command-feedback">{{ commandFeedback }}</p>
 
         <template v-if="candidates.length">
           <div class="tr-explore-toolbar">
@@ -158,6 +201,15 @@
                 </select>
               </label>
             </div>
+          </div>
+
+          <div class="tr-explore-batch">
+            <span class="tr-explore-batch-label">批量（当前 {{ visible.length }} 张）</span>
+            <button type="button" class="tr-chip is-plain" @click="batch('add')">全选</button>
+            <button type="button" class="tr-chip is-plain" @click="batch('toggle')">反选</button>
+            <button type="button" class="tr-chip is-plain" @click="batchHigh">加选高分</button>
+            <button type="button" class="tr-chip is-plain" @click="batch('remove')">取消</button>
+            <span class="tr-explore-batch-count">已勾 {{ selected.length }}</span>
           </div>
 
           <div class="tr-explore-grid">
@@ -277,10 +329,10 @@
           <button
             type="button"
             class="tr-btn is-primary is-large"
-            :disabled="busy || (!!candidates.length && !selected.length)"
+            :disabled="busy"
             @click="$emit('submit')"
           >
-            {{ busy ? '正在编排…' : candidates.length ? '用这些地点开始编排' : '按当前条件直接编排' }}
+            {{ busy ? '正在编排…' : submitLabel }}
           </button>
           <button
             v-if="candidates.length"
@@ -315,7 +367,7 @@
 <script setup>
 import { computed, reactive, ref } from 'vue'
 import TravelIcon from './TravelIcon.vue'
-import { categoryMeta, exploreStats } from './travelExplore.js'
+import { categoryMeta, exploreStats, EXPLORE_CATEGORIES } from './travelExplore.js'
 import './explore.css'
 
 const props = defineProps({
@@ -325,12 +377,28 @@ const props = defineProps({
   selectedIds: { type: Array, default: () => [] },
   form: { type: Object, default: () => ({}) },
   search: { type: Function, default: null },
+  interpret: { type: Function, default: null },
+  activeBase: { type: String, default: 'all' },
   busy: Boolean,
   isMock: Boolean,
   dayCount: { type: Number, default: 1 },
 })
 
-const emit = defineEmits(['toggle', 'autopick', 'clear', 'submit', 'skip', 'back', 'add-base', 'remove-base', 'refresh', 'fallback'])
+const emit = defineEmits([
+  'toggle',
+  'autopick',
+  'clear',
+  'submit',
+  'skip',
+  'back',
+  'add-base',
+  'remove-base',
+  'refresh',
+  'fallback',
+  'batch',
+  'switch-base',
+  'expand',
+])
 
 const SORTS = [
   { value: 'score', label: '综合推荐' },
@@ -346,10 +414,31 @@ const keyword = ref('')
 const filters = reactive({ high: false, indoor: false, people: false, must: false })
 const baseKeyword = ref('')
 const baseSuggestions = ref([])
+const commandText = ref('')
+const commandBusy = ref(false)
+const commandFeedback = ref('')
 let baseTimer = null
 
-const candidates = computed(() => props.data?.candidates || [])
-const groups = computed(() => props.data?.groups || [])
+const allCandidates = computed(() => props.data?.candidates || [])
+// 基地视角：切换只过滤已检索到的卡片，不触发新的检索。
+const candidates = computed(() => {
+  const active = props.activeBase
+  if (!active || active === 'all') return allCandidates.value
+  return allCandidates.value.filter((item) => item.baseId === active || item.baseName === active)
+})
+const groups = computed(() => {
+  const counts = new Map()
+  for (const item of candidates.value) {
+    const meta = categoryMeta(item.categoryKey)
+    counts.set(meta.key, (counts.get(meta.key) || 0) + 1)
+  }
+  return EXPLORE_CATEGORIES.filter((meta) => counts.has(meta.key)).map((meta) => ({
+    key: meta.key,
+    label: meta.label,
+    icon: meta.icon,
+    count: counts.get(meta.key),
+  }))
+})
 const bases = computed(() => props.data?.bases || [])
 const baseCandidates = computed(() => (bases.value.length ? [] : props.data?.baseCandidates || []))
 const scope = computed(() => props.data?.scope || 'poi')
@@ -372,8 +461,84 @@ const subtitle = computed(() => {
 const statsValue = computed(() => exploreStats(selected.value))
 
 const selectedSet = computed(() => new Set(props.selectedIds || []))
-const selected = computed(() => candidates.value.filter((item) => selectedSet.value.has(item.id)))
+// 短名单统计跨基地的全部勾选，不随当前基地视角缩水。
+const selected = computed(() => allCandidates.value.filter((item) => selectedSet.value.has(item.id)))
 const selectedPreview = computed(() => selected.value.slice(0, 8))
+const submitLabel = computed(() => {
+  if (!candidates.value.length) return '按当前条件直接编排'
+  return selected.value.length ? `用这 ${selected.value.length} 个地点编排` : '帮我挑一批并编排'
+})
+
+function isActiveBase(base) {
+  return (base.id || base.name) === props.activeBase
+}
+
+function batch(mode) {
+  emit('batch', visible.value.map((item) => item.id), mode)
+}
+
+function batchHigh() {
+  emit('batch', visible.value.filter((item) => item.score >= 80).map((item) => item.id), 'add')
+}
+
+async function runCommand() {
+  const text = commandText.value.trim()
+  if (!text || commandBusy.value) return
+  commandBusy.value = true
+  commandFeedback.value = ''
+  try {
+    const fn = props.interpret
+    const action = typeof fn === 'function' ? await fn(text) : { action: 'unknown', message: '指令解析不可用。' }
+    applyCommand(action || { action: 'unknown' })
+  } catch (error) {
+    commandFeedback.value = `解析失败：${error?.message || error}`
+  } finally {
+    commandBusy.value = false
+  }
+}
+
+function applyCommand(action) {
+  switch (action.action) {
+    case 'refresh':
+      emit('refresh')
+      commandFeedback.value = '重新扫描全部基地（保留已勾）。'
+      break
+    case 'expand':
+      emit('expand', action.km > 0 ? action.km : 120)
+      commandFeedback.value = `扩大检索范围到 ${action.km > 0 ? action.km : 120} km 并重扫。`
+      break
+    case 'switch':
+      emit('switch-base', action.base || 'all')
+      commandFeedback.value = action.base === 'all' ? '已切到全部基地。' : `已切到 ${action.base} 的候选（未重搜）。`
+      break
+    case 'category':
+      activeCategory.value = action.key
+      commandFeedback.value = `只看「${categoryMeta(action.key).label}」。`
+      break
+    case 'filter':
+      if (action.key in filters) filters[action.key] = !filters[action.key]
+      commandFeedback.value = `已切换筛选：${action.key}。`
+      break
+    case 'pick':
+      emit('autopick')
+      commandFeedback.value = '已按天数挑一批。'
+      break
+    case 'clear':
+      emit('clear')
+      commandFeedback.value = '已清空勾选。'
+      break
+    case 'batch':
+      batch(action.mode || 'add')
+      commandFeedback.value = '已批量勾选当前卡片。'
+      break
+    case 'noop':
+      break
+    default:
+      commandFeedback.value = action.message || '没听懂这条指令。'
+      return
+  }
+  commandText.value = ''
+}
 
 const visible = computed(() => {
   let list = candidates.value

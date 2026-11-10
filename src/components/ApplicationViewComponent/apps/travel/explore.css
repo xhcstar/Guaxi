@@ -150,6 +150,100 @@
   color: var(--tr-ink-faint);
 }
 
+/* 基地 tab：点名字切换视角（不重搜），点 × 才移除基地。 */
+.tr-explore-base-tab {
+  display: inline-flex;
+  align-items: stretch;
+  border: 1px solid var(--tr-line);
+  border-radius: 999px;
+  background: var(--tr-card);
+  overflow: hidden;
+}
+
+.tr-explore-base-tab.active {
+  border-color: var(--tr-accent);
+  background: var(--tr-accent-soft);
+}
+
+.tr-explore-base-tab-name {
+  padding: 6px 4px 6px 12px;
+  border: 0;
+  background: transparent;
+  color: var(--tr-ink-soft);
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.tr-explore-base-tab.active .tr-explore-base-tab-name {
+  color: var(--tr-accent-deep);
+  font-weight: 600;
+}
+
+.tr-explore-base-tab-x {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 10px 0 4px;
+  border: 0;
+  background: transparent;
+  color: var(--tr-ink-faint);
+  cursor: pointer;
+}
+
+.tr-explore-base-tab-x:hover {
+  color: var(--tr-accent-deep);
+}
+
+/* 指令条：一句话驱动重搜/扩范围/切基地/筛选，本地解析优先、模型兜底。 */
+.tr-explore-command {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 16px;
+  padding: 0 12px;
+  height: 44px;
+  border: 1px solid var(--tr-line);
+  border-radius: 12px;
+  background: var(--tr-card-strong);
+  color: var(--tr-ink-faint);
+}
+
+.tr-explore-command input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--tr-ink);
+  font-size: 13.5px;
+}
+
+.tr-explore-command-feedback {
+  margin: 8px 0 0;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--tr-ink-faint);
+}
+
+/* 批量操作行：作用于当前筛选可见的卡片，避免逐个勾选/取消。 */
+.tr-explore-batch {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.tr-explore-batch-label {
+  font-size: 12px;
+  color: var(--tr-ink-faint);
+}
+
+.tr-explore-batch-count {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--tr-accent-deep);
+}
+
 .tr-explore-base-search {
   position: relative;
   display: flex;

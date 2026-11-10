@@ -766,6 +766,7 @@ async fn app_main() {
             commands::travel::travel_explore,
             commands::travel::travel_suggest_bases,
             commands::travel::travel_build_routes,
+            commands::travel::travel_along_meals,
             commands::travel::travel_route_weather,
             commands::travel::travel_llm_complete,
             commands::travel::travel_llm_web_complete,

@@ -145,8 +145,29 @@ pub fn bump(url: &str) {
     );
 }
 
-pub fn usage_today() -> Result<Value, String> {
-    let conn = open()?;
+/// 今日已发出的 POI 搜索次数与免费额度上限。
+/// 个人认证的高德关键字/周边搜索只有约 100 次/天，扫描前先看余量，
+/// 不够时缩小扫描范围并如实告知，而不是扫到一半静默失败。
+pub fn poi_usage_today() -> (i64, i64) {
+    let limit = 100i64;
+    let Ok(conn) = open() else {
+        return (0, limit);
+    };
+    let day = chrono::Local::now().format("%Y-%m-%d").to_string();
+    let used: i64 = conn
+        .query_row(
+            "SELECT count FROM quota WHERE day = ?1 AND provider = 'amap' AND kind = 'poi'",
+            params![day],
+            |row| row.get(0),
+        )
+        .optional()
+        .ok()
+        .flatten()
+        .unwrap_or(0);
+    (used, limit)
+}
+
+pub fn usage_today() -> Result<Value, String> {    let conn = open()?;
     let day = chrono::Local::now().format("%Y-%m-%d").to_string();
     let mut stmt = conn
         .prepare("SELECT provider, kind, count FROM quota WHERE day = ?1 ORDER BY provider, kind")

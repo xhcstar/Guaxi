@@ -4,12 +4,17 @@
 import { computed, reactive } from 'vue'
 import { api, createLocalDraft, createWeekendDraft } from './travelApi.js'
 import { createDemoPlan } from './travelData.js'
-import { homeGuardKm, orderSights, pickNearAnchor, tooCloseToHome } from './travelEngine.js'
+import { homeGuardKm, mealStopsAlongLegs, orderSights, pickNearAnchor, tooCloseToHome } from './travelEngine.js'
 import {
   autoPickCandidates,
   buildContext,
   buildExploreFacts,
+  categoriesForInterests,
   enrichCandidates,
+  EXPLORE_COMMAND_SYSTEM,
+  buildExploreCommandPrompt,
+  normalizeExploreCommand,
+  parseExploreCommand,
 } from './travelExplore.js'
 import { assemblePlan, computeBudget, defaultPlanTitle } from './travelPlan.js'
 import { formatProblems, validatePlan } from './travelValidate.js'
@@ -84,6 +89,10 @@ const state = reactive({
     form: null,
     // 用户手动加/删过基地后，省级目的地就不再自动补省会。
     basesTouched: false,
+    // 当前查看的基地（id 或 name）；'all' 表示合并看全部基地。切换纯前端过滤，不重搜。
+    activeBase: 'all',
+    // 「扩大范围」指令设定的检索半径（km）；为空用后端默认。
+    searchRadiusKm: null,
   },
   weekend: {
     seriesId: '',
@@ -130,11 +139,14 @@ function modelWaitHint() {
 
 // 校验不过就不落盘：宁可报错，也不把违反距离/日期约束的计划交给用户。
 // 浏览器预览用的是内置示例 POI，与目的地坐标不同源，只校验结构，不校验半径。
+// 返回的松紧提示（收尾偏晚、当天在途过长）不阻断生成，由调用方并进顶部横幅。
 function assertPlanConstraints(plan, options) {
   const report = validatePlan(plan, api.isMock ? { ...options, radiusKm: 0 } : options)
-  if (report.ok) return
-  console.warn('[travel] 计划未通过约束校验：', report.problems.slice(0, 5).join('；'))
-  throw new Error(`生成结果未通过约束校验：${formatProblems(report.problems)}`)
+  if (!report.ok) {
+    console.warn('[travel] 计划未通过约束校验：', report.problems.slice(0, 5).join('；'))
+    throw new Error(`生成结果未通过约束校验：${formatProblems(report.problems)}`)
+  }
+  return report.advisories || []
 }
 
 function friendlyError(error) {
@@ -432,9 +444,13 @@ export function useTravelStore() {
   }
 
   function toExploreRequest(form) {
+    const categories = categoriesForInterests(form.interests || [])
     return {
       ...toRequest(form),
+      // 选了兴趣就只扫相关类别：全省四个基地全类别扫描会吃掉大半日搜索额度。
+      categories,
       bases: (form.bases || []).filter((item) => item?.name).map(placeRef),
+      searchRadiusKm: state.explore.searchRadiusKm || undefined,
     }
   }
 
@@ -443,7 +459,8 @@ export function useTravelStore() {
   }
 
   // 候选池是“先看再编”：只检索、不调用模型，用户可以反复筛选，命中缓存的二次扫描几乎零请求。
-  async function openExplore(form) {
+  // preserveSelection 用于「重新扫描/扩大范围」：重搜后保留用户已勾的地点，不让他白挑一遍。
+  async function openExplore(form, { preserveSelection = false } = {}) {
     const error = validationError(form)
     if (error) {
       showToast(error, 'error')
@@ -451,10 +468,11 @@ export function useTravelStore() {
     }
     if (form.mode === 'weekend') return generateWeekend(form)
     const token = ++state.generationToken
+    const previousSelected = preserveSelection ? [...state.explore.selectedIds] : []
+    const previousBase = preserveSelection ? state.explore.activeBase : 'all'
     state.explore.loading = true
     state.explore.error = ''
     state.explore.data = null
-    state.explore.selectedIds = []
     state.explore.form = JSON.parse(JSON.stringify(form))
     state.error = ''
     state.warning = ''
@@ -466,16 +484,13 @@ export function useTravelStore() {
       const context = buildContext({ form, weather: data.weather, dates })
       const enriched = enrichCandidates(data, context)
       state.explore.data = enriched
-      // 一进来就按天数挑好一批：用户不勾也能直接点「用这些地点开始编排」，
-      // 挑不挑是把主动权交还给用户，而不是拿一屏空候选逼他自己从零开始。
-      const picked =
-        enriched.selectedIds?.length || !enriched.candidates?.length
-          ? enriched.selectedIds || []
-          : autoPickCandidates(enriched.candidates, {
-              form,
-              dayCount: Math.max(1, dates.length),
-            })
-      state.explore.selectedIds = [...picked]
+      // 默认不替用户勾选：一屏几十张卡片全勾上，用户得逐个删，反而更累。
+      // 只保留「必去」；重搜时再并回用户之前勾过且仍存在的地点。
+      const alive = new Set((enriched.candidates || []).map((item) => item.id))
+      const kept = previousSelected.filter((id) => alive.has(id))
+      state.explore.selectedIds = [...new Set([...(enriched.selectedIds || []), ...kept])]
+      const baseIds = new Set((enriched.bases || []).map((base) => base.id || base.name))
+      state.explore.activeBase = baseIds.has(previousBase) ? previousBase : 'all'
       state.wizard = form
       // 省级目的地还没选基地：软件先替用户把省会选上，而不是让他对着空输入框。
       // 用户一旦手动加/删过基地就不再自动补，否则“删掉最后一个”会被立刻加回来。
@@ -497,12 +512,8 @@ export function useTravelStore() {
           // 后端已带回 baseCandidates，就不再补发请求。
           state.explore.data = refined
           state.explore.form = JSON.parse(JSON.stringify(form))
-          state.explore.selectedIds = refined.candidates?.length
-            ? autoPickCandidates(refined.candidates, {
-                form,
-                dayCount: Math.max(1, dates.length),
-              })
-            : []
+          state.explore.selectedIds = [...(refined.selectedIds || [])]
+          state.explore.activeBase = 'all'
           if (!refined.candidates?.length) {
             showToast(`已把${seed.name}设为落脚城市，但这个范围内没扫到候选，可直接编排`, 'info', 4200)
           }
@@ -548,7 +559,7 @@ export function useTravelStore() {
     const data = state.explore.data
     const form = state.explore.form || state.wizard
     if (!data || !form) return
-    const ids = autoPickCandidates(data.candidates || [], {
+    const ids = autoPickCandidates(scopedExploreCandidates(), {
       form,
       dayCount: exploreDayCount(form),
     })
@@ -558,6 +569,62 @@ export function useTravelStore() {
 
   function clearExploreSelection() {
     state.explore.selectedIds = []
+  }
+
+  /** 批量勾选：action = add / remove / toggle / replace，ids 为当前筛选可见的卡片。 */
+  function batchExploreSelection(ids, action = 'add') {
+    const list = (ids || []).filter(Boolean)
+    if (!list.length) return
+    const current = new Set(state.explore.selectedIds)
+    if (action === 'replace') {
+      state.explore.selectedIds = [...new Set(list)]
+      return
+    }
+    for (const id of list) {
+      if (action === 'remove') current.delete(id)
+      else if (action === 'toggle') current.has(id) ? current.delete(id) : current.add(id)
+      else current.add(id)
+    }
+    state.explore.selectedIds = [...current]
+  }
+
+  /** 当前基地视角下的候选：'all' 看全部，否则只看该基地，切换不触发检索。 */
+  function scopedExploreCandidates() {
+    const data = state.explore.data
+    const all = data?.candidates || []
+    const active = state.explore.activeBase
+    if (!active || active === 'all') return all
+    return all.filter((item) => item.baseId === active || item.baseName === active)
+  }
+
+  function switchExploreBase(id) {
+    state.explore.activeBase = id || 'all'
+  }
+
+  /** 把单基地扫描结果并进总候选池：去重、保留已勾、切到新基地。 */
+  function mergeExploreData(existing, incoming) {
+    const byId = new Map()
+    for (const item of existing?.candidates || []) byId.set(item.id, item)
+    for (const item of incoming?.candidates || []) if (!byId.has(item.id)) byId.set(item.id, item)
+    const hotels = new Map()
+    for (const item of [...(existing?.hotels || []), ...(incoming?.hotels || [])]) {
+      hotels.set(item.id || `${item.name}|${item.lng}`, item)
+    }
+    const bases = new Map()
+    for (const base of [...(existing?.bases || []), ...(incoming?.bases || [])]) {
+      bases.set(base.id || base.name, base)
+    }
+    const notes = [...new Set([...(existing?.notes || []), ...(incoming?.notes || [])])]
+    return {
+      ...(existing || incoming),
+      candidates: [...byId.values()],
+      hotels: [...hotels.values()],
+      bases: [...bases.values()],
+      notes,
+      baseCandidates: existing?.baseCandidates?.length ? existing.baseCandidates : incoming?.baseCandidates || [],
+      weather: existing?.weather?.length ? existing.weather : incoming?.weather || [],
+      total: byId.size,
+    }
   }
 
   async function addExploreBase(place) {
@@ -571,7 +638,9 @@ export function useTravelStore() {
         (item.name && item.name === place.name),
     )
     if (same) {
-      showToast('这个基地已经在列表里了', 'info')
+      // 已存在：不重搜，直接切过去看它的卡片。
+      switchExploreBase(place.adcode || place.name)
+      showToast(`已切换到 ${place.name} 的候选`, 'info')
       return
     }
     if (list.length >= 4) {
@@ -579,19 +648,97 @@ export function useTravelStore() {
       return
     }
     list.push({ ...place })
-    await openExplore(state.wizard)
+    state.wizard = { ...state.wizard, bases: [...list] }
+    // 只检索新基地，不重扫已有基地：已有候选留在池里，切换即可看。
+    const token = ++state.generationToken
+    state.explore.loading = true
+    state.explore.error = ''
+    try {
+      const form = state.explore.form || state.wizard
+      const request = { ...toExploreRequest(form), bases: [placeRef(place)] }
+      const data = await api.explore(request)
+      if (token !== state.generationToken) return
+      const dates = enumerateDates(form.startDate, form.endDate)
+      const incoming = enrichCandidates(data, buildContext({ form, weather: data.weather, dates }))
+      state.explore.data = mergeExploreData(state.explore.data, incoming)
+      state.explore.form = JSON.parse(JSON.stringify(state.wizard))
+      state.explore.activeBase = place.adcode || place.name
+      if (!incoming.candidates?.length) {
+        showToast(`${place.name} 附近这次没扫到候选，可扩大范围或换类别`, 'info', 4200)
+      }
+    } catch (error) {
+      if (token !== state.generationToken) return
+      state.explore.error = friendlyError(error)
+      showToast(`检索 ${place.name} 失败：${state.explore.error}`, 'error')
+    } finally {
+      if (token === state.generationToken) state.explore.loading = false
+    }
   }
 
   async function removeExploreBase(index) {
     if (!state.wizard?.bases) return
     state.explore.basesTouched = true
+    const removed = state.wizard.bases[index]
     state.wizard.bases.splice(index, 1)
-    await openExplore(state.wizard)
+    state.wizard = { ...state.wizard, bases: [...state.wizard.bases] }
+    // 移除基地只清掉它的候选，不重搜其它基地。
+    const key = removed?.adcode || removed?.name
+    const data = state.explore.data
+    if (data) {
+      state.explore.data = {
+        ...data,
+        bases: (data.bases || []).filter((base) => (base.id || base.name) !== key),
+        candidates: (data.candidates || []).filter(
+          (item) => item.baseId !== key && item.baseName !== key && item.baseName !== removed?.name,
+        ),
+      }
+      const alive = new Set(state.explore.data.candidates.map((item) => item.id))
+      state.explore.selectedIds = state.explore.selectedIds.filter((id) => alive.has(id))
+    }
+    if (state.explore.activeBase === key) state.explore.activeBase = 'all'
+    state.explore.form = JSON.parse(JSON.stringify(state.wizard))
   }
 
   async function refreshExplore() {
     if (!state.wizard) return
-    await openExplore(state.wizard)
+    await openExplore(state.wizard, { preserveSelection: true })
+  }
+
+  /** 「扩大范围」：设定检索半径后重搜（保留已勾），这是少数需要重搜的操作之一。 */
+  async function expandExploreRange(km) {
+    if (!state.wizard) return
+    const value = Number(km)
+    if (!Number.isFinite(value) || value <= 0) return
+    state.explore.searchRadiusKm = Math.min(300, Math.max(20, Math.round(value)))
+    showToast(`已把检索范围扩大到 ${state.explore.searchRadiusKm} km，重新扫描`, 'info')
+    await openExplore(state.wizard, { preserveSelection: true })
+  }
+
+  /**
+   * 候选池指令条：先本地解析常见说法（不耗模型），解析不了再交给已配置模型翻译成动作。
+   * 返回规范动作对象，由 ExploreBoard 执行；未知时返回 message 供提示。
+   */
+  async function interpretExploreCommand(text) {
+    const raw = String(text || '').trim()
+    if (!raw) return { action: 'noop' }
+    const bases = state.explore.data?.bases || []
+    const local = parseExploreCommand(raw, bases)
+    if (local) return local
+    // 本地没命中：让模型把自由语句映射到同一组动作，避免每个说法都写正则。
+    try {
+      const { raw: json } = await completeJsonLlm({
+        system: EXPLORE_COMMAND_SYSTEM,
+        prompt: buildExploreCommandPrompt(raw, bases),
+        temperature: 0,
+        maxTokens: 256,
+      })
+      return normalizeExploreCommand(json, bases)
+    } catch (error) {
+      return {
+        action: 'unknown',
+        message: `没听懂「${raw}」。可以试试：重新检索、扩大到 150 公里、切换到伊犁、只要博物馆、帮我挑、清空。`,
+      }
+    }
   }
 
   /**
@@ -626,8 +773,17 @@ export function useTravelStore() {
       return
     }
     if (!state.explore.selectedIds.length) {
-      showToast('先勾选想去的地方，或点「帮我挑」', 'info')
-      return
+      // 没勾也不挡路：主按钮此时是「帮我挑一批并编排」，先按当前基地视角挑一批再走。
+      const form2 = state.explore.form || state.wizard
+      const ids = autoPickCandidates(scopedExploreCandidates(), {
+        form: form2,
+        dayCount: exploreDayCount(form2),
+      })
+      if (!ids.length) {
+        showToast('当前基地没有可挑的候选，换个基地或扩大范围试试', 'info')
+        return
+      }
+      state.explore.selectedIds = ids
     }
     const facts = buildExploreFacts(data, state.explore.selectedIds, form)
     await generateTrip(form, { facts })
@@ -929,7 +1085,63 @@ export function useTravelStore() {
     })
     const weatherMeta = await attachRouteWeather({ form, facts, routeInfo: output })
     output.weatherMeta = weatherMeta
+    // 跨城长路段压过饭点时，沿路线折线补一份「顺路餐馆」，否则午饭不是被拖到终点
+    // 城市，就是在出发点附近随便找一家——这正是「快到家才吃饭」的另一种表现。
+    await attachAlongMeals({ form, facts, routeInfo: output })
     return output
+  }
+
+  /**
+   * 沿长路段补充餐饮候选：每天最多取两处（午/晚各一处），全局不超过 6 处，
+   * 避免一次行程为了几顿饭连打好几次地图接口。
+   */
+  async function attachAlongMeals({ form, facts, routeInfo }) {
+    const requests = []
+    const slots = []
+    for (const info of routeInfo) {
+      const hits = mealStopsAlongLegs(info.legs || [], { startTime: form.startTime || '08:30' })
+      for (const hit of hits) {
+        if (requests.length >= 6) break
+        const leg = info.legs?.[hit.legIndex]
+        if (!leg) continue
+        const coords = parsePolyline(
+          leg.polyline,
+          { lng: leg.fromLng, lat: leg.fromLat },
+          { lng: leg.toLng, lat: leg.toLat },
+        )
+        const position = samplePolyline(coords, hit.ratio)
+        if (!position) continue
+        const [lng, lat] = position
+        requests.push({ lng, lat, radiusKm: 8, legIndex: hit.legIndex, meal: hit.meal, time: minutesToTime(hit.time) })
+        slots.push({ date: info.date, legIndex: hit.legIndex, meal: hit.meal, time: hit.time })
+      }
+    }
+    if (!requests.length) return
+    let stops = []
+    try {
+      stops = await api.alongMeals(requests)
+    } catch {
+      return
+    }
+    if (!Array.isArray(stops) || !stops.length) return
+    // 沿途餐馆进入当天事实包：模型只能从候选里选，所以补进 facts.food 才能真正被用上。
+    const known = new Set((facts.food || []).map((poi) => poi.id || `${poi.name}|${poi.lng}`))
+    const added = []
+    stops.forEach((stop) => {
+      for (const poi of stop.pois || []) {
+        const key = poi.id || `${poi.name}|${poi.lng}`
+        if (!poi?.name || known.has(key)) continue
+        known.add(key)
+        added.push({ ...poi, kind: 'food', alongTime: stop.time, alongMeal: stop.meal })
+      }
+    })
+    if (!added.length) return
+    facts.food = [...(facts.food || []), ...added]
+    const meals = new Set(slots.map((slot) => (slot.meal === 'lunch' ? '午餐' : '晚餐')))
+    facts.notes = [
+      ...(facts.notes || []),
+      `跨城路段沿线补了 ${added.length} 家顺路餐馆，用于途中${[...meals].join('、')}，不必绕回终点或家门口吃饭。`,
+    ]
   }
 
   async function createOutline({ form, facts }) {
@@ -1155,8 +1367,9 @@ export function useTravelStore() {
           : Number(form.radiusKm) || 20,
         expectedDates: enumerateDates(form.startDate, form.endDate),
       }
+      let advisories = []
       try {
-        assertPlanConstraints(plan, constraints)
+        advisories = assertPlanConstraints(plan, constraints)
       } catch (error) {
         // 模型方案没通过校验：整份改用确定性编排重建，仍然保证能出计划。
         console.warn('[travel] 行程未通过约束校验，改用确定性编排重建：', error?.message || error)
@@ -1183,10 +1396,14 @@ export function useTravelStore() {
           provider: '确定性编排',
           routeWeather: routeInfo.weatherMeta,
         })
-        assertPlanConstraints(plan, constraints)
+        advisories = assertPlanConstraints(plan, constraints)
         state.warning = state.warning
           ? `${state.warning}；模型方案未通过约束校验，已用确定性编排重建。`
           : '模型方案未通过约束校验，已用确定性编排重建。'
+      }
+      if (advisories.length) {
+        const note = advisories.slice(0, 2).join('；')
+        state.warning = state.warning ? `${state.warning}；${note}` : note
       }
       const saved = await api.savePlan(plan)
       if (token !== state.generationToken) return null
@@ -2323,9 +2540,13 @@ ${weather || '（暂无）'}
     toggleExploreCandidate,
     pickExploreCandidates,
     clearExploreSelection,
+    batchExploreSelection,
+    switchExploreBase,
     addExploreBase,
     removeExploreBase,
     refreshExplore,
+    expandExploreRange,
+    interpretExploreCommand,
     submitExplore,
     skipExplore,
     exploreFallbackGenerate,

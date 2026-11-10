@@ -9,14 +9,18 @@ use std::collections::HashSet;
 
 use super::providers::{coord, MapProvider};
 use super::{
-    amap, amap_key, haversine_km, is_infra_poi, osm, poi_matches_avoid, regions, resolve_place,
+    amap, amap_key, cache, haversine_km, is_infra_poi, osm, poi_matches_avoid, regions, resolve_place,
     truncate, weather, Place, PlaceRef, Poi, WeatherDay,
 };
 
 const DEFAULT_LIMIT_PER_CATEGORY: usize = 12;
 const MAX_CANDIDATES: usize = 160;
 const OSM_RADIUS_M: f64 = 25_000.0;
+/// 一段时间内同时打向地图服务的类别检索数。串行时四个基地的全省扫描要等十几分钟；
+/// 放到 4 路并发能把墙钟时间压到三分之一，请求总数不变，不会额外消耗额度。
+const SWEEP_CONCURRENCY: usize = 4;
 
+#[derive(Clone, Copy)]
 struct CategoryDef {
     key: &'static str,
     label: &'static str,
@@ -158,6 +162,9 @@ pub struct ExploreRequest {
     pub end_date: String,
     #[serde(default)]
     pub limit_per_category: Option<usize>,
+    /// 「扩大范围」指令设定的基地检索半径（km）；为空用默认 80 km 裁剪 / 60 km 周边兜底。
+    #[serde(default)]
+    pub search_radius_km: Option<f64>,
     /// auto | amap | baidu | tencent | google | mapbox | osm
     #[serde(default)]
     pub map_provider: String,
@@ -326,6 +333,7 @@ fn filter_candidates(
     request: &ExploreRequest,
     base: &Place,
 ) -> Vec<ExploreCandidate> {
+    let radius_km = request.search_radius_km.unwrap_or(80.0).clamp(10.0, 300.0);
     let mut keep: Vec<ExploreCandidate> = items
         .into_iter()
         .filter(|item| !poi_matches_avoid(&item.poi, &request.avoid))
@@ -337,7 +345,7 @@ fn filter_candidates(
         .filter(|item| {
             item.poi.lng.abs() > 0.0001
                 && item.poi.lat.abs() > 0.0001
-                && haversine_km(base.lng, base.lat, item.poi.lng, item.poi.lat) <= 80.0
+                && haversine_km(base.lng, base.lat, item.poi.lng, item.poi.lat) <= radius_km
         })
         .collect();
     // 必去点通常也会被某个类别搜到；去重时让“必去”版本留下。
@@ -362,6 +370,9 @@ async fn sweep_amap(key: &str, base: &Place, origin: &Place, request: &ExploreRe
     let mut hotels = Vec::new();
     let mut notes = Vec::new();
     let mut failures = 0usize;
+    // 「扩大范围」时周边兜底半径跟着放大；高德 around 上限 50 km，超出部分靠文本检索覆盖。
+    let around_m = (request.search_radius_km.unwrap_or(BASE_RADIUS_M / 1000.0) * 1000.0)
+        .clamp(3000.0, 50_000.0);
     let limit = request
         .limit_per_category
         .unwrap_or(DEFAULT_LIMIT_PER_CATEGORY)
@@ -372,30 +383,47 @@ async fn sweep_amap(key: &str, base: &Place, origin: &Place, request: &ExploreRe
         Some(request.categories.iter().map(|item| item.as_str()).collect())
     };
 
-    for category in CATEGORIES {
-        if let Some(filter) = &only {
-            if !filter.contains(category.key) {
-                continue;
+    // 每个类别独立检索，互不依赖；并发跑完再按原顺序拼接，结果与串行完全一致。
+    let active: Vec<&CategoryDef> = CATEGORIES
+        .iter()
+        .filter(|category| match &only {
+            Some(filter) => filter.contains(category.key),
+            None => true,
+        })
+        .collect();
+    let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(SWEEP_CONCURRENCY));
+    let tasks = active.iter().map(|category| {
+        let permit = semaphore.clone();
+        let city = city.clone();
+        let base = base.clone();
+        async move {
+            let _held = permit.acquire().await;
+            let (mut items, text_error) =
+                match amap::place_text_typed(key, category.keywords, &city, category.types, true)
+                    .await
+                {
+                    Ok(items) => (items, None),
+                    Err(error) => (Vec::new(), Some(error)),
+                };
+            // 城市级检索空手而归时按基地坐标兜底：文本检索依赖城市名，坐标检索不受影响。
+            if items.is_empty() {
+                items = amap::place_around(
+                    key,
+                    base.lng,
+                    base.lat,
+                    around_m,
+                    category.types,
+                    category.keywords,
+                )
+                .await
+                .unwrap_or_default();
             }
+            (*category, items, text_error)
         }
-        let (mut items, text_error) =
-            match amap::place_text_typed(key, category.keywords, &city, category.types, true).await {
-                Ok(items) => (items, None),
-                Err(error) => (Vec::new(), Some(error)),
-            };
-        // 城市级检索空手而归时按基地坐标兜底：文本检索依赖城市名，坐标检索不受影响。
-        if items.is_empty() {
-            items = amap::place_around(
-                key,
-                base.lng,
-                base.lat,
-                BASE_RADIUS_M,
-                category.types,
-                category.keywords,
-            )
-            .await
-            .unwrap_or_default();
-        }
+    });
+    let results = futures_util::future::join_all(tasks).await;
+
+    for (category, mut items, text_error) in results {
         if items.is_empty() {
             if let Some(error) = text_error {
                 failures += 1;
@@ -410,7 +438,7 @@ async fn sweep_amap(key: &str, base: &Place, origin: &Place, request: &ExploreRe
             continue;
         }
         let mut bucket: Vec<ExploreCandidate> = items
-            .into_iter()
+            .drain(..)
             .map(|poi| candidate_from(poi, category, base, origin, false))
             .collect();
         sort_by_quality(&mut bucket);
@@ -422,7 +450,7 @@ async fn sweep_amap(key: &str, base: &Place, origin: &Place, request: &ExploreRe
             .await
             .unwrap_or_default();
     if stays.is_empty() {
-        stays = amap::place_around(key, base.lng, base.lat, BASE_RADIUS_M, HOTEL_TYPES, "").await
+        stays = amap::place_around(key, base.lng, base.lat, around_m, HOTEL_TYPES, "").await
             .unwrap_or_default();
     }
     hotels.extend(stays);
@@ -436,7 +464,7 @@ async fn sweep_amap(key: &str, base: &Place, origin: &Place, request: &ExploreRe
             .await
             .unwrap_or_default();
         if items.is_empty() {
-            items = amap::place_around(key, base.lng, base.lat, BASE_RADIUS_M, "", keyword)
+            items = amap::place_around(key, base.lng, base.lat, around_m, "", keyword)
                 .await
                 .unwrap_or_default();
         }
@@ -710,8 +738,38 @@ pub async fn explore(
 
     let mut candidates = Vec::new();
     let mut hotels = Vec::new();
-    if !base_places.is_empty() {
-        for base in &base_places {
+    // 扫描前先看今日 POI 搜索余量：基地数 × 类别数是本次最少要发的请求数，
+    // 不够就先砍基地，并说明砍了几个，避免扫到一半因额度用尽而静默空手。
+    let mut scan_places = base_places.clone();
+    if use_amap && !scan_places.is_empty() {
+        let per_base = if request.categories.is_empty() {
+            CATEGORIES.len()
+        } else {
+            request
+                .categories
+                .iter()
+                .filter(|key| CATEGORIES.iter().any(|category| category.key == key.as_str()))
+                .count()
+                .max(1)
+        } + 1;
+        let (used, limit) = cache::poi_usage_today();
+        let remaining = (limit - used).max(0);
+        let affordable = remaining as usize / per_base.max(1);
+        if affordable >= 1 && affordable < scan_places.len() {
+            notes.push(format!(
+                "今日高德搜索额度还剩约 {remaining} 次，本次只扫描前 {affordable} 个基地（原定 {} 个）。明天额度恢复后可重新扫描。",
+                scan_places.len()
+            ));
+            scan_places.truncate(affordable);
+        } else if affordable < 1 {
+            notes.push(format!(
+                "今日高德搜索额度只剩约 {remaining} 次，不足一次完整扫描（每基地约需 {per_base} 次）。已改用 OpenStreetMap 候选；明天额度恢复后再扫描高德数据。"
+            ));
+            scan_places.clear();
+        }
+    }
+    if !scan_places.is_empty() {
+        for base in &scan_places {
             let (found, mut stays, mut base_notes) = if use_amap {
                 sweep_amap(&key, base, &origin, request).await
             } else {
@@ -722,12 +780,24 @@ pub async fn explore(
             notes.append(&mut base_notes);
         }
     }
+    // 额度不足时按 OSM 再扫一遍：免费链路没有每日搜索次数限制，先让用户看到地点。
+    if use_amap && scan_places.is_empty() && !base_places.is_empty() {
+        for base in &base_places {
+            let (found, mut stays, mut base_notes) = sweep_osm(base, &origin, request).await;
+            candidates.append(&mut filter_candidates(found, request, base));
+            hotels.append(&mut stays);
+            notes.append(&mut base_notes);
+        }
+    }
 
-    if use_amap {
+    if use_amap && !scan_places.is_empty() {
         notes.push(
             "候选由高德按类别检索：评分、人均来自高德，同城同类检索会缓存 7 天。".to_string(),
         );
     }
+    // 本次真正用上高德数据，才把来源标成高德；退到 OSM 时必须如实标注，
+    // 否则页面会把没有评分/人均的地点当成高德数据展示。
+    let used_amap = use_amap && !scan_places.is_empty();
 
     let mut candidates = dedupe_candidates(candidates);
     let total_before_cap = candidates.len();
@@ -750,7 +820,7 @@ pub async fn explore(
 
     Ok(ExploreResult {
         scope: scope.to_string(),
-        source: if use_amap { "amap" } else { "osm" }.to_string(),
+        source: if used_amap { "amap" } else { "osm" }.to_string(),
         coord_system: "gcj02".to_string(),
         origin,
         destination,

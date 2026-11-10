@@ -299,12 +299,15 @@ function mockExplore(args) {
         },
       ]
   const base = baseList[0]
+  // 预览里给每个基地一份独立 id 的示例候选，基地切换才有各自的一批卡片可看。
+  const idSuffix = bases.length ? `@${base.id}` : ''
   const candidates = [...(facts.attractions || []), ...(facts.food || [])]
     .map((poi, index) => {
       const categoryKey = classifyDemoPoi(poi)
       const distanceKm = Math.round(haversineKm(base, poi) * 10) / 10
       return {
         ...poi,
+        id: `${poi.id}${idSuffix}`,
         categoryKey,
         categoryLabel: '',
         baseId: base.id,
@@ -520,6 +523,13 @@ export const api = {
     return invoke('travel_route_weather', {
       request: { provider: provider || 'auto', seasonDate: seasonDate || '', points },
     })
+  },
+
+  // 跨城长路段上的顺路餐饮：在折线采样点做一次小半径检索。
+  async alongMeals(stops) {
+    if (!isTauriRuntime()) return []
+    if (!Array.isArray(stops) || !stops.length) return []
+    return invoke('travel_along_meals', { stops })
   },
 
   async llmComplete(request) {

@@ -546,3 +546,243 @@ test('候选池：基地城市名必须收敛到城市级，扫描需有坐标�
   assert.match(explore, /base_candidates/)
   assert.match(read('src-tauri/src/main.rs'), /commands::travel::travel_suggest_bases/)
 })
+
+// ── 行程合理性：在途预算与到家门口吃饭 ─────────────────────
+
+test('单日在途上限：短日按比例收紧，长日有绝对上限', async () => {
+  const { dailyTransitLimitMinutes } = await load(
+    path.join(travelDir, 'travelEngine.js'),
+  )
+  // 8 小时的一天、均衡节奏：一半在车上就已经很多。
+  assert.equal(dailyTransitLimitMinutes({ pace: 'balanced' }, 8 * 60), 240)
+  // 同样节奏，只有 5 小时可用时上限随之下降，不能硬塞 4 小时车程。
+  assert.ok(dailyTransitLimitMinutes({ pace: 'balanced' }, 5 * 60) < 240)
+  // 松弛比紧凑更早触顶。
+  assert.ok(
+    dailyTransitLimitMinutes({ pace: 'relaxed' }, 10 * 60) <
+      dailyTransitLimitMinutes({ pace: 'intense' }, 10 * 60),
+  )
+  // 再长的一天也封顶，避免「12 小时里 6 小时在车上」被当成合理。
+  assert.ok(dailyTransitLimitMinutes({ pace: 'intense' }, 16 * 60) <= 240)
+})
+
+test('离家餐饮门槛：异地行程管、周末和本地行程不管', async () => {
+  const { mealGuardKm } = await load(path.join(travelDir, 'travelEngine.js'))
+  const shanghai = { lng: 121.4365, lat: 31.1879 }
+  const hangzhou = { lng: 120.1302, lat: 30.2405 }
+  const nearHome = { lng: 121.44, lat: 31.19 }
+  assert.ok(mealGuardKm({ origin: shanghai, destination: hangzhou }) > 0)
+  // 目的地就在家附近：不设门槛，否则家门口的餐馆全被判反常识。
+  assert.equal(mealGuardKm({ origin: shanghai, destination: nearHome }), 0)
+  // 周末本来就有 homeGuard 管景点与餐饮，这里不重复加码。
+  assert.equal(
+    mealGuardKm({ origin: shanghai, destination: hangzhou, mode: 'weekend' }),
+    0,
+  )
+})
+
+test('校验：在途超预算和收尾偏晚只提示，不改判失败', async () => {
+  const { validatePlan } = await load(path.join(travelDir, 'travelValidate.js'))
+  const plan = createDemoPlan()
+  plan.startTime = '08:30'
+  plan.endTime = '12:00'
+  const report = validatePlan(plan, { center: plan.destination, radiusKm: 0 })
+  const text = [...report.problems, ...report.advisories].join('；')
+  assert.match(text, /在途|结束于/)
+  // 这两项不能进 problems：否则整份计划会被退回重建，长线行程永远出不来。
+  assert.ok(!report.problems.some((item) => /在途|结束于/.test(item)))
+})
+
+test('校验：返程日把午饭排回家门口会被拦下', async () => {
+  const { validateDayBlocks } = await load(path.join(travelDir, 'travelValidate.js'))
+  const origin = { name: '乌鲁木齐', city: '乌鲁木齐', lng: 87.62, lat: 43.82 }
+  const destination = { name: '喀纳斯景区', city: '布尔津', lng: 87.04, lat: 48.69 }
+  const day = {
+    blocks: [
+      {
+        kind: 'transit',
+        title: '前往喀纳斯',
+        start: '08:30',
+        end: '14:00',
+        route: { distance: 600, duration: 330 * 60 },
+      },
+      {
+        kind: 'sight',
+        title: '喀纳斯湖',
+        start: '14:00',
+        end: '17:00',
+        poi: { name: '喀纳斯湖', lng: 87.04, lat: 48.69, rating: 4.8 },
+      },
+      {
+        kind: 'food',
+        title: '家门口拌面',
+        start: '19:00',
+        end: '20:00',
+        poi: { name: '家门口拌面', lng: 87.63, lat: 43.83 },
+      },
+    ],
+  }
+  const problems = validateDayBlocks(day, {
+    center: destination,
+    radiusKm: 200,
+    home: origin,
+    mealGuard: 2,
+  })
+  assert.ok(problems.some((item) => /快到家才吃饭/.test(item)))
+  // 没有异地离家门槛时（本地行程），这条规则不该出现。
+  const localProblems = validateDayBlocks(day, { center: destination, radiusKm: 3000, home: origin })
+  assert.ok(!localProblems.some((item) => /快到家才吃饭/.test(item)))
+})
+
+// ── 候选池：额度与检索范围 ─────────────────────────────────
+
+test('候选池：兴趣收窄检索类别，餐饮始终保留', async () => {
+  const { categoriesForInterests } = await load(path.join(travelDir, 'travelExplore.js'))
+  // 没选兴趣：返回空数组表示扫全部类别，不能退化成「一类都不扫」。
+  assert.deepEqual(categoriesForInterests([]), [])
+  const natural = categoriesForInterests(['自然风光'])
+  assert.ok(natural.includes('nature'))
+  assert.ok(natural.includes('food'), '餐饮决定午饭晚饭，必须始终检索')
+  assert.ok(!natural.includes('must'), '必去由后端单独处理')
+  // 兴趣越少，类别越少：这正是省额度的来源。
+  assert.ok(natural.length < categoriesForInterests(['自然风光', '人文古迹', '亲子']).length)
+})
+
+test('候选池：扫描要按额度缩短基地数，并如实标注数据来源', () => {
+  const explore = read('src-tauri/src/commands/travel/explore.rs')
+  // 扫描前看今日 POI 额度，不够时缩基地而不是扫到一半静默失败。
+  assert.match(explore, /poi_usage_today\(\)/)
+  assert.match(explore, /scan_places\.truncate\(affordable\)/)
+  // 退到 OSM 后来源必须跟着变，否则页面会把无评分地点当成高德数据。
+  assert.match(explore, /let used_amap = use_amap && !scan_places\.is_empty\(\)/)
+  assert.match(explore, /if used_amap \{ "amap" \} else \{ "osm" \}/)
+})
+
+test('候选池：类别检索要并发，但有限流', () => {
+  const explore = read('src-tauri/src/commands/travel/explore.rs')
+  assert.match(explore, /SWEEP_CONCURRENCY/)
+  assert.match(explore, /tokio::sync::Semaphore::new\(SWEEP_CONCURRENCY\)/)
+  assert.match(explore, /join_all\(tasks\)/)
+  // 前端必须真的把类别发出去，否则后端过滤是空的。
+  assert.match(
+    read(path.join(travelDir, 'travelStore.js')),
+    /categoriesForInterests\(form\.interests/,
+  )
+})
+
+// ── 沿途顺路餐饮 ───────────────────────────────────────────
+
+test('沿途餐饮：只有跨饭点的长路段才需要沿线找饭', async () => {
+  const { mealStopsAlongLegs } = await load(path.join(travelDir, 'travelEngine.js'))
+  // 乌鲁木齐 → 布尔津：08:30 出发、600 km，午饭只能在路上解决。
+  const long = mealStopsAlongLegs([{ distance: 600, duration: 330 * 60 }], { startTime: '08:30' })
+  assert.equal(long.length, 1)
+  assert.equal(long[0].meal, 'lunch')
+  assert.ok(long[0].ratio > 0.2 && long[0].ratio < 0.9)
+  // 市区 8 km 的移动不该触发沿线找餐。
+  assert.equal(mealStopsAlongLegs([{ distance: 8, duration: 30 * 60 }], { startTime: '11:30' }).length, 0)
+  // 傍晚出发的长路段对应晚饭。
+  const evening = mealStopsAlongLegs([{ distance: 200, duration: 150 * 60 }], { startTime: '16:00' })
+  assert.equal(evening[0]?.meal, 'dinner')
+})
+
+test('沿途餐饮：离景点远但贴着路线，不该被判「用餐不顺路」', async () => {
+  const { validateDayBlocks } = await load(path.join(travelDir, 'travelValidate.js'))
+  const along = { name: '途中服务区餐厅', lng: 87.10, lat: 46.0, alongTime: '12:30', alongMeal: 'lunch' }
+  const day = {
+    blocks: [
+      {
+        kind: 'transit',
+        title: '前往布尔津',
+        start: '08:30',
+        end: '14:00',
+        legIndex: 0,
+        route: {
+          distance: 600,
+          duration: 330 * 60,
+          fromLng: 87.62,
+          fromLat: 43.82,
+          toLng: 86.87,
+          toLat: 47.70,
+          polyline: '87.62,43.82;87.10,46.00;86.87,47.70',
+        },
+      },
+      {
+        kind: 'sight',
+        title: '五彩滩',
+        start: '14:30',
+        end: '16:30',
+        poi: { name: '五彩滩', lng: 86.87, lat: 47.70 },
+      },
+      { kind: 'food', title: '途中服务区餐厅', start: '12:30', end: '13:30', poi: along },
+    ],
+  }
+  const problems = validateDayBlocks(day, { center: { lng: 86.87, lat: 47.7 }, radiusKm: 200 })
+  assert.ok(!problems.some((item) => /用餐不顺路/.test(item)))
+  // 同样的位置但不带沿途标记：照旧按「离其他安排太远」拦下。
+  const plain = {
+    ...day,
+    blocks: day.blocks.map((block) =>
+      block.kind === 'food' ? { ...block, poi: { ...block.poi, alongTime: '' } } : block,
+    ),
+  }
+  const strict = validateDayBlocks(plain, { center: { lng: 86.87, lat: 47.7 }, radiusKm: 200 })
+  assert.ok(strict.some((item) => /用餐不顺路/.test(item)))
+})
+
+test('沿途餐饮：命令已注册且前端会调用', () => {
+  assert.match(read('src-tauri/src/main.rs'), /commands::travel::travel_along_meals/)
+  const mod = read('src-tauri/src/commands/travel/mod.rs')
+  assert.match(mod, /pub async fn travel_along_meals\(/)
+  // 必须走 050000 餐饮分类并限制半径，避免沿线把景点也拉进来。
+  assert.match(mod, /"050000"/)
+  assert.match(read(path.join(travelDir, 'travelStore.js')), /api\.alongMeals\(/)
+})
+
+// ── 候选池：默认不勾 / 批量 / 基地切换 / 指令条 ─────────────
+
+test('候选池指令：常见说法本地解析，不耗模型', async () => {
+  const { parseExploreCommand } = await load(path.join(travelDir, 'travelExplore.js'))
+  const bases = [{ id: '654000', name: '伊犁哈萨克自治州' }, { id: '654300', name: '阿勒泰地区' }]
+  assert.equal(parseExploreCommand('重新检索', bases).action, 'refresh')
+  assert.equal(parseExploreCommand('扩大到 150 公里', bases).km, 150)
+  assert.equal(parseExploreCommand('切换到伊犁', bases).base, '654000')
+  assert.equal(parseExploreCommand('看看阿勒泰', bases).base, '654300')
+  assert.equal(parseExploreCommand('只要博物馆', bases).key, 'museum')
+  assert.equal(parseExploreCommand('帮我挑', bases).action, 'pick')
+  assert.equal(parseExploreCommand('清空', bases).action, 'clear')
+  assert.equal(parseExploreCommand('全选', bases).mode, 'add')
+  // 解析不了的返回 null，交给模型兜底，而不是瞎猜一个动作。
+  assert.equal(parseExploreCommand('今天天气怎么样', bases), null)
+})
+
+test('候选池指令：模型返回被收敛到合法动作', async () => {
+  const { normalizeExploreCommand } = await load(path.join(travelDir, 'travelExplore.js'))
+  const bases = [{ id: '654000', name: '伊犁哈萨克自治州' }]
+  assert.equal(normalizeExploreCommand({ action: ' bogus' }, bases).action, 'unknown')
+  assert.equal(normalizeExploreCommand({ action: 'switch', base: '伊犁' }, bases).base, '654000')
+  assert.equal(normalizeExploreCommand({ action: 'category', category: '博物馆' }, bases).key, 'museum')
+  assert.equal(normalizeExploreCommand({ action: 'expand', km: -5 }, bases).km, 0)
+  assert.equal(normalizeExploreCommand({ action: 'batch', mode: 'xx' }, bases).mode, 'add')
+})
+
+test('候选池：默认不自动勾选，基地增量检索且切换不重搜', () => {
+  const store = read(path.join(travelDir, 'travelStore.js'))
+  // 进入候选池不再 autoPick，只保留必去（重搜时并回仍存在的旧勾选）。
+  assert.match(store, /默认不替用户勾选/)
+  assert.match(store, /const kept = previousSelected\.filter/)
+  assert.match(store, /\[\.\.\.new Set\(\[\.\.\.\(enriched\.selectedIds \|\| \[\]\), \.\.\.kept\]\)\]/)
+  // 新增基地只检索该基地（bases 单元素），合并进总池。
+  assert.match(store, /bases: \[placeRef\(place\)\]/)
+  assert.match(store, /mergeExploreData\(state\.explore\.data, incoming\)/)
+  // 切换基地是纯前端赋值，不调用 api.explore。
+  assert.match(store, /function switchExploreBase\(id\) \{\s*state\.explore\.activeBase = id \|\| 'all'\s*\}/)
+  // 批量与指令入口已导出。
+  for (const fn of ['batchExploreSelection', 'switchExploreBase', 'expandExploreRange', 'interpretExploreCommand']) {
+    assert.ok(store.includes(`${fn},`), `store 应导出 ${fn}`)
+  }
+  const board = read(path.join(travelDir, 'ExploreBoard.vue'))
+  assert.match(board, /tr-explore-batch/)
+  assert.match(board, /tr-explore-command/)
+  assert.match(board, /switch-base/)
+})

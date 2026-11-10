@@ -764,6 +764,93 @@ pub async fn travel_ip_location() -> Result<Place, String> {
     osm::ip_location().await
 }
 
+// ── 命令：沿途餐饮 ─────────────────────────────────────────
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AlongMealRequest {
+    pub lng: f64,
+    pub lat: f64,
+    #[serde(default)]
+    pub radius_km: Option<f64>,
+    /// 序号用于把结果对回具体路段。
+    #[serde(default)]
+    pub leg_index: i64,
+    #[serde(default)]
+    pub meal: String,
+    #[serde(default)]
+    pub time: String,
+}
+
+#[derive(Debug, Clone, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct AlongMealStop {
+    pub leg_index: i64,
+    pub meal: String,
+    pub time: String,
+    pub lng: f64,
+    pub lat: f64,
+    pub pois: Vec<Poi>,
+}
+
+/// 长路段跨饭点时，在路线折线上的采样点做一次小半径餐饮检索。
+///
+/// 这里刻意只查「沿路 5 km」而不是整城：跨城那一天真正需要的，
+/// 是途经城镇里能顺路吃一顿的店，而不是终点城市或家门口的餐厅。
+#[tauri::command]
+pub async fn travel_along_meals(
+    stops: Vec<AlongMealRequest>,
+) -> Result<Vec<AlongMealStop>, String> {
+    if stops.is_empty() {
+        return Ok(Vec::new());
+    }
+    if stops.len() > 8 {
+        return Err("沿途餐饮采样点过多".to_string());
+    }
+    let key = amap_key();
+    let use_amap = !key.trim().is_empty();
+    let mut out = Vec::new();
+    for stop in stops {
+        let radius_m = (stop.radius_km.unwrap_or(5.0) * 1000.0).clamp(1000.0, 20_000.0);
+        let mut pois = if use_amap {
+            amap::place_around(&key, stop.lng, stop.lat, radius_m, "050000", "")
+                .await
+                .unwrap_or_default()
+        } else {
+            let (wgs_lng, wgs_lat) = providers::coord::gcj02_to_wgs84(stop.lng, stop.lat);
+            match osm::explore_pois(wgs_lat, wgs_lng, radius_m).await {                Ok(items) => items
+                    .into_iter()
+                    .filter(|poi| poi.kind == "food")
+                    .map(|mut poi| {
+                        let (lng, lat) = providers::coord::wgs84_to_gcj02(poi.lng, poi.lat);
+                        poi.lng = lng;
+                        poi.lat = lat;
+                        poi
+                    })
+                    .collect(),
+                Err(_) => Vec::new(),
+            }
+        };
+        pois.retain(|poi| poi.lng.abs() > 0.0001 && poi.lat.abs() > 0.0001);
+        pois.sort_by(|a, b| {
+            b.rating
+                .unwrap_or(0.0)
+                .partial_cmp(&a.rating.unwrap_or(0.0))
+                .unwrap()
+        });
+        pois.truncate(3);
+        out.push(AlongMealStop {
+            leg_index: stop.leg_index,
+            meal: stop.meal,
+            time: stop.time,
+            lng: stop.lng,
+            lat: stop.lat,
+            pois,
+        });
+    }
+    Ok(out)
+}
+
 #[tauri::command]
 pub async fn travel_search_places(keyword: String, city: Option<String>) -> Result<Vec<Place>, String> {
     let keyword = keyword.trim();

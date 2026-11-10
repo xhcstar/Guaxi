@@ -1,16 +1,60 @@
 // 行程硬约束校验：地点必须来自候选池，且落在用户要求的半径、日期与出发时间内。
 // 模型输出先过这里，不过关就退回确定性编排；装配完成后再整体校验一次，避免把错误计划交给用户。
 
-import { distanceKm, homeGuardKm, tooCloseToHome } from './travelEngine.js'
-import { haversineKm, timeToMinutes } from './travelUtils.js'
+import {
+  dailyTransitLimitMinutes,
+  distanceKm,
+  homeGuardKm,
+  mealGuardKm,
+  tooCloseToHome,
+} from './travelEngine.js'
+import { haversineKm, minutesToTime, parsePolyline, timeToMinutes } from './travelUtils.js'
 
 const POI_KINDS = new Set(['sight', 'food', 'hotel'])
 // 后端按「半径 + 500 m」裁剪候选，这里用同一口径，避免边界点误判。
 const RADIUS_SLACK_KM = 0.5
 const START_SLACK_MINUTES = 30
+// 收尾可以稍有弹性，排过半小时才算真超时。
+const END_SLACK_MINUTES = 30
 
 function distanceText(km) {
   return km >= 10 ? km.toFixed(0) : km.toFixed(1)
+}
+
+// 当天的真实行驶折线：把所有带 route 的 transit 块按 legIndex 串起来。
+function routePolyline(day) {
+  const legs = (day?.blocks || [])
+    .filter((block) => block?.kind === 'transit' && block?.route)
+    .sort((a, b) => (a.legIndex ?? 0) - (b.legIndex ?? 0))
+  const points = []
+  const push = (lng, lat) => {
+    if (!Number.isFinite(lng) || !Number.isFinite(lat)) return
+    const last = points[points.length - 1]
+    if (last && Math.abs(last.lng - lng) < 1e-5 && Math.abs(last.lat - lat) < 1e-5) return
+    points.push({ lng, lat })
+  }
+  for (const block of legs) {
+    const coords = parsePolyline(
+      block.route.polyline,
+      { lng: block.route.fromLng, lat: block.route.fromLat },
+      { lng: block.route.toLng, lat: block.route.toLat },
+    )
+    for (const [lng, lat] of coords) push(lng, lat)
+  }
+  return points
+}
+
+// 点到折线的最短距离：顺不顺路取决于「离这条线多近」，与离景点多远无关。
+function distanceToPolylineKm(poi, points) {
+  if (!poi || points.length < 2) return Infinity
+  let best = Infinity
+  for (let index = 1; index < points.length; index += 1) {
+    const from = points[index - 1]
+    const to = points[index]
+    // 用两端点到目标点的距离近似该线段：折线点足够密，误差远小于 3 km 判定阈值。
+    best = Math.min(best, distanceKm(from, poi), distanceKm(to, poi))
+  }
+  return best
 }
 
 export function validateDayBlocks(
@@ -19,15 +63,25 @@ export function validateDayBlocks(
     center,
     radiusKm = 0,
     notBeforeMinutes = null,
+    endMinutes = null,
     allowHotel = true,
     home = null,
     homeGuard = 0,
+    mealGuard = 0,
+    transitLimitMinutes = 0,
     requireLunch = false,
     requireDinner = false,
     requireHotel = false,
+    advisories = null,
   } = {},
 ) {
   const problems = []
+  // 产线类问题（收尾偏晚、当天在途过长）走这里：编排单天时没有收集数组，按硬约束退回
+  // 确定性编排；整份计划复核时传入 advisories，只作页面横幅提示，不作废整份计划。
+  const soft = (text) => {
+    if (Array.isArray(advisories)) advisories.push(text)
+    else problems.push(text)
+  }
   const blocks = Array.isArray(day?.blocks) ? day.blocks : []
   if (!blocks.length) {
     problems.push('没有任何安排')
@@ -78,6 +132,32 @@ export function validateDayBlocks(
     const start = timeToMinutes(first?.start)
     if (start != null && start < notBeforeMinutes - START_SLACK_MINUTES) {
       problems.push(`「${first.title || '第一站'}」早于出发时间 ${first.start}`)
+    }
+  }
+
+  // 收尾只看游览/用餐，不看最后返程：结束时间是「当天活动结束」，回家路上的时间不算超时。
+  if (endMinutes != null) {
+    const lastActivity = [...blocks]
+      .filter((block) => block?.kind !== 'transit' && block?.kind !== 'rest')
+      .map((block) => ({ block, end: timeToMinutes(block?.end) }))
+      .filter((item) => item.end != null)
+      .sort((a, b) => b.end - a.end)[0]
+    if (lastActivity && lastActivity.end > endMinutes + END_SLACK_MINUTES) {
+      soft(
+        `「${lastActivity.block.title || '最后一项安排'}」结束于 ${lastActivity.block.end}，晚于每天结束时间 ${minutesToTime(endMinutes)}`,
+      )
+    }
+  }
+
+  // 单日全在车上就没有游览价值：超过在途上限说明这一天几乎都在赶路。
+  if (transitLimitMinutes > 0) {
+    const transitMinutes = blocks
+      .filter((block) => block?.kind === 'transit')
+      .reduce((sum, block) => sum + (Number(block?.route?.duration) || 0) / 60, 0)
+    if (transitMinutes > transitLimitMinutes) {
+      soft(
+        `当天在途约 ${Math.round(transitMinutes)} 分钟，超过 ${Math.round(transitLimitMinutes)} 分钟上限，建议减少一处目的地或拉长日期`,
+      )
     }
   }
 
@@ -132,6 +212,18 @@ export function validateDayBlocks(
         `「${poi.name || label}」离出发点不到 ${Math.round(homeGuard)} km，不像出游安排`,
       )
     }
+    // 异地行程的餐饮另设离家门槛：快到家了才吃饭，通常是返程顺手排的，没有出游意义。
+    // 只看午/晚饭时段，出发前在楼下吃早饭这类安排不算问题。
+    if (
+      block.kind === 'food' &&
+      mealGuard > 0 &&
+      tooCloseToHome(poi, home, mealGuard) &&
+      (overlapsMeal(block, 11 * 60, 15 * 60) || overlapsMeal(block, 17 * 60, 21 * 60))
+    ) {
+      problems.push(
+        `「${poi.name || label}」离出发点不到 ${Math.round(mealGuard)} km，像是快到家才吃饭`,
+      )
+    }
     if (!center || !(radiusKm > 0)) return
     const km = haversineKm(center, poi)
     if (!Number.isFinite(km)) {
@@ -146,8 +238,13 @@ export function validateDayBlocks(
   })
 
   // 午餐/晚餐要落在当天行程附近，不能人在 30 km 外却回家门口吃饭。
+  // 沿途餐馆例外：它本来就该离当天景区很远（在跨城路段中间），顺不顺路要看
+  // 它离当天路线折线有多近，而不是离哪个景点有多近。
   if (foodBlocks.length && otherPois.length) {
+    const route = routePolyline(day)
     for (const { label, poi } of foodBlocks) {
+      const detour = poi.alongTime && route.length >= 2 ? distanceToPolylineKm(poi, route) : null
+      if (detour != null && detour <= 3) continue
       const nearest = Math.min(...otherPois.map((other) => distanceKm(other, poi)))
       if (Number.isFinite(nearest) && nearest > 12) {
         problems.push(`「${poi.name || label}」离当天其他安排超过 12 km，用餐不顺路`)
@@ -187,6 +284,7 @@ export function validateBudget(plan) {
 
 export function validatePlan(plan, { center, radiusKm = 0, expectedDates = [] } = {}) {
   const problems = []
+  const advisories = []
   const days = Array.isArray(plan?.days) ? plan.days : []
   if (!days.length) problems.push('计划里没有任何一天的安排')
   if (expectedDates.length && days.length !== expectedDates.length) {
@@ -197,7 +295,11 @@ export function validatePlan(plan, { center, radiusKm = 0, expectedDates = [] } 
   const allowHotel = !sameDay && days.length > 1
   const notBeforeMinutes = timeToMinutes(plan?.startTime)
   const homeGuard = homeGuardKm(plan)
+  const mealGuard = mealGuardKm(plan)
   const endMinutes = timeToMinutes(plan?.endTime) ?? 0
+  const dayWindowMinutes =
+    notBeforeMinutes != null && endMinutes > notBeforeMinutes ? endMinutes - notBeforeMinutes : 0
+  const transitLimitMinutes = dailyTransitLimitMinutes(plan, dayWindowMinutes)
   const requireLunch = endMinutes >= 13 * 60
   const requireDinner = endMinutes >= 19 * 60
   days.forEach((day, index) => {
@@ -205,24 +307,30 @@ export function validatePlan(plan, { center, radiusKm = 0, expectedDates = [] } 
     if (expectedDates[index] && day?.date !== expectedDates[index]) {
       problems.push(`${prefix}日期应为 ${expectedDates[index]}，实际 ${day?.date || '缺失'}`)
     }
+    const soft = []
     validateDayBlocks(day, {
       center,
       radiusKm,
       notBeforeMinutes,
+      endMinutes,
       allowHotel,
       home: plan?.origin,
       homeGuard,
+      mealGuard,
+      transitLimitMinutes,
       requireLunch,
       requireDinner,
       requireHotel: !sameDay && index < days.length - 1,
+      advisories: soft,
     }).forEach((item) => {
       problems.push(`${prefix}：${item}`)
     })
+    soft.forEach((item) => advisories.push(`${prefix}：${item}`))
   })
 
   validateBudget(plan).forEach((item) => problems.push(`预算：${item}`))
 
-  return { ok: problems.length === 0, problems }
+  return { ok: problems.length === 0, problems, advisories }
 }
 
 export function formatProblems(problems, limit = 2) {

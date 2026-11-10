@@ -356,6 +356,130 @@ export function scoreCandidate(item, context) {
   }
 }
 
+/**
+ * 兴趣 → 后端检索类别。高德个人认证的关键字搜索只有约 100 次/天，
+ * 一次四基地的全省扫描就要几十次；按兴趣只扫相关类别能省下大半。
+ * 「必去」由后端单独处理，不参与；餐饮始终保留——每天的午饭晚饭都靠它。
+ * 没选兴趣时返回空数组，表示扫全部类别。
+ */
+export function categoriesForInterests(interests = []) {
+  const picked = new Set((interests || []).map((item) => text(item)).filter(Boolean))
+  if (!picked.size) return []
+  const keys = EXPLORE_CATEGORIES.filter(
+    (item) =>
+      item.key !== 'must' &&
+      Array.isArray(item.interests) &&
+      item.interests.some((interest) => picked.has(interest)),
+  ).map((item) => item.key)
+  if (!keys.includes('food')) keys.push('food')
+  return keys
+}
+
+// ── 候选池指令条 ───────────────────────────────────────────
+
+export const EXPLORE_COMMAND_ACTIONS = [
+  'refresh',
+  'expand',
+  'switch',
+  'category',
+  'filter',
+  'pick',
+  'clear',
+  'batch',
+]
+
+export const EXPLORE_COMMAND_SYSTEM = `你是旅行候选池的指令解析器。把用户的一句话映射成一个 JSON 动作，只输出 JSON，不要解释。
+可选 action：refresh(重新检索) / expand(扩大范围,带 km) / switch(切换基地,带 base) / category(只看某类,带 category) / filter(筛选,带 filter=high|indoor|people|must) / pick(帮我挑) / clear(清空勾选) / batch(批量勾选,带 mode=add|remove|toggle|replace) / unknown(无法理解,带 message)。
+base 用给出的基地名或 "all"；category 用给出的类别 key。不确定就返回 unknown。`
+
+export function buildExploreCommandPrompt(raw, bases = []) {
+  const baseNames = (bases || []).map((base) => base.name).filter(Boolean)
+  const cats = EXPLORE_CATEGORIES.filter((item) => item.key !== 'must').map(
+    (item) => `${item.key}=${item.label}`,
+  )
+  return `基地：${baseNames.join('、') || '（无）'}
+类别：${cats.join('、')}
+用户说：${raw}
+输出一个 JSON 动作。`
+}
+
+/** 本地解析常见说法，命中返回动作，未命中返回 null 交给模型。不耗模型额度。 */
+export function parseExploreCommand(raw, bases = []) {
+  const t = String(raw || '').trim()
+  if (!t) return { action: 'noop' }
+  const has = (re) => re.test(t)
+  const kmMatch = t.match(/(\d+(?:\.\d+)?)\s*(?:公里|千米|km)/i)
+  const km = kmMatch ? Number(kmMatch[1]) : 0
+
+  if (has(/扩大|放宽|更大|范围扩|扩范围/)) return { action: 'expand', km }
+  if (km && has(/范围|半径|周边|附近/)) return { action: 'expand', km }
+  if (has(/重新|重扫|刷新|再搜|再检索|rescan|refresh/i)) return { action: 'refresh' }
+  if (has(/帮我挑|自动挑|挑一批|推荐一批|智能挑/)) return { action: 'pick' }
+  if (has(/清空|取消全部|全部取消|都不选|一个不选/)) return { action: 'clear' }
+  if (has(/反选/)) return { action: 'batch', mode: 'toggle' }
+  if (has(/全选|全部勾|都勾上|勾全部/)) return { action: 'batch', mode: 'add' }
+  if (has(/全部基地|所有基地|合并看|看全部/)) return { action: 'switch', base: 'all' }
+
+  for (const base of bases || []) {
+    const name = String(base?.name || '')
+    if (!name) continue
+    const short = name.replace(/(哈萨克自治州|蒙古自治州|自治州|地区|市)$/, '')
+    const mentioned = t.includes(name) || (short && short !== name && t.includes(short))
+    if (mentioned && has(/切换|切到|换到|只看|看看|查看|去/)) {
+      return { action: 'switch', base: base.id || name }
+    }
+  }
+
+  for (const cat of EXPLORE_CATEGORIES) {
+    if (cat.key === 'must') continue
+    const label = cat.label
+    const mentioned = t.includes(label) || (label.length > 2 && t.includes(label.slice(0, 2)))
+    if (mentioned && has(/只要|只看|筛选|过滤|类别/)) return { action: 'category', key: cat.key }
+  }
+
+  if (has(/高分|评分高/)) return { action: 'filter', key: 'high' }
+  if (has(/室内/)) return { action: 'filter', key: 'indoor' }
+  if (has(/老幼|老人|小孩/)) return { action: 'filter', key: 'people' }
+  if (has(/必去/)) return { action: 'filter', key: 'must' }
+  return null
+}
+
+/** 把模型返回的 JSON 收敛到同一组动作；非法字段丢弃，基地/类别名转成 id/key。 */
+export function normalizeExploreCommand(json, bases = []) {
+  const action = String(json?.action || '').trim()
+  if (!EXPLORE_COMMAND_ACTIONS.includes(action)) {
+    return { action: 'unknown', message: String(json?.message || '没听懂这条指令。') }
+  }
+  if (action === 'expand') {
+    const km = Number(json?.km)
+    return { action, km: Number.isFinite(km) && km > 0 ? km : 0 }
+  }
+  if (action === 'switch') {
+    const wanted = String(json?.base || '').trim()
+    if (!wanted || wanted === 'all') return { action, base: 'all' }
+    const hit = (bases || []).find(
+      (base) => base.id === wanted || base.name === wanted || String(base.name || '').includes(wanted),
+    )
+    return { action, base: hit ? hit.id || hit.name : wanted }
+  }
+  if (action === 'category') {
+    const wanted = String(json?.category || '').trim()
+    const hit = EXPLORE_CATEGORIES.find((cat) => cat.key === wanted || cat.label === wanted)
+    return hit ? { action, key: hit.key } : { action: 'unknown', message: `没有「${wanted}」这个类别。` }
+  }
+  if (action === 'filter') {
+    const key = String(json?.filter || json?.key || '').trim()
+    return ['high', 'indoor', 'people', 'must'].includes(key)
+      ? { action, key }
+      : { action: 'unknown', message: '不支持这个筛选。' }
+  }
+  if (action === 'batch') {
+    const mode = String(json?.mode || 'add').trim()
+    return { action, mode: ['add', 'remove', 'toggle', 'replace'].includes(mode) ? mode : 'add' }
+  }
+  return { action }
+}
+
 export function buildContext({ form = {}, weather = [], dates = [], month } = {}) {
   const tripWeather = (weather || []).filter((item) => !dates.length || dates.includes(item.date))
   const rainy = tripWeather.filter((item) => /雨|雪|雷/.test(String(item.dayWeather || ''))).length
