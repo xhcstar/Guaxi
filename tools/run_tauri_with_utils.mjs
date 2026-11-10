@@ -1,4 +1,4 @@
-import { cp, mkdir, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, readdir, readFile, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
@@ -46,6 +46,7 @@ const windowsCudaRuntimeBundlesDir = path.join(
   windowsNsisOutputDir,
   'cuda_runtime_bundles',
 );
+const BUNDLE_MANIFEST_FILE = 'bundle-manifest.json';
 
 // 语音功能的 GPU 构建需要 SHERPA_ONNX_LIB_DIR 指向已装配的 CUDA 库目录。
 // 与其让每台机器各自 export 一遍，不如在这里按 `--features gpu` 自动补上——
@@ -210,12 +211,99 @@ async function collectBundleEntries(dir, label) {
   return files;
 }
 
-async function publishBundleDir(bundleEntries, targetDir) {
-  await rm(targetDir, { recursive: true, force: true });
-  await mkdir(targetDir, { recursive: true });
-  for (const entry of bundleEntries) {
-    await cp(entry.fullPath, path.join(targetDir, entry.name));
+// Copy only when the destination is missing or differs from the source.
+// Preserving the source mtime lets the next build skip the stat/compare/hash
+// work entirely; multi-GB bundle directories must never be deleted and copied
+// wholesale again.
+async function copyFileIfChanged(sourcePath, targetPath) {
+  const sourceStat = await stat(sourcePath);
+  let targetStat = null;
+  try {
+    targetStat = await stat(targetPath);
+  } catch {
+    targetStat = null;
   }
+
+  if (
+    targetStat?.isFile() &&
+    targetStat.size === sourceStat.size &&
+    Math.abs(targetStat.mtimeMs - sourceStat.mtimeMs) < 2
+  ) {
+    return false;
+  }
+
+  await mkdir(path.dirname(targetPath), { recursive: true });
+  await copyFile(sourcePath, targetPath);
+  await utimes(targetPath, sourceStat.atime, sourceStat.mtime);
+  return true;
+}
+
+async function writeFileIfChanged(targetPath, content) {
+  try {
+    if ((await readFile(targetPath, 'utf8')) === content) {
+      return false;
+    }
+  } catch {
+    // Missing/unreadable target: fall through and write it.
+  }
+  await mkdir(path.dirname(targetPath), { recursive: true });
+  await writeFile(targetPath, content, 'utf8');
+  return true;
+}
+
+async function publishBundleDir(sourceDir, targetDir) {
+  await mkdir(targetDir, { recursive: true });
+
+  const sourceEntries = await readdir(sourceDir, { withFileTypes: true });
+  const sourceFiles = sourceEntries
+    .filter(
+      (entry) =>
+        entry.isFile() &&
+        (entry.name.toLowerCase().endsWith('.tar.zst') ||
+          entry.name === BUNDLE_MANIFEST_FILE),
+    )
+    .map((entry) => entry.name);
+
+  if (!sourceFiles.includes(BUNDLE_MANIFEST_FILE)) {
+    throw new Error(`资源目录缺少 ${BUNDLE_MANIFEST_FILE}: ${sourceDir}`);
+  }
+
+  // Remove stale bundles from previous builds, but leave unrelated files alone.
+  const keep = new Set(sourceFiles);
+  for (const entry of await readdir(targetDir, { withFileTypes: true })) {
+    if (
+      entry.isFile() &&
+      (entry.name.toLowerCase().endsWith('.tar.zst') ||
+        entry.name === BUNDLE_MANIFEST_FILE) &&
+      !keep.has(entry.name)
+    ) {
+      await rm(path.join(targetDir, entry.name), { force: true });
+    }
+  }
+
+  let copied = 0;
+  let skipped = 0;
+  let nextIndex = 0;
+  const workers = Array.from(
+    { length: Math.min(4, sourceFiles.length) },
+    async () => {
+      while (nextIndex < sourceFiles.length) {
+        const name = sourceFiles[nextIndex];
+        nextIndex += 1;
+        const changed = await copyFileIfChanged(
+          path.join(sourceDir, name),
+          path.join(targetDir, name),
+        );
+        if (changed) {
+          copied += 1;
+        } else {
+          skipped += 1;
+        }
+      }
+    },
+  );
+  await Promise.all(workers);
+  return { copied, skipped, files: sourceFiles.length };
 }
 
 async function publishExternalWindowsBundles(includeCudaRuntime) {
@@ -234,10 +322,24 @@ async function publishExternalWindowsBundles(includeCudaRuntime) {
     : [];
 
   await mkdir(windowsNsisOutputDir, { recursive: true });
-  await publishBundleDir(utilsEntries, windowsExternalBundlesDir);
-  await cp(windowsExtractHelperSource, windowsExtractHelperOutput);
+  const utilsPublish = await publishBundleDir(
+    utilsBundlesSourceDir,
+    windowsExternalBundlesDir,
+  );
+  const helperChanged = await copyFileIfChanged(
+    windowsExtractHelperSource,
+    windowsExtractHelperOutput,
+  );
+  let cudaPublish = null;
   if (includeCudaRuntime) {
-    await publishBundleDir(cudaEntries, windowsCudaRuntimeBundlesDir);
+    cudaPublish = await publishBundleDir(
+      windowsCudaRuntimeSourceBundlesDir,
+      windowsCudaRuntimeBundlesDir,
+    );
+  } else {
+    // A CPU build must not ship CUDA DLLs left over from a previous GPU build
+    // in the same target directory: the installer would happily extract them.
+    await rm(windowsCudaRuntimeBundlesDir, { recursive: true, force: true });
   }
 
   const totalBytes = [...utilsEntries, ...cudaEntries].reduce(
@@ -246,6 +348,7 @@ async function publishExternalWindowsBundles(includeCudaRuntime) {
   );
   const readme = [
     'Keep "utils_bundles", "cuda_runtime_bundles" (GPU builds) and "extract_utils_bundles.exe" next to the Guaxi setup executable.',
+    'Each bundle folder must also contain bundle-manifest.json; the installer uses it to skip unchanged resources and to verify archive integrity.',
     'The installer reads these external tar.zst bundle files during installation: utils bundles expand into the installed utils directory, CUDA runtime bundles into the install root next to guaxi.exe.',
     '',
     `Utils bundle count: ${utilsEntries.length}`,
@@ -256,14 +359,14 @@ async function publishExternalWindowsBundles(includeCudaRuntime) {
     ...cudaEntries.map((entry) => `cuda_runtime_bundles/${entry.name}\t${entry.size}`),
     '',
   ].join('\n');
-  await writeFile(windowsExternalReadme, readme, 'utf8');
+  await writeFileIfChanged(windowsExternalReadme, readme);
 
   console.log(
-    `[utils.bundle] published external windows bundles dir=${windowsExternalBundlesDir} bundleCount=${utilsEntries.length} totalBytes=${totalBytes}`,
+    `[utils.bundle] published external windows bundles dir=${windowsExternalBundlesDir} bundleCount=${utilsEntries.length} totalBytes=${totalBytes} copied=${utilsPublish.copied} skipped=${utilsPublish.skipped} helperChanged=${helperChanged}`,
   );
-  if (includeCudaRuntime) {
+  if (includeCudaRuntime && cudaPublish) {
     console.log(
-      `[cuda.bundle] published external windows bundles dir=${windowsCudaRuntimeBundlesDir} bundleCount=${cudaEntries.length}`,
+      `[cuda.bundle] published external windows bundles dir=${windowsCudaRuntimeBundlesDir} bundleCount=${cudaEntries.length} copied=${cudaPublish.copied} skipped=${cudaPublish.skipped}`,
     );
   }
 }
@@ -407,12 +510,13 @@ async function main() {
   const tauriExitCode = await run(
     tauri.command,
     tauri.args,
-    // `build.rs` also knows how to reuse existing bundles. We forward the flag
-    // through an env var so Cargo-triggered bundle preparation stays consistent
-    // with the outer JS wrapper.
+    // The wrapper already prepared/validated the bundles above. Tell build.rs
+    // to trust that manifest instead of scanning the 120k-file utils tree a
+    // second time; a direct `cargo build --release` still uses the incremental
+    // path because this env var is absent there.
     {
       ...releaseCargoEnv(),
-      ...(reuseExisting ? { GUAXI_REUSE_UTILS_ZIP: '1' } : {}),
+      ...(shouldPrepareForTauriCommand ? { GUAXI_REUSE_UTILS_ZIP: '1' } : {}),
       // GPU 构建才注入，且只注入到这一层：tauri 拉起的 cargo 会继承它，
       // 而上面那些辅助构建不会。
       ...(gpuSherpaLibDir ? { SHERPA_ONNX_LIB_DIR: gpuSherpaLibDir } : {}),

@@ -34,17 +34,74 @@ async function pathExists(p) {
   }
 }
 
+async function collectFiles(dir, root, files, targetDir = null) {
+  for (const entry of await fs.readdir(dir, { withFileTypes: true })) {
+    const fullPath = path.join(dir, entry.name)
+    const relative = path.relative(root, fullPath)
+    if (entry.isDirectory()) {
+      if (targetDir) {
+        await fs.mkdir(path.join(targetDir, relative), { recursive: true })
+      }
+      await collectFiles(fullPath, root, files, targetDir)
+    } else if (entry.isFile()) {
+      files.push(relative)
+    }
+  }
+}
+
+async function copyFileIfChanged(sourcePath, targetPath) {
+  const sourceStat = await fs.stat(sourcePath)
+  let targetStat = null
+  try {
+    targetStat = await fs.stat(targetPath)
+  } catch {
+    targetStat = null
+  }
+
+  if (
+    targetStat?.isFile() &&
+    targetStat.size === sourceStat.size &&
+    Math.abs(targetStat.mtimeMs - sourceStat.mtimeMs) < 2
+  ) {
+    return false
+  }
+
+  await fs.mkdir(path.dirname(targetPath), { recursive: true })
+  await fs.copyFile(sourcePath, targetPath)
+  // Preserve mtime so the next run can skip unchanged files.
+  await fs.utimes(targetPath, sourceStat.atime, sourceStat.mtime)
+  return true
+}
+
+async function syncDirectory(sourceDir, targetDir, label) {
+  const sourceFiles = []
+  await fs.mkdir(targetDir, { recursive: true })
+  await collectFiles(sourceDir, sourceDir, sourceFiles, targetDir)
+
+  let copied = 0
+  let skipped = 0
+  for (const relative of sourceFiles) {
+    const changed = await copyFileIfChanged(
+      path.join(sourceDir, relative),
+      path.join(targetDir, relative),
+    )
+    if (changed) {
+      copied += 1
+    } else {
+      skipped += 1
+    }
+  }
+
+  log('synced', { label, files: sourceFiles.length, copied, skipped })
+}
+
 async function main() {
-  log('start', { SRC_ASSETS_DIR, DEST_ROOT, SRC_VDITOR_DIST_DIR, DEST_VDITOR_ROOT, DEST_VDITOR_DIST_DIR })
+  log('start', { SRC_ASSETS_DIR, DEST_ROOT, SRC_VDITOR_DIST_DIR, DEST_VDITOR_DIST_DIR })
 
   if (!(await pathExists(SRC_ASSETS_DIR))) {
     warn('source assets dir not found, skip copy', { SRC_ASSETS_DIR })
   } else {
-    await fs.mkdir(DEST_ROOT, { recursive: true })
-    await fs.cp(SRC_ASSETS_DIR, DEST_ROOT, {
-      recursive: true,
-      force: true,
-    })
+    await syncDirectory(SRC_ASSETS_DIR, DEST_ROOT, 'excalidraw')
   }
 
   if (!(await pathExists(SRC_VDITOR_DIST_DIR))) {
@@ -52,11 +109,8 @@ async function main() {
   } else {
     // Vditor internally resolves runtime assets as `${cdn}/dist/...`,
     // so we must preserve the `dist` layer under `public/vditor/dist`.
-    await fs.mkdir(DEST_VDITOR_DIST_DIR, { recursive: true })
-    await fs.cp(SRC_VDITOR_DIST_DIR, DEST_VDITOR_DIST_DIR, {
-      recursive: true,
-      force: true,
-    })
+    // Only this dist subtree is managed; older root-level vditor files are left alone.
+    await syncDirectory(SRC_VDITOR_DIST_DIR, DEST_VDITOR_DIST_DIR, 'vditor')
   }
 
   log('done')

@@ -7,16 +7,17 @@ mod utils_zip_support;
 // The installer passes arguments explicitly so the helper can stay shell-agnostic
 // and avoid fragile inline PowerShell extraction logic.
 fn parse_arg(flag: &str) -> Result<PathBuf, String> {
+    parse_optional_arg(flag).ok_or_else(|| format!("missing required argument: {flag}"))
+}
+
+fn parse_optional_arg(flag: &str) -> Option<PathBuf> {
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         if arg == flag {
-            let value = args
-                .next()
-                .ok_or_else(|| format!("missing value for {flag}"))?;
-            return Ok(PathBuf::from(value));
+            return args.next().map(PathBuf::from);
         }
     }
-    Err(format!("missing required argument: {flag}"))
+    None
 }
 
 fn main() {
@@ -29,10 +30,23 @@ fn main() {
         std::process::exit(2);
     });
 
-    let bundle_count = utils_zip_support::extract_bundle_archives_to_destination(
-        &bundle_root,
-        &destination,
-    )
+    // The installer passes --state-file so repeated installs can skip bundles
+    // whose files are already present with the same size/mtime signature.
+    // Without it (older packages) we keep the previous full-extraction behavior.
+    let state_file = parse_optional_arg("--state-file");
+    let result = if state_file.is_some() {
+        utils_zip_support::sync_bundle_archives_to_destination(
+            &bundle_root,
+            &destination,
+            state_file.as_deref(),
+        )
+    } else {
+        utils_zip_support::extract_bundle_archives_to_destination(&bundle_root, &destination)
+            .map(|bundle_count| utils_zip_support::ExtractResult {
+                bundle_count,
+                ..utils_zip_support::ExtractResult::default()
+            })
+    }
     .unwrap_or_else(|error| {
         eprintln!("{error}");
         std::process::exit(1);
@@ -61,9 +75,13 @@ fn main() {
     }
 
     println!(
-        "[utils.bundle] extracted bundleRoot={} destination={} bundleCount={}",
+        "[utils.bundle] extracted bundleRoot={} destination={} bundleCount={} extracted={} skippedBundles={} writtenFiles={} skippedFiles={}",
         bundle_root.display(),
         destination.display(),
-        bundle_count
+        result.bundle_count,
+        result.extracted_bundle_count,
+        result.skipped_bundle_count,
+        result.written_file_count,
+        result.skipped_file_count
     );
 }

@@ -50,10 +50,12 @@ fn main() {
         }
         Ok(result) => {
             println!(
-                "[cuda.bundle] prepared bundleDir={} strategy={} bundleCount={} elapsedMs={} totalBytes={}",
+                "[cuda.bundle] prepared bundleDir={} strategy={} bundleCount={} rebuilt={} reused={} elapsedMs={} totalBytes={}",
                 result.bundle_dir.display(),
                 result.strategy.label(),
                 result.bundle_count,
+                result.rebuilt_bundle_count,
+                result.reused_bundle_count,
                 result.elapsed_ms,
                 result.total_bytes
             );

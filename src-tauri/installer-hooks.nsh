@@ -3,10 +3,10 @@
   ; next to the installer. After the main app files are copied, invoke the
   ; dedicated Rust helper to expand those bundles into $INSTDIR\utils.
   DetailPrint "Extracting external utils bundle parts to $INSTDIR\\utils"
-  nsExec::ExecToLog '"$EXEDIR\extract_utils_bundles.exe" --bundle-root "$EXEDIR\utils_bundles" --destination "$INSTDIR\utils"'
+  nsExec::ExecToLog '"$EXEDIR\extract_utils_bundles.exe" --bundle-root "$EXEDIR\utils_bundles" --destination "$INSTDIR\utils" --state-file "$INSTDIR\.guaxi-utils-bundles.state.json"'
   Pop $0
   StrCmp $0 "0" done 0
-    MessageBox MB_ICONSTOP|MB_OK "安装阶段解压外部 utils 资源包失败，安装已中止。请确认安装器同级目录下存在 utils_bundles 文件夹并完整重试。"
+    MessageBox MB_ICONSTOP|MB_OK "安装阶段解压外部 utils 资源包失败，安装已中止。请确认安装器同级目录下存在完整的 utils_bundles 文件夹（含 bundle-manifest.json）后重试。"
     Abort
   done:
 
@@ -17,10 +17,10 @@
   ; ship no such folder and skip this step.
   IfFileExists "$EXEDIR\cuda_runtime_bundles\*.tar.zst" 0 cuda_done
     DetailPrint "Extracting external CUDA runtime parts to $INSTDIR"
-    nsExec::ExecToLog '"$EXEDIR\extract_utils_bundles.exe" --bundle-root "$EXEDIR\cuda_runtime_bundles" --destination "$INSTDIR" --no-marker'
+    nsExec::ExecToLog '"$EXEDIR\extract_utils_bundles.exe" --bundle-root "$EXEDIR\cuda_runtime_bundles" --destination "$INSTDIR" --state-file "$INSTDIR\.guaxi-cuda-bundles.state.json" --no-marker'
     Pop $2
     StrCmp $2 "0" cuda_done 0
-      MessageBox MB_ICONSTOP|MB_OK "安装阶段解压外部 CUDA 运行库失败，安装已中止。请确认安装器同级目录下存在 cuda_runtime_bundles 文件夹并完整重试。"
+      MessageBox MB_ICONSTOP|MB_OK "安装阶段解压外部 CUDA 运行库失败，安装已中止。请确认安装器同级目录下存在完整的 cuda_runtime_bundles 文件夹（含 bundle-manifest.json）后重试。"
       Abort
   cuda_done:
 

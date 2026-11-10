@@ -75,8 +75,16 @@ async function main() {
     throw new Error('产物里找不到 window.GuaxiChartPreview 挂载点')
   }
 
-  await fs.writeFile(OUT_FILE, chunk.code, 'utf8')
-  log('done', { OUT_FILE, bytes: Buffer.byteLength(chunk.code) })
+  let changed = true
+  try {
+    changed = (await fs.readFile(OUT_FILE, 'utf8')) !== chunk.code
+  } catch {
+    changed = true
+  }
+  if (changed) {
+    await fs.writeFile(OUT_FILE, chunk.code, 'utf8')
+  }
+  log('done', { OUT_FILE, bytes: Buffer.byteLength(chunk.code), changed })
 }
 
 main().catch((error) => {

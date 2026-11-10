@@ -35,10 +35,12 @@ fn main() {
         }
         Ok(result) => {
             println!(
-                "[utils.bundle] prepared bundleDir={} strategy={} bundleCount={} elapsedMs={} fileCount={} emptyDirCount={} totalBytes={}",
+                "[utils.bundle] prepared bundleDir={} strategy={} bundleCount={} rebuilt={} reused={} elapsedMs={} fileCount={} emptyDirCount={} totalBytes={}",
                 result.bundle_dir.display(),
                 result.strategy.label(),
                 result.bundle_count,
+                result.rebuilt_bundle_count,
+                result.reused_bundle_count,
                 result.elapsed_ms,
                 result.file_count,
                 result.empty_dir_count,
