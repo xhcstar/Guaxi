@@ -604,7 +604,7 @@ async function prepareCudaLibs(proxy) {
 
   await writeFile(marker, `${name}\n${CUDA_RUNTIME_STAMP}\n`);
   info(`GPU 库目录就绪：${libDir}`);
-  info('用 GPU 构建：npm run tauri -- build --features gpu（会自己带上 SHERPA_ONNX_LIB_DIR 与打包配置）');
+  info('用 GPU 构建：npm run tauri -- build -- --no-default-features --features gpu（会自己带上 SHERPA_ONNX_LIB_DIR 与打包配置）');
 }
 
 async function main() {

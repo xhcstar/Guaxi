@@ -29,12 +29,8 @@
     "download:asr-model": "powershell -ExecutionPolicy Bypass -File ./tools/download_asr_model.ps1",
     "preview": "vite preview",
     "tauri": "node ./tools/run_tauri_with_utils.mjs",
-    "tauri:build": "node ./tools/run_tauri_with_utils.mjs build",
-    "tauri:build:reuse": "node ./tools/run_tauri_with_utils.mjs build --reuse-utils-zip",
-    "tauri:bundle": "node ./tools/run_tauri_with_utils.mjs bundle",
-    "tauri:bundle:reuse": "node ./tools/run_tauri_with_utils.mjs bundle --reuse-utils-zip",
     "postinstall": "node tools/copy_excalidraw_assets.mjs",
-    "tauri:gpu": "node ./tools/run_tauri_with_utils.mjs dev --features gpu"
+    "tauri:gpu": "node ./tools/run_tauri_with_utils.mjs dev -- --no-default-features --features gpu"
   },
   "dependencies": {
     "@codingame/monaco-vscode-api": "^23.3.0",

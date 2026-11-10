@@ -6,16 +6,13 @@ mod utils_zip_support;
 // Historical flag name is kept for compatibility with existing local scripts.
 // Internally the implementation now produces tar.zst bundle parts, not zip files.
 const REUSE_EXISTING_FLAG: &str = "--reuse-existing";
-const KEEP_EXISTING_FLAG: &str = "--keep-existing";
 
 fn manifest_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
 
 fn should_reuse_existing_bundle() -> bool {
-    std::env::args().skip(1).any(|arg| {
-        arg == REUSE_EXISTING_FLAG || arg == KEEP_EXISTING_FLAG
-    })
+    std::env::args().skip(1).any(|arg| arg == REUSE_EXISTING_FLAG)
 }
 
 fn main() {

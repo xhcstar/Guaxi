@@ -462,22 +462,28 @@ async function main() {
 
     // Bundle the heavy `src-tauri/utils` runtime tree into external tar.zst
     // parts before Tauri starts the actual release build.
-    const prepareArgs = [
-      'run',
-      '--quiet',
-      '--manifest-path',
-      'src-tauri/Cargo.toml',
-      '--bin',
-      'prepare_utils_zip',
-    ];
-
+    //
+    // 复用模式（--reuse-utils-zip）下这里刻意什么都不做：`prepare_utils_zip
+    // --reuse-existing` 本身只耗时 ~0.2s，但为了跑它要额外起一个 `cargo run`
+    // 进程（首次编译后稳定在 ~6s）。而 build.rs 在同一份清单上做的判断完全等价
+    // ——调用 tauri 时已经带上 GUAXI_REUSE_UTILS_ZIP=1，它会走同一条
+    // 「清单完整就跳过扫描」的快路径。少一次进程、少一处重复判断。
     if (reuseExisting) {
-      prepareArgs.push('--', '--reuse-existing');
-    }
-
-    const prepareExitCode = await run('cargo', prepareArgs);
-    if (prepareExitCode !== 0) {
-      process.exit(prepareExitCode);
+      console.log(
+        '[utils.bundle] reuse requested: skipping prepare, build.rs will trust the existing manifest',
+      );
+    } else {
+      const prepareExitCode = await run('cargo', [
+        'run',
+        '--quiet',
+        '--manifest-path',
+        'src-tauri/Cargo.toml',
+        '--bin',
+        'prepare_utils_zip',
+      ]);
+      if (prepareExitCode !== 0) {
+        process.exit(prepareExitCode);
+      }
     }
 
     if (process.platform === 'win32') {
@@ -496,8 +502,10 @@ async function main() {
         ],
         {
           ...releaseCargoEnv(),
+          // helper 只是打包用的 bin，同样会触发 build.rs。它的分包要么已由上面
+          // 准备好、要么马上由主构建的 build.rs 处理，所以这里无条件跳过准备，
+          // 不必再叠加 GUAXI_REUSE_UTILS_ZIP（skip 的判断在 reuse 之前）。
           GUAXI_SKIP_BUNDLE_PREPARE: '1',
-          ...(reuseExisting ? { GUAXI_REUSE_UTILS_ZIP: '1' } : {}),
         },
       );
       if (helperBuildExitCode !== 0) {

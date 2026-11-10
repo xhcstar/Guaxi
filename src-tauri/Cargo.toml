@@ -28,7 +28,7 @@ default = ["sherpa-onnx/static"]
 # 再把 SHERPA_ONNX_LIB_DIR 指向它，并关掉默认特性（static 与 shared 互斥）：
 #   SHERPA_ONNX_LIB_DIR=src-tauri/.sherpa-onnx-libs/1.13.8/cuda-lib \
 #     cargo build --no-default-features --features gpu
-# 平时不用自己敲这些：`npm run tauri -- build --features gpu` 会自动补上
+# 平时不用自己敲这些：`npm run tauri -- build -- --no-default-features --features gpu` 会自动补上
 # SHERPA_ONNX_LIB_DIR、把整目录 DLL 作为 resources 收进安装包，并在打包后跑一次
 # CUDA 自检（cargo run --bin verify_cuda_runtime）。
 gpu = ["sherpa-onnx/shared"]
