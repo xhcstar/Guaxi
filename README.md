@@ -92,10 +92,14 @@ Guaxi 是一款面向**个人知识工作流**的桌面软件。它不要求你�
 
 ## 界面预览
 
-<div align="center">
-  <img src="docs/assets/guaxi-about.png" alt="Guaxi 关于页面" width="880" />
-  <p><sub>「关于」页：版本、能力矩阵、技术栈与许可信息</sub></p>
-</div>
+以下截图取自应用内「设置 → 用户手册」，同一界面分别给出亮色与暗色两套（手册本身会跟随当前主题切换）。
+
+| 场景 | 亮色 | 暗色 |
+|:--|:-:|:-:|
+| **Agent 工作台**<br/>任务目录、工具调用、运行账本与右侧仪表 | <img src="docs/assets/screens/agent-light.png" width="420" /> | <img src="docs/assets/screens/agent-dark.png" width="420" /> |
+| **仓库 · 书架**<br/>知识库筛选与文档封面 | <img src="docs/assets/screens/library-light.png" width="420" /> | <img src="docs/assets/screens/library-dark.png" width="420" /> |
+| **知识源**<br/>分类、文章流与收藏 | <img src="docs/assets/screens/feeds-light.png" width="420" /> | <img src="docs/assets/screens/feeds-dark.png" width="420" /> |
+| **应用中心**<br/>分类导航与工具卡片 | <img src="docs/assets/screens/apps-light.png" width="420" /> | <img src="docs/assets/screens/apps-dark.png" width="420" /> |
 
 ## 系统要求
 
