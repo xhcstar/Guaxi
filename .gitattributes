@@ -1,0 +1,15 @@
+# ---------------------------------------------------------------------------
+# 构建期生成的第三方静态资源
+#
+# public/excalidraw/** 与 public/vditor/** 由 tools/copy_excalidraw_assets.mjs
+# 从 node_modules（npm 包，内容一律 LF）直接字节级复制而来，属于「生成产物」，
+# 不应参与任何换行符转换。
+#
+# 为什么要显式声明：Windows 上 core.autocrlf=true 会在 checkout 时把文本写成
+# CRLF，而构建脚本随后又从 node_modules 复制回 LF。两者内容逐字节相同，但
+# 索引里记录的 stat 尺寸（CRLF）与工作区（LF）不一致，git status 便会长期把
+# 上百个文件显示成 "modified"（实际 diff 为空）。声明 -text 后 git 不再做
+# 任何 EOL 转换，工作区字节始终等于仓库字节，状态自然稳定。
+# ---------------------------------------------------------------------------
+public/excalidraw/** -text
+public/vditor/**     -text

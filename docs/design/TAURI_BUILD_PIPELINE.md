@@ -651,6 +651,10 @@ npm run prepare:tauri-utils
 ### 10.10 前端静态资源
 
 - Excalidraw / Vditor：`tools/copy_excalidraw_assets.mjs`（`public/excalidraw`、`public/vditor`），`postinstall` 也会跑一次；
+- 这两个目录是**生成产物**，`.gitattributes` 里声明了 `public/excalidraw/** -text`、`public/vditor/** -text`：禁止任何换行符转换。
+  否则在 Windows（`core.autocrlf=true`）上，checkout 会把它们写成 CRLF，而脚本又从 `node_modules` 复制回 LF，
+  内容逐字节相同但索引里记录的 stat 尺寸对不上，`git status` 会长期挂着上百个「伪 modified」。改这两个路径的规则前先读那条注释。
+- 脚本只在**内容真的不同**时才写文件（尺寸相同还会逐字节比对），避免每次构建都刷新 mtime、反复扰动 git 的 stat 缓存；
 - 浏览器预览页的图表模块：改过 `guaxiChartData` / `guaxiChartTypes` / `guaxiChartSamples` 后必须重跑 `tools/build_chart_preview_bundle.mjs`，产物 `src-tauri/assets/vendor/guaxi-chart-preview.js` 会被 Rust `include_str!` 打进二进制（构建期已自动执行，手工改前端时记得别忘）。
 
 ### 10.11 改完怎么验证（按顺序）
@@ -704,6 +708,7 @@ npm run prepare:tauri-utils
 | 「资源清单版本不兼容」 | 新分包配了旧 helper | 安装器与分包必须同批发布 |
 | release 链接阶段 OOM | Windows 内存峰值 | 确认 `releaseCargoEnv()` 生效（job=1 / incremental=0） |
 | `failed to open: ...\.cargo-build-lock`（os error 5） | 机器上已有另一个 cargo 构建（IDE 里点过构建、或另一个终端在跑），release 目录被独占 | 等对方结束再重跑；并发跑两个 release 构建没有意义 |
+| 每次构建后 `public/excalidraw` / `public/vditor` 下上百个文件显示 modified，`git diff` 却是空的 | `core.autocrlf=true` 把 checkout 写成 CRLF，构建脚本又复制回 LF；内容相同但索引 stat 尺寸对不上 | `.gitattributes` 已声明这两个目录 `-text`；若已被标记，`git add -- public/excalidraw public/vditor` 刷新一次即可（不会产生内容提交） |
 
 ---
 

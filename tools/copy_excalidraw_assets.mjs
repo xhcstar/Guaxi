@@ -58,12 +58,21 @@ async function copyFileIfChanged(sourcePath, targetPath) {
     targetStat = null
   }
 
-  if (
-    targetStat?.isFile() &&
-    targetStat.size === sourceStat.size &&
-    Math.abs(targetStat.mtimeMs - sourceStat.mtimeMs) < 2
-  ) {
-    return false
+  if (targetStat?.isFile() && targetStat.size === sourceStat.size) {
+    // 尺寸相同且 mtime 也一致 → 直接跳过。
+    if (Math.abs(targetStat.mtimeMs - sourceStat.mtimeMs) < 2) {
+      return false
+    }
+    // 尺寸相同但 mtime 不同：可能是 `git checkout` 重新写了工作区文件。
+    // 这种情况下必须比一次内容，否则会无谓地重写几百个字节完全相同的文件，
+    // 并把 mtime 改回 node_modules 的时间，反复扰动 git 的 stat 缓存。
+    const [sourceData, targetData] = await Promise.all([
+      fs.readFile(sourcePath),
+      fs.readFile(targetPath),
+    ])
+    if (sourceData.equals(targetData)) {
+      return false
+    }
   }
 
   await fs.mkdir(path.dirname(targetPath), { recursive: true })
