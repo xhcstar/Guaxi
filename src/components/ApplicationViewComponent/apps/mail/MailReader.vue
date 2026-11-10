@@ -593,29 +593,46 @@ function applyThemeColors() {
 }
 
 /**
- * 正文 DOM 的「内容指纹」：主题、图片状态与正文本身。
+ * 要不要重跑映射 / 高亮：比对「这次绑进 v-html 的字符串」与上一次是否同一个。
  *
- * 颜色映射要对整棵正文树逐元素做 `getComputedStyle`（会话视图里是几十张卡片、
- * 上万节点），而 `onUpdated` 是在**每次** patch 后都会跑的——点一下星标、切换
- * 已读状态都会触发。指纹没变说明正文 DOM 没被重设，跳过这次映射：
- * 映射是幂等的，重复跑只会白花时间。
+ * Vue 只在绑定值变化时重设 innerHTML；值没变，DOM 就还是上次映射过的样子，
+ * 可以跳过整棵 getComputedStyle（会话视图里是上万节点）。
+ * 这里必须比字符串本身，不能比长度：两封长度相同的正文、或重渲染新产生的字符串，
+ * 长度指纹会误判「没变」，于是 innerHTML 已被重置回邮件原色却不再映射——
+ * 暗色下就是深字压深底、白底表格整块冒出来（用户反馈的回归）。
  */
-const bodySignature = computed(() =>
-  [
-    props.themeMode,
-    imagesBlocked.value ? 'blocked' : 'shown',
-    props.detail ? `${props.detail.accountId}:${props.detail.folder}:${props.detail.uid}` : '',
-    (props.thread || []).map((m) => `${m.accountId}:${m.folder}:${m.uid}:${m.html?.length || 0}`).join(','),
-    renderedHtml.value.length,
-    highlightTokens.value.join('\u0000'),
-  ].join('|'),
-)
-let appliedSignature = ''
+let lastDecor = null
+
+function decorSnapshot() {
+  return {
+    theme: props.themeMode,
+    images: imagesBlocked.value,
+    highlight: highlightTokens.value.join('\u0000'),
+    detailHtml: renderedHtml.value,
+    translatedHtml: tools.translatedHtml.value,
+    threadHtml: threadMessages.value.map((m) => threadBody(m)),
+    // 正文容器本身被重建（loading 切换、子树重挂载）时字符串可能没变，
+    // 但 DOM 已是邮件原色，靠元素引用把这种情况也兜住。
+    bodies: Array.from(scrollRef.value?.querySelectorAll('.mail-body') || []),
+  }
+}
 
 function reapplyBodyDecor() {
-  const signature = bodySignature.value
-  if (signature === appliedSignature) return
-  appliedSignature = signature
+  const snap = decorSnapshot()
+  const prev = lastDecor
+  const changed =
+    !prev ||
+    prev.theme !== snap.theme ||
+    prev.images !== snap.images ||
+    prev.highlight !== snap.highlight ||
+    prev.detailHtml !== snap.detailHtml ||
+    prev.translatedHtml !== snap.translatedHtml ||
+    prev.threadHtml.length !== snap.threadHtml.length ||
+    snap.threadHtml.some((html, i) => html !== prev.threadHtml[i]) ||
+    prev.bodies.length !== snap.bodies.length ||
+    snap.bodies.some((el, i) => el !== prev.bodies[i])
+  if (!changed) return
+  lastDecor = snap
   applyThemeColors()
   applySearchHighlight()
 }
@@ -654,18 +671,18 @@ function applySearchHighlight() {
 watch(
   [renderedHtml, () => props.themeMode, () => props.thread, imagesAllowed, highlightTokens],
   () => {
-    appliedSignature = ''
+    lastDecor = null
     reapplyBodyDecor()
   },
   { flush: 'post' },
 )
 onMounted(() => {
-  appliedSignature = ''
+  lastDecor = null
   reapplyBodyDecor()
 })
-// Vue 在每次组件更新时都会无条件重设 v-html 的 innerHTML；颜色映射与高亮写在 DOM 上，
-// 会被下一次更新（标记已读、工具栏状态变化等）整个冲掉。只在 watch 里跑不够，
-// 这里在每次 patch 之后补一遍。两者都是幂等的；指纹没变时直接跳过，
+// Vue 在绑定值变化时会重设 v-html 的 innerHTML；颜色映射与高亮写在 DOM 上，
+// 会被那次重置冲掉。只在 watch 里跑不够，这里在每次 patch 之后补一遍。
+// 两者都是幂等的；绑定的字符串没变时直接跳过，
 // 否则每点一次星标都要把整条会话的正文重新走一遍映射。
 onUpdated(reapplyBodyDecor)
 

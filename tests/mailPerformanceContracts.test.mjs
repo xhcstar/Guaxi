@@ -80,10 +80,16 @@ test('阅读区：正文渲染结果缓存，且 DOM 没变时不重跑主题映
     '先查缓存再解析',
   )
   assert.ok(/threadBodies\.clear\(\)/.test(reader), '换会话时清掉缓存')
-  assert.ok(/const bodySignature = computed/.test(reader), '正文 DOM 指纹')
+  // 跳过判定必须比「绑进 v-html 的字符串本身」，不能比长度：
+  // 等长正文 / 重渲染新字符串会被长度指纹漏掉，innerHTML 重置后不再映射，
+  // 暗色下就是深字压深底、白底块冒出来。
+  assert.ok(/function decorSnapshot\(\)/.test(reader), '用绑定值快照判定是否重映射')
+  assert.ok(/detailHtml: renderedHtml\.value/.test(reader), '快照带上详情正文串本身')
+  assert.ok(/threadHtml: threadMessages\.value\.map/.test(reader), '快照带上会话每封正文串本身')
+  assert.ok(!/renderedHtml\.value\.length/.test(reader), '不再用长度当指纹')
   assert.ok(
-    /function reapplyBodyDecor\(\)[\s\S]{0,200}signature === appliedSignature\) return/.test(reader),
-    '指纹没变就跳过整棵映射',
+    /function reapplyBodyDecor\(\)[\s\S]{0,600}if \(!changed\) return/.test(reader),
+    '绑定值没变才跳过整棵映射',
   )
   assert.ok(/onUpdated\(reapplyBodyDecor\)/.test(reader), '每次 patch 后仍会补一遍（只是可能跳过）')
 })
