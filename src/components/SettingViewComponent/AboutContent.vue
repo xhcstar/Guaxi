@@ -143,7 +143,7 @@
         </div>
         <div class="about-def">
           <dt>安装目标</dt>
-          <dd>Windows · NSIS 安装包</dd>
+          <dd>Windows · NSIS 安装包 / Linux · AppImage · deb · rpm</dd>
         </div>
         <div class="about-def">
           <dt>开源许可</dt>

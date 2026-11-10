@@ -4,7 +4,7 @@
 
 # Guaxi
 
-**AI 驱动的个人知识工作台** · 本地优先 · 桌面端
+**AI 驱动的个人知识工作台** · 本地优先 · 跨平台桌面端
 
 把本地文件、Markdown 写作、资料阅读、AI 助手、知识图谱、外部知识源、任务与工具应用
 放进同一套桌面界面，让「收集 → 阅读 → 理解 → 写作 → 沉淀」成为一条连续的路径。
@@ -14,7 +14,7 @@
 [![Tauri](https://img.shields.io/badge/Tauri-2.x-24C8DB.svg)](https://tauri.app)
 [![Rust](https://img.shields.io/badge/Rust-stable-000000.svg)](https://www.rust-lang.org)
 [![Vue](https://img.shields.io/badge/Vue-3.x-42B883.svg)](https://vuejs.org)
-[![Platform](https://img.shields.io/badge/platform-Windows%20x64-0078D4.svg)](#系统要求)
+[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-0078D4.svg)](#系统要求)
 
 [核心能力](#核心能力) · [快速开始](#快速开始) · [使用方法](#使用方法) · [项目结构](#项目结构) · [开源致谢](#开源致谢) · [常见问题](#常见问题) · [许可证](#许可证)
 
@@ -101,14 +101,22 @@ Guaxi 是一款面向**个人知识工作流**的桌面软件。它不要求你�
 
 | 项目 | 要求 |
 |---|---|
-| 操作系统 | **Windows 10/11 x64**（当前唯一完整验证并实际发布的主线） |
-| 运行时 | WebView2（安装包已内嵌 bootstrapper，离线可装） |
+| 操作系统（Windows） | Windows 10/11 x64 —— 完整验证并实际发布的主线 |
+| 操作系统（Linux） | Linux x64 —— 已提供正式打包配置（AppImage / deb / rpm），适配仍在完善中 |
+| WebView 运行时 | Windows：WebView2（安装包内嵌 bootstrapper，离线可装）· Linux：WebKitGTK |
 | 构建：Node.js | 20 LTS 及以上（Vite 6 要求 Node 18+） |
 | 构建：Rust | stable 工具链（Tauri 2 要求 1.77+，本项目在 stable 上构建） |
-| 构建：C++ 工具链 | Visual Studio Build Tools（MSVC v143 + Windows SDK） |
-| 构建：CI 之外 | Git；Windows 下 release 构建建议 ≥ 16 GB 内存（见[构建发布包](#5-构建发布包)） |
+| 构建：C++ 工具链 | Windows：Visual Studio Build Tools（MSVC v143 + Windows SDK） |
+| 构建：Linux 系统包 | `webkit2gtk-4.1`、`gtk3`、`librsvg2`、`patchelf` 等，以 [Tauri 官方前置要求](https://tauri.app/start/prerequisites/) 为准 |
+| 构建：其他 | Git；Windows 下 release 构建建议 ≥ 16 GB 内存（见[构建发布包](#5-构建发布包)） |
 
-> Linux 配置（`tauri.linux.conf.json`，AppImage/deb/rpm）仍保留在仓库中，但打包布局与安装期解包尚未针对 deb/rpm 单独适配，改动前请先自行验证。macOS 未提供配置。
+> **平台状态说明**
+>
+> - **Windows** 是当前完整验证并对外发布的主线，安装器为 NSIS，大资源走外置 `tar.zst` 分包。
+> - **Linux** 是正式支持的目标平台：`tauri.linux.conf.json` 已配置 AppImage / deb / rpm 打包，
+>   资源改为把 `utils/__bundles` 作为 resources 打进包、首次启动时解包，不需要外置 helper。
+>   仍在补齐的是**各发行版安装后的目录布局与运行时路径解析的逐一验证**，遇到问题欢迎带日志反馈。
+> - **macOS** 暂无构建配置。
 
 ## 快速开始
 
@@ -148,6 +156,9 @@ npm run rsshub:prepare      # RSSHub 运行环境（缺失则关闭聚合）
 
 ### 4. 开发模式
 
+Tauri 命令**只有一个入口**：`npm run tauri -- <子命令>`（`dev` / `build` / `bundle`）。
+`tools/run_tauri_with_utils.mjs` 会在调用 Tauri 之前完成依赖预取与资源准备，额外参数放在子命令后面原样透传。
+
 ```bash
 npm run tauri -- dev
 ```
@@ -158,11 +169,11 @@ debug 下**不复制、不打包** `utils`：运行时直接命中源码树 `src
 ### 5. 构建发布包
 
 ```bash
-npm run tauri -- build          # 完整 release 构建（推荐）
-npm run tauri:build:reuse       # utils 未变时复用已有分包，省掉重扫十几万文件
+npm run tauri -- build                        # 完整 release 构建（推荐）
+npm run tauri -- build --reuse-utils-zip      # utils 未变时复用已有分包，省掉重扫十几万文件
 ```
 
-构建完成后，**下面这些必须放在同一个目录一起分发**，少一个安装到一半就会中止：
+**Windows（NSIS，主线）**：构建完成后，**下面这些必须放在同一个目录一起分发**，少一个安装到一半就会中止：
 
 ```text
 src-tauri/target/release/bundle/nsis/
@@ -172,6 +183,11 @@ src-tauri/target/release/bundle/nsis/
 └── utils_bundles/                # 若干 *.tar.zst + bundle-manifest.json
 ```
 
+**Linux（AppImage / deb / rpm，适配中）**：同一条命令即可，产物在
+`src-tauri/target/release/bundle/{appimage,deb,rpm}/`。资源处理方式与 Windows 不同：
+`utils/__bundles/` 作为 **resources 直接打进包**，应用首次启动时解包到 `utils/`，
+因此**不需要**外置 helper 与 `utils_bundles/` 目录，安装器本身就是完整可分发的单文件。
+
 ### GPU（CUDA）构建
 
 ```bash
@@ -180,12 +196,14 @@ npm run tauri -- build -- --no-default-features --features gpu
 ```
 
 `static`（CPU，默认，自包含无需分发 DLL）与 `shared`（GPU，动态链接 CUDA 运行库）互斥，
-**GPU 构建必须带 `--no-default-features`**。发布目录还额外需要 `cuda_runtime_bundles/`。
+**GPU 构建必须带 `--no-default-features`**。Windows 发布目录还额外需要 `cuda_runtime_bundles/`。
 
 ### 常用脚本
 
 | 脚本 | 说明 |
 |---|---|
+| `npm run tauri -- <dev\|build\|bundle>` | Tauri 统一入口（自动前置依赖预取与资源准备） |
+| `npm run tauri:gpu` | GPU 开发模式（`dev --no-default-features --features gpu` 的快捷写法） |
 | `npm run dev` | 只起 Vite（不带 Tauri 壳） |
 | `npm run build` | 构建前端到 `dist/`（末尾含阅读器分包检查） |
 | `npm run prepare:tauri-utils` | 只重新生成 `utils` 分包，不构建安装器 |
@@ -196,8 +214,9 @@ npm run tauri -- build -- --no-default-features --features gpu
 
 ### 构建为什么这么绕
 
-安装包有硬上限：把数 GB 资源塞进 NSIS 会触发 `makensis` 的 `error mmapping datablock`（约 2 GB 数据块上限）。
-所以 `utils` 被拆成外部的 `tar.zst` 分包，由专用 Rust helper 在安装阶段解包到安装目录，并支持增量跳过与完整性校验。
+Windows 安装包有硬上限：把数 GB 资源塞进 NSIS 会触发 `makensis` 的 `error mmapping datablock`（约 2 GB 数据块上限）。
+所以 Windows 侧把 `utils` 拆成外部的 `tar.zst` 分包，由专用 Rust helper 在安装阶段解包到安装目录，并支持增量跳过与完整性校验。
+Linux 侧没有这个限制，分包直接作为 resources 随包发布，首次启动时解包。
 
 完整的阶段流程、分包规则、清单格式、排错表与「新增资源该改哪里」的决策表，都在
 **[`docs/design/TAURI_BUILD_PIPELINE.md`](docs/design/TAURI_BUILD_PIPELINE.md)**。改构建链之前请先读它。
@@ -249,7 +268,7 @@ Git 仓库直接执行提交 / 推送 / 拉取——用的是你本机的 Git �
 - **本地模型**：走 `llama.cpp`，模型放在设置指定目录，全程不联网；
 - **语音**：sherpa-onnx 进程内推理。GPU 版要求 `nvcuda.dll` 与 `onnxruntime_providers_cuda.dll` 同时存在，
   缺失会在构造引擎之前自动降级 CPU 并告警（而不是等到崩溃）；
-- **邮箱账号**：口令与 OAuth Token 存放在系统凭据库（Windows Credential Manager）。
+- **邮箱账号**：口令与 OAuth Token 存放在系统凭据库（Windows Credential Manager / Linux Secret Service）。
 
 ### 同步
 
@@ -273,7 +292,7 @@ Git 仓库直接执行提交 / 推送 / 拉取——用的是你本机的 Git �
 
 | 层次 | 使用的东西 |
 |---|---|
-| 桌面壳与打包 | Rust、Tauri 2、NSIS、tar + zstd（外部资源分包） |
+| 桌面壳与打包 | Rust、Tauri 2、NSIS（Windows）/ AppImage · deb · rpm（Linux）、tar + zstd（资源分包） |
 | 前端 | Vue 3、Vite 6、Pinia、Vue Router、Naive UI、Iconify |
 | 编辑器与阅读 | Monaco Editor（含 languageclient / TextMate）、PDF.js、pdfium-render、docx-preview、EPUB.js、Vditor、Typst 0.14 |
 | 内容解析 | anydoc、calamine、comrak、ebook-rs、pandoc（外置）、MinerU / marker（可选组件） |
@@ -314,7 +333,7 @@ guaxi/
 | 名称 | Guaxi（智能知识管理系统） |
 | 版本 | v0.1.0（Preview，开发中） |
 | 许可 | GNU Affero General Public License v3.0 |
-| 主平台 | Windows 10/11 x64（NSIS 安装包） |
+| 主平台 | Windows 10/11 x64（主线，NSIS）· Linux x64（AppImage / deb / rpm，适配中） |
 | 形态 | 本地优先的桌面应用，无强制云端依赖 |
 | 源码 | [github.com/xhcstar/Guaxi](https://github.com/xhcstar/Guaxi) · [github.com/xhcstar/Guaxi](https://github.com/xhcstar/Guaxi) |
 | 作者 / 维护者 | xhcstar |
@@ -356,10 +375,11 @@ Guaxi 建立在这些优秀项目之上（节选，按用途分组）：
 
 | 现象 | 原因 / 处理 |
 |---|---|
-| 安装到一半弹「解压外部 utils 资源包失败」 | 发布目录缺 `utils_bundles/` 或 `bundle-manifest.json`，或与安装器不同版本；必须整目录一起分发 |
-| 改了 `utils` 里的文件，打出来的包没更新 | 用了 `tauri:build:reuse`——它不重扫 `utils`；改跑 `npm run prepare:tauri-utils` 或完整 build |
+| 安装到一半弹「解压外部 utils 资源包失败」（Windows） | 发布目录缺 `utils_bundles/` 或 `bundle-manifest.json`，或与安装器不同版本；必须整目录一起分发 |
+| 改了 `utils` 里的文件，打出来的包没更新 | 用了 `--reuse-utils-zip`——它不重扫 `utils`；改跑 `npm run prepare:tauri-utils` 或完整 build |
 | `cargo` 卡在下载 sherpa 原生库 | 预取没成功，`build.rs` 回去联网了；重跑 `npm run sherpa:fetch` |
-| `error mmapping datablock` | 又把大资源塞进了 `bundle.resources`；走外置分包 |
+| `error mmapping datablock`（Windows） | 又把大资源塞进了 `bundle.resources`；走外置分包 |
+| Linux 安装后提示资源缺失 | 确认 `utils/__bundles` 已作为 resources 打进包；首次启动会解包并在 `utils` 同级写 `.guaxi_utils_extract_complete`，残留 `utils.__extracting_*` 会在下次启动自动续做或清理 |
 | dev 下报「资源缺失」但文件明明在 | 代码绕过了 `ensure_relative_dir()` 自拼路径；统一走该入口 |
 | GPU 版实际还在跑 CPU | 缺 CUDA 运行时 DLL 或驱动过旧；`npm run sherpa:fetch:cuda` 后重打，看自检退出码 |
 
