@@ -93,14 +93,7 @@ async function verifyCudaRuntimeForRelease() {
     return;
   }
 
-  const buildExitCode = await run('cargo', [
-    'build',
-    '--quiet',
-    '--manifest-path',
-    'src-tauri/Cargo.toml',
-    '--bin',
-    'verify_cuda_runtime',
-  ]);
+  const buildExitCode = await ensureCargoBinBuilt('verify_cuda_runtime', {}, false);
   if (buildExitCode !== 0) {
     console.warn('[tauri] CUDA 自检工具构建失败，跳过自检。');
     return;
@@ -173,16 +166,107 @@ function run(command, commandArgs, extraEnv = {}) {
   });
 }
 
+// 打包辅助 bin（prepare_utils_zip / prepare_cuda_runtime_bundle / extract_utils_bundles /
+// verify_cuda_runtime）的依赖很少，但每次 `cargo run/build` 都要校验整个依赖图 ——
+// 本项目有 5000+ 个 fingerprint，实测空跑一次就要 ~12s，比工具本身的工作还久。
+// exe 已存在且比它的全部输入新时直接执行（等价于 cargo 的 freshness 判断），
+// 否则退回 cargo 构建；`cargo clean` 后 exe 不在，自然会走回退路径。
+async function binTargetPath(bin, release) {
+  const exeName = process.platform === 'win32' ? `${bin}.exe` : bin;
+  return path.join(
+    projectRoot,
+    'src-tauri',
+    'target',
+    release ? 'release' : 'debug',
+    exeName,
+  );
+}
+
+function binInputFiles(bin) {
+  return [
+    path.join(projectRoot, 'src-tauri', 'utils_zip_support.rs'),
+    path.join(projectRoot, 'src-tauri', 'src', 'bin', `${bin}.rs`),
+    path.join(projectRoot, 'src-tauri', 'Cargo.toml'),
+    path.join(projectRoot, 'src-tauri', 'Cargo.lock'),
+  ];
+}
+
+async function isPrebuiltBinFresh(bin, release) {
+  let exeStat;
+  try {
+    exeStat = await stat(await binTargetPath(bin, release));
+  } catch {
+    return false;
+  }
+  if (!exeStat.isFile()) {
+    return false;
+  }
+  for (const source of binInputFiles(bin)) {
+    try {
+      if ((await stat(source)).mtimeMs > exeStat.mtimeMs) {
+        return false;
+      }
+    } catch {
+      // 输入文件缺失时无法证明 exe 是最新的，交给 cargo 判断。
+      return false;
+    }
+  }
+  return true;
+}
+
+function cargoBinArgs(bin, args, release) {
+  const cargoArgs = [
+    'run',
+    '--quiet',
+    ...(release ? ['--release'] : []),
+    '--manifest-path',
+    'src-tauri/Cargo.toml',
+    '--bin',
+    bin,
+  ];
+  if (args.length > 0) {
+    cargoArgs.push('--', ...args);
+  }
+  return cargoArgs;
+}
+
+async function runCargoBin(bin, args, extraEnv = {}, release = true) {
+  if (await isPrebuiltBinFresh(bin, release)) {
+    return run(await binTargetPath(bin, release), args, extraEnv);
+  }
+  return run('cargo', cargoBinArgs(bin, args, release), extraEnv);
+}
+
+async function ensureCargoBinBuilt(bin, extraEnv = {}, release = true) {
+  if (await isPrebuiltBinFresh(bin, release)) {
+    return 0;
+  }
+  return run(
+    'cargo',
+    [
+      'build',
+      '--quiet',
+      ...(release ? ['--release'] : []),
+      '--manifest-path',
+      'src-tauri/Cargo.toml',
+      '--bin',
+      bin,
+    ],
+    extraEnv,
+  );
+}
+
 function releaseCargoEnv() {
   if (process.platform !== 'win32') {
     return {};
   }
 
   return {
-    // Windows release builds for this crate are memory-heavy. Serializing the
-    // build and disabling incremental state makes rustc/LLVM noticeably less
-    // likely to run out of memory on packaging machines.
-    CARGO_BUILD_JOBS: process.env.CARGO_BUILD_JOBS || '1',
+    // Windows release builds for this crate are memory-heavy, so keep a modest
+    // ceiling instead of saturating every core. The release profile already
+    // drops debug info, so 4 parallel rustc jobs use the CPU well without
+    // letting LLVM's peak memory get out of hand. Override with CARGO_BUILD_JOBS.
+    CARGO_BUILD_JOBS: process.env.CARGO_BUILD_JOBS || '4',
     CARGO_INCREMENTAL: '0',
   };
 }
@@ -415,13 +499,6 @@ async function main() {
       // 构建期压成 tar.zst，安装时由 extract_utils_bundles 解压到 $INSTDIR
       // （guaxi.exe 旁边，Windows 加载器与 onnxruntime 都在那里找 DLL）。
       const prepareArgs = [
-        'run',
-        '--quiet',
-        '--manifest-path',
-        'src-tauri/Cargo.toml',
-        '--bin',
-        'prepare_cuda_runtime_bundle',
-        '--',
         '--source-dir',
         gpuSherpaLibDir,
         '--bundle-dir',
@@ -430,7 +507,13 @@ async function main() {
       if (reuseExisting) {
         prepareArgs.push('--reuse-existing');
       }
-      const prepareExitCode = await run('cargo', prepareArgs);
+      // 这个工具要压 2.8GB 数据，debug profile 下 zstd 的 C 代码是 -O0、blake3 也未优化，
+      // 实测只有 ~80MB/s；release 构建本身很便宜，能快数倍。build.rs 不必再预处理一遍。
+      const prepareExitCode = await runCargoBin(
+        'prepare_cuda_runtime_bundle',
+        prepareArgs,
+        { GUAXI_SKIP_BUNDLE_PREPARE: '1' },
+      );
       if (prepareExitCode !== 0) {
         process.exit(prepareExitCode);
       }
@@ -473,14 +556,11 @@ async function main() {
         '[utils.bundle] reuse requested: skipping prepare, build.rs will trust the existing manifest',
       );
     } else {
-      const prepareExitCode = await run('cargo', [
-        'run',
-        '--quiet',
-        '--manifest-path',
-        'src-tauri/Cargo.toml',
-        '--bin',
-        'prepare_utils_zip',
-      ]);
+      const prepareExitCode = await runCargoBin('prepare_utils_zip', [], {
+        // release profile 会触发 build.rs 的 release 分支，这里跳过：
+        // 分包正是本进程要做的，重复处理只会把同一批文件压两次。
+        GUAXI_SKIP_BUNDLE_PREPARE: '1',
+      });
       if (prepareExitCode !== 0) {
         process.exit(prepareExitCode);
       }
@@ -489,25 +569,13 @@ async function main() {
     if (process.platform === 'win32') {
       // The installer invokes this helper during installation to expand the
       // external utils bundles into the final install directory.
-      const helperBuildExitCode = await run(
-        'cargo',
-        [
-          'build',
-          '--quiet',
-          '--manifest-path',
-          'src-tauri/Cargo.toml',
-          '--release',
-          '--bin',
-          'extract_utils_bundles',
-        ],
-        {
-          ...releaseCargoEnv(),
-          // helper 只是打包用的 bin，同样会触发 build.rs。它的分包要么已由上面
-          // 准备好、要么马上由主构建的 build.rs 处理，所以这里无条件跳过准备，
-          // 不必再叠加 GUAXI_REUSE_UTILS_ZIP（skip 的判断在 reuse 之前）。
-          GUAXI_SKIP_BUNDLE_PREPARE: '1',
-        },
-      );
+      const helperBuildExitCode = await ensureCargoBinBuilt('extract_utils_bundles', {
+        ...releaseCargoEnv(),
+        // helper 只是打包用的 bin，同样会触发 build.rs。它的分包要么已由上面
+        // 准备好、要么马上由主构建的 build.rs 处理，所以这里无条件跳过准备，
+        // 不必再叠加 GUAXI_REUSE_UTILS_ZIP（skip 的判断在 reuse 之前）。
+        GUAXI_SKIP_BUNDLE_PREPARE: '1',
+      });
       if (helperBuildExitCode !== 0) {
         process.exit(helperBuildExitCode);
       }

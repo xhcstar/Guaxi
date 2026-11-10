@@ -230,14 +230,26 @@ struct ExtractBundleStats {
 // Skip legacy generated artifacts, temporary extraction directories and resource
 // trees that are intentionally excluded from release payloads.
 pub fn should_skip(relative: &str) -> bool {
-    let normalized = relative.replace('\\', "/");
-    LEGACY_BUNDLES.contains(&normalized.as_str())
+    // 一次扫描要调用近 50 万次，这里刻意避免逐项分配：
+    // 只有含反斜杠的路径才复制，目录前缀用 strip_prefix 判断而不是 format!。
+    let normalized = if relative.contains('\\') {
+        std::borrow::Cow::Owned(relative.replace('\\', "/"))
+    } else {
+        std::borrow::Cow::Borrowed(relative)
+    };
+    let normalized: &str = normalized.as_ref();
+    let bytes = normalized.as_bytes();
+    LEGACY_BUNDLES.contains(&normalized)
         || SKIPPED_DIRECTORIES.iter().any(|dir| {
-            normalized == *dir || normalized.starts_with(&format!("{dir}/"))
+            normalized == *dir
+                || normalized
+                    .strip_prefix(dir)
+                    .map(|rest| rest.starts_with('/'))
+                    .unwrap_or(false)
         })
         // 语音模型与原生库的下载归档只是中间产物，解压完就没用了。
         // 一旦误留在 utils 下，就会被整包打进 release 白增几百 MB。
-        || normalized.to_ascii_lowercase().ends_with(".tar.bz2")
+        || (bytes.len() >= 8 && bytes[bytes.len() - 8..].eq_ignore_ascii_case(b".tar.bz2"))
         || normalized.contains(".__extracting_")
         || normalized.ends_with("/.guaxi_extract_complete")
         || normalized.ends_with("/.guaxi_utils_extract_complete")
@@ -520,7 +532,7 @@ fn collect_bundle_specs(
         .map_err(|e| format!("failed to read dir {}: {e}", source_dir.display()))?
         .flatten()
         .collect::<Vec<_>>();
-    entries.sort_by_key(|entry| entry.path());
+    entries.sort_by_cached_key(|entry| entry.file_name());
 
     let mut top_entries = Vec::new();
     for entry in entries {
@@ -656,7 +668,7 @@ fn included_children(
         .map_err(|e| format!("failed to read dir {}: {e}", dir.display()))?
         .flatten()
         .collect::<Vec<_>>();
-    entries.sort_by_key(|entry| entry.path());
+    entries.sort_by_cached_key(|entry| entry.file_name());
 
     let mut children = Vec::new();
     for entry in entries {
@@ -674,14 +686,18 @@ fn included_children(
 fn file_entry(relative: &Path, path: &Path) -> Result<BundleEntrySpec, String> {
     let metadata = fs::metadata(path)
         .map_err(|e| format!("failed to read metadata {}: {e}", path.display()))?;
-    Ok(BundleEntrySpec {
+    Ok(entry_spec(relative, path, &metadata))
+}
+
+fn entry_spec(relative: &Path, source: &Path, metadata: &fs::Metadata) -> BundleEntrySpec {
+    BundleEntrySpec {
         relative: relative.to_path_buf(),
-        source: path.to_path_buf(),
+        source: source.to_path_buf(),
         kind: BundleEntryKind::File {
             size: metadata.len(),
-            mtime_ns: metadata_mtime_ns(&metadata),
+            mtime_ns: metadata_mtime_ns(metadata),
         },
-    })
+    }
 }
 
 fn collect_entries(root_relative: &Path, current_dir: &Path) -> Result<Vec<BundleEntrySpec>, String> {
@@ -689,18 +705,36 @@ fn collect_entries(root_relative: &Path, current_dir: &Path) -> Result<Vec<Bundl
         .map_err(|e| format!("failed to read dir {}: {e}", current_dir.display()))?
         .flatten()
         .collect::<Vec<_>>();
-    entries.sort_by_key(|entry| entry.path());
+    entries.sort_by_cached_key(|entry| entry.file_name());
 
     let mut collected = Vec::new();
     for entry in entries {
         let path = entry.path();
-        let name = entry.file_name();
-        let relative = root_relative.join(&name);
+        let relative = root_relative.join(entry.file_name());
         if should_skip(&normalize_path(&relative)) {
             continue;
         }
 
-        if path.is_dir() {
+        // 普通文件的类型和元数据直接取自目录枚举结果，不必再逐项 stat；
+        // 符号链接 / 目录联接必须回退到 fs::metadata：链接自身的 size=0、
+        // mtime 也是链接的，拿它做清单会和安装后按目标内容写出的文件对不上。
+        let file_type = entry
+            .file_type()
+            .map_err(|e| format!("failed to stat dir entry {}: {e}", path.display()))?;
+        let link_target = if file_type.is_symlink() {
+            Some(
+                fs::metadata(&path)
+                    .map_err(|e| format!("failed to read metadata {}: {e}", path.display()))?,
+            )
+        } else {
+            None
+        };
+        let is_dir = link_target
+            .as_ref()
+            .map(|metadata| metadata.is_dir())
+            .unwrap_or_else(|| file_type.is_dir());
+
+        if is_dir {
             let nested_entries = collect_entries(&relative, &path)?;
             if nested_entries.is_empty() {
                 collected.push(BundleEntrySpec {
@@ -714,7 +748,13 @@ fn collect_entries(root_relative: &Path, current_dir: &Path) -> Result<Vec<Bundl
             continue;
         }
 
-        collected.push(file_entry(&relative, &path)?);
+        let metadata = match link_target {
+            Some(metadata) => metadata,
+            None => entry
+                .metadata()
+                .map_err(|e| format!("failed to read metadata {}: {e}", path.display()))?,
+        };
+        collected.push(entry_spec(&relative, &path, &metadata));
     }
 
     Ok(collected)
