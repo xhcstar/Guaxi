@@ -765,12 +765,13 @@ onUnmounted(() => {
 .word-chip-wrap {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  /* 横向 6px 是同一行的词间距离；纵向要大一些，否则多行联想词会挤成一片 */
+  gap: 8px 6px;
   min-width: 0;
   max-width: 100%;
 }
 
-/* n-tag 默认 nowrap 且固定高度，长释义会把面板撑宽导致横向溢出 */
+/* n-tag 默认 nowrap + 固定高度 + line-height:1，长释义会把面板撑宽、多行还会挤成一片 */
 .word-chip-wrap :deep(.n-tag),
 .word-meta-badges :deep(.n-tag) {
   max-width: 100%;
@@ -786,6 +787,16 @@ onUnmounted(() => {
   white-space: normal;
   word-break: break-word;
   overflow-wrap: anywhere;
+}
+
+/* 联想词这类长文本标签会折行，需要比药丸更大的上下留白和行距，
+   否则边框贴着字、行与行糊在一起。徽标区保持原样。 */
+.word-chip-wrap :deep(.n-tag) {
+  padding: 4px 9px;
+}
+
+.word-chip-wrap :deep(.n-tag .n-tag__content) {
+  line-height: 1.55;
 }
 
 .word-sub-section {
