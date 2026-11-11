@@ -172,7 +172,16 @@ impl ResourceInput {
 
 // 创建数据库文件路径
 pub fn create_db_file() -> Result<PathBuf, String> {
-    let repo_dir = crate::paths::repos_dir();
+    let exe_path = env::current_exe().map_err(|e| e.to_string())?;
+    let exe_dir = exe_path
+        .parent()
+        .ok_or("无法获取可执行文件所在目录".to_string())?
+        .to_path_buf();
+
+    let repo_dir = exe_dir.join("repos");
+    if !repo_dir.exists() {
+        fs::create_dir_all(&repo_dir).map_err(|e| e.to_string())?;
+    }
     // 数据库文件路径
     let db_path = repo_dir.join("repos.db");
     Ok(db_path)

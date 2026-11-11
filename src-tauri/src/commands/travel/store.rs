@@ -25,12 +25,14 @@ pub fn sanitize_id(raw: &str) -> Result<String, String> {
     Ok(trimmed.to_string())
 }
 
-/// 旅行数据的根目录。计划、偏好、地图缓存都放在这里。
-///
-/// 以前放 exe 同级（绿色版思路），可覆盖安装会清掉安装目录，用户升级一次计划就没了；
-/// 现在统一收到用户数据根下，绿色版由 `portable.marker` 切回 exe 目录。
+/// 旅行数据的根目录。计划、偏好、地图缓存都放在这里，随绿色版整体迁移。
 pub fn travel_root() -> Result<PathBuf, String> {
-    let base = crate::paths::data_root().join("repos").join("travel");
+    let exe = std::env::current_exe().map_err(|e| format!("无法获取程序路径: {e}"))?;
+    let base = exe
+        .parent()
+        .ok_or_else(|| "无法获取程序目录".to_string())?
+        .join("repos")
+        .join("travel");
     fs::create_dir_all(&base).map_err(|e| format!("创建旅行数据目录失败: {e}"))?;
     for sub in ["plans", "share"] {
         fs::create_dir_all(base.join(sub)).map_err(|e| format!("创建旅行子目录失败: {e}"))?;

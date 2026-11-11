@@ -1,13 +1,13 @@
 //! 任务管理后端：.org 文件为真相源，SQLite 仅作索引/缓存（看板/日历/报表/画像查询）。
 //!
 //! 复用 commands/todo.rs 的 SQLite 模式（WAL、即用即关连接、Result<T,String>）。
-//! 目录结构：<task_root>/{work,life,study}/*.org，task_root 默认在用户数据根下 `task/`，可配置覆盖。
+//! 目录结构：<task_root>/{work,life,study}/*.org，task_root 默认 exe 同级 `task/`，可配置覆盖。
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, UNIX_EPOCH};
-use std::fs;
+use std::{env, fs};
 
 use chrono::{Datelike, Local, NaiveDate, Timelike};
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
@@ -68,13 +68,23 @@ impl Default for TaskConfig {
     }
 }
 
+fn exe_dir() -> Result<PathBuf, String> {
+    let p = env::current_exe().map_err(|e| format!("获取可执行文件路径失败: {}", e))?;
+    p.parent()
+        .map(|d| d.to_path_buf())
+        .ok_or_else(|| "无法获取可执行文件目录".to_string())
+}
+
 fn task_config_path() -> Result<PathBuf, String> {
-    let dir = crate::paths::config_dir();
+    let dir = exe_dir()?.join("config");
+    if !dir.exists() {
+        fs::create_dir_all(&dir).map_err(|e| format!("创建 config 目录失败: {}", e))?;
+    }
     Ok(dir.join("task_config.json"))
 }
 
 fn default_task_root() -> Result<PathBuf, String> {
-    Ok(crate::paths::data_root().join("task"))
+    Ok(exe_dir()?.join("task"))
 }
 
 fn load_task_config() -> TaskConfig {
@@ -117,7 +127,7 @@ fn resolve_task_root() -> Result<PathBuf, String> {
 // ───────── SQLite ─────────
 
 fn resolve_db_path() -> Result<PathBuf, String> {
-    let repos = crate::paths::data_root().join("repos");
+    let repos = exe_dir()?.join("repos");
     if !repos.exists() {
         fs::create_dir_all(&repos).map_err(|e| format!("创建 repos 目录失败: {}", e))?;
     }
@@ -1757,7 +1767,10 @@ fn habit_streak(checkins: &[String], end: NaiveDate) -> u32 {
 static REMINDER_STARTED: OnceLock<()> = OnceLock::new();
 
 fn reminder_state_path() -> Result<PathBuf, String> {
-    let dir = crate::paths::config_dir();
+    let dir = exe_dir()?.join("config");
+    if !dir.exists() {
+        fs::create_dir_all(&dir).map_err(|e| format!("创建 config 目录失败: {e}"))?;
+    }
     Ok(dir.join("task_reminder_state.json"))
 }
 

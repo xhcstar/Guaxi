@@ -6,7 +6,7 @@ use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
-use std::fs;
+use std::{env, fs};
 use tracing::{info, warn};
 use walkdir::WalkDir;
 
@@ -85,7 +85,12 @@ fn is_audio(path: &Path) -> bool {
 }
 
 fn resolve_dir() -> Result<PathBuf, String> {
-    let dir = crate::paths::repos_dir().join(MUSIC_DIR_NAME);
+    let exe = env::current_exe().map_err(|e| format!("获取可执行文件路径失败: {}", e))?;
+    let exe_dir = exe
+        .parent()
+        .ok_or_else(|| "无法获取可执行文件目录".to_string())?
+        .to_path_buf();
+    let dir = exe_dir.join("repos").join(MUSIC_DIR_NAME);
     if !dir.exists() {
         fs::create_dir_all(&dir).map_err(|e| format!("创建音乐数据目录失败: {}", e))?;
     }

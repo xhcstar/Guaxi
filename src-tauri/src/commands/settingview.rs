@@ -485,31 +485,39 @@ fn default_gc_cycle_seconds() -> u64 {
 }
 
 fn default_image_bed_root() -> String {
-    crate::paths::data_root()
-        .join("ResourceRepo")
-        .to_string_lossy()
-        .to_string()
+    let exe_path = env::current_exe().expect("无法获取当前可执行文件路径");
+    let exe_dir = exe_path
+        .parent()
+        .expect("无法获取可执行文件所在目录")
+        .to_path_buf();
+    exe_dir.join("ResourceRepo").to_string_lossy().to_string()
 }
 
 fn default_template_repo_path() -> String {
-    crate::paths::data_root()
-        .join("Template")
-        .to_string_lossy()
-        .to_string()
+    let exe_path = env::current_exe().expect("无法获取当前可执行文件路径");
+    let exe_dir = exe_path
+        .parent()
+        .expect("无法获取可执行文件所在目录")
+        .to_path_buf();
+    exe_dir.join("Template").to_string_lossy().to_string()
 }
 
 fn default_slidev_repo_root() -> String {
-    crate::paths::data_root()
-        .join("SlideRepo")
-        .to_string_lossy()
-        .to_string()
+    let exe_path = env::current_exe().expect("无法获取当前可执行文件路径");
+    let exe_dir = exe_path
+        .parent()
+        .expect("无法获取可执行文件所在目录")
+        .to_path_buf();
+    exe_dir.join("SlideRepo").to_string_lossy().to_string()
 }
 
 fn default_chat_record_root() -> String {
-    crate::paths::data_root()
-        .join("ChatRecord")
-        .to_string_lossy()
-        .to_string()
+    let exe_path = env::current_exe().expect("无法获取当前可执行文件路径");
+    let exe_dir = exe_path
+        .parent()
+        .expect("无法获取可执行文件所在目录")
+        .to_path_buf();
+    exe_dir.join("ChatRecord").to_string_lossy().to_string()
 }
 
 fn default_tts_provider() -> String {
@@ -927,12 +935,15 @@ pub(crate) fn run_modelscope_download(local_dir: &Path, model_id: &str, filename
 
 impl Default for AppConfig {
     fn default() -> Self {
-        // 资料库默认放用户目录，不再跟着安装目录走：覆盖安装会清掉安装目录。
-        // 老版本写下的绝对路径由 `rebase_legacy_paths` 在 load_config 时改写。
-        let libraries_repo_path = crate::paths::data_root()
-            .join("Libraries")
-            .to_string_lossy()
-            .to_string();
+        // 获取当前程序所在路径
+        let exe_path = env::current_exe().expect("无法获取当前可执行文件路径");
+        let exe_dir = exe_path
+            .parent()
+            .expect("无法获取可执行文件所在目录")
+            .to_path_buf();
+
+        // 设置 libraries_repo_path 为当前程序所在路径下的 Libraries 目录
+        let libraries_repo_path = exe_dir.join("Libraries").to_string_lossy().to_string();
 
         AppConfig {
             server: ServerConfig {
@@ -994,105 +1005,36 @@ impl Default for AppConfig {
 }
 
 pub fn init_library_config() -> Result<(), String> {
-    // 放用户目录：安装目录在覆盖安装时会被清空，资料库跟着丢过一次了。
-    let libraries_dir = crate::paths::data_root().join("Libraries");
+    // 获取当前程序所在路径
+    let exe_path = env::current_exe().expect("无法获取当前可执行文件路径");
+    let exe_dir = exe_path
+        .parent()
+        .expect("无法获取可执行文件所在目录")
+        .to_path_buf();
+
+    let libraries_dir = exe_dir.join("Libraries");
     if !libraries_dir.exists() {
-        fs::create_dir_all(&libraries_dir).map_err(|e| format!("无法创建 Libraries 目录: {e}"))?;
+        fs::create_dir_all(&libraries_dir).expect("无法创建 Libraries 目录");
     }
     // info!("init libraries successfully libraries_patch: {:?}", libraries_dir);
     Ok(())
 }
 
-/// 旧版本的默认数据目录都是 exe 同级（`<安装目录>/Libraries`、`<安装目录>/repos` 等）。
-/// 覆盖安装把它们清掉之后，配置里残留的绝对路径会指向一个空目录，用户看到的就是"资料库空了"。
-/// 读配置时把这些前缀改写用户数据根，再正常保存一次就永久修好了。
-fn rebase_one_path(value: &str, legacy: &str, legacy_lower: &str, root: &std::path::Path) -> Option<String> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    // 分隔符统一按反斜杠比较：配置文件被手动改成正斜杠也认得出是同一个前缀。
-    // 替换是 1:1 的，所以下面用 legacy.len() 取偏移仍然对得上。
-    let lowered = trimmed.replace('/', "\\").to_lowercase();
-    let legacy_normalized = legacy_lower.replace('/', "\\");
-    if !lowered.starts_with(&legacy_normalized) {
-        return None;
-    }
-    // 用截断后的 trimmed 取后缀，避免把前后空格带进新路径。
-    let rest_raw = trimmed.get(legacy.len()..)?;
-    // 前缀必须落在目录边界上：`<exe>2\xx` 不算 `<exe>\xx` 的马甲。
-    if !rest_raw.is_empty() && !rest_raw.starts_with(['\\', '/']) {
-        return None;
-    }
-    let rest = rest_raw.trim_start_matches(['\\', '/']);
-    if rest.is_empty() {
-        // 路径就是安装目录本身，改写没有意义。
-        return None;
-    }
-    let mut out = root.to_path_buf();
-    for segment in rest.split(['\\', '/']).filter(|part| !part.is_empty()) {
-        out.push(segment);
-    }
-    Some(out.to_string_lossy().to_string())
-}
-
-fn rebase_legacy_paths(v: &mut serde_json::Value) -> bool {
-    let legacy = crate::paths::exe_dir();
-    let root = crate::paths::data_root();
-    if root == legacy {
-        return false;
-    }
-    let legacy_str = legacy
-        .to_string_lossy()
-        .trim_end_matches(['\\', '/'])
-        .to_string();
-    if legacy_str.is_empty() {
-        return false;
-    }
-    let legacy_lower = legacy_str.to_lowercase();
-    let mut changed = false;
-
-    for pointer in [
-        "/libraries_repo_config/libraries_repo_path",
-        "/libraries_root",
-        "/image_bed_root",
-        "/template_repo_path",
-        "/slidev_repo_root",
-        "/chat_record_root",
-        "/knowledge_bases_root",
-        "/life_album_album_dir",
-        "/active_repo_path",
-    ] {
-        // 先读出来再取可变引用，避免同时借用同一个 Value。
-        let current = match v.pointer(pointer).and_then(|node| node.as_str()) {
-            Some(text) => text.to_string(),
-            None => continue,
-        };
-        if let Some(next) = rebase_one_path(&current, &legacy_str, &legacy_lower, &root) {
-            if let Some(slot) = v.pointer_mut(pointer) {
-                *slot = serde_json::Value::String(next);
-            }
-            changed = true;
-        }
-    }
-
-    if let Some(list) = v.pointer_mut("/repopathlist").and_then(|node| node.as_array_mut()) {
-        for item in list.iter_mut() {
-            let Some(current) = item.as_str() else { continue };
-            if let Some(next) = rebase_one_path(current, &legacy_str, &legacy_lower, &root) {
-                *item = serde_json::Value::String(next);
-                changed = true;
-            }
-        }
-    }
-
-    changed
-}
-
 pub fn get_config_path() -> PathBuf {
-    // 配置必须放在用户目录：覆盖安装会清空 exe 同级目录，放这里才能活过一次升级。
-    crate::paths::config_dir().join("guaxi_config.json")
+    let exe_path = env::current_exe().expect("无法获取当前可执行文件路径");
+    let exe_dir = exe_path
+        .parent()
+        .expect("无法获取可执行文件所在目录")
+        .to_path_buf();
+
+    let config_dir = exe_dir.join("config");
+    if !config_dir.exists() {
+        fs::create_dir_all(&config_dir).expect("无法创建 config 目录");
+    }
+
+    config_dir.join("guaxi_config.json")
 }
+
 pub fn load_config() -> AppConfig {
     const ENC_PREFIX: &str = "enc:v1:";
     const KEYRING_SERVICE: &str = "com.guaxi.guaxi";
@@ -1107,7 +1049,8 @@ pub fn load_config() -> AppConfig {
     let mut needs_save = false;
     let mut needs_migrate = false;
 
-    if !config_path.exists() {        let mut default_config = AppConfig::default();
+    if !config_path.exists() {
+        let mut default_config = AppConfig::default();
         if default_config.device_id.trim().is_empty() {
             default_config.device_id = Uuid::new_v4().to_string();
         }
@@ -1140,12 +1083,6 @@ pub fn load_config() -> AppConfig {
             serde_json::json!({})
         }
     };
-
-    // 老配置里的路径前缀还指向安装目录，先改写到用户数据根，否则重装后这里全是空目录。
-    if rebase_legacy_paths(&mut v) {
-        needs_save = true;
-        info!("config data paths rebased to the user data root");
-    }
 
     let device_id = v
         .pointer("/device_id")
@@ -3492,49 +3429,4 @@ pub fn get_device_id() -> String {
         save_config(&config);
     }
     config.device_id.clone()
-}
-
-#[cfg(test)]
-mod rebase_tests {
-    use super::rebase_one_path;
-    use std::path::Path;
-
-    #[test]
-    fn rebases_paths_under_the_install_dir() {
-        let legacy = r"C:/Users/me/AppData/Local/guaxi";
-        let legacy_lower = legacy.to_lowercase();
-        let root = Path::new(r"C:/Users/me/AppData/Roaming/Guaxi");
-        let got = rebase_one_path(
-            r"C:/Users/me/AppData/Local/guaxi/Libraries",
-            legacy,
-            &legacy_lower,
-            root,
-        );
-        let expected = root.join("Libraries").to_string_lossy().to_string();
-        assert_eq!(got.as_deref(), Some(expected.as_str()));
-    }
-
-    #[test]
-    fn rebases_nested_and_forward_slash_paths() {
-        let legacy = r"C:/apps/guaxi";
-        let legacy_lower = legacy.to_lowercase();
-        let root = Path::new(r"D:/data");
-        let got = rebase_one_path("c:/apps/guaxi/repos/travel/plans", legacy, &legacy_lower, root);
-        let expected = root.join("repos").join("travel").join("plans");
-        assert_eq!(got.as_deref(), Some(expected.to_string_lossy().as_ref()));
-    }
-
-    #[test]
-    fn leaves_unrelated_or_bare_paths_alone() {
-        let legacy = r"C:/apps/guaxi";
-        let legacy_lower = legacy.to_lowercase();
-        let root = Path::new(r"D:/data");
-        // 同前缀不同目录，不能被当成子路径。
-        assert!(rebase_one_path(r"C:/apps/guaxi2/Libraries", legacy, &legacy_lower, root).is_none());
-        // 安装目录本身改写没有意义。
-        assert!(rebase_one_path(r"C:/apps/guaxi", legacy, &legacy_lower, root).is_none());
-        assert!(rebase_one_path("", legacy, &legacy_lower, root).is_none());
-        // 用户自定义到别处的路径不动。
-        assert!(rebase_one_path(r"E:/notes", legacy, &legacy_lower, root).is_none());
-    }
 }

@@ -18,7 +18,6 @@ static LOG_GUARD: OnceCell<tracing_appender::non_blocking::WorkerGuard> = OnceCe
 mod cognition;
 mod commands;
 mod guaxiservices;
-mod paths;
 mod state;
 
 use commands::file_watcher::FileWatcher;
@@ -269,10 +268,6 @@ async fn app_main() {
     } else {
         info!("Project started with restricted logging (app info + dependency warnings)");
     }
-    // 旧版本把配置和数据写在安装目录，覆盖安装会把它们清掉。
-    // 这一步必须在任何后台循环/命令读配置之前同步跑完：否则调度器先在用户目录写一份默认值，
-    // 迁移再想"只补缺"就补不进去了，用户的订阅源/计划会看起来被重置。
-    paths::migrate_legacy();
     tokio::spawn(app_init());
     start_background_gc();
     start_log_cleanup();
@@ -294,8 +289,6 @@ async fn app_main() {
         .manage(file_watcher)
         .manage(shared_state.clone())
         .invoke_handler(tauri::generate_handler![
-            commands::app_state::storage_snapshot_read,
-            commands::app_state::storage_snapshot_write,
             commands::file_watcher::start_file_watching,
             commands::file_watcher::stop_file_watching,
             commands::remote_terminal::log_import_file,

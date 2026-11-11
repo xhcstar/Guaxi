@@ -132,24 +132,6 @@ Guaxi 是一款面向**个人知识工作流**的桌面软件。它不要求你�
 >   仍在补齐的是**各发行版安装后的目录布局与运行时路径解析的逐一验证**，遇到问题欢迎带日志反馈。
 > - **macOS** 暂无构建配置。
 
-### 数据目录
-
-用户数据统一放在用户目录下，覆盖安装或卸载都不会带走：
-
-| 平台 | 路径 |
-| --- | --- |
-| Windows | `%APPDATA%\Guaxi` |
-| macOS | `~/Library/Application Support/Guaxi` |
-| Linux | `${XDG_DATA_HOME:-~/.local/share}/Guaxi` |
-
-- `config/guaxi_config.json`：全部设置（模型、语音、路径、同步、地图 Key…）
-- `repos/`：行程计划、任务、知识库与图谱索引、各业务 SQLite
-- `state/local_storage.json`：界面偏好、聚合源收藏、助手会话的落盘镜像
-- `Libraries/`：资料库文件
-
-想让数据跟着程序目录走（绿色版）：在 exe 同级放一个空的 `portable.marker`，所有路径改回 exe 目录。
-旧版本把配置和数据写在安装目录里，新版本首次启动会自动复制到用户目录，原文件保留、随时可回退。
-
 ## 快速开始
 
 ### 1. 获取源码

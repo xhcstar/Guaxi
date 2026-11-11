@@ -14,6 +14,7 @@ use reqwest::Client;
 use rusqlite::{params, Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::env;
 use std::fs;
 use std::io::{BufReader, Read, Write};
 use std::path::{Path, PathBuf};
@@ -133,7 +134,12 @@ fn now_iso() -> String {
 }
 
 fn learning_root() -> Result<PathBuf, String> {
-    let dir = crate::paths::repos_dir().join(LANG_LEARN_DIR);
+    let exe = env::current_exe().map_err(|e| format!("获取可执行文件路径失败: {}", e))?;
+    let dir = exe
+        .parent()
+        .ok_or_else(|| "无法确定可执行文件目录".to_string())?
+        .join("repos")
+        .join(LANG_LEARN_DIR);
     fs::create_dir_all(&dir).map_err(|e| format!("创建语言学习目录失败: {}", e))?;
     Ok(dir)
 }

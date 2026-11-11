@@ -87,7 +87,12 @@ impl Default for ReaderPrefs {
 }
 
 fn db_path() -> Result<PathBuf, String> {
-    let dir = crate::paths::repos_dir();
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let dir = exe
+        .parent()
+        .ok_or("无法获取程序目录")?
+        .join("repos");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     Ok(dir.join("reader_state.db"))
 }
 

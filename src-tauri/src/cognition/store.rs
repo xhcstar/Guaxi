@@ -23,7 +23,15 @@ static INITIALIZED: Lazy<Mutex<bool>> = Lazy::new(|| Mutex::new(false));
 
 /// 解析 cognition.db 路径。
 pub fn cog_db_path() -> Result<PathBuf, String> {
-    let repos = crate::paths::repos_dir();
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let dir = exe
+        .parent()
+        .ok_or_else(|| "无法获取可执行文件所在目录".to_string())?
+        .to_path_buf();
+    let repos = dir.join("repos");
+    if !repos.exists() {
+        fs::create_dir_all(&repos).map_err(|e| e.to_string())?;
+    }
     Ok(repos.join("cognition.db"))
 }
 

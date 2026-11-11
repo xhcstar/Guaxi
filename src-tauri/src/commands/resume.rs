@@ -8,6 +8,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::env;
 use uuid::Uuid;
 
 const RESUME_DIR_NAME: &str = "guaxi_resume";
@@ -109,7 +110,12 @@ fn new_id() -> String {
 }
 
 fn resolve_db_path() -> Result<PathBuf, String> {
-    let dir = crate::paths::repos_dir().join(RESUME_DIR_NAME);
+    let exe_path = env::current_exe().map_err(|e| format!("获取可执行文件路径失败: {}", e))?;
+    let exe_dir = exe_path
+        .parent()
+        .ok_or_else(|| "无法获取可执行文件所在目录".to_string())?;
+
+    let dir = exe_dir.join("repos").join(RESUME_DIR_NAME);
     fs::create_dir_all(&dir).map_err(|e| format!("创建简历数据目录失败: {}", e))?;
     Ok(dir.join(RESUME_DB_NAME))
 }

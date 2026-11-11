@@ -12,6 +12,7 @@ use once_cell::sync::Lazy;
 use regex::Regex;
 use rusqlite::Connection;
 use sha2::{Digest, Sha256};
+use std::env;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::OnceLock;
@@ -23,7 +24,16 @@ pub const KG_SCHEMA_VERSION: i64 = 2;
 
 /// 解析 kg_index.db 路径(与 knowledge_bases.db 同目录 repos/)。
 pub fn kg_db_path() -> Result<PathBuf, String> {
-    let repo_dir = crate::paths::repos_dir();
+    let exe_path = env::current_exe().map_err(|e| e.to_string())?;
+    let exe_dir = exe_path
+        .parent()
+        .ok_or_else(|| "无法获取可执行文件所在目录".to_string())?
+        .to_path_buf();
+
+    let repo_dir = exe_dir.join("repos");
+    if !repo_dir.exists() {
+        fs::create_dir_all(&repo_dir).map_err(|e| e.to_string())?;
+    }
     Ok(repo_dir.join("kg_index.db"))
 }
 
