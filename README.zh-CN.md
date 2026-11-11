@@ -390,6 +390,8 @@ Guaxi 建立在这些优秀项目之上（节选，按用途分组）：
 | 现象 | 原因 / 处理 |
 |---|---|
 | 安装到一半弹「解压外部 utils 资源包失败」（Windows） | 发布目录缺 `utils_bundles/` 或 `bundle-manifest.json`，或与安装器不同版本；必须整目录一起分发 |
+| 安装时解压资源像是卡住了 | 几 GB 数据本来就要几分钟。点开「显示详细信息」能看到实时的 `[utils.bundle]` 进度行，同一份日志会保存到安装目录下的 `install.log` |
+| 解包报「目标目录不可写」/「磁盘空间不足」 | 安装目录权限或杀毒软件拦截，或磁盘剩余不够；helper 在动手写之前就会预检可写性与可用空间 |
 | 改了 `utils` 里的文件，打出来的包没更新 | 用了 `--reuse-utils-zip`——它不重扫 `utils`；改跑 `npm run prepare:tauri-utils` 或完整 build |
 | `cargo` 卡在下载 sherpa 原生库 | 预取没成功，`build.rs` 回去联网了；重跑 `npm run sherpa:fetch` |
 | `error mmapping datablock`（Windows） | 又把大资源塞进了 `bundle.resources`；走外置分包 |

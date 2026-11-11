@@ -126,6 +126,44 @@ fn progress_mode() -> ProgressMode {
     ProgressMode::Stdout
 }
 
+/// 安装日志文件。安装器只看得到子进程的 stdout（stdout 被 nsExec 收进安装日志），
+/// 而且安装窗口的详情面板滚动后就不方便回看，所以再把同样的行写一份到文件里。
+/// 用 `Mutex<Option<...>>` 而不是 OnceLock：同一个进程可能被复用（测试/多次调用）。
+static LOG_SINK: Mutex<Option<(File, Instant)>> = Mutex::new(None);
+
+/// 追加模式打开安装日志。打不开只影响日志，不应该让安装失败，调用方自行忽略错误。
+pub fn set_log_file(path: &Path) -> io::Result<()> {
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent)?;
+        }
+    }
+    let mut file = OpenOptions::new().create(true).append(true).open(path)?;
+    let _ = writeln!(file, "==== guaxi bundle helper ====");
+    let _ = file.flush();
+    let mut guard = LOG_SINK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    *guard = Some((file, Instant::now()));
+    Ok(())
+}
+
+/// 写一行到安装日志（带相对时间，方便看每一步花了多久）。没有日志文件时是空操作。
+fn log_line(message: &str) {
+    let mut guard = LOG_SINK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let Some((file, started)) = guard.as_mut() else {
+        return;
+    };
+    let _ = writeln!(
+        file,
+        "[+{:>6.1}s] {message}",
+        started.elapsed().as_secs_f64()
+    );
+    let _ = file.flush();
+}
+
 /// 输出一行进度。调用方负责保证单行（`cargo:warning=` 不认多行）。
 fn progress_emit(message: &str) {
     match progress_mode() {
@@ -134,6 +172,24 @@ fn progress_emit(message: &str) {
         ProgressMode::CargoWarning => println!("cargo:warning={message}"),
         ProgressMode::Silent => {}
     }
+    log_line(message);
+}
+
+/// 供 bin 使用：既打到 stdout / cargo warning，也写进安装日志。
+pub fn emit_line(message: &str) {
+    progress_emit(message);
+}
+
+/// 失败信息必须让安装器看得见：nsExec 只接管 stdout，stderr 在无控制台的安装进程里
+/// 会被直接丢掉，所以这里同时写 stdout、stderr 与日志文件。
+/// 刻意绕过 `progress_emit`：`GUAXI_BUNDLE_LOG=quiet` 只该压掉进度行，不该吞掉错误。
+pub fn report_error(message: &str) {
+    match progress_mode() {
+        ProgressMode::CargoWarning => println!("cargo:warning={message}"),
+        _ => println!("{message}"),
+    }
+    log_line(message);
+    eprintln!("{message}");
 }
 
 fn format_bytes(bytes: u64) -> String {
@@ -162,9 +218,69 @@ fn format_duration(duration: Duration) -> String {
     }
 }
 
-/// 一次打包任务的进度。多线程压缩时由各 worker 原子累加，后台线程定期打印一行，
+/// 目标目录可写性探测。安装失败里很常见的是权限不足、杀毒软件锁定目录、
+/// 磁盘写满——提前写一个探针文件，报错能直接指明是「写不进去」而不是
+/// 等到解某个大包时才失败、还把原因归到分包损坏上。
+fn probe_destination_writable(destination: &Path) -> Result<(), String> {
+    let probe = destination.join(format!(".guaxi-write-probe-{}", std::process::id()));
+    match fs::write(&probe, b"ok") {
+        Ok(()) => {
+            let _ = fs::remove_file(&probe);
+            Ok(())
+        }
+        Err(error) => Err(format!(
+            "目标目录不可写: {} ({error})；请检查目录权限、磁盘空间，或关闭拦截写入的杀毒软件",
+            destination.display()
+        )),
+    }
+}
+
+/// 目标所在卷的可用字节数。拿不到（非 Windows、路径不可解析）时返回 None，
+/// 调用方应当跳过空间检查而不是误判。
+///
+/// 这里刻意直接声明 kernel32 的入口，而不是依赖 `windows-sys`：本文件同时被
+/// `src-tauri/build.rs` 通过 `#[path]` 引入，而 build script 的依赖表里没有
+/// windows-sys，为它加一份 build-dependency 只会拖慢构建。
+#[cfg(windows)]
+fn available_disk_space(path: &Path) -> Option<u64> {
+    use std::os::windows::ffi::OsStrExt;
+
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn GetDiskFreeSpaceExW(
+            directory_name: *const u16,
+            free_bytes_available: *mut u64,
+            total_bytes: *mut u64,
+            total_free_bytes: *mut u64,
+        ) -> i32;
+    }
+
+    let mut wide: Vec<u16> = path.as_os_str().encode_wide().collect();
+    wide.push(0);
+    let mut free_bytes: u64 = 0;
+    // SAFETY: 传入以 NUL 结尾的宽字符串指针；另外三个参数是该 API 允许的
+    // 可选输出指针，这里只关心调用方可用空间。
+    let ok = unsafe {
+        GetDiskFreeSpaceExW(
+            wide.as_ptr(),
+            &mut free_bytes,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        )
+    };
+    (ok != 0).then_some(free_bytes)
+}
+
+#[cfg(not(windows))]
+fn available_disk_space(_path: &Path) -> Option<u64> {
+    None
+}
+
+/// 一次打包/解包任务的进度。多线程压缩时由各 worker 原子累加，后台线程定期打印一行，
 /// 让终端不至于长时间空白。
 struct BundleProgress {
+    /// 「压缩」或「解包」——进度行里的动词。
+    phase: &'static str,
     started: Instant,
     total_files: usize,
     total_bytes: u64,
@@ -176,14 +292,25 @@ struct BundleProgress {
 
 impl BundleProgress {
     fn new(total_files: usize, total_bytes: u64) -> Arc<Self> {
+        Self::with_phase("压缩", total_files, total_bytes)
+    }
+
+    /// 安装阶段的解包进度：`add_bytes` 由 `DecompressReader` 按**解压后**写出的
+    /// 字节累加，所以几 GB 的包能平滑推进，ETA 也跟实际耗时对得上。
+    fn for_extract(total_files: usize, total_bytes: u64) -> Arc<Self> {
+        Self::with_phase("解包", total_files, total_bytes)
+    }
+
+    fn with_phase(phase: &'static str, total_files: usize, total_bytes: u64) -> Arc<Self> {
         Arc::new(Self {
+            phase,
             started: Instant::now(),
             total_files,
             total_bytes,
             done_files: AtomicUsize::new(0),
             done_bytes: AtomicU64::new(0),
             stop: AtomicBool::new(false),
-            // 小体量分包几秒就完事，为它开线程只是噪音。
+            // 小体量分包几秒就完事，为它开线程只是噪音；安装时几 GB 的解包更需要这行。
             ticker_enabled: progress_mode() != ProgressMode::Silent
                 && total_bytes >= 64 * 1024 * 1024,
         })
@@ -215,13 +342,16 @@ impl BundleProgress {
         let this = Arc::clone(self);
         Some(thread::spawn(move || {
             let mut waited = Duration::ZERO;
+            // 轮询粒度要小：结束时 join 最多等一个粒度。250ms 在几秒级的分包上
+            // 会凭空多出两百多毫秒（实测单包解包 620ms → 880ms）。
+            let step = Duration::from_millis(50);
             while !this.stop.load(Ordering::Relaxed) {
                 if waited >= interval {
                     this.emit_progress();
                     waited = Duration::ZERO;
                 }
-                thread::sleep(Duration::from_millis(250));
-                waited += Duration::from_millis(250);
+                thread::sleep(step);
+                waited += step;
             }
         }))
     }
@@ -233,7 +363,7 @@ impl BundleProgress {
         let percent = if self.total_bytes == 0 {
             0.0
         } else {
-            done_bytes as f64 / self.total_bytes as f64 * 100.0
+            (done_bytes as f64 / self.total_bytes as f64 * 100.0).min(100.0)
         };
         let rate = if elapsed_seconds > 0.5 {
             done_bytes as f64 / elapsed_seconds
@@ -248,7 +378,8 @@ impl BundleProgress {
             "?".to_string()
         };
         progress_emit(&format!(
-            "[utils.bundle] 压缩中 {percent:.0}% · {}/{} 文件 · {} / {} · {} / 已用 {} · 预计还需 {}",
+            "[utils.bundle] {}中 {percent:.0}% · {}/{} 文件 · {} / {} · {} / 已用 {} · 预计还需 {}",
+            self.phase,
             self.done_files.load(Ordering::Relaxed),
             self.total_files,
             format_bytes(done_bytes),
@@ -261,6 +392,11 @@ impl BundleProgress {
             format_duration(elapsed),
             remaining
         ));
+    }
+
+    /// 让后台 ticker 退出（解包阶段自己收尾，不需要 `finish` 的压缩措辞）。
+    fn stop_ticker(&self) {
+        self.stop.store(true, Ordering::Relaxed);
     }
 
     fn finish(&self, bundle_count: usize, archived_bytes: u64) {
@@ -642,7 +778,9 @@ fn prepare_bundles_in_dir(
             .and_then(|previous| {
                 fs::metadata(&spec.bundle_path)
                     .ok()
-                    .filter(|metadata| metadata.is_file() && metadata.len() == previous.archive_bytes)
+                    .filter(|metadata| {
+                        metadata.is_file() && metadata.len() == previous.archive_bytes
+                    })
                     .map(|_| previous)
             });
 
@@ -661,8 +799,7 @@ fn prepare_bundles_in_dir(
         let cores = std::thread::available_parallelism()
             .map(|value| value.get())
             .unwrap_or(1);
-        let encoder_threads = (cores / rebuild_indices.len())
-            .clamp(1, cores) as u32;
+        let encoder_threads = (cores / rebuild_indices.len()).clamp(1, cores) as u32;
         let rebuild_bytes: u64 = rebuild_indices
             .iter()
             .map(|index| specs[*index].stats.total_bytes)
@@ -728,12 +865,8 @@ fn prepare_bundles_in_dir(
     let mut aggregate_stats = EntryStats::default();
 
     for (spec, meta) in specs.iter().zip(prepared.into_iter()) {
-        let meta = meta.ok_or_else(|| {
-            format!(
-                "bundle {} was neither reused nor rebuilt",
-                spec.bundle_name
-            )
-        })?;
+        let meta = meta
+            .ok_or_else(|| format!("bundle {} was neither reused nor rebuilt", spec.bundle_name))?;
         if meta.rebuilt {
             rebuilt_bundle_count += 1;
         } else {
@@ -974,10 +1107,7 @@ fn collect_units(
     Ok(())
 }
 
-fn included_children(
-    dir: &Path,
-    relative: &Path,
-) -> Result<Vec<(PathBuf, PathBuf)>, String> {
+fn included_children(dir: &Path, relative: &Path) -> Result<Vec<(PathBuf, PathBuf)>, String> {
     let mut entries = fs::read_dir(dir)
         .map_err(|e| format!("failed to read dir {}: {e}", dir.display()))?
         .flatten()
@@ -1209,6 +1339,24 @@ impl<R: Read> Read for ProgressReader<'_, R> {
     }
 }
 
+/// 解包侧的计数读取器：统计**解压后**写出的字节。
+/// 安装耗时几乎全在写文件上（十几万个小文件 + 杀软扫描），按归档压缩字节算会把
+/// 进度算得飞快（5 秒报 50%、ETA 5 秒，实际要几分钟），反而更像卡住。
+struct DecompressReader<'a, R> {
+    inner: &'a mut R,
+    progress: &'a BundleProgress,
+}
+
+impl<R: Read> Read for DecompressReader<'_, R> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let read = self.inner.read(buf)?;
+        if read > 0 {
+            self.progress.add_bytes(read as u64);
+        }
+        Ok(read)
+    }
+}
+
 fn prepare_single_bundle(
     bundle: &BundleSpec,
     encoder_threads: u32,
@@ -1229,8 +1377,12 @@ fn prepare_single_bundle(
         .map_err(|e| format!("failed to create {}: {e}", temp_bundle_path.display()))?;
     let writer = BufWriter::with_capacity(ZSTD_ENCODER_WRITE_BUFFER_SIZE, file);
     let hashing_writer = HashingWriter::new(writer);
-    let mut encoder = Encoder::new(hashing_writer, ZSTD_COMPRESSION_LEVEL)
-        .map_err(|e| format!("failed to start zstd encoder {}: {e}", temp_bundle_path.display()))?;
+    let mut encoder = Encoder::new(hashing_writer, ZSTD_COMPRESSION_LEVEL).map_err(|e| {
+        format!(
+            "failed to start zstd encoder {}: {e}",
+            temp_bundle_path.display()
+        )
+    })?;
     if encoder_threads > 1 {
         encoder
             .multithread(encoder_threads)
@@ -1288,9 +1440,12 @@ fn prepare_single_bundle(
     let encoder = archive
         .into_inner()
         .map_err(|e| format!("failed to finalize tar {}: {e}", temp_bundle_path.display()))?;
-    let hashing_writer = encoder
-        .finish()
-        .map_err(|e| format!("failed to finalize zstd {}: {e}", temp_bundle_path.display()))?;
+    let hashing_writer = encoder.finish().map_err(|e| {
+        format!(
+            "failed to finalize zstd {}: {e}",
+            temp_bundle_path.display()
+        )
+    })?;
     let (writer, archive_blake3) = hashing_writer
         .finish()
         .map_err(|e| format!("failed to flush {}: {e}", temp_bundle_path.display()))?;
@@ -1347,8 +1502,8 @@ fn read_manifest(bundle_dir: &Path) -> Result<Option<BundleManifest>, String> {
 
 fn write_manifest_if_changed(bundle_dir: &Path, manifest: &BundleManifest) -> Result<bool, String> {
     let path = bundle_dir.join(BUNDLE_MANIFEST_FILE);
-    let bytes = serde_json::to_vec(manifest)
-        .map_err(|e| format!("failed to serialize manifest: {e}"))?;
+    let bytes =
+        serde_json::to_vec(manifest).map_err(|e| format!("failed to serialize manifest: {e}"))?;
     if let Ok(existing) = fs::read(&path) {
         if existing == bytes {
             return Ok(false);
@@ -1606,6 +1761,34 @@ fn run_extraction(
 
     let state_mutex = state_file.map(|_| Mutex::new(state));
     let extract_started = Instant::now();
+
+    // 安装阶段最常见的失败是「写不进去」（权限 / 杀软 / 磁盘满），而不是分包本身坏了。
+    // 先把可写性、可用空间和总体体量打出来，失败时用户能立刻判断方向。
+    probe_destination_writable(destination)?;
+    let required_bytes: u64 = extract_indices
+        .iter()
+        .filter_map(|&index| plans[index].manifest)
+        .flat_map(|entry| entry.files.iter())
+        .map(|file| file.size)
+        .sum();
+    let extract_file_count: usize = extract_indices
+        .iter()
+        .filter_map(|&index| plans[index].manifest)
+        .map(|entry| entry.files.len())
+        .sum();
+    let archive_bytes: u64 = extract_indices
+        .iter()
+        .map(|&index| {
+            plans[index]
+                .manifest
+                .map(|entry| entry.archive_bytes)
+                .unwrap_or_else(|| {
+                    fs::metadata(&plans[index].path)
+                        .map(|metadata| metadata.len())
+                        .unwrap_or(0)
+                })
+        })
+        .sum();
     progress_emit(&format!(
         "[utils.bundle] 安装解包 · 共 {} 个分包 · 本次解压 {} 个 · 增量跳过 {} 个 · 目标 {}",
         plans.len(),
@@ -1613,25 +1796,91 @@ fn run_extraction(
         result.skipped_bundle_count,
         destination.display()
     ));
+    let batch_summary = if extract_indices.is_empty() {
+        "本次无需写入（已安装且文件一致）".to_string()
+    } else {
+        format!(
+            "本次写入 {} 个文件 · 展开后 {} · 归档 {}",
+            extract_file_count,
+            format_bytes(required_bytes),
+            format_bytes(archive_bytes)
+        )
+    };
+    if let Some(free) = available_disk_space(destination) {
+        progress_emit(&format!(
+            "[utils.bundle] {batch_summary} · 目标盘可用 {}",
+            format_bytes(free)
+        ));
+        // 留 5% + 64MB 余量：覆盖「同名文件先写临时文件再替换」的瞬时占用。
+        let needed = required_bytes.saturating_add(required_bytes / 20 + 64 * 1024 * 1024);
+        if required_bytes > 0 && free < needed {
+            return Err(format!(
+                "磁盘空间不足：解压到 {} 需要约 {}，当前可用 {}。请清理磁盘后重新运行安装程序。",
+                destination.display(),
+                format_bytes(required_bytes),
+                format_bytes(free)
+            ));
+        }
+    } else {
+        progress_emit(&format!("[utils.bundle] {batch_summary}"));
+    }
+
+    // 进度按**解压后**的字节算：安装耗时几乎都在写文件上，用归档压缩字节当分母
+    // 会让百分比虚高（前面实测 5 秒报 51%、ETA 5 秒），比「没进度」更容易误导。
+    let progress_total_bytes = if required_bytes > 0 {
+        required_bytes
+    } else {
+        archive_bytes
+    };
+    let progress = BundleProgress::for_extract(extract_file_count, progress_total_bytes);
+    let ticker = progress.spawn_ticker();
     let extract_results: Vec<Result<ExtractBundleStats, String>> = extract_indices
         .par_iter()
         .map(|&index| {
             let plan = &plans[index];
             let bundle_started = Instant::now();
-            let stats = extract_single_bundle(&plan.path, destination, plan.manifest)?;
-            if let Some(entry) = plan.manifest {
-                verify_files_complete(destination, entry)?;
+            let planned_files = plan.manifest.map(|entry| entry.files.len()).unwrap_or(0);
+            let bundle_archive_bytes = plan
+                .manifest
+                .map(|entry| entry.archive_bytes)
+                .unwrap_or_else(|| {
+                    fs::metadata(&plan.path)
+                        .map(|metadata| metadata.len())
+                        .unwrap_or(0)
+                });
+            // 小分包（rsshub 的单个 JSON 之类）几十毫秒就完事，逐条打印只会把
+            // 真正重要的大包淹掉；它们仍然计入总量与最后的汇总。
+            let verbose_bundle = bundle_archive_bytes >= 8 * 1024 * 1024;
+            if verbose_bundle {
+                progress_emit(&format!(
+                    "[utils.bundle] 解包开始 {} · {} 个文件 · 归档 {}",
+                    plan.name,
+                    planned_files,
+                    format_bytes(bundle_archive_bytes)
+                ));
             }
-            progress_emit(&format!(
-                "[utils.bundle] 解包完成 {} · 写入 {} 个文件 · 跳过 {} 个 · {}",
-                plan.name,
-                stats.written_files,
-                stats.skipped_files,
-                format_duration(bundle_started.elapsed())
-            ));
+            let stats = extract_single_bundle(&plan.path, destination, plan.manifest, &progress)
+                .map_err(|error| format!("分包 {} 解压失败: {error}", plan.name))?;
+            if let Some(entry) = plan.manifest {
+                verify_files_complete(destination, entry)
+                    .map_err(|error| format!("分包 {} 校验失败: {error}", plan.name))?;
+            }
+            if verbose_bundle {
+                progress_emit(&format!(
+                    "[utils.bundle] 解包完成 {} · 写入 {} 个文件 · 跳过 {} 个 · {}",
+                    plan.name,
+                    stats.written_files,
+                    stats.skipped_files,
+                    format_duration(bundle_started.elapsed())
+                ));
+            }
             Ok(stats)
         })
         .collect();
+    progress.stop_ticker();
+    if let Some(handle) = ticker {
+        let _ = handle.join();
+    }
 
     for (index, stats) in extract_indices.iter().zip(extract_results) {
         let plan = &plans[*index];
@@ -1666,7 +1915,9 @@ fn run_extraction(
         let mut guard = state_mutex
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        guard.bundles.retain(|name, _| allowed.contains(name.as_str()));
+        guard
+            .bundles
+            .retain(|name, _| allowed.contains(name.as_str()));
         guard.schema = STATE_FILE_SCHEMA;
         if let Err(error) = save_state(path, &guard) {
             eprintln!("[utils.bundle] failed to save install state: {error}");
@@ -1713,8 +1964,8 @@ fn save_state(path: &Path, state: &BundleState) -> Result<(), String> {
         fs::create_dir_all(parent)
             .map_err(|e| format!("failed to create state dir {}: {e}", parent.display()))?;
     }
-    let bytes = serde_json::to_vec(state)
-        .map_err(|e| format!("failed to serialize install state: {e}"))?;
+    let bytes =
+        serde_json::to_vec(state).map_err(|e| format!("failed to serialize install state: {e}"))?;
     let temp_path = path.with_file_name(format!(
         ".{}.tmp",
         path.file_name()
@@ -1747,8 +1998,8 @@ fn verify_archive(bundle: &Path, entry: &BundleManifestEntry) -> Result<(), Stri
         return Ok(());
     }
 
-    let mut file = File::open(bundle)
-        .map_err(|e| format!("读取资源分包失败: {} ({e})", bundle.display()))?;
+    let mut file =
+        File::open(bundle).map_err(|e| format!("读取资源分包失败: {} ({e})", bundle.display()))?;
     let mut hasher = blake3::Hasher::new();
     let mut buffer = vec![0u8; 1024 * 1024];
     loop {
@@ -1820,8 +2071,8 @@ fn verify_files_complete(destination: &Path, entry: &BundleManifestEntry) -> Res
             return Err(format!("资源清单包含非法路径: {}", file.path));
         };
         let path = destination.join(relative);
-        let metadata = fs::metadata(&path)
-            .map_err(|e| format!("资源文件缺失: {} ({e})", path.display()))?;
+        let metadata =
+            fs::metadata(&path).map_err(|e| format!("资源文件缺失: {} ({e})", path.display()))?;
         if !metadata.is_file() || metadata.len() != file.size {
             return Err(format!(
                 "资源文件大小不一致: {} (实际 {} 字节，清单 {} 字节)",
@@ -1847,6 +2098,7 @@ fn extract_single_bundle(
     bundle: &Path,
     destination: &Path,
     manifest: Option<&BundleManifestEntry>,
+    progress: &BundleProgress,
 ) -> Result<ExtractBundleStats, String> {
     let file = File::open(bundle)
         .map_err(|e| format!("打开资源分包失败: {} ({e})", bundle.to_string_lossy()))?;
@@ -1887,9 +2139,8 @@ fn extract_single_bundle(
         let entry_type = entry.header().entry_type();
 
         if entry_type.is_dir() {
-            fs::create_dir_all(&out_path).map_err(|e| {
-                format!("创建资源目录失败: {} ({e})", out_path.to_string_lossy())
-            })?;
+            fs::create_dir_all(&out_path)
+                .map_err(|e| format!("创建资源目录失败: {} ({e})", out_path.to_string_lossy()))?;
             continue;
         }
 
@@ -1898,16 +2149,17 @@ fn extract_single_bundle(
             if let Some(expected_file) = expected_file {
                 if file_signature_matches(&out_path, expected_file) {
                     stats.skipped_files += 1;
+                    // 跳过也要计入进度：这些字节已经“就位”，否则重装/升级时
+                    // 百分比会一直停在很低的位置。
+                    progress.add_bytes(expected_file.size);
+                    progress.complete_entry();
                     continue;
                 }
             }
 
             if let Some(parent) = out_path.parent() {
                 fs::create_dir_all(parent).map_err(|e| {
-                    format!(
-                        "创建资源文件父目录失败: {} ({e})",
-                        parent.to_string_lossy()
-                    )
+                    format!("创建资源文件父目录失败: {} ({e})", parent.to_string_lossy())
                 })?;
             }
 
@@ -1915,12 +2167,35 @@ fn extract_single_bundle(
             if temp_path.exists() {
                 let _ = fs::remove_file(&temp_path);
             }
-            entry.unpack(&temp_path).map_err(|e| {
+            // 不用 entry.unpack()：它在写文件时无法回报进度。这里自己 copy，
+            // 用 DecompressReader 统计解压后的真实字节，进度与耗时才对得上。
+            let mut written = File::create(&temp_path).map_err(|e| {
+                format!(
+                    "创建资源临时文件失败: {} ({e})",
+                    temp_path.to_string_lossy()
+                )
+            })?;
+            let mut reader = DecompressReader {
+                inner: &mut entry,
+                progress,
+            };
+            io::copy(&mut reader, &mut written).map_err(|e| {
                 format!(
                     "写入资源临时文件失败: {} ({e})",
                     temp_path.to_string_lossy()
                 )
             })?;
+            drop(written);
+
+            // entry.unpack() 会顺带把权限位写出去；自己 copy 就要补回来，
+            // 否则 Linux 下 utils 里的可执行脚本会掉 +x。
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                if let Ok(mode) = entry.header().mode() {
+                    let _ = fs::set_permissions(&temp_path, fs::Permissions::from_mode(mode));
+                }
+            }
 
             if let Some(expected_file) = expected_file {
                 if expected_file.mtime_ns > 0 {
@@ -1935,6 +2210,7 @@ fn extract_single_bundle(
 
             replace_file(&temp_path, &out_path)?;
             stats.written_files += 1;
+            progress.complete_entry();
             continue;
         }
 
@@ -1953,10 +2229,7 @@ fn temp_path_for(target: &Path) -> Result<PathBuf, String> {
         .file_name()
         .and_then(OsStr::to_str)
         .ok_or_else(|| format!("无法解析资源文件名: {}", target.display()))?;
-    Ok(target.with_file_name(format!(
-        ".{name}.guaxi-tmp-{}",
-        std::process::id()
-    )))
+    Ok(target.with_file_name(format!(".{name}.guaxi-tmp-{}", std::process::id())))
 }
 
 fn set_file_mtime(path: &Path, mtime_ns: u64) -> Result<(), String> {
@@ -2025,7 +2298,9 @@ mod tests {
     #[test]
     fn skips_download_archives_and_retired_speech_binaries() {
         // 模型与原生库的下载归档只是中间产物，解压后就没用了，不能进包。
-        assert!(should_skip("Models/whisper_onnx/sherpa-onnx-whisper-base.en.tar.bz2"));
+        assert!(should_skip(
+            "Models/whisper_onnx/sherpa-onnx-whisper-base.en.tar.bz2"
+        ));
         assert!(should_skip("Models/tts/kokoro-multi-lang-v1_1.tar.bz2"));
 
         // 语音已改成进程内调用库，这两棵外部二进制树不该再进包。
@@ -2039,5 +2314,4 @@ mod tests {
         assert!(!should_skip("Models/asr/sense-voice/tokens.txt"));
         assert!(!should_skip("Models/vad/silero_vad.onnx"));
     }
-
 }

@@ -422,6 +422,8 @@ Guaxi stands on these projects (a selection, grouped by role):
 | Symptom | Cause / fix |
 |---|---|
 | Installer aborts with "failed to extract external utils bundles" (Windows) | `utils_bundles/` or `bundle-manifest.json` is missing from the release directory, or its version does not match the installer — ship the whole directory together |
+| Installer seems frozen while extracting assets | Expected for a few minutes (gigabytes). Check **Show details**: it streams `[utils.bundle]` progress lines, and the same log is saved to `install.log` in the install directory |
+| Extracted assets fail with "目标目录不可写" / "磁盘空间不足" | Permission or antivirus block on the install directory, or too little free space; the helper checks writability and free space before touching any file |
 | Edited files under `utils` but the built package is unchanged | You used `--reuse-utils-zip`, which does not rescan `utils`; rerun `npm run prepare:tauri-utils` or do a full build |
 | `cargo` hangs downloading the sherpa native libs | The prefetch failed and `build.rs` went online; rerun `npm run sherpa:fetch` |
 | `error mmapping datablock` (Windows) | Large assets were pushed back into `bundle.resources`; use the external bundles |

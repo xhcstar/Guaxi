@@ -336,6 +336,44 @@ src-tauri/target/release/bundle/nsis/
 | `GUAXI_BUNDLE_LOG=quiet` | 关掉 Rust 侧的进度行，只保留摘要（CI 用） |
 | `GUAXI_SKIP_BUNDLE_PREPARE=1` | 让 `build.rs` 完全跳过分包准备（编排层给辅助 bin 用的，不建议手工设置） |
 
+### 6.5 安装期的日志
+
+安装阶段同样是「几 GB 数据、进度条不动」的重灾区：NSIS 在解包外部 `utils_bundles` /
+`cuda_runtime_bundles` 时，自身进度条是静止的。现在安装器把详情面板打开，并把 helper 的
+进度行实时转进日志；同一份日志同时追加到 `$INSTDIR\install.log`，安装失败后用户可以直接回传。
+
+```text
+正在解压 utils 资源包到 D:\guaxi\utils（数 GB，可能需要几分钟，请勿关闭窗口）
+详细进度见下方日志，安装结束后也会保存到 D:\guaxi\install.log
+[utils.bundle] 安装日志 D:\guaxi\install.log · bundleRoot=... · destination=... · incremental=true
+[utils.bundle] 安装解包 · 共 120 个分包 · 本次解压 120 个 · 增量跳过 0 个 · 目标 D:\guaxi\utils
+[utils.bundle] 本次写入 120805 个文件 · 展开后 5.39 GB · 归档 2.9 GB · 目标盘可用 62.1 GB
+[utils.bundle] 解包开始 utils\scripts.tar.zst · 12 个文件 · 归档 41 MB
+[utils.bundle] 解包中 37% · 41000/120805 文件 · 2.0 GB / 5.39 GB · 210 MB/s / 已用 9.5s · 预计还需 16s
+[utils.bundle] 解包完成 utils\scripts.tar.zst · 写入 12 个文件 · 跳过 0 个 · 0.3s
+[utils.bundle] 安装解包完成 · 解压 120 个分包 · 写入 120805 个文件 · 跳过 0 个文件 · 总用时 1m52s
+utils 资源解包退出码：0
+```
+
+进度按 **解压后写出的真实字节**累计（不是归档压缩字节），所以单个几百 MB 的 DLL 也能平滑
+推进、ETA 与实测耗时对得上；「解包开始 / 完成」只对 ≥8 MB 的分包打印，避免上百个小包把
+关键行淹掉。安装器自己也会在同一个日志里写 `[nsis]` 阶段标记与每步退出码，helper 若没能
+启动，从日志也能看出卡在哪一步。
+
+**失败时怎么定位**
+
+| 日志里的信号 | 含义 |
+|---|---|
+| `目标目录不可写: … (拒绝访问)` | 权限问题，或杀毒软件锁定了安装目录 |
+| `磁盘空间不足：… 需要约 5.4 GB，当前可用 …` | 解包前预检就拦下；不再解到一半才失败 |
+| `分包 xxx.tar.zst 解压失败: …` | 该分包损坏或与清单不匹配 → 安装包不完整，重新下载 |
+| `安装包缺少资源清单 …` | `utils_bundles/` 与安装器不是同一版本，整目录一起分发 |
+| 长时间停在某个 `解包开始` 且无 `解包中` | 该分包读写异常（常见于杀软实时扫描大文件） |
+
+helper 的 stdout 被 `nsExec` 收进详情面板，stderr 在无控制台的安装进程里会被丢弃，
+因此错误信息通过 stdout + 日志文件双写（`report_error`）。`GUAXI_BUNDLE_LOG=quiet`
+对安装阶段同样生效，但错误行不受影响。
+
 
 ---
 
