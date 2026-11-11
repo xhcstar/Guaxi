@@ -21,6 +21,7 @@ import { formatProblems, validatePlan } from './travelValidate.js'
 import {
   buildDayPrompt,
   buildOutlinePrompt,
+  buildRepairFeedback,
   fallbackDay,
   fallbackOutline,
   normalizeDay,
@@ -61,6 +62,14 @@ const STORAGE_USED_BASES = 'guaxi.travel.usedBases.v1'
 // 网页模型是没有流式的黑盒：一次编排最多等 120 秒，超时立刻走确定性编排，
 // 避免整条流水线在某个阶段一停就是几分钟。
 const WEB_MODEL_TIMEOUT_MS = 120 * 1000
+// 校验不过时把问题讲回给模型整改的次数。软件只是校验员：先问模型，问不通才兜底。
+const OUTLINE_REPAIR_ATTEMPTS = 1
+const DAY_REPAIR_ATTEMPTS = 1
+// 一次生成里允许的整改次数上限：修得动才有意义，不能把等待时间无限拉长。
+const REPAIR_BUDGET_PER_RUN = 5
+// 这些错误重试/整改都没用：没模型、没 Key、网络断了，直接兜底。
+const MODEL_UNAVAILABLE_PATTERN =
+  /没有可用的模型|API\s*Key|不调用模型|浏览器预览|Failed to fetch|网络请求失败|fetch failed|timed? ?out|超时/i
 
 const state = reactive({
   view: 'home',
@@ -137,18 +146,9 @@ function modelWaitHint() {
   return `网页模型 ${label} 最多等 ${WEB_MODEL_TIMEOUT_MS / 1000} 秒，没有响应就改用确定性编排`
 }
 
-// 校验不过就不落盘：宁可报错，也不把违反距离/日期约束的计划交给用户。
+// 校验不过不落盘、也不直接作废：先按天把问题讲回模型让它改，改不动才用确定性编排补齐，
+// 最后由调用方把仍然存在的偏差并进顶部横幅。
 // 浏览器预览用的是内置示例 POI，与目的地坐标不同源，只校验结构，不校验半径。
-// 返回的松紧提示（收尾偏晚、当天在途过长）不阻断生成，由调用方并进顶部横幅。
-function assertPlanConstraints(plan, options) {
-  const report = validatePlan(plan, api.isMock ? { ...options, radiusKm: 0 } : options)
-  if (!report.ok) {
-    console.warn('[travel] 计划未通过约束校验：', report.problems.slice(0, 5).join('；'))
-    throw new Error(`生成结果未通过约束校验：${formatProblems(report.problems)}`)
-  }
-  return report.advisories || []
-}
-
 function friendlyError(error) {
   const text = String(error?.message || error || '未知错误')
   if (text.includes('未配置高德')) return text
@@ -158,6 +158,30 @@ function friendlyError(error) {
     return '网络请求失败，请检查网络或代理设置后重试。'
   }
   return text
+}
+
+// 模型/网络本身不可用：这种情况再让它整改只是白等，直接兜底。
+function isModelUnavailable(error) {
+  return MODEL_UNAVAILABLE_PATTERN.test(String(error?.message || error || ''))
+}
+
+// 把一次失败翻译成「要讲给模型听的问题清单」。
+// 校验类错误带 problems（每条都很具体），结构类错误只能拿报错原文当问题。
+function problemsFromError(error) {
+  const list = Array.isArray(error?.problems) ? error.problems : []
+  const cleaned = list.map((item) => String(item || '').trim()).filter(Boolean)
+  if (cleaned.length) return cleaned
+  return [String(error?.message || error || '模型输出无法解析')]
+}
+
+// 上一版输出：让模型看到自己写了什么，改起来才不会换一套新的错误。
+function previousFromError(error) {
+  if (!error?.previous) return ''
+  try {
+    return JSON.stringify(error.previous)
+  } catch {
+    return ''
+  }
 }
 
 function readJson(key, fallback) {
@@ -1144,29 +1168,49 @@ export function useTravelStore() {
     ]
   }
 
-  async function createOutline({ form, facts }) {
-    try {
-      const { system, prompt } = buildOutlinePrompt({ form, facts })
-      const { raw, provider } = await completeJsonLlm({
-        prompt,
-        system,
-        temperature: 0.35,
-        maxTokens: 8192,
-      })
-      const outline = normalizeOutline(raw, { form, facts })
-      return {
-        outline,
-        provider: provider || '',
-        usedFallback: false,
-        warning: '',
+  // 大纲没过校验：先把「哪一条不通过」讲回给模型让它重排，模型还是给不出来才用确定性大纲。
+  async function createOutline({ form, facts, feedback = [] }) {
+    let problems = Array.isArray(feedback) ? feedback.filter(Boolean) : []
+    let previous = ''
+    let lastError = null
+    let lastProvider = ''
+    for (let attempt = 0; attempt <= OUTLINE_REPAIR_ATTEMPTS; attempt += 1) {
+      try {
+        const { system, prompt } = buildOutlinePrompt({
+          form,
+          facts,
+          feedback: problems.length ? { problems, previous } : null,
+        })
+        const response = await completeJsonLlm({
+          prompt,
+          system,
+          temperature: problems.length ? 0.2 : 0.35,
+          maxTokens: 8192,
+        })
+        lastProvider = response.provider || ''
+        const outline = normalizeOutline(response.raw, { form, facts })
+        return {
+          outline,
+          provider: lastProvider,
+          usedFallback: false,
+          warning: '',
+          repaired: attempt > 0,
+        }
+      } catch (error) {
+        lastError = error
+        if (isModelUnavailable(error)) break
+        problems = problemsFromError(error)
+        previous = previousFromError(error) || previous
       }
-    } catch (error) {
-      return {
-        outline: fallbackOutline({ form, facts }),
-        provider: api.isMock ? '内置编排' : '确定性兜底',
-        usedFallback: true,
-        warning: api.isMock ? '' : `模型这次没有返回可用的大纲 JSON，已用确定性编排兜底：${friendlyError(error)}`,
-      }
+    }
+    return {
+      outline: fallbackOutline({ form, facts }),
+      provider: api.isMock ? '内置编排' : '确定性兜底',
+      usedFallback: true,
+      repaired: false,
+      warning: api.isMock
+        ? ''
+        : `模型这次没有给出可用的大纲（已把校验问题讲回去让它重排），先用确定性编排兜底：${friendlyError(lastError)}`,
     }
   }
 
@@ -1221,7 +1265,24 @@ export function useTravelStore() {
     throw lastError || new Error('模型没有返回可解析的 JSON')
   }
 
-  async function createDay({ form, facts, outlineDay, dayIndex, totalDays, legs, stopRefs, startName, useModel = true }) {
+  /**
+   * 编排一天。软件只做校验：模型给的安排没过校验，就把问题清单讲回去让它重排，
+   * 而不是立刻换成确定性编排。模型连改都改不动（或本来就没模型）才兜底。
+   * feedback 用于「整份计划复核」时把已发现的问题直接带进第一次请求。
+   */
+  async function createDay({
+    form,
+    facts,
+    outlineDay,
+    dayIndex,
+    totalDays,
+    legs,
+    stopRefs,
+    startName,
+    useModel = true,
+    feedback = [],
+    repairBudget = null,
+  }) {
     const buildFallback = () => {
       const day = fallbackDay({
         form,
@@ -1238,38 +1299,173 @@ export function useTravelStore() {
     }
     // 大纲阶段模型已经失败时不再逐日重试：网页模型每次都要等满超时，代价太高。
     if (!useModel) return buildFallback()
-    try {
-      const { system, prompt } = buildDayPrompt({
-        form,
-        facts,
-        outlineDay,
-        dayIndex,
-        totalDays,
-        legs,
-        startName,
-      })
-      const { raw } = await completeJsonLlm({
-        prompt,
-        system,
-        temperature: 0.3,
-        maxTokens: 8192,
-      })
-      const day = normalizeDay(raw, {
-        form,
-        facts,
-        outlineDay,
-        dayIndex,
-        totalDays,
-        legs,
-        stopRefs,
-        startName,
-      })
-      day.source = 'ai'
-      return day
-    } catch (error) {
-      console.warn('[travel] 模型当天安排未通过校验，已改用确定性编排：', error?.message || error)
-      return buildFallback()
+    let problems = Array.isArray(feedback) ? feedback.filter(Boolean) : []
+    const askedToRepair = problems.length > 0
+    let previous = ''
+    let lastError = null
+    for (let attempt = 0; attempt <= DAY_REPAIR_ATTEMPTS; attempt += 1) {
+      if (attempt > 0) {
+        // 整改次数有上限：修不动就让确定性编排接手，别让这一趟生成卡在重试里。
+        if (repairBudget && repairBudget.left <= 0) break
+        if (repairBudget) repairBudget.left -= 1
+      }
+      try {
+        const { system, prompt } = buildDayPrompt({
+          form,
+          facts,
+          outlineDay,
+          dayIndex,
+          totalDays,
+          legs,
+          startName,
+          feedback: problems.length ? { problems, previous } : null,
+        })
+        const { raw } = await completeJsonLlm({
+          prompt,
+          system,
+          temperature: problems.length ? 0.15 : 0.3,
+          maxTokens: 8192,
+        })
+        const day = normalizeDay(raw, {
+          form,
+          facts,
+          outlineDay,
+          dayIndex,
+          totalDays,
+          legs,
+          stopRefs,
+          startName,
+        })
+        day.source = 'ai'
+        if (attempt > 0 || askedToRepair) day.repaired = true
+        return day
+      } catch (error) {
+        lastError = error
+        if (isModelUnavailable(error)) break
+        problems = problemsFromError(error)
+        previous = previousFromError(error) || previous
+      }
     }
+    console.warn('[travel] 模型当天安排没能通过校验，已改用确定性编排：', lastError?.message || lastError)
+    const day = buildFallback()
+    day.repairNote = lastError?.message || ''
+    return day
+  }
+
+  const DAY_PROBLEM_PREFIX = /^第\s*(\d+)\s*天[：:]\s*([\s\S]+)$/
+  const BUDGET_PROBLEM_PREFIX = /^预算[：:]/
+
+  function groupProblemsByDay(problems, dayCount) {
+    const byDay = new Map()
+    const others = []
+    ;(problems || []).forEach((item) => {
+      const match = DAY_PROBLEM_PREFIX.exec(String(item || ''))
+      const index = match ? Number(match[1]) - 1 : -1
+      if (index >= 0 && index < dayCount) {
+        if (!byDay.has(index)) byDay.set(index, [])
+        byDay.get(index).push(match[2])
+        return
+      }
+      // 预算由程序算，不是模型能改的；其余「整天数/总日期」类问题单日整改也解不掉。
+      if (!BUDGET_PROBLEM_PREFIX.test(String(item || ''))) others.push(item)
+    })
+    return { byDay, others }
+  }
+
+  /**
+   * 整份计划复核没过时：把问题按天分组交回模型整改（软件只挑问题、复核结果），
+   * 模型改不动的那几天才用确定性编排补齐，而不是一有问题就把整份方案作废重排。
+   */
+  async function repairPlanByValidation({
+    form,
+    facts,
+    outline,
+    days,
+    routeInfo,
+    totalDays,
+    provider,
+    checkOptions,
+    dayCount,
+    problems,
+    repairBudget,
+  }) {
+    const assemble = (dayList) =>
+      assemblePlan({
+        form,
+        facts,
+        outline,
+        days: dayList,
+        provider,
+        routeWeather: routeInfo.weatherMeta,
+      })
+    const rebuildFallbackDay = (index) => {
+      const info = routeInfo[index] || {}
+      const day = fallbackDay({
+        form,
+        facts,
+        outlineDay: outline.days[index],
+        dayIndex: index,
+        totalDays,
+        legs: info.legs || [],
+        stopRefs: info.stopRefs || [],
+        startName: info.startName,
+      })
+      day.source = 'fallback'
+      return day
+    }
+
+    const { byDay, others } = groupProblemsByDay(problems, dayCount)
+    const next = [...days]
+    let repaired = 0
+    const targets = [...byDay.keys()].filter((index) => days[index]?.source !== 'fallback')
+    // 有「非单日」的问题时，单日整改解不掉，直接按确定性编排重建整份。
+    if (!others.length && targets.length) {
+      await runWithConcurrency(targets, 2, async (index) => {
+        if (repairBudget && repairBudget.left <= 0) return
+        if (repairBudget) repairBudget.left -= 1
+        const info = routeInfo[index] || {}
+        const day = await createDay({
+          form,
+          facts,
+          outlineDay: outline.days[index],
+          dayIndex: index,
+          totalDays,
+          legs: info.legs || [],
+          stopRefs: info.stopRefs || [],
+          startName: info.startName,
+          feedback: byDay.get(index),
+          repairBudget,
+        })
+        next[index] = day
+        if (day?.source === 'ai') repaired += 1
+      })
+    }
+
+    let plan = assemble(next)
+    let report = validatePlan(plan, checkOptions)
+    if (report.ok) return { plan, days: next, report, repaired, replaced: 0 }
+
+    // 还有偏差：只把仍有问题的那几天换回确定性编排，其余天保留模型的结果。
+    const stillBad = new Set()
+    let rebuildAll = false
+    report.problems.forEach((item) => {
+      const match = DAY_PROBLEM_PREFIX.exec(String(item || ''))
+      if (!match) {
+        if (!BUDGET_PROBLEM_PREFIX.test(String(item || ''))) rebuildAll = true
+        return
+      }
+      const index = Number(match[1]) - 1
+      if (index >= 0 && index < next.length) stillBad.add(index)
+    })
+    const replaceTargets = rebuildAll ? next.map((_, index) => index) : [...stillBad]
+    if (!replaceTargets.length) return { plan, days: next, report, repaired, replaced: 0 }
+    const finalDays = [...next]
+    replaceTargets.forEach((index) => {
+      finalDays[index] = rebuildFallbackDay(index)
+    })
+    plan = assemble(finalDays)
+    report = validatePlan(plan, checkOptions)
+    return { plan, days: finalDays, report, repaired, replaced: replaceTargets.length }
   }
 
   async function generateTrip(form, options = {}) {
@@ -1320,6 +1516,8 @@ export function useTravelStore() {
       })
       if (token !== state.generationToken) return null
       setStage('days', '正在细化每天的游览节奏与用餐…', 58, modelWaitHint())
+      // 一整趟生成共用一个整改预算：够修掉常见的几处偏差，又不会把等待拖成无限重试。
+      const repairBudget = { left: REPAIR_BUDGET_PER_RUN }
       const days = await runWithConcurrency(
         outlineResult.outline.days,
         2,
@@ -1335,6 +1533,7 @@ export function useTravelStore() {
             stopRefs: info.stopRefs,
             startName: info.startName,
             useModel: !outlineResult.usedFallback,
+            repairBudget,
           })
         },
       )
@@ -1367,48 +1566,43 @@ export function useTravelStore() {
           : Number(form.radiusKm) || 20,
         expectedDates: enumerateDates(form.startDate, form.endDate),
       }
-      let advisories = []
-      try {
-        advisories = assertPlanConstraints(plan, constraints)
-      } catch (error) {
-        // 模型方案没通过校验：整份改用确定性编排重建，仍然保证能出计划。
-        console.warn('[travel] 行程未通过约束校验，改用确定性编排重建：', error?.message || error)
-        const rebuiltDays = outlineResult.outline.days.map((outlineDay, index) => {
-          const info = routeInfo[index]
-          const day = fallbackDay({
-            form,
-            facts,
-            outlineDay,
-            dayIndex: index,
-            totalDays,
-            legs: info.legs,
-            stopRefs: info.stopRefs,
-            startName: info.startName,
-          })
-          day.source = 'fallback'
-          return day
-        })
-        plan = assemblePlan({
+      const checkOptions = api.isMock ? { ...constraints, radiusKm: 0 } : constraints
+      let report = validatePlan(plan, checkOptions)
+      if (!report.ok) {
+        // 复核没过先别急着作废整份方案：把问题按天讲回给模型，让它自己修；软件只负责复核。
+        console.warn('[travel] 行程未通过约束校验，先请模型按问题整改：', formatProblems(report.problems, 3))
+        setStage('verify', '校验发现偏差，正在请模型按意见修正…', 86, formatProblems(report.problems, 2))
+        const outcome = await repairPlanByValidation({
           form,
           facts,
           outline: outlineResult.outline,
-          days: rebuiltDays,
-          provider: '确定性编排',
-          routeWeather: routeInfo.weatherMeta,
+          days,
+          routeInfo,
+          totalDays,
+          provider: outlineResult.provider,
+          checkOptions,
+          dayCount: days.length,
+          problems: report.problems,
+          repairBudget,
         })
-        // 确定性编排已经是最后一层兜底：这一步再失败也不该把行程整份丢掉。
-        // 偏差写进提示，让计划照常打开，用户还能在计划页里手改或重新生成。
-        const report = validatePlan(plan, api.isMock ? { ...constraints, radiusKm: 0 } : constraints)
-        advisories = report.advisories || []
-        const leftovers = report.problems || []
-        if (leftovers.length) {
-          console.warn('[travel] 确定性编排仍有偏差：', leftovers.slice(0, 5).join('；'))
+        plan = outcome.plan
+        report = outcome.report
+        if (!api.isMock) {
+          const parts = []
+          if (outcome.repaired > 0) parts.push(`有 ${outcome.repaired} 天已按校验意见让模型重排`)
+          if (outcome.replaced > 0) parts.push(`${outcome.replaced} 天模型仍未改好，已用确定性编排补齐`)
+          if (report.ok) {
+            if (parts.length) state.warning = state.warning ? `${state.warning}；${parts.join('，')}。` : `${parts.join('，')}。`
+          } else {
+            const leftovers = report.problems || []
+            console.warn('[travel] 整改后仍有偏差：', leftovers.slice(0, 5).join('；'))
+            parts.push(`仍有 ${leftovers.length} 项需要留意：${formatProblems(leftovers)}`)
+            const note = parts.join('，')
+            state.warning = state.warning ? `${state.warning}；${note}` : note
+          }
         }
-        const rebuiltNote = leftovers.length
-          ? `模型方案未通过约束校验，已用确定性编排重建；另有 ${leftovers.length} 项需要留意：${formatProblems(leftovers)}`
-          : '模型方案未通过约束校验，已用确定性编排重建。'
-        state.warning = state.warning ? `${state.warning}；${rebuiltNote}` : rebuiltNote
       }
+      const advisories = report.advisories || []
       if (advisories.length) {
         const note = advisories.slice(0, 2).join('；')
         state.warning = state.warning ? `${state.warning}；${note}` : note
@@ -1456,7 +1650,7 @@ export function useTravelStore() {
     return Array.from({ length: 8 }, (_, index) => addDays(first, index * 7))
   }
 
-  function buildWeekendPrompt({ form, facts, dates, seen }) {
+  function buildWeekendPrompt({ form, facts, dates, seen, feedback = null }) {
     const ring = weekendRing(form)
     const seenNames = seen?.names ? [...seen.names].filter(Boolean).slice(0, 24) : []
     // 按距离从远到近列给模型：目的地本来就要选外圈，先看到远处的候选。
@@ -1516,7 +1710,7 @@ ${weather || '（暂无）'}
 - 餐饮优先选 base 附近的小店/农家乐，不要选出发地附近的连锁店。
 - 只使用候选 id；住宿只在需要过夜时填写。`
 
-    return { system: WEEKEND_PROMPT_SYSTEM, prompt: user }
+    return { system: WEEKEND_PROMPT_SYSTEM, prompt: `${user}${buildRepairFeedback(feedback)}` }
   }
 
   // 周末出游应当“出门”：目的地放在半径外圈，而不是家门口。
@@ -1715,6 +1909,47 @@ ${weather || '（暂无）'}
     return normalizeWeekendOutline({ weekends: [] }, { form, facts, dates, seen })
   }
 
+  // 班次大纲同样先问模型：解析不出来就把报错原文讲回去让它重排一次，再不行才用确定性班次表。
+  async function createWeekendOutline({ form, facts, dates, seen }) {
+    let problems = []
+    let previous = ''
+    let lastError = null
+    for (let attempt = 0; attempt <= OUTLINE_REPAIR_ATTEMPTS; attempt += 1) {
+      try {
+        const { system, prompt } = buildWeekendPrompt({
+          form,
+          facts,
+          dates,
+          seen,
+          feedback: problems.length ? { problems, previous } : null,
+        })
+        const { raw } = await completeJsonLlm({
+          prompt,
+          system,
+          temperature: problems.length ? 0.3 : 0.5,
+          maxTokens: 8192,
+        })
+        return {
+          items: normalizeWeekendOutline(raw, { form, facts, dates, seen }),
+          usedFallback: false,
+          error: null,
+          repaired: attempt > 0,
+        }
+      } catch (error) {
+        lastError = error
+        if (isModelUnavailable(error)) break
+        problems = problemsFromError(error)
+        previous = previousFromError(error) || previous
+      }
+    }
+    return {
+      items: fallbackWeekendOutline({ form, facts, dates, seen }),
+      usedFallback: true,
+      error: lastError,
+      repaired: false,
+    }
+  }
+
   function weekendOutlineDays(item, map, oneDay = false) {
     const base = map.get(item.basePoiId)
     const stops1 = uniqueBy(
@@ -1764,7 +1999,7 @@ ${weather || '（暂无）'}
     ]
   }
 
-  async function buildWeekendPlan({ form, facts, item, outline, map, seriesId, index, useModel = true }) {
+  async function buildWeekendPlan({ form, facts, item, outline, map, seriesId, index, useModel = true, repairBudget = null }) {
     const oneDay = form.startDate === form.endDate
     const weekendForm = {
       ...form,
@@ -1801,6 +2036,7 @@ ${weather || '（暂无）'}
             legs: info.legs,
             stopRefs: info.stopRefs,
             startName: info.startName,
+            repairBudget,
           }),
         )
       } else {
@@ -1819,35 +2055,61 @@ ${weather || '（暂无）'}
       }
     }
     const baseName = item.basePoiId ? map.get(item.basePoiId)?.name : ''
-    const plan = assemblePlan({
-      form: weekendForm,
-      facts,
-      outline: {
-        ...outline,
-        title: `${baseName || item.theme} · ${oneDay ? '周末一日' : '周末两日'}`,
-        subtitle: item.theme + (item.note ? ` · ${item.note}` : ''),
-      },
-      days,
-      provider: detailed ? '模型 + 确定性' : '班次表',
-      detailLevel: detailed ? 'full' : 'draft',
-      seriesId,
-      weekendStart: item.date,
-      routeWeather: routeInfo.weatherMeta,
-    })
-    plan.id = `wk_${seriesId}_${item.date.replaceAll('-', '')}`
-    plan.kind = 'weekend'
-    plan.locked = false
-    plan.weekend = {
-      basePoiId: item.basePoiId,
-      theme: item.theme,
-      note: item.note,
-      index,
+    const outlineWithTitle = {
+      ...outline,
+      title: `${baseName || item.theme} · ${oneDay ? '周末一日' : '周末两日'}`,
+      subtitle: item.theme + (item.note ? ` · ${item.note}` : ''),
     }
-    assertPlanConstraints(plan, {
+    const providerLabel = detailed ? '模型 + 确定性' : '班次表'
+    const assembleWeekend = (dayList) =>
+      assemblePlan({
+        form: weekendForm,
+        facts,
+        outline: outlineWithTitle,
+        days: dayList,
+        provider: providerLabel,
+        detailLevel: detailed ? 'full' : 'draft',
+        seriesId,
+        weekendStart: item.date,
+        routeWeather: routeInfo.weatherMeta,
+      })
+    const stampWeekend = (target) => {
+      target.id = `wk_${seriesId}_${item.date.replaceAll('-', '')}`
+      target.kind = 'weekend'
+      target.locked = false
+      target.weekend = {
+        basePoiId: item.basePoiId,
+        theme: item.theme,
+        note: item.note,
+        index,
+      }
+      return target
+    }
+    const checkOptions = {
       center: facts.destination,
       radiusKm: Number(weekendForm.radiusKm) || 20,
       expectedDates: oneDay ? [item.date] : [item.date, addDays(item.date, 1)],
-    })
+    }
+    let plan = stampWeekend(assembleWeekend(days))
+    const report = validatePlan(plan, api.isMock ? { ...checkOptions, radiusKm: 0 } : checkOptions)
+    if (!report.ok) {
+      // 和长线一样：先把偏差讲回模型让它重排，模型改不动才按确定性编排补齐这两天。
+      console.warn('[travel] 周末计划未通过校验，先请模型按问题整改：', formatProblems(report.problems, 3))
+      const outcome = await repairPlanByValidation({
+        form: weekendForm,
+        facts,
+        outline,
+        days,
+        routeInfo,
+        totalDays,
+        provider: providerLabel,
+        checkOptions: api.isMock ? { ...checkOptions, radiusKm: 0 } : checkOptions,
+        dayCount: days.length,
+        problems: report.problems,
+        repairBudget,
+      })
+      plan = stampWeekend(outcome.plan)
+    }
     return plan
   }
 
@@ -1898,21 +2160,17 @@ ${weather || '（暂无）'}
       setStage('outline', '正在把周边地点排成 8 个周末班次…', 30, modelWaitHint())
       // 之前排过的目的地：先算出来，模型和确定性编排都按它避让。
       const seen = weekendSeen(form.origin)
-      let outlineItems
-      let usedFallback = false
-      let modelError = null
-      try {
-        const { system, prompt } = buildWeekendPrompt({ form: baseForm, facts, dates, seen })
-        const { raw } = await completeJsonLlm({ prompt, system, temperature: 0.5, maxTokens: 8192 })
-        outlineItems = normalizeWeekendOutline(raw, { form: baseForm, facts, dates, seen })
-      } catch (error) {
-        outlineItems = fallbackWeekendOutline({ form: baseForm, facts, dates, seen })
-        usedFallback = true
-        modelError = error
+      const outlineResult = await createWeekendOutline({ form: baseForm, facts, dates, seen })
+      const outlineItems = outlineResult.items
+      const usedFallback = outlineResult.usedFallback
+      const modelError = outlineResult.error
+      if (usedFallback && !api.isMock) {
+        console.warn('[travel] 周末班次大纲没能通过模型，已用确定性班次表：', modelError?.message || modelError)
       }
       const map = poiMap(facts)
       const seriesId = uid('wks')
       const plans = []
+      const repairBudget = { left: REPAIR_BUDGET_PER_RUN }
       for (let index = 0; index < outlineItems.length; index += 1) {
         if (token !== state.generationToken) return []
         const item = outlineItems[index]
@@ -1937,6 +2195,7 @@ ${weather || '（暂无）'}
           seriesId,
           index,
           useModel: !usedFallback,
+          repairBudget,
         })
         const saved = await api.savePlan(plan)
         plans.push(saved)
@@ -1959,7 +2218,7 @@ ${weather || '（暂无）'}
       }
       if (usedFallback && !api.isMock) {
         const reason = modelError ? friendlyError(modelError) : '模型没有返回可解析的班次'
-        state.warning = `模型这次没有返回可用的班次 JSON，已用确定性方案兜底：${reason}；可在班次表里逐个细化。`
+        state.warning = `模型这次没有给出可用的班次（已把问题讲回去让它重排），已用确定性方案兜底：${reason}；可在班次表里逐个细化。`
       }
       // 去过的地方快用完了：如实说明本次有复用，而不是悄悄重复。
       const reusedCount = plans.filter((plan) => {
@@ -2126,37 +2385,70 @@ ${weather || '（暂无）'}
           }),
         )
       }
-      const rebuilt = assemblePlan({
-        form,
-        facts,
-        outline,
-        days: refinedDays,
-        provider: '模型 + 确定性',
-        detailLevel: 'full',
-        seriesId: plan.seriesId,
-        weekendStart: plan.weekendStart,
-        routeWeather: routeInfo.weatherMeta,
-      })
-      rebuilt.id = plan.id
-      rebuilt.createdAt = plan.createdAt
-      rebuilt.locked = plan.locked
-      rebuilt.adoptedAt = plan.adoptedAt || ''
-      rebuilt.weekend = plan.weekend
-      assertPlanConstraints(rebuilt, {
+      const assembleRefined = (dayList) =>
+        assemblePlan({
+          form,
+          facts,
+          outline,
+          days: dayList,
+          provider: '模型 + 确定性',
+          detailLevel: 'full',
+          seriesId: plan.seriesId,
+          weekendStart: plan.weekendStart,
+          routeWeather: routeInfo.weatherMeta,
+        })
+      const stampRebuilt = (target) => {
+        target.id = plan.id
+        target.createdAt = plan.createdAt
+        target.locked = plan.locked
+        target.adoptedAt = plan.adoptedAt || ''
+        target.weekend = plan.weekend
+        return target
+      }
+      const checkOptions = {
         center: facts.destination,
         radiusKm: Number(form.radiusKm) || 20,
         expectedDates: days.map((day) => day.date),
-      })
+      }
+      const normalizedCheck = api.isMock ? { ...checkOptions, radiusKm: 0 } : checkOptions
+      let rebuilt = stampRebuilt(assembleRefined(refinedDays))
+      let report = validatePlan(rebuilt, normalizedCheck)
+      let repairedDays = 0
+      if (!report.ok) {
+        // 细化同样先问模型：把偏差讲回去让它重排，改不动才按确定性编排补齐。
+        const outcome = await repairPlanByValidation({
+          form,
+          facts,
+          outline,
+          days: refinedDays,
+          routeInfo,
+          totalDays: outline.days.length,
+          provider: '模型 + 确定性',
+          checkOptions: normalizedCheck,
+          dayCount: refinedDays.length,
+          problems: report.problems,
+          repairBudget: { left: REPAIR_BUDGET_PER_RUN },
+        })
+        rebuilt = stampRebuilt(outcome.plan)
+        report = outcome.report
+        repairedDays = outcome.repaired
+      }
+      if (!report.ok) {
+        const note = `细化后仍有偏差：${formatProblems(report.problems)}`
+        state.warning = state.warning ? `${state.warning}；${note}` : note
+      }
       const saved = await api.savePlan(rebuilt)
       state.weekend.plans = state.weekend.plans.map((item) =>
         item.id === planId ? saved : item,
       )
       state.plan = saved
       await refreshPlans()
-      const aiDays = refinedDays.filter((day) => day.source === 'ai').length
+      const aiDays = (rebuilt.days || refinedDays).filter((day) => day.source === 'ai').length
       showToast(
         aiDays > 0
-          ? '这个周末已细化完成'
+          ? repairedDays > 0
+            ? `这个周末已细化完成，其中 ${repairedDays} 天按校验意见重排过`
+            : '这个周末已细化完成'
           : 'AI 细化未通过校验，已保留确定性编排',
         aiDays > 0 ? 'success' : 'info',
         3200,

@@ -342,6 +342,8 @@ export function createDemoPlan(overrides = {}) {
       facts,
       outlineDay,
       dayIndex: index,
+      // 不传 totalDays 会被当成单日行程：第一天排不出「入住」块，酒店预约也随之丢失。
+      totalDays: outline.days.length,
       legs,
       stopRefs,
       startName: index === 0 ? facts.origin.name : map.get(outline.days[index - 1].hotelId)?.name,

@@ -131,7 +131,7 @@
         <p v-if="commandFeedback" class="tr-explore-command-feedback">{{ commandFeedback }}</p>
 
         <template v-if="candidates.length">
-          <div class="tr-explore-toolbar">
+          <div v-hscroll class="tr-explore-toolbar" aria-label="候选分类">
             <div class="tr-explore-cats">
               <button
                 type="button"
@@ -368,6 +368,7 @@
 import { computed, reactive, ref } from 'vue'
 import TravelIcon from './TravelIcon.vue'
 import { categoryMeta, exploreStats, EXPLORE_CATEGORIES } from './travelExplore.js'
+import { vHscroll } from './travelScrollAssist.js'
 import './explore.css'
 
 const props = defineProps({

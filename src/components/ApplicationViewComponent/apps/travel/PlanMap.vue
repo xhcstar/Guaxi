@@ -1,7 +1,7 @@
 <template>
   <div class="tr-map-wrap">
     <div class="tr-map-toolbar">
-      <div class="tr-map-days">
+      <div v-hscroll class="tr-map-days" aria-label="按天查看路线">
         <button type="button" :class="{ active: activeDay === 'all' }" @click="setDay('all')">全部</button>
         <button
           v-for="(day, index) in plan.days || []"
@@ -46,6 +46,7 @@ import 'leaflet/dist/leaflet.css'
 import TravelIcon from './TravelIcon.vue'
 import { escapeHtml, bd09ToGcj02, bd09ToWgs84, wgs84ToGcj02 } from './travelUtils.js'
 import { mapSourceLabel } from './travelShare.js'
+import { vHscroll } from './travelScrollAssist.js'
 
 const props = defineProps({
   plan: { type: Object, required: true },

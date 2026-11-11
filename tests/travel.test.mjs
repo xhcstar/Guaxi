@@ -871,3 +871,128 @@ test('候选池：默认不自动勾选，基地增量检索且切换不重搜',
   assert.match(board, /tr-explore-command/)
   assert.match(board, /switch-base/)
 })
+
+// ── 横向卡片条滚动与模型整改回路 ──────────────────────────
+
+test('横向卡片条：竖向滚轮转横向，到头交还页面', async () => {
+  const { resolveWheelScroll } = await load(path.join(travelDir, 'travelScrollAssist.js'))
+  const base = { scrollWidth: 1000, clientWidth: 400 }
+  // 竖向滚轮在可滚区间内被接管，并换算成横向位移。
+  const mid = resolveWheelScroll({ ...base, deltaY: 120, scrollLeft: 0 })
+  assert.equal(mid.handled, true)
+  assert.equal(mid.next, 120)
+  // 滚到头（差值小于 1px）就不再拦，页面继续上下滚。
+  const atEnd = resolveWheelScroll({ ...base, deltaY: 120, scrollLeft: 600 })
+  assert.equal(atEnd.handled, false)
+  const atStart = resolveWheelScroll({ ...base, deltaY: -120, scrollLeft: 0 })
+  assert.equal(atStart.handled, false)
+  // 触控板横向手势、Ctrl+滚轮（缩放）、装不下的条都交回浏览器。
+  assert.equal(resolveWheelScroll({ ...base, deltaX: 200, deltaY: 10, scrollLeft: 100 }).handled, false)
+  assert.equal(resolveWheelScroll({ ...base, deltaY: 120, ctrlKey: true, scrollLeft: 100 }).handled, false)
+  assert.equal(
+    resolveWheelScroll({ scrollWidth: 400, clientWidth: 400, deltaY: 120, scrollLeft: 0 }).handled,
+    false,
+  )
+  // 行模式的 delta 按行数放大，且不会越界。
+  const rows = resolveWheelScroll({ ...base, deltaY: 3, deltaMode: 1, scrollLeft: 500 })
+  assert.equal(rows.handled, true)
+  assert.equal(rows.next, 554)
+})
+
+test('横向卡片条：五个卡片条都接上了 v-hscroll 指令', () => {
+  const assist = read(path.join(travelDir, 'travelScrollAssist.js'))
+  assert.match(assist, /addEventListener\('wheel', handleWheel, \{ passive: false \}\)/)
+  assert.match(assist, /addEventListener\('keydown', handleKeydown\)/)
+  const wired = [
+    ['PlanWorkspace.vue', ['tr-weather-strip', 'tr-route-weather-track', 'tr-day-switcher']],
+    ['PlanMap.vue', ['tr-map-days']],
+    ['ExploreBoard.vue', ['tr-explore-toolbar']],
+    ['WeekendBoard.vue', ['tr-board-list']],
+    ['PrepPanel.vue', ['tr-mini-weather']],
+  ]
+  for (const [file, classes] of wired) {
+    const content = read(path.join(travelDir, file))
+    for (const cls of classes) {
+      assert.match(
+        content,
+        new RegExp(`v-hscroll[^>]*class="${cls}"|class="${cls}"[^>]*v-hscroll`),
+        `${file} 的 ${cls} 应带 v-hscroll`,
+      )
+      assert.match(content, /import \{ vHscroll \} from '\.\/travelScrollAssist\.js'/, `${file} 应导入 vHscroll`)
+    }
+  }
+})
+
+test('模型整改：校验失败会把问题清单和上一版输出讲回给模型', async () => {
+  const { buildRepairFeedback } = await load(path.join(travelDir, 'travelPrompt.js'))
+  // 没有反馈时是普通请求，feedback=null 也不能炸。
+  assert.equal(buildRepairFeedback(null), '')
+  assert.equal(buildRepairFeedback({}), '')
+  const text = buildRepairFeedback({
+    problems: ['第 2 天：断桥残雪 距离市中心 45 km，超出半径 20 km', '', '时间倒挂：19:00 的块早于 14:00'],
+    previous: '{"days":[]}',
+  })
+  assert.match(text, /【校验未通过，逐条改正】/)
+  // 空条目会被过滤掉后重新编号，问题清单保持紧凑。
+  assert.match(text, /1\. 第 2 天：断桥残雪/)
+  assert.match(text, /2\. 时间倒挂/)
+  assert.doesNotMatch(text, /3\. /)
+  assert.match(text, /【上一次的输出】/)
+})
+
+test('模型整改：normalizeDay 校验失败带出 problems 和上一版输出', () => {
+  const form = {
+    startDate: '2026-11-14',
+    endDate: '2026-11-15',
+    startTime: '08:30',
+    endTime: '12:00',
+    transport: 'driving',
+    budgetLevel: 'comfort',
+    radiusKm: 20,
+    adults: 2,
+    children: 0,
+    elders: 0,
+    interests: [],
+    pace: 'balanced',
+  }
+  const facts = {
+    weather: [],
+    origin: { name: '上海市徐汇区徐家汇', lng: 121.44, lat: 31.19 },
+    destination: { name: '杭州西湖风景名胜区', lng: 120.15, lat: 30.27 },
+    attractions: [
+      // 离西湖约 70 km：模型挑了超出半径的景点，校验应当拦下并给出可整改的问题。
+      { id: 'poi-far', name: '幻影景点', lng: 120.9, lat: 30.3, rating: 4.5, category: '景区' },
+    ],
+    food: [],
+    hotels: [],
+    notes: [],
+  }
+  const outlineDay = { date: form.startDate, weekday: '周六', theme: '示例', area: '', stops: [] }
+  const badDay = {
+    day: '2026-11-14',
+    theme: '示例',
+    blocks: [
+      { start: '09:00', end: '10:30', kind: 'sight', poiId: 'poi-far', title: '幻影景点' },
+    ],
+  }
+  assert.throws(
+    () =>
+      normalizeDay(badDay, {
+        form,
+        facts,
+        outlineDay,
+        dayIndex: 0,
+        totalDays: 1,
+        legs: [],
+        stopRefs: [],
+        startName: '上海',
+      }),
+    (error) => {
+      assert.equal(error.code, 'day-validation')
+      assert.ok(Array.isArray(error.problems) && error.problems.length > 0)
+      assert.ok(error.problems.some((item) => /超出 20 km 范围/.test(String(item))))
+      assert.ok(error.previous)
+      return true
+    },
+  )
+})

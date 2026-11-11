@@ -165,7 +165,7 @@
     </nav>
 
     <div v-if="activeTab === 'itinerary'" class="tr-tab-panel">
-      <div v-if="plan.weather?.length" class="tr-weather-strip">
+      <div v-if="plan.weather?.length" v-hscroll class="tr-weather-strip" aria-label="每日天气">
         <div v-for="item in plan.weather" :key="item.date" class="tr-weather-day">
           <span class="tr-weather-date">{{ shortDate(item.date) }}</span>
           <TravelIcon :name="weatherIcon(item)" :size="22" />
@@ -186,7 +186,7 @@
             {{ routeWeatherPoints.length }} 个采样点 · {{ routeWeatherAvailable }} 有预报
           </small>
         </div>
-        <div class="tr-route-weather-track">
+        <div v-hscroll class="tr-route-weather-track" aria-label="沿途天气采样点">
           <div
             v-for="(point, index) in routeWeatherPoints"
             :key="`${point.date}-${point.time}-${index}`"
@@ -212,7 +212,7 @@
         </p>
       </div>
 
-      <div class="tr-day-switcher">
+      <div v-hscroll class="tr-day-switcher" aria-label="按天查看行程">
         <button
           v-for="(day, index) in days"
           :key="day.date"
@@ -282,6 +282,7 @@ import PlanMap from './PlanMap.vue'
 import BudgetPanel from './BudgetPanel.vue'
 import PrepPanel from './PrepPanel.vue'
 import SharePanel from './SharePanel.vue'
+import { vHscroll } from './travelScrollAssist.js'
 import { cityCode, mapSourceLabel, peopleCount, ticketCities, transportLabel } from './travelShare.js'
 import { durationText, money, shortDate, timeAgo, weekdayCn } from './travelUtils.js'
 

@@ -1,5 +1,6 @@
 // 模型编排：只负责“去哪、什么顺序、怎么讲”，地点与路线必须来自事实包。
-// 这里同时提供确定性兜底，模型不可用/输出不合法时仍能生成可执行的行程。
+// 校验不过时软件不自己改方案，而是把「哪一条不通过」讲回给模型让它重排；
+// 这里提供那段反馈文本，以及最后仍然不通时的确定性兜底。
 
 import {
   addMinutes,
@@ -89,7 +90,25 @@ function travelersText(form) {
   return parts.join('、')
 }
 
-export function buildOutlinePrompt({ form, facts }) {
+/**
+ * 校验反馈段：把「上一版哪里不通过」原样回传给模型。
+ * 软件保持只做校验和提问，怎么改由模型决定；previous 只作对照，截断后附上避免撑爆上下文。
+ */
+export function buildRepairFeedback(feedback) {
+  const { problems = [], previous = '' } = feedback || {}
+  const items = (Array.isArray(problems) ? problems : [])
+    .map((item) => String(item || '').trim())
+    .filter(Boolean)
+  if (!items.length) return ''
+  const list = items.map((item, index) => `${index + 1}. ${item}`).join('\n')
+  const raw = String(previous || '')
+  const previousBlock = raw
+    ? `\n\n【上一次的输出】（只用来对照问题，不要照抄）\n${raw.length > 2600 ? `${raw.slice(0, 2600)}…` : raw}`
+    : ''
+  return `\n\n【校验未通过，逐条改正】\n${list}${previousBlock}\n\n请针对上面每一条重新安排，输出完整的 JSON（结构与上面的示例完全一致）。只输出 JSON，不要解释、不要 markdown。`
+}
+
+export function buildOutlinePrompt({ form, facts, feedback = null }) {
   const dates = enumerateDates(form.startDate, form.endDate)
   const attractions = (facts.attractions || []).map(compactPoi)
   const food = (facts.food || []).map(compactPoi)
@@ -141,7 +160,7 @@ ${weather.join('\n') || '（暂无预报，按季节常识提示）'}
 - 结合季节与天气安排：雨天减少户外、夏季避开正午暴晒、冬季缩短户外时间，山区早晚加衣。
 - 只使用上面出现的 id；没有合适的就留空并说明。`
 
-  return { system: SYSTEM_PROMPT, prompt: user }
+  return { system: SYSTEM_PROMPT, prompt: `${user}${buildRepairFeedback(feedback)}` }
 }
 
 export function normalizeOutline(raw, { form, facts }) {
@@ -351,7 +370,7 @@ ${along
   .join('\n')}`
 }
 
-export function buildDayPrompt({ form, facts, outlineDay, dayIndex, totalDays, legs, startName }) {
+export function buildDayPrompt({ form, facts, outlineDay, dayIndex, totalDays, legs, startName, feedback = null }) {
   const map = poiMap(facts)
   const stopLines = (outlineDay.stops || [])
     .map((item, index) => {
@@ -421,7 +440,7 @@ ${hotelExample}]}
 - 当天往返和最后一天不要安排住宿；需要过夜的那几天必须安排住宿。
 - 不写预算金额；tips 写排队、预约、停车、穿衣、点菜等真正有用的信息。`
 
-  return { system: SYSTEM_PROMPT, prompt: user }
+  return { system: SYSTEM_PROMPT, prompt: `${user}${buildRepairFeedback(feedback)}` }
 }
 
 const KIND_ALIAS = {
@@ -766,7 +785,12 @@ export function normalizeDay(raw, { form, facts, outlineDay, dayIndex, totalDays
     },
   )
   if (problems.length) {
-    throw new Error(`模型当天安排未通过校验：${problems[0]}`)
+    const error = new Error(`模型当天安排未通过校验：${problems[0]}`)
+    // 校验条目原样带出去：调用方要把它们讲回给模型整改，而不是立刻换成确定性编排。
+    error.code = 'day-validation'
+    error.problems = problems
+    error.previous = raw
+    throw error
   }
   return {
     date: outlineDay.date,

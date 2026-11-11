@@ -862,6 +862,42 @@
   background-clip: content-box;
 }
 
+/* ── 横向卡片条 ───────────────────────────────────────────────
+   v-hscroll 会给这些条补上滚轮与方向键；这里只负责“看得出还能滚”：
+   滚动条压扁一点、悬浮时加深，聚焦时给一圈焦点环。 */
+[data-hscroll] {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(28, 42, 39, 0.2) transparent;
+  scroll-padding-inline: 2px;
+  overscroll-behavior-x: contain;
+}
+
+[data-hscroll]:focus {
+  outline: none;
+}
+
+[data-hscroll]:focus-visible {
+  outline: 2px solid var(--tr-accent);
+  outline-offset: 3px;
+  border-radius: 10px;
+}
+
+[data-hscroll]::-webkit-scrollbar {
+  height: 7px;
+}
+
+[data-hscroll]::-webkit-scrollbar-thumb {
+  background: rgba(28, 42, 39, 0.16);
+  border-radius: 10px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+[data-hscroll]:hover::-webkit-scrollbar-thumb {
+  background: rgba(28, 42, 39, 0.3);
+  background-clip: content-box;
+}
+
 /* ── 首页 ─────────────────────────────────────────────────── */
 
 .tr-home {

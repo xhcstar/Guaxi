@@ -72,7 +72,7 @@
         <h3><TravelIcon name="cloud" :size="16" /> 天气与穿衣</h3>
         <p v-if="plan.season?.label" class="tr-prep-season">季节：{{ plan.season.label }}</p>
         <p class="tr-prep-lead">{{ weatherAdvice }}</p>
-        <div v-if="plan.weather?.length" class="tr-mini-weather">
+        <div v-if="plan.weather?.length" v-hscroll class="tr-mini-weather" aria-label="每日天气">
           <div v-for="item in plan.weather" :key="item.date">
             <span>{{ shortDate(item.date) }}</span>
             <strong>{{ item.dayWeather }}</strong>
@@ -101,6 +101,7 @@
 import { computed } from 'vue'
 import TravelIcon from './TravelIcon.vue'
 import { friendlyDate, shortDate, timeAgo } from './travelUtils.js'
+import { vHscroll } from './travelScrollAssist.js'
 
 const props = defineProps({
   plan: { type: Object, required: true },

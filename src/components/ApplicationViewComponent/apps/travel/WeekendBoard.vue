@@ -49,7 +49,7 @@
       <small>最近一个周末会自动细化到时间表；后面的周末先给方向和预订提醒。</small>
     </div>
 
-    <div v-else class="tr-board-list">
+    <div v-else v-hscroll class="tr-board-list" aria-label="周末班次表">
       <div class="tr-board-list-head">
         <span>周末</span>
         <span>目的地 / 主题</span>
@@ -133,6 +133,7 @@
 <script setup>
 import TravelIcon from './TravelIcon.vue'
 import { money, parseDate, shortDate, weekdayCn } from './travelUtils.js'
+import { vHscroll } from './travelScrollAssist.js'
 
 const props = defineProps({
   plans: { type: Array, default: () => [] },
