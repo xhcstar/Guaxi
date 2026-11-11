@@ -852,7 +852,9 @@ pub struct PreviewImageConfig {
 }
 
 fn default_preview_image_max_width() -> u16 {
-    860
+    // 与前端 DEFAULT_PREVIEW_IMAGE_OPTIONS.max_width 保持一致。
+    // 预览正文占满整行，图片若停在 860 会显得「图比字小一号」，默认值按常见屏宽给到 1400。
+    1400
 }
 
 fn default_preview_image_radius() -> u8 {
@@ -1614,7 +1616,7 @@ pub fn set_preview_image_config(preview_image_config: PreviewImageConfig) -> Pre
 /// 单图宽度上限的可调区间。低于 320 会让流程图/表格截图不可读，
 /// 高于 1400 在 1080p 屏上必然横向滚动。
 const PREVIEW_IMAGE_MAX_WIDTH_MIN: u16 = 320;
-const PREVIEW_IMAGE_MAX_WIDTH_MAX: u16 = 1400;
+const PREVIEW_IMAGE_MAX_WIDTH_MAX: u16 = 1800;
 /// 圆角上限：再大就不像圆角卡片，而像被裁掉一角的图。
 const PREVIEW_IMAGE_RADIUS_MAX: u8 = 28;
 

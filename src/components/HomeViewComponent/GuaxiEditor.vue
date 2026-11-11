@@ -23544,12 +23544,19 @@ const renderMarkdownForExportHtml = async (context) => {
   // 1. PDF/HTML 导出复用预览渲染器，不再走 Pandoc 的 Markdown 解析。
   // 2. 这样 Mermaid、MathJax、highlight.js、代码单元输出等最终 DOM 会和软件内预览保持同源。
   // 3. buildPrintHtml 只负责补齐可打印页面外壳、打印 CSS 和 base href，不再参与 Markdown 语义转换。
+  // 4. basePath 必须传：渲染器会拿它调后端的图片预处理，把 ![](相对路径) 解析成可访问的
+  //    本地地址。此前这里只传了 math/mermaid/codeHighlight，后端收不到 base_path，
+  //    相对路径图片一律被判成「文件不存在」，导出稿里全变成「图片不可用」占位块。
+  //    用同步的 getParentDirectoryPath 而不是 await dirname：外壳里的 <base href> 用的是
+  //    同一个函数算出来的目录，两者必须完全一致，否则相对路径会解析到别处。
+  const exportBasePath = getParentDirectoryPath(context?.inputPath)
   const rawBodyHtml = await renderPreviewMarkdown(
     markdown,
     {
       math: true,
       mermaid: true,
       codeHighlight: true,
+      basePath: exportBasePath,
     },
     'export-rendered-html',
   )
@@ -23592,8 +23599,97 @@ const restoreRemoteImageProxyUrls = (html) => {
   )
 }
 
+/**
+ * 把「从 fromDir 到 absPath」的路径写成相对路径（统一用 `/`）。
+ * 返回空字符串表示跨盘符/无法表达相对关系，调用方自己决定兜底。
+ */
+const buildRelativePathForExport = (fromDir, absPath) => {
+  const normalize = (value) => String(value || '').replace(/\\/g, '/').trim()
+  const from = normalize(fromDir).replace(/\/+$/, '')
+  const to = normalize(absPath)
+  if (!from || !to) return ''
+
+  const split = (value) => value.split('/').filter((seg) => seg && seg !== '.')
+  const fromSegs = split(from)
+  const toSegs = split(to)
+  // Windows 盘符（D:/…）与 POSIX 根（/home/…）都按下标 0 当作根节点比较：
+  // 根不同就不可能用相对路径表达，宁可退回绝对地址也不要拼出 ../.. 乱跳的路径。
+  const sameRoot = String(fromSegs[0] || '').toLowerCase() === String(toSegs[0] || '').toLowerCase()
+  if (!sameRoot) return ''
+
+  let i = 0
+  while (i < fromSegs.length && i < toSegs.length && fromSegs[i] === toSegs[i]) i += 1
+  const up = new Array(fromSegs.length - i).fill('..')
+  const down = toSegs.slice(i)
+  const joined = [...up, ...down].join('/')
+  if (!joined) return ''
+  // 同级文件（up 为空）显式写 `./`：否则 `img.png` 会被解析成「相对当前目录」的兄弟，
+  // 在带 <base href> 的页面里虽然等价，但阅读导出稿源码时不容易看出是相对路径。
+  // 需要上跳时不能再补 `./`，`./../x` 虽然浏览器认，但明显是拼接失误的样子。
+  return up.length ? joined : `./${joined}`
+}
+
+/**
+ * 把任意路径串编码成可以直接放进 <img src> 的形式。
+ *
+ * 为什么不用 encodeURI：它**故意**不转义 `#` 与 `?`，而文件名里这两个字符在 URL 里是
+ * 片段分隔符 / 查询串起点——`my#1.png` 会被浏览器当成 `my`，图照样裂。
+ * 这里逐段 encodeURIComponent，再保留 `/` 作为分隔符。
+ */
+const encodePathForUrl = (path) => String(path || '')
+  .split('/')
+  .map((seg) => (
+    // `.` `..` 与 Windows 盘符（`D:`）保持原样：盘符里的冒号一旦被转义成 `D%3A`，
+    // file:/// 地址在部分浏览器里就认不出来（POSIX 路径的根空段也会被原样保留）。
+    seg === '..' || seg === '.' || /^[A-Za-z]:$/.test(seg) ? seg : encodeURIComponent(seg)
+  ))
+  .join('/')
+
+/**
+ * 导出 HTML 时把本地图片的代理地址还原成可离线使用的路径。
+ *
+ * 为什么必须还原：渲染阶段把 `![](./a.png)` 换成了
+ * `http://localhost:8888/markdown/api/images/<编码后的绝对路径>`（后端只对登记过的文件放行）。
+ * 这种地址只在本机、且应用运行时才有效，导出的 HTML 一旦关掉应用就是一堆 404。
+ *
+ * 还原策略：
+ * 1. 能算出相对文档目录的路径就用相对路径（配合 <base href> 生效，导出文件可以随便挪）；
+ * 2. 跨盘符无法表达时退回 file:///绝对地址，至少同一台机器上还能打开。
+ */
+const restoreLocalImageProxyUrls = (html, baseDir) => {
+  const source = String(html || '')
+  if (!source.includes('/markdown/api/images/')) return source
+
+  return source.replace(
+    /http:\/\/localhost:8888\/markdown\/api\/images\/([^"'<>)\s]+)/g,
+    (match, encoded) => {
+      let absPath = ''
+      try {
+        absPath = decodeURIComponent(encoded)
+      } catch {
+        return match
+      }
+      if (!absPath) return match
+
+      const relative = buildRelativePathForExport(baseDir, absPath)
+      if (relative) return encodePathForUrl(relative)
+
+      // 跨盘符 / 无文档目录兜底：file:///D:/x/y.png
+      const posix = absPath.replace(/\\/g, '/').replace(/^\/+/, '')
+      return `file:///${encodePathForUrl(posix)}`
+    },
+  )
+}
+
 const exportMarkdownRenderedHtml = async (context, outputPath) => {
-  const html = restoreRemoteImageProxyUrls(await renderMarkdownForExportHtml(context))
+  // 本地图片同样要还原：渲染器把它们改写成 http://localhost:8888/markdown/api/images/…
+  // （后端只放行登记过的文件），导出稿一旦离开应用、或应用关掉，这些地址全是 404。
+  // 这里按文档所在目录还原成相对路径；<base href> 仍指向该目录，所以相对路径照常解析。
+  const exportDir = getParentDirectoryPath(context?.inputPath)
+  const html = restoreLocalImageProxyUrls(
+    restoreRemoteImageProxyUrls(await renderMarkdownForExportHtml(context)),
+    exportDir,
+  )
   const { writeFile } = await import('@tauri-apps/plugin-fs')
   const bytes = new TextEncoder().encode(html)
 
@@ -30043,8 +30139,13 @@ body.guaxi-tab-dragging * {
   align-items: stretch;
   align-content: flex-start;
   gap: var(--guaxi-media-gap);
+  /* 设计说明：这里不再写死 1000px 上限。
+     正文段落本来就是占满整行的，图片块却缩在中间 1000px 里，右侧几百分的空档会显得
+     「图比字小一号」；改成跟随正文列宽后，图片与文字左右边缘对齐，视觉上才是一体的。
+     单图仍由 --guaxi-figure-max-width 单独限宽（见下方 is-single 规则），
+     所以不会出现单张图被拉到 2000px 宽的情况。 */
   width: 100%;
-  max-width: 1000px;
+  max-width: 100%;
   margin: 22px auto;
   padding: 6px 0;
 }
@@ -30054,6 +30155,10 @@ body.guaxi-tab-dragging * {
   width: 100%;
   max-width: 100%;
   gap: 0;
+  /* 单图的下限要用「容器宽度」而不是「窗口宽度」来夹：分栏预览里窗口很宽、面板很窄，
+     34vw 会大于面板宽度，把图片挤出可视区（外面 overflow-x:hidden 会直接裁掉）。
+     声明成查询容器后，图片上的 min-width 就能用 cqw 拿到本组的实际宽度。 */
+  container-type: inline-size;
 }
 
 .preview .guaxi-media-group.is-gallery {
@@ -30069,8 +30174,9 @@ body.guaxi-tab-dragging * {
      start 会让高度较小的那张图贴在行首，下方留出一块死白，一组图看起来「一高一低」；
      stretch 让每个单元格撑满行高，再由单元格内部的 flex 居中，短图上下留白对称，整组更稳。 */
   align-items: stretch;
-  padding-left: 6px;
-  padding-right: 6px;
+  /* 两侧不再留 6px 内缩：图集要贴着正文左右边缘，才能和段落视觉对齐。 */
+  padding-left: 0;
+  padding-right: 0;
 }
 
 /* 设计说明：
@@ -30118,8 +30224,8 @@ body.guaxi-tab-dragging * {
   flex: 0 1 auto;
   min-width: 0;
   width: 100%;
-  /* 单图宽度上限跟设置走：默认 860px，窄面板时自动收缩到 100%。 */
-  max-width: min(100%, var(--guaxi-figure-max-width, 860px));
+  /* 单图宽度上限跟设置走：默认 1400px，窄面板时自动收缩到 100%。 */
+  max-width: min(100%, var(--guaxi-figure-max-width, 1400px));
   margin-left: auto;
   margin-right: auto;
   padding: 0;
@@ -30149,7 +30255,10 @@ body.guaxi-tab-dragging * {
   display: block;
   width: 100%;
   max-width: 100%;
-  max-height: min(56vh, 420px);
+  /* 只做「别把图排到一屏之外」的兜底，不再用它限制观感尺寸。
+     原来的 min(56vh, 420px) 在等宽列里会让 3:2 的截图提前触顶，图片被 object-fit 缩进
+     两边留白，看着就是「小了一圈」。单图另有 max-height: none（见下方 is-single 规则）。 */
+  max-height: min(78vh, 820px);
   height: auto;
   margin: 0;
   /* 与探索者、Markdown 渲染器同一套视觉口径：圆角 + 极淡描边。
@@ -30164,9 +30273,17 @@ body.guaxi-tab-dragging * {
   /* 设计说明：
    * 1. 单张 Markdown 图片是阅读区的主体内容，不应被固定 760px 或视口高度上限提前压缩。
    * 2. 这里让图片优先按原始宽高展示；只有原图超过当前预览宽度时才收缩到容器内。
-   * 3. `width: auto` 可以避免短图被强行放大，`max-width: 100%` 则让大图尽量占满可用区域。
+   * 3. `width: auto` 可以避免大图被强行拉伸，`max-width: 100%` 则让大图尽量占满可用区域。
+   * 4. `min-width` 是「小图别缩成邮票」的下限：笔记里常有用截图工具截的小图（200–300px），
+   *    按原始尺寸显示在宽屏下几乎看不清，给个 460px 的下限，轻微放大的观感损失远小于看不清。
+   * 5. 下限写成 min(460px, 100cqw) 而不是 min(100%, 460px)：图片外面套着工具条的
+   *    `.media-viewer-wrap`（inline-block 收缩宽度），百分比 min-width 在这种收缩容器里
+   *    解析不出来会被直接丢弃（实测无效）；cqw 取的是上一层查询容器（本媒体组）的宽度，
+   *    既能拿到与阅读区成比例的下限，又保证面板再窄也不会把图撑出可视区。
+   *    cqw 不被支持时整条声明作废，退化成「按原始尺寸显示」，不会比改动前更糟。
    */
   width: auto;
+  min-width: min(460px, 100cqw);
   max-width: 100%;
   max-height: none;
 }

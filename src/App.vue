@@ -84,7 +84,7 @@ onMounted(async () => {
   // 否则首个打开的标签页会先按默认字号渲染一次再跳变。
   await settingsStore.loadEditorDisplayConfig()
   // 图片宽度/圆角走 CSS 变量下发，必须在首帧前落到根节点，
-  // 否则预览会先按默认 860px 渲染一次再跳变。
+  // 否则预览会先按默认宽度渲染一次再跳变。
   await settingsStore.loadPreviewImageConfig()
   decorateGlobalNavIcons()
   navIconObserver = new MutationObserver(decorateGlobalNavIcons)

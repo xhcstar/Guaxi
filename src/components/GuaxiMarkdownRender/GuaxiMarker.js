@@ -700,16 +700,21 @@ export const addMediaViewerButtons = (container, options = {}) => {
     const openOverlay = (payload) => {
       try {
         const overlay = document.createElement('div');
+        // 配色一律交给样式表里的 .guaxi-media-* 类（暗色主题靠 CSS 变量翻转），
+        // 这里只保留定位与布局，避免颜色散落在 JS 字符串里。
+        overlay.className = 'guaxi-media-overlay';
         overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:99999;display:flex;align-items:center;justify-content:center;';
 
         const panel = document.createElement('div');
-        panel.style.cssText = 'position:relative;max-width:95vw;max-height:92vh;background:rgba(255,255,255,0.98);border:1px solid rgba(0,0,0,0.12);border-radius:10px;overflow:hidden;';
+        panel.className = 'guaxi-media-panel';
+        panel.style.cssText = 'position:relative;max-width:95vw;max-height:92vh;overflow:hidden;';
 
         const toolbar = document.createElement('div');
         toolbar.style.cssText = 'position:absolute;right:8px;top:8px;display:flex;gap:6px;z-index:2;';
 
         const legend = document.createElement('div');
-        legend.style.cssText = 'position:absolute;left:8px;top:8px;display:flex;gap:10px;align-items:center;padding:6px 8px;border-radius:8px;background:rgba(255,255,255,0.9);border:1px solid rgba(0,0,0,0.12);color:rgba(0,0,0,0.7);font-size:12px;line-height:1;z-index:2;';
+        legend.className = 'guaxi-media-legend';
+        legend.style.cssText = 'position:absolute;left:8px;top:8px;display:flex;gap:10px;align-items:center;padding:6px 8px;border-radius:8px;z-index:2;';
 
         const mkLegendItem = (iconSvg, text) => {
           const item = document.createElement('span');
@@ -732,7 +737,8 @@ export const addMediaViewerButtons = (container, options = {}) => {
           b.type = 'button';
           b.title = title;
           b.setAttribute('aria-label', title);
-          b.style.cssText = 'height:30px;min-width:30px;padding:0 8px;border-radius:8px;color:rgba(0,0,0,0.75);background:rgba(255,255,255,0.95);border:1px solid rgba(0,0,0,0.12);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;line-height:0;';
+          b.className = 'guaxi-media-tool';
+          b.style.cssText = 'height:30px;min-width:30px;padding:0 8px;border-radius:8px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;line-height:0;';
 
           const icon = document.createElement('span');
           icon.style.cssText = 'display:inline-flex;align-items:center;justify-content:center;line-height:0;';
@@ -761,7 +767,8 @@ export const addMediaViewerButtons = (container, options = {}) => {
         // 平移量放在 scale 前面（screen 像素语义），滚轮按光标位置定点缩放，
         // 鼠标按住拖拽即平移，双击还原。
         const stage = document.createElement('div');
-        stage.style.cssText = 'width:95vw;height:92vh;max-width:95vw;max-height:92vh;display:flex;align-items:center;justify-content:center;overflow:hidden;padding:40px 24px 24px;box-sizing:border-box;background:rgba(255,255,255,0.98);cursor:grab;touch-action:none;';
+        stage.className = 'guaxi-media-stage';
+        stage.style.cssText = 'width:95vw;height:92vh;max-width:95vw;max-height:92vh;display:flex;align-items:center;justify-content:center;overflow:hidden;padding:40px 24px 24px;box-sizing:border-box;cursor:grab;touch-action:none;';
 
         const contentWrap = document.createElement('div');
         contentWrap.style.cssText = 'transform-origin:center center;will-change:transform;';
@@ -1751,14 +1758,16 @@ export const addMediaViewerButtons = (container, options = {}) => {
     // 右边是整段文字（可编辑 / 一键复制）。两种取字姿势都给到，和企业微信一致。
     const openOcrOverlay = (img) => {
       const overlay = document.createElement('div');
-      overlay.className = 'media-ocr-overlay';
+      overlay.className = 'media-ocr-overlay guaxi-ocr-overlay';
       overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:99999;display:flex;align-items:center;justify-content:center;';
 
       const panel = document.createElement('div');
-      panel.style.cssText = 'position:relative;width:92vw;height:88vh;display:flex;background:#ffffff;border:1px solid rgba(0,0,0,0.12);border-radius:10px;overflow:hidden;box-shadow:0 12px 40px rgba(0,0,0,0.25);';
+      panel.className = 'guaxi-ocr-panel';
+      panel.style.cssText = 'position:relative;width:92vw;height:88vh;display:flex;overflow:hidden;';
 
       const stage = document.createElement('div');
-      stage.style.cssText = 'flex:1;min-width:0;display:flex;align-items:center;justify-content:center;padding:16px;overflow:auto;background:#f6f7f9;box-sizing:border-box;';
+      stage.className = 'guaxi-ocr-stage';
+      stage.style.cssText = 'flex:1;min-width:0;display:flex;align-items:center;justify-content:center;padding:16px;overflow:auto;box-sizing:border-box;';
 
       const imgWrap = document.createElement('div');
       imgWrap.style.cssText = 'position:relative;display:inline-block;line-height:0;';
@@ -1776,19 +1785,22 @@ export const addMediaViewerButtons = (container, options = {}) => {
       stage.appendChild(imgWrap);
 
       const side = document.createElement('div');
-      side.style.cssText = 'width:360px;flex:0 0 360px;display:flex;flex-direction:column;gap:8px;padding:12px;border-left:1px solid rgba(0,0,0,0.08);box-sizing:border-box;';
+      side.className = 'guaxi-ocr-side';
+      side.style.cssText = 'width:360px;flex:0 0 360px;display:flex;flex-direction:column;gap:8px;padding:12px;box-sizing:border-box;';
 
       const title = document.createElement('div');
       title.textContent = '图片取字 (OCR)';
-      title.style.cssText = 'font-size:14px;font-weight:600;color:rgba(0,0,0,0.85);';
+      title.className = 'guaxi-ocr-title';
 
       const status = document.createElement('div');
-      status.style.cssText = 'font-size:12px;color:rgba(0,0,0,0.5);min-height:18px;white-space:pre-wrap;';
+      status.className = 'guaxi-ocr-status';
+      status.style.cssText = 'min-height:18px;white-space:pre-wrap;';
 
       const area = document.createElement('textarea');
       area.spellcheck = false;
       area.placeholder = '识别出的文字会显示在这里，可直接编辑与复制。';
-      area.style.cssText = 'flex:1;min-height:0;resize:none;padding:8px;font-size:13px;line-height:1.6;border:1px solid rgba(0,0,0,0.12);border-radius:6px;box-sizing:border-box;font-family:inherit;color:rgba(0,0,0,0.88);background:#fff;';
+      area.className = 'guaxi-ocr-text';
+      area.style.cssText = 'flex:1;min-height:0;resize:none;padding:8px;font-size:13px;line-height:1.6;box-sizing:border-box;';
 
       const tools = document.createElement('div');
       tools.style.cssText = 'display:flex;flex-wrap:wrap;gap:8px;align-items:center;';
@@ -1797,7 +1809,8 @@ export const addMediaViewerButtons = (container, options = {}) => {
         const b = document.createElement('button');
         b.type = 'button';
         b.textContent = label;
-        b.style.cssText = 'height:28px;padding:0 10px;border-radius:6px;border:1px solid rgba(0,0,0,0.12);background:#fff;color:rgba(0,0,0,0.78);cursor:pointer;font-size:12px;';
+        b.className = 'guaxi-ocr-btn';
+        b.style.cssText = 'height:28px;padding:0 10px;cursor:pointer;';
         return b;
       };
 
@@ -1806,7 +1819,8 @@ export const addMediaViewerButtons = (container, options = {}) => {
       const btnCloseSide = mkSideBtn('关闭');
 
       const layerToggleLabel = document.createElement('label');
-      layerToggleLabel.style.cssText = 'display:inline-flex;align-items:center;gap:4px;font-size:12px;color:rgba(0,0,0,0.6);cursor:pointer;';
+      layerToggleLabel.className = 'guaxi-ocr-toggle';
+      layerToggleLabel.style.cssText = 'display:inline-flex;align-items:center;gap:4px;cursor:pointer;';
       const layerToggle = document.createElement('input');
       layerToggle.type = 'checkbox';
       layerToggle.checked = true;

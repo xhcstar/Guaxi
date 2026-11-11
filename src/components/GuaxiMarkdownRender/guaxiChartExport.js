@@ -288,12 +288,14 @@ const OVERLAY_ICONS = {
  */
 export function openChartOverlay({ title, svgText, onExportSvg, onExportPng }) {
   const overlay = document.createElement('div')
+  overlay.className = 'guaxi-media-overlay'
   overlay.style.cssText =
     'position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:99999;display:flex;align-items:center;justify-content:center;'
 
   const panel = document.createElement('div')
+  panel.className = 'guaxi-media-panel'
   panel.style.cssText =
-    'position:relative;max-width:95vw;max-height:92vh;background:rgba(255,255,255,0.98);border:1px solid rgba(0,0,0,0.12);border-radius:10px;overflow:hidden;'
+    'position:relative;max-width:95vw;max-height:92vh;overflow:hidden;'
 
   const toolbar = document.createElement('div')
   toolbar.style.cssText = 'position:absolute;right:8px;top:8px;display:flex;gap:6px;z-index:2;'
@@ -301,8 +303,10 @@ export function openChartOverlay({ title, svgText, onExportSvg, onExportPng }) {
   const legend = document.createElement('div')
   // 提示条贴在面板底部居中：工具栏固定在右上角，窗口窄时（三分栏视图）两者若都在顶部
   // 就会互相挤压，提示条被截断。贴底还能避开画布主体。
+  // 配色走 .guaxi-media-legend，暗色主题下不会留白块。
+  legend.className = 'guaxi-media-legend'
   legend.style.cssText =
-    'position:absolute;left:50%;bottom:10px;transform:translateX(-50%);display:flex;flex-wrap:wrap;justify-content:center;gap:6px 12px;align-items:center;padding:6px 10px;border-radius:8px;background:rgba(255,255,255,0.94);border:1px solid rgba(0,0,0,0.12);color:rgba(0,0,0,0.7);font-size:12px;line-height:1.3;z-index:2;max-width:calc(95vw - 24px);box-sizing:border-box;'
+    'position:absolute;left:50%;bottom:10px;transform:translateX(-50%);display:flex;flex-wrap:wrap;justify-content:center;gap:6px 12px;align-items:center;padding:6px 10px;border-radius:8px;line-height:1.3;z-index:2;max-width:calc(95vw - 24px);box-sizing:border-box;'
 
   const mkLegendItem = (iconSvg, text) => {
     const item = document.createElement('span')
@@ -321,8 +325,9 @@ export function openChartOverlay({ title, svgText, onExportSvg, onExportPng }) {
     b.type = 'button'
     b.title = titleText
     b.setAttribute('aria-label', titleText)
+    b.className = 'guaxi-media-tool'
     b.style.cssText =
-      'height:30px;min-width:30px;padding:0 8px;border-radius:8px;color:rgba(0,0,0,0.75);background:rgba(255,255,255,0.95);border:1px solid rgba(0,0,0,0.12);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;line-height:0;'
+      'height:30px;min-width:30px;padding:0 8px;border-radius:8px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;line-height:0;'
     if (fallbackText) {
       b.textContent = fallbackText
       b.style.fontSize = '12px'
@@ -361,8 +366,9 @@ export function openChartOverlay({ title, svgText, onExportSvg, onExportPng }) {
   // 设计同 mermaid：transform: scale() 不参与布局，只加 scale 时放大后既滚不到也拖不动，
   // 所以这里自己维护 translate + scale，滚轮按光标定点缩放，按住拖动平移。
   const stage = document.createElement('div')
+  stage.className = 'guaxi-media-stage'
   stage.style.cssText =
-    'width:95vw;height:92vh;max-width:95vw;max-height:92vh;display:flex;align-items:center;justify-content:center;overflow:hidden;padding:44px 24px 56px;box-sizing:border-box;background:rgba(255,255,255,0.98);cursor:grab;touch-action:none;'
+    'width:95vw;height:92vh;max-width:95vw;max-height:92vh;display:flex;align-items:center;justify-content:center;overflow:hidden;padding:44px 24px 56px;box-sizing:border-box;cursor:grab;touch-action:none;'
 
   const contentWrap = document.createElement('div')
   contentWrap.style.cssText = 'transform-origin:center center;will-change:transform;'
@@ -370,8 +376,9 @@ export function openChartOverlay({ title, svgText, onExportSvg, onExportPng }) {
 
   // 标题不塞进提示条：窗口窄时会把三条操作提示挤掉。改为画布上方的独立一行。
   const titleBar = document.createElement('div')
+  titleBar.className = 'guaxi-media-title'
   titleBar.style.cssText =
-    'position:absolute;left:50%;top:52px;transform:translateX(-50%);max-width:calc(95vw - 24px);padding:4px 10px;border-radius:8px;background:rgba(255,255,255,0.92);border:1px solid rgba(0,0,0,0.1);color:rgba(0,0,0,0.8);font-size:12px;font-weight:600;line-height:1.4;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;z-index:2;'
+    'position:absolute;left:50%;top:52px;transform:translateX(-50%);max-width:calc(95vw - 24px);padding:4px 10px;border-radius:8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;z-index:2;'
   titleBar.textContent = title || '图表预览'
 
   legend.appendChild(mkLegendItem(OVERLAY_ICONS.plus, '滚轮缩放（按光标定点）'))

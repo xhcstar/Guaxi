@@ -10851,7 +10851,10 @@ defineExpose({
   align-content: flex-start;
   gap: var(--guaxi-media-gap);
   width: 100% !important;
-  max-width: 1000px;
+  /* 设计说明：不再写死 1000px 上限。Cell 的正文段落本来就占满整行，
+     图片却缩在中间会让右侧空出一大片；跟随 Cell 宽度后图片与文字左右对齐。
+     单图宽度仍由 --guaxi-figure-max-width 单独限制（见 is-single 规则）。 */
+  max-width: 100%;
   margin: 24px auto !important;
   padding: 6px 0;
 }
@@ -10862,6 +10865,8 @@ defineExpose({
   width: 100% !important;
   max-width: 100%;
   gap: 0;
+  /* 与主预览同口径：单图下限按本组宽度（cqw）夹取，分栏很窄时也不会把图撑出可视区。 */
+  container-type: inline-size;
 }
 
 .guaxi-notebook__markdown-preview :deep(.guaxi-media-group.is-gallery),
@@ -10944,8 +10949,8 @@ defineExpose({
   flex: 0 1 auto;
   min-width: 0;
   width: 100%;
-  /* 单图与主预览口径一致：宽度上限取设置变量（默认 860px），超出居中收缩 */
-  max-width: min(100%, var(--guaxi-figure-max-width, 860px));
+  /* 单图与主预览口径一致：宽度上限取设置变量（默认 1400px），超出居中收缩 */
+  max-width: min(100%, var(--guaxi-figure-max-width, 1400px));
   margin-left: auto;
   margin-right: auto;
   padding: 0;
@@ -10965,7 +10970,9 @@ defineExpose({
   display: block;
   width: 100%;
   max-width: 100%;
-  max-height: min(60vh, 460px);
+  /* 兜底用，不是观感尺寸：原来的 min(60vh, 460px) 会让 3:2 截图在等宽列里提前触顶，
+     被 object-fit 缩进两边留白，看起来「小了一圈」。 */
+  max-height: min(78vh, 820px);
   height: auto;
   margin: 0;
   border-radius: var(--guaxi-figure-radius, 12px);
@@ -10980,9 +10987,13 @@ defineExpose({
 .guaxi-notebook__rich.markdown-body :deep(.guaxi-media-group.is-single .guaxi-media-group__image) {
   /* 设计说明：
    * 1. 探索者模式的单张 Markdown 图片应和普通预览一致：优先保持原始宽高，不再被 760px/视口高度限制提前压缩。
-   * 2. `width: auto` 避免短图被放大；`max-width: 100%` 让大图尽量占满当前 Markdown Cell 的阅读宽度。
+   * 2. `width: auto` 避免大图被拉着变形；`max-width: 100%` 让大图尽量占满当前 Markdown Cell 的阅读宽度。
+   * 3. `min-width` 与主预览同口径：小图别缩成邮票。用 min(460px, 100cqw) 而不是百分比——
+   *    图片外面套着工具条的 `.media-viewer-wrap`（收缩宽度），百分比 min-width 解析不出来会被丢弃；
+   *    cqw 取本媒体组宽度，既给出与阅读区成比例的下限，又保证分栏很窄时图片不会溢出被裁。
    */
   width: auto;
+  min-width: min(460px, 100cqw);
   max-width: 100%;
   max-height: none;
 }

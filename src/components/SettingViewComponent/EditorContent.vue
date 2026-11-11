@@ -91,8 +91,9 @@
               @update:value="(v) => handlePreviewImageChange('max_width', Number(v) || DEFAULT_PREVIEW_IMAGE_OPTIONS.max_width)"
             />
             <span class="setting-page-desc">
-              允许 {{ PREVIEW_IMAGE_MAX_WIDTH_MIN }}–{{ PREVIEW_IMAGE_MAX_WIDTH_MAX }}px，默认 860。
-              这是「不放大」的上限：原图比它窄就按原始尺寸显示，只有超过时才等比收缩。
+              允许 {{ PREVIEW_IMAGE_MAX_WIDTH_MIN }}–{{ PREVIEW_IMAGE_MAX_WIDTH_MAX }}px，默认 1400。
+              这是单图的上限：原图更宽时等比收缩到该宽度，更窄时按原始尺寸显示（低于 460px 的小图会
+              放大到 460px，免得截图小图看不清）。图集按列宽平分，不受这项限制。
             </span>
           </n-space>
         </n-form-item>

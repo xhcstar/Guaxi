@@ -53,18 +53,21 @@ export const EDITOR_FONT_SIZE_MAX = 48
 /**
  * Markdown 图片显示配置的默认值，与后端 PreviewImageConfig::default() 对齐。
  *
- * 860 / 12 / 不显示图注 = 此前写死在预览与探索者样式里的那一组，
- * 所以升级后没动过设置的用户看到的图片和以前完全一样。
+ * 1400 / 12 / 不显示图注。
+ *
+ * 宽度上限从 860 提到 1400：预览正文是占满整行的，图片却缩在 860/1000 里，
+ * 宽屏下两侧各空出几百分，看起来「图比字小一号」。1400 在常见笔记本与 2K 屏上
+ * 基本能贴住正文两侧，又不会把图拉到失真的宽度。
  */
 export const DEFAULT_PREVIEW_IMAGE_OPTIONS = {
-  max_width: 860,
+  max_width: 1400,
   radius: 12,
   show_caption: false,
 }
 
 /** 与后端 normalize_preview_image_config 的夹取区间保持一致。 */
 export const PREVIEW_IMAGE_MAX_WIDTH_MIN = 320
-export const PREVIEW_IMAGE_MAX_WIDTH_MAX = 1400
+export const PREVIEW_IMAGE_MAX_WIDTH_MAX = 1800
 export const PREVIEW_IMAGE_RADIUS_MAX = 28
 
 /** 图片宽度上限/圆角落到 CSS 变量上的名字：样式里只认这两个变量，不认具体数值。 */
@@ -298,7 +301,7 @@ export const useSettingsStore = defineStore("settings", {
     /**
      * 把宽度上限与圆角写成根节点上的 CSS 变量。
      *
-     * 样式里所有图片尺寸都走 var(--guaxi-figure-max-width, 860px) 这类写法，
+     * 样式里所有图片尺寸都走 var(--guaxi-figure-max-width, 1400px) 这类写法，
      * 所以这里改一次全局生效，不用去碰预览、探索者、阅读器各自的样式表。
      * 幂等，可重复调用。
      */

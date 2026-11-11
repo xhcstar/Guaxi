@@ -531,7 +531,7 @@ export const buildExportCodeThemeCss = () =>
 export const buildExportFigureCss = (options = {}) => {
   const maxWidth = Number(options.maxWidth)
   const radius = Number(options.radius)
-  const safeMaxWidth = Number.isFinite(maxWidth) && maxWidth > 0 ? Math.round(maxWidth) : 860
+  const safeMaxWidth = Number.isFinite(maxWidth) && maxWidth > 0 ? Math.round(maxWidth) : 1400
   const safeRadius = Number.isFinite(radius) && radius >= 0 ? Math.round(radius) : 12
   const showCaption = !!options.showCaption
 
@@ -590,10 +590,31 @@ export const buildExportFigureCss = (options = {}) => {
     margin-right: auto;
   }
 
-  /* 两张及以上平分一行：列宽由容器决定，两张不同尺寸的截图才会左右边缘对齐。 */
+  /* 两张及以上平分一行：列宽由容器决定，两张不同尺寸的截图才会左右边缘对齐。
+     不再写 420px 上限——那会让并排的图缩成窄条，和页面上「图比字小一号」是同一个问题。
+     用 grid 而不是 flex：flex 的 1 1 0 会让 3 张以上排成一行窄条，而应用内是
+     「3 张一行 / 4 张 2×2」，导出稿要与屏幕上看到的一致。 */
+  .export-content .guaxi-media-group.is-gallery {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr));
+    align-items: stretch;
+  }
+
+  .export-content .guaxi-media-group.is-gallery[data-guaxi-media-count='2'] {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .export-content .guaxi-media-group.is-gallery[data-guaxi-media-count='3'] {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .export-content .guaxi-media-group.is-gallery[data-guaxi-media-count='4'] {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .export-content .guaxi-media-group.is-gallery > .guaxi-media-group__item {
-    flex: 1 1 0;
-    max-width: min(100%, 420px);
+    width: 100%;
+    max-width: 100%;
   }
 
   .export-content .guaxi-media-group__image,
@@ -609,9 +630,11 @@ export const buildExportFigureCss = (options = {}) => {
     object-fit: contain;
   }
 
-  /* 单图不强行拉满列宽，否则小图标会被放大到糊。 */
+  /* 单图按原始宽度显示，只给一个 460px 下限：截图小图在打印稿里同样需要看得清。
+     导出稿没有工具条包裹层，图片的包含块宽度是确定的，所以这里可以直接用百分比夹取。 */
   .export-content .guaxi-media-group.is-single .guaxi-media-group__image {
     width: auto;
+    min-width: min(100%, 460px);
   }
 ${captionCss}
   @media print {
