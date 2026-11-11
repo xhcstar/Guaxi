@@ -15,15 +15,25 @@
   max-width: 100%;
   height: auto;
 }
-/* 纯图片段落（只含 <img>/<br>/空白）：并排 + 自动换行 + 居中 */
-.md-paragraph:has(img):not(:has(:not(img):not(br))) {
+/* 图片不可用占位图是内联 SVG：颜色全部走 currentColor，
+   浅色主题继承深色文字、暗色主题继承浅色文字，无需额外换图。 */
+.md-paragraph svg.guaxi-broken-image {
+  display: inline-block;
+  vertical-align: middle;
+  max-width: 100%;
+  height: auto;
+}
+/* 纯图片段落（只含 <img>/占位 SVG/<br>/空白）：并排 + 自动换行 + 居中。
+   例外检查只看直接子元素：占位图是内联 SVG，它自己的 <rect>/<path> 不能算成"其它内容"。 */
+.md-paragraph:has(img, .guaxi-broken-image):not(:has(> :not(img):not(.guaxi-broken-image):not(br))) {
   display: flex;
   flex-wrap: wrap;
   justify-content: center;
   align-items: flex-start;
   gap: 10px;
 }
-.md-paragraph:has(img):not(:has(:not(img):not(br))) > img {
+.md-paragraph:has(img, .guaxi-broken-image):not(:has(> :not(img):not(.guaxi-broken-image):not(br))) > img,
+.md-paragraph:has(img, .guaxi-broken-image):not(:has(> :not(img):not(.guaxi-broken-image):not(br))) > .guaxi-broken-image {
   /* 保持图片自然宽度（不强制缩小到不可读），放不下时整张换行；单图过宽则限制到容器宽度 */
   flex: 0 0 auto;
   max-width: 100%;

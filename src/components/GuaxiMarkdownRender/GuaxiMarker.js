@@ -2243,11 +2243,16 @@ export const renderMarkdown = async (content, options) => {
       finalContent = result.processed_content;
       mappings = result.mappings || [];
 
-      // 根据mappings替换图片路径
+      // 根据 mappings 替换图片路径。
+      // 只替换图片语法里的目的地：旧写法按 `](路径)` 全局替换，会把正文里的
+      // 普通链接 `[说明](x.png)` 一起改掉，导致链接整段退化成源码文本。
       mappings.forEach((mapping) => {
+        const original = String(mapping?.original_path || "");
+        const served = String(mapping?.served_path || "");
+        if (!original || !served) return;
         finalContent = finalContent.replace(
-          new RegExp(`\\]\\(${escapeRegExp(mapping.original_path)}\\)`, "g"),
-          `](${mapping.served_path})`
+          new RegExp(`(!\\[[^\\]]*\\]\\()${escapeRegExp(original)}(\\))`, "g"),
+          (_match, prefix, suffix) => `${prefix}${served}${suffix}`
         );
       });
     } catch (err) {

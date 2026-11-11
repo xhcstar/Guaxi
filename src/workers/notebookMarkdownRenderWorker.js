@@ -114,9 +114,11 @@ const preprocessMarkdownContent = async (content, options = {}) => {
     const mappings = Array.isArray(result?.mappings) ? result.mappings : []
     for (const mapping of mappings) {
       if (!mapping?.original_path || !mapping?.served_path) continue
+      // 只替换图片语法里的目的地：按 `](路径)` 全局替换会把正文里的普通链接
+      // `[说明](x.png)` 一起改掉，链接整段退化成源码文本。
       finalContent = finalContent.replace(
-        new RegExp(`\\]\\(${escapeRegExp(mapping.original_path)}\\)`, 'g'),
-        `](${mapping.served_path})`,
+        new RegExp(`(!\\[[^\\]]*\\]\\()${escapeRegExp(mapping.original_path)}(\\))`, 'g'),
+        (_match, prefix, suffix) => `${prefix}${mapping.served_path}${suffix}`,
       )
     }
   } catch (error) {

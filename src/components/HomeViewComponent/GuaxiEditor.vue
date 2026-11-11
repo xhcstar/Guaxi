@@ -6678,7 +6678,8 @@ const openFsLinkSmart = async (rawLink, { anchor, baseDocPath, source = 'unknown
   const isMd = isMarkdownFilePath(abs) || isMarkdownFilePath(ensureMarkdownExt(abs));
   const mdPath = isMd ? ensureMarkdownExt(abs) : abs;
 
-  // 目录判定失败（后端报错/文件不存在）时不阻断，继续按文件路径处理，让后续步骤给出明确反馈。
+  // 先探测目标是否存在：目录交给文件管理器，文件继续按类型分流；
+  // 探测失败说明路径不在磁盘上，直接给出提示（链接本身照常渲染，点击时才报错）。
   try {
     const meta = await invoke('get_file_meta', { path: abs });
     if (meta?.is_directory) {
@@ -6687,11 +6688,16 @@ const openFsLinkSmart = async (rawLink, { anchor, baseDocPath, source = 'unknown
       return true;
     }
   } catch (error) {
-    logger.debug('[LinkOpen] get_file_meta failed, continue as file', {
+    // get_file_meta 失败意味着路径根本不在磁盘上：继续往下走只会 fetch 失败，
+    // 最后落到 explorer 里"打开一个不存在的路径"，用户看不到任何解释。
+    // 链接本身应该照常渲染成可点的文本，点击时才提示文件不存在。
+    logger.warn('[LinkOpen] link target is missing', {
       source,
       path: abs,
       error: String(error?.message || error),
     });
+    message.error('链接指向的文件不存在');
+    return false;
   }
 
   if (isMd) {
