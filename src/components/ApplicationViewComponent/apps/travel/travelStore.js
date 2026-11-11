@@ -1396,10 +1396,18 @@ export function useTravelStore() {
           provider: '确定性编排',
           routeWeather: routeInfo.weatherMeta,
         })
-        advisories = assertPlanConstraints(plan, constraints)
-        state.warning = state.warning
-          ? `${state.warning}；模型方案未通过约束校验，已用确定性编排重建。`
+        // 确定性编排已经是最后一层兜底：这一步再失败也不该把行程整份丢掉。
+        // 偏差写进提示，让计划照常打开，用户还能在计划页里手改或重新生成。
+        const report = validatePlan(plan, api.isMock ? { ...constraints, radiusKm: 0 } : constraints)
+        advisories = report.advisories || []
+        const leftovers = report.problems || []
+        if (leftovers.length) {
+          console.warn('[travel] 确定性编排仍有偏差：', leftovers.slice(0, 5).join('；'))
+        }
+        const rebuiltNote = leftovers.length
+          ? `模型方案未通过约束校验，已用确定性编排重建；另有 ${leftovers.length} 项需要留意：${formatProblems(leftovers)}`
           : '模型方案未通过约束校验，已用确定性编排重建。'
+        state.warning = state.warning ? `${state.warning}；${rebuiltNote}` : rebuiltNote
       }
       if (advisories.length) {
         const note = advisories.slice(0, 2).join('；')

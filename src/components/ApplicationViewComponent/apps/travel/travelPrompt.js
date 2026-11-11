@@ -534,6 +534,23 @@ function describeLeg(leg, fromName, toName) {
   return `${mode} ${Number(leg.distance || 0).toFixed(1)} km，约 ${durationText(leg.duration) || '—'}`
 }
 
+// 一天能用 HH:mm 表示的最后时刻。分钟数一旦越过这里，开始与结束会被一起截成 23:59，
+// 校验就会报「结束时间不晚于开始时间」——所以排到这里还没排完，说明当天装不下，
+// 该少排一站，而不是排出假时间。
+const DAY_END_MINUTES = 24 * 60 - 1
+// 一段安排至少要占这么久；连这点时间都挤不出来，就说明当天已经排满。
+const MIN_SLOT_MINUTES = 20
+// 过夜那天给「前往酒店 + 入住」留的余量（上路 30 分 + 入住 30 分 + 缓冲）。
+const HOTEL_RESERVE_MINUTES = 75
+
+// 把一段安排裁进当天可表示的范围；连最小片段都放不下时返回 null，由调用方跳过。
+function clipBlockTimes(start, end, limit = DAY_END_MINUTES, minMinutes = 5) {
+  const from = Math.max(0, Math.round(start))
+  const to = Math.max(from + minMinutes, Math.round(end))
+  if (from >= limit) return null
+  return { start: from, end: Math.min(to, limit) }
+}
+
 export function normalizeDay(raw, { form, facts, outlineDay, dayIndex, totalDays = 1, legs, stopRefs, startName }) {
   const map = poiMap(facts)
   if (!raw || !Array.isArray(raw.blocks)) {
@@ -572,10 +589,12 @@ export function normalizeDay(raw, { form, facts, outlineDay, dayIndex, totalDays
         ((target?.id && block.poiId === target.id) || block.title === target?.name),
     )
     const minutes = durationMinutes(leg)
+    const dayStart = timeToMinutes(form.startTime) ?? 9 * 60
     let startMinutes = timeToMinutes(targetBlock?.start || addMinutes(form.startTime, index * 90))
-    if (startMinutes == null) startMinutes = timeToMinutes(form.startTime) + index * 90
+    if (startMinutes == null) startMinutes = dayStart + index * 90
     let endMinutes = startMinutes
-    startMinutes = Math.max(0, startMinutes - minutes)
+    // 不能倒推到当天出发之前：08:30 的第一段路不会从 00:10 开始。
+    startMinutes = Math.max(dayStart, startMinutes - minutes)
     if (targetBlock) {
       const previous = blocks
         .filter((block) => timeToMinutes(block.end) <= timeToMinutes(targetBlock.start))
@@ -583,11 +602,22 @@ export function normalizeDay(raw, { form, facts, outlineDay, dayIndex, totalDays
         .filter((value) => value != null)
       if (previous.length) startMinutes = Math.max(startMinutes, Math.max(...previous))
       endMinutes = Math.max(startMinutes + 5, timeToMinutes(targetBlock.start))
+    } else {
+      // 模型没给这一站排块时，按「已有安排的收尾时间」往后接：按序号硬插会插进
+      // 别人中间，整天的块一旦重叠，这天就会被判失败退回兜底。
+      const settled = Math.max(
+        dayStart,
+        ...blocks.map((block) => timeToMinutes(block.end) ?? 0),
+      )
+      startMinutes = Math.max(startMinutes, settled)
+      endMinutes = Math.max(startMinutes + minutes, settled + minutes)
     }
+    const times = clipBlockTimes(startMinutes, endMinutes)
+    if (!times) return
     const block = {
       id: uid('blk'),
-      start: minutesToTime(startMinutes),
-      end: minutesToTime(endMinutes),
+      start: minutesToTime(times.start),
+      end: minutesToTime(times.end),
       kind: 'transit',
       title: `前往${target?.name || '下一站'}`,
       detail: describeLeg(leg, stopRefs[index]?.name, target?.name),
@@ -598,9 +628,7 @@ export function normalizeDay(raw, { form, facts, outlineDay, dayIndex, totalDays
       legIndex: index,
       route: leg,
     }
-    const insertAt = targetBlock
-      ? blocks.indexOf(targetBlock)
-      : Math.min(blocks.length, index + 1)
+    const insertAt = targetBlock ? blocks.indexOf(targetBlock) : blocks.length
     blocks.splice(insertAt, 0, block)
   })
 
@@ -691,21 +719,26 @@ export function normalizeDay(raw, { form, facts, outlineDay, dayIndex, totalDays
       ...blocks.map((block) => timeToMinutes(block.end) ?? 0),
     )
     const hotelStart = Math.max(19 * 60, latestEnd + 15)
-    blocks.push({
-      id: uid('blk'),
-      start: minutesToTime(hotelStart),
-      end: minutesToTime(hotelStart + 30),
-      kind: 'hotel',
-      title: hotel ? `入住 ${hotel.name}` : '入住目的地附近酒店（现场预订）',
-      detail: hotel?.address || '目的地附近酒店较多，按预算现场预订即可。',
-      poiId: hotel?.id || '',
-      poi: hotel || null,
-      freeHotel: !hotel,
-      tips: [],
-      booking: null,
-      legIndex: null,
-      route: null,
-    })
+    // 当天的块已经排到 23:59 时，入住只能截在同一分钟上，那会变成「结束不晚于开始」；
+    // 这种情况不硬塞住宿，让当天校验退回确定性编排，由那边重新排到装得下为止。
+    const hotelTimes = clipBlockTimes(hotelStart, hotelStart + 30, DAY_END_MINUTES, 30)
+    if (hotelTimes) {
+      blocks.push({
+        id: uid('blk'),
+        start: minutesToTime(hotelTimes.start),
+        end: minutesToTime(hotelTimes.end),
+        kind: 'hotel',
+        title: hotel ? `入住 ${hotel.name}` : '入住目的地附近酒店（现场预订）',
+        detail: hotel?.address || '目的地附近酒店较多，按预算现场预订即可。',
+        poiId: hotel?.id || '',
+        poi: hotel || null,
+        freeHotel: !hotel,
+        tips: [],
+        booking: null,
+        legIndex: null,
+        route: null,
+      })
+    }
   }
 
   blocks = blocks.sort((a, b) => (timeToMinutes(a.start) || 0) - (timeToMinutes(b.start) || 0))
@@ -751,8 +784,17 @@ export function normalizeDay(raw, { form, facts, outlineDay, dayIndex, totalDays
 export function fallbackDay({ form, facts, outlineDay, dayIndex, totalDays = 1, legs, stopRefs, startName }) {
   const map = poiMap(facts)
   const blocks = []
+  const tips = []
   const startMin = timeToMinutes(form.startTime || '08:30') ?? 510
   const endMin = Math.max(timeToMinutes(form.endTime || '20:30') ?? 1230, startMin + 5 * 60)
+  // 两个上限分开用：endMin 是用户设的结束时间，超一点只提示；activityLimit 是当天真正
+  // 装得下的时间，越过它排出来的 HH:mm 会退化成 23:59 的假时间。
+  const lastDay = dayIndex >= Math.max(1, totalDays) - 1
+  const needHotel = !lastDay && form.startDate !== form.endDate
+  const activityLimit = DAY_END_MINUTES - (needHotel ? HOTEL_RESERVE_MINUTES : 0)
+  // 用户设的结束时间说的是「活动结束」，所以新的一站最晚要在 endMin 前开始；
+  // 已经开始的这一站可以顺延，返程和入住也可以排在这之后。
+  const lastStartMinutes = Math.min(activityLimit, Math.max(endMin, startMin + 120))
   let cursor = startMin
   const startLabel = startName || facts.origin?.name || '酒店'
   // 覆盖范围放宽到 15:00 / 20:30，长行程也能补上“晚一点的午饭/晚饭”。
@@ -761,6 +803,8 @@ export function fallbackDay({ form, facts, outlineDay, dayIndex, totalDays = 1, 
   let lunchDone = false
   let dinnerDone = false
   let lastAnchor = null
+  // 当天排不下的停留点：记下来，最后写进 tips，避免「少了一站却不说」。
+  const skipped = []
   const usedFood = new Set()
   const foodPool = uniqueBy(
     [
@@ -773,7 +817,8 @@ export function fallbackDay({ form, facts, outlineDay, dayIndex, totalDays = 1, 
   const addMeal = (kind, anchor) => {
     const windowInfo = kind === 'lunch' ? LUNCH : DINNER
     const start = Math.max(cursor, windowInfo.from)
-    if (start > windowInfo.to - 60 || start > endMin - 45) return false
+    // 一顿饭要放得下整块 60 分钟，窗口和当天剩余时间都得够；否则不硬塞，留给下一站。
+    if (start > windowInfo.to - 60 || start > Math.min(endMin - 45, activityLimit - 60)) return false
     const near = pickNearAnchor(foodPool, anchor, { maxKm: 8, exclude: usedFood, kind: 'food' })
     blocks.push({
       id: uid('blk'),
@@ -809,25 +854,44 @@ export function fallbackDay({ form, facts, outlineDay, dayIndex, totalDays = 1, 
     if (!dinnerDone && cursor >= DINNER.from && cursor <= DINNER.to - 60) addMeal('dinner', anchor)
   }
 
-  stopRefs.forEach((poi, index) => {
+  for (let index = 0; index < stopRefs.length; index += 1) {
+    const poi = stopRefs[index]
     const leg = legs[index]
+    const isFood = poi.kind === 'food'
+    const dwell = isFood ? 60 : form.pace === 'relaxed' ? 120 : 90
     const legMinutes = leg ? durationMinutes(leg) : 0
     const nextStart = cursor + (legMinutes ? legMinutes + 10 : 0)
     // 下一站本身就是饭点附近的餐饮时，不重复插一顿。
     const nextFoodInLunch =
-      poi.kind === 'food' && nextStart >= LUNCH.from - 15 && nextStart <= LUNCH.to
+      isFood && nextStart >= LUNCH.from - 15 && nextStart <= LUNCH.to
     const nextFoodInDinner =
-      poi.kind === 'food' && nextStart >= DINNER.from - 15 && nextStart <= DINNER.to
+      isFood && nextStart >= DINNER.from - 15 && nextStart <= DINNER.to
+    // 这一段路加一小段游览都塞不进当天，剩下的点就别排了：宁可在计划里少一站，
+    // 也不能排出 23:59 才开始、23:59 就结束的假时间。
+    if (cursor + legMinutes + 10 + MIN_SLOT_MINUTES > lastStartMinutes) {
+      skipped.push(...stopRefs.slice(index).map((item) => item.name))
+      break
+    }
     if (index > 0 && !nextFoodInLunch && !nextFoodInDinner) {
       maybeMeals(lastAnchor || poi)
+      // 补了饭之后时间可能又不够了，按新的 cursor 再判一次。
+      if (cursor + legMinutes + 10 + MIN_SLOT_MINUTES > lastStartMinutes) {
+        skipped.push(...stopRefs.slice(index).map((item) => item.name))
+        break
+      }
     }
 
     if (leg) {
       const minutes = durationMinutes(leg)
+      const times = clipBlockTimes(cursor, cursor + minutes, activityLimit)
+      if (!times) {
+        skipped.push(...stopRefs.slice(index).map((item) => item.name))
+        break
+      }
       blocks.push({
         id: uid('blk'),
-        start: minutesToTime(cursor),
-        end: minutesToTime(cursor + minutes),
+        start: minutesToTime(times.start),
+        end: minutesToTime(times.end),
         kind: 'transit',
         title: `前往${poi.name}`,
         detail: describeLeg(leg, index === 0 ? startLabel : stopRefs[index - 1]?.name, poi.name),
@@ -840,8 +904,11 @@ export function fallbackDay({ form, facts, outlineDay, dayIndex, totalDays = 1, 
       })
       cursor += minutes + 10
     }
-    const isFood = poi.kind === 'food'
-    const duration = isFood ? 60 : form.pace === 'relaxed' ? 120 : 90
+    // 时间够就按节奏停留，不够就压缩这一站，但不低于最小片段。
+    const duration = Math.max(
+      MIN_SLOT_MINUTES,
+      Math.min(dwell, activityLimit - cursor),
+    )
     const blockStart = cursor
     blocks.push({
       id: uid('blk'),
@@ -860,12 +927,51 @@ export function fallbackDay({ form, facts, outlineDay, dayIndex, totalDays = 1, 
       route: null,
     })
     if (isFood) {
-      if (blockStart >= LUNCH.from && blockStart < LUNCH.to) lunchDone = true
-      if (blockStart >= DINNER.from && blockStart < DINNER.to) dinnerDone = true
+      // 这一站已经占了这家店，晚饭别再排同一家。
+      if (poi.id) usedFood.add(poi.id)
+      // 差一点到饭点的餐饮也算这一顿，别在 10:50 吃完又在 12:00 补一顿午饭。
+      if (blockStart >= LUNCH.from - 60 && blockStart < LUNCH.to) lunchDone = true
+      if (blockStart >= DINNER.from - 60 && blockStart < DINNER.to) dinnerDone = true
     }
     lastAnchor = poi
     cursor += duration + 15
-  })
+  }
+
+  // 一站都排不进去（当天第一段路就超过一天）：至少给出「在路上」的时间线，
+  // 否则这天会变成空安排，整份计划又被判失败。
+  let routeOverflow = false
+  if (!blocks.length) {
+    const first = stopRefs[0]
+    const leg = legs[0] || null
+    const minutes = leg ? durationMinutes(leg) : 60
+    const times = clipBlockTimes(startMin, startMin + Math.max(minutes, MIN_SLOT_MINUTES), activityLimit)
+    if (times) {
+      blocks.push({
+        id: uid('blk'),
+        start: minutesToTime(times.start),
+        end: minutesToTime(times.end),
+        kind: 'transit',
+        title: `前往${first?.name || '目的地'}`,
+        detail: leg
+          ? describeLeg(leg, startLabel, first?.name)
+          : '当天路线服务不可用，按直线估算，出发前请复核。',
+        poiId: '',
+        poi: null,
+        tips: leg?.warning ? [leg.warning] : [],
+        booking: null,
+        legIndex: leg ? 0 : null,
+        route: leg,
+      })
+      // 时间线已经被这一段路占满，后面补饭/补住宿都要按这个终点算。
+      cursor = times.end
+      routeOverflow = true
+    }
+    if (stopRefs.length) {
+      tips.push('当天路程已经占满整天，建议改乘飞机/高铁，或在途中城镇住一晚再继续。')
+    } else {
+      tips.push('这天没有排到合适的地点，可以先自由活动，或把想去的点挪到其他天。')
+    }
+  }
 
   // 白天很长但景点少：收尾前把没排上的饭补上（睡到自然醒/只逛一个点也能吃上午饭）。
   if (!lunchDone && endMin >= 13 * 60) {
@@ -876,36 +982,43 @@ export function fallbackDay({ form, facts, outlineDay, dayIndex, totalDays = 1, 
     addMeal('dinner', lastAnchor)
   }
 
-  const lastDay = dayIndex >= Math.max(1, totalDays) - 1
-  const needHotel = !lastDay && form.startDate !== form.endDate
   const hotel = outlineDay.hotelId
     ? map.get(outlineDay.hotelId)
     : needHotel
       ? pickNearAnchor(facts.hotels || [], lastAnchor, { maxKm: 15, kind: 'hotel' })
       : null
-  const extraLeg = legs[stopRefs.length]
+  // 少了站就不再排返程：剩下那段路通向没排进去的点，接不上当天的时间线。
+  const extraLeg = skipped.length ? null : legs[stopRefs.length]
+  let returnLegUsed = false
   if (extraLeg) {
     const minutes = durationMinutes(extraLeg)
+    const times = clipBlockTimes(cursor, cursor + minutes, activityLimit)
     const targetName = extraLeg.toName || hotel?.name || (needHotel ? '住宿' : '下一站')
-    blocks.push({
-      id: uid('blk'),
-      start: minutesToTime(cursor),
-      end: minutesToTime(cursor + minutes),
-      kind: 'transit',
-      title: `前往${targetName}`,
-      detail: describeLeg(extraLeg, stopRefs[stopRefs.length - 1]?.name, targetName),
-      poiId: '',
-      poi: null,
-      tips: extraLeg.warning ? [extraLeg.warning] : [],
-      booking: null,
-      legIndex: stopRefs.length,
-      route: extraLeg,
-    })
-    cursor += minutes + 10
+    if (times) {
+      blocks.push({
+        id: uid('blk'),
+        start: minutesToTime(times.start),
+        end: minutesToTime(times.end),
+        kind: 'transit',
+        title: `前往${targetName}`,
+        detail: describeLeg(extraLeg, stopRefs[stopRefs.length - 1]?.name, targetName),
+        poiId: '',
+        poi: null,
+        tips: extraLeg.warning ? [extraLeg.warning] : [],
+        booking: null,
+        legIndex: stopRefs.length,
+        route: extraLeg,
+      })
+      cursor = times.end + 10
+      returnLegUsed = true
+    } else {
+      tips.push('返程那段路已经排不进当天，建议提前结束游览，或就近住一晚再走。')
+    }
   }
 
   if (needHotel) {
-    const hotelStart = Math.max(cursor + 30, 19 * 60)
+    // 上面已经预留了 HOTEL_RESERVE_MINUTES，这里再夹一次是防手滑：宁可住得早，不排出 23:59。
+    const hotelStart = Math.min(Math.max(cursor + 30, 19 * 60), DAY_END_MINUTES - 30)
     blocks.push({
       id: uid('blk'),
       start: minutesToTime(hotelStart),
@@ -923,16 +1036,51 @@ export function fallbackDay({ form, facts, outlineDay, dayIndex, totalDays = 1, 
     })
   }
 
+  // 连一段路都没有（当天没有任何可用地点/路线）：给一段自由活动，
+  // 别让这天空着，空安排会把整份计划判失败。
+  if (!blocks.length) {
+    blocks.push({
+      id: uid('blk'),
+      start: minutesToTime(startMin),
+      end: minutesToTime(Math.min(startMin + 60, DAY_END_MINUTES)),
+      kind: 'rest',
+      title: '自由活动 / 现场找去处',
+      detail: '这天没有可用的候选地点，可以到地方再决定，或回到探索页换一批地点。',
+      poiId: '',
+      poi: null,
+      tips: [],
+      booking: null,
+      legIndex: null,
+      route: null,
+    })
+  }
+
+  if (skipped.length && !routeOverflow) {
+    const names = skipped.slice(0, 2).join('、')
+    tips.push(
+      `当天时间装不下，${names}${skipped.length > 2 ? ` 等 ${skipped.length} 处` : ''}没排进来，可以挪到其他天或换掉一处目的地。`,
+    )
+  }
+
+  // 没排进来的站，连它后面那段路一起拿掉：地图、预算和时间线才对得上。
+  const usedLegs = routeOverflow
+    ? legs.slice(0, legs.length ? 1 : 0)
+    : skipped.length
+      ? legs.slice(0, Math.max(0, stopRefs.length - skipped.length))
+      : returnLegUsed || legs.length <= stopRefs.length
+        ? legs
+        : legs.slice(0, stopRefs.length)
+
   return {
     date: outlineDay.date,
     weekday: outlineDay.weekday || weekdayCn(outlineDay.date),
     theme: outlineDay.theme,
     area: outlineDay.area,
     weather: (facts.weather || []).find((item) => item.date === outlineDay.date) || null,
-    routeWeather: routeWeatherOf(legs),
+    routeWeather: routeWeatherOf(usedLegs),
     blocks,
-    legs,
-    tips: [],
+    legs: usedLegs,
+    tips,
   }
 }
 

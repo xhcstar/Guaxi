@@ -208,6 +208,91 @@ test('normalizeDay 为漏写的路段补 transit 块', () => {
   assert.ok(day.blocks.every((block) => /^\d{2}:\d{2}$/.test(block.start)))
 })
 
+// 回归：乌鲁木齐一天排喀纳斯、禾木这类跨城长路段时，确定性编排曾经一路排过午夜，
+// 时间被截成 23:59 之后同一天出现「结束不晚于开始」，整份计划判失败（用户只能看到报错）。
+test('确定性编排：当天路太长时少排一站，而不是排出 23:59 的假时间', async () => {
+  const { fallbackDay } = await load(path.join(travelDir, 'travelPrompt.js'))
+  const { validateDayBlocks } = await load(path.join(travelDir, 'travelValidate.js'))
+  const poi = (id, name, kind, lng, lat) => ({ id, name, kind, lng, lat, city: '乌鲁木齐' })
+  const origin = poi('origin', '乌鲁木齐站', 'origin', 87.6, 43.8)
+  const sights = [
+    poi('s1', '大巴扎步行街', 'sight', 87.62, 43.78),
+    poi('s2', '喀纳斯景区-卧龙湾', 'sight', 87.03, 48.7),
+    poi('s3', '禾木风景区', 'sight', 87.4, 48.6),
+  ]
+  const food = [poi('f1', '雪莲山餐饮·新疆地方菜(河南路店)', 'food', 87.58, 43.87)]
+  const leg = (minutes, toName) => ({
+    mode: 'driving',
+    distance: minutes * 1.2,
+    duration: minutes * 60,
+    tolls: 0,
+    fare: 0,
+    summary: '测试路线',
+    steps: [],
+    polyline: '',
+    toName,
+  })
+  const form = {
+    startDate: '2026-11-14',
+    endDate: '2026-11-15',
+    startTime: '08:30',
+    endTime: '20:30',
+    pace: 'balanced',
+    transport: 'driving',
+    radiusKm: 900,
+    adults: 2,
+    children: 0,
+    elders: 0,
+    interests: [],
+  }
+  const facts = {
+    origin,
+    destination: { name: '乌鲁木齐', city: '乌鲁木齐', lng: 87.6, lat: 43.8 },
+    attractions: sights,
+    food,
+    hotels: [],
+    weather: [],
+  }
+  const stopRefs = sights.map((item) => ({ ...item, poiId: item.id }))
+  const legs = [leg(40, sights[0].name), leg(560, sights[1].name), leg(200, sights[2].name), leg(600, '乌鲁木齐')]
+  const day = fallbackDay({
+    form,
+    facts,
+    outlineDay: { date: '2026-11-14', theme: '测试日', area: '', hotelId: '' },
+    dayIndex: 0,
+    totalDays: 2,
+    legs,
+    stopRefs,
+    startName: origin.name,
+  })
+
+  assert.ok(day.blocks.length > 0, '不能因为路太长就把这一天空掉')
+  day.blocks.forEach((block) => {
+    assert.match(block.start, /^\d{2}:\d{2}$/)
+    assert.ok(block.end > block.start, `「${block.title}」${block.start}-${block.end} 时间倒挂`)
+  })
+  // 时间线必须单调，不能出现两段安排重叠。
+  for (let index = 1; index < day.blocks.length; index += 1) {
+    assert.ok(
+      day.blocks[index].start >= day.blocks[index - 1].end,
+      `「${day.blocks[index].title}」与上一段重叠`,
+    )
+  }
+  const problems = validateDayBlocks(day, {
+    center: facts.destination,
+    radiusKm: 900,
+    notBeforeMinutes: 510,
+    endMinutes: 1230,
+    home: origin,
+    requireHotel: true,
+  })
+  assert.deepEqual(problems.filter((item) => /结束时间不晚于开始时间|时间重叠/.test(item)), [])
+  // 排不进去的那站要说清楚，不能悄悄少一站。
+  assert.ok(day.tips.some((item) => /没排进来/.test(item)))
+  // 时间线对不上的路段不能留在地图/预算里。
+  assert.ok(day.legs.length < legs.length)
+})
+
 // ── 分享安全 ───────────────────────────────────────────────
 
 test('分享 HTML 转义标题与地点，不执行用户输入', () => {
