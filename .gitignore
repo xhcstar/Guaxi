@@ -67,5 +67,12 @@ src-tauri/utils/utils.zip
 src-tauri/utils/__bundles/*
 !src-tauri/utils/__bundles/.gitkeep
 
+# 图表预览单文件产物（do not commit）
+# 由 tools/build_chart_preview_bundle.mjs 用 Vite/esbuild 压缩生成，Rust 侧 include_str! 内联。
+# 不同 Node/工具链环境压缩出的短变量名不同（内容语义等价、字节级不同），多台机器交替
+# 构建会互相覆盖工作区；它又是构建前必然会生成的东西，因此不进版本库。
+# 缺失时 src-tauri/build.rs 会调用 node 补生成。
+src-tauri/assets/vendor/guaxi-chart-preview.js
+
 # RSSHub 由 tools/prepare_rsshub_env.mjs 克隆+构建（含自己的 .git/node_modules/dist），不入库
 src-tauri/utils/rsshub/

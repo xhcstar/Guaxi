@@ -36,6 +36,51 @@ fn preview_asset_version(manifest_dir: &Path) -> String {
     format!("{:016x}", hasher.finish())
 }
 
+/// 图表预览的单文件产物（`assets/vendor/guaxi-chart-preview.js`）由 Vite 打成，
+/// 被本 crate 用 `include_str!` 内联进二进制，缺了就是编译错误。
+///
+/// 正常流程由 npm 编排（`tools/run_tauri_with_utils.mjs`）在启动 Tauri 前生成；
+/// 该文件已列入 .gitignore —— 它是构建产物，且不同 Node/工具链环境压缩出的短变量名
+/// 不同（语义等价、字节不同），两台机器交替构建会互相覆盖工作区。
+///
+/// 这里兜底「绕过 npm、直接 cargo build / check」的场景：缺失时尝试用 node 补生成。
+fn ensure_chart_preview_bundle(manifest_dir: &Path) {
+    let bundle = manifest_dir
+        .join("assets")
+        .join("vendor")
+        .join("guaxi-chart-preview.js");
+    println!("cargo:rerun-if-changed={}", bundle.display());
+    if bundle.is_file() {
+        return;
+    }
+
+    let Some(root) = manifest_dir.parent() else {
+        return;
+    };
+    let script = root.join("tools").join("build_chart_preview_bundle.mjs");
+    if !script.is_file() {
+        return;
+    }
+
+    println!("cargo:warning=[chart.preview] 产物缺失，尝试用 node 生成（需要先执行 npm install）");
+    let generated = std::process::Command::new("node")
+        .arg(&script)
+        .current_dir(root)
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false);
+
+    if generated && bundle.is_file() {
+        println!("cargo:warning=[chart.preview] 已生成 {}", bundle.display());
+        return;
+    }
+
+    panic!(
+        "缺少图表预览产物 {}，自动生成也失败了。请先 `npm install`，再执行 `npm run build:chart-preview`（或任一次 `npm run tauri -- dev`）后重试。",
+        bundle.display()
+    );
+}
+
 fn main() {
     // Windows 主线程栈默认只有 1MB，而 Tauri 的 generate_handler! 会把所有命令展开
     // 到同一个闭包里的巨大 match 中；debug 构建（-O0）不合并各分支的栈槽，帧大小≈
@@ -51,6 +96,9 @@ fn main() {
     // was skipped, a release build still gets the external utils bundles.
     let manifest_dir =
         PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").expect("missing CARGO_MANIFEST_DIR"));
+    // 必须排在 preview_asset_version 之前：那个指纹会遍历 assets/vendor 下的全部文件，
+    // 产物若此时还不存在，算出来的版本号就是错的（且 include_str! 会直接编译失败）。
+    ensure_chart_preview_bundle(&manifest_dir);
     let utils_dir = manifest_dir.join("utils");
     let profile = std::env::var("PROFILE").unwrap_or_default();
     let reuse_existing = matches!(
