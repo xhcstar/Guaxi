@@ -116,7 +116,7 @@
                   <Icon :icon="checkIcon" width="13" height="13" /> 已安装
                 </span>
               </div>
-              <div v-if="jobFor(item.id)" class="dm-job">
+              <div v-if="jobFor(item.id) && jobFor(item.id).stage !== 'done'" class="dm-job">
                 <n-progress
                   type="line"
                   :percentage="Math.round(jobFor(item.id).progress || 0)"
