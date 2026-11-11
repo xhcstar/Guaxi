@@ -38,7 +38,7 @@ import GuaxiCenterAppView from "./GuaxiCenterAppView.vue"
 import GuaxiRightContentAppView from "./GuaxiRightContentAppView.vue"
 import LifeAlbumApp from "./apps/LifeAlbumApp.vue"
 import MusicPlayerApp from "./apps/MusicPlayerApp.vue"
-import LanguageTranslatorApp from "./apps/LanguageTranslatorApp.vue"
+import GuaxiDictionaryApp from "./apps/GuaxiDictionaryApp.vue"
 import FileTransferAssistantApp from "./apps/FileTransferAssistantApp.vue"
 // import PythonPlaygroundApp from "./apps/PythonPlaygroundApp.vue"
 // import PlaceholderApp from "./apps/PlaceholderApp.vue"
@@ -126,13 +126,13 @@ const apps = [
   },
   {
     id: 'language-translator',
-    name: '翻译助手',
+    name: 'Guaxi 词典',
     category: 'language',
     categoryLabel: '语言类',
-    description: '多语言互译与单词收藏，支持常用语速查',
-    icon: '🌐',
-    color: 'linear-gradient(135deg, #42e695, #3bb2b8)',
-    component: LanguageTranslatorApp
+    description: '多语言词典与翻译：MDX / StarDict / DSL 离线词库、查词自动入生词本，支持词典库管理',
+    icon: '📖',
+    color: 'linear-gradient(135deg, #2f7d6d, #214c4b)',
+    component: GuaxiDictionaryApp
   },
   {
     id: 'tools-file-transfer',

@@ -59,6 +59,24 @@ pub struct DictManifest {
     pub installed_at: String,
     #[serde(default)]
     pub builtin: bool,
+    /// 来源格式：mdx / stardict / dsl / wiktionary / csv / json / ecdict_csv / cedict_zip
+    #[serde(default)]
+    pub format: String,
+    /// 查词时是否参与；老清单没有这个字段，默认开启。
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// 越大越靠前；同优先级按名称排序。
+    #[serde(default)]
+    pub priority: i64,
+    /// 是否带 MDD 解包出来的图片/样式资源。
+    #[serde(default)]
+    pub has_resources: bool,
+    #[serde(default)]
+    pub resource_bytes: u64,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -87,6 +105,32 @@ pub struct DictEntry {
     pub target_lang: String,
     pub pack_id: String,
     pub pack_name: String,
+    /// 富文本释义（MDict / StarDict / DSL 才有），已把资源引用替换成 data URI。
+    #[serde(default)]
+    pub definition_html: String,
+    #[serde(default)]
+    pub format: String,
+}
+
+/// 按词典分组的查词结果：词典应用要像欧路那样一本一本列出来。
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DictPackHits {
+    pub pack_id: String,
+    pub pack_name: String,
+    pub source_lang: String,
+    pub target_lang: String,
+    pub format: String,
+    pub entry_count: i64,
+    pub entries: Vec<DictEntry>,
+}
+
+/// 词条浏览 / 模糊搜索的轻量行。
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DictBrowserRow {
+    pub term: String,
+    pub phonetic: String,
+    pub pos: String,
+    pub preview: String,
 }
 
 struct CatalogSpec {
@@ -126,6 +170,78 @@ const CATALOG: &[CatalogSpec] = &[
         version: "2025-11-30",
         format: "cedict_zip",
         url: CEDICT_URL,
+    },
+    CatalogSpec {
+        id: "kaikki-ja",
+        name: "Wiktionary 日英词典",
+        source_lang: "ja",
+        target_lang: "en",
+        description: "基于日文 Wiktionary 的完整词条抽取（kaikki.org），约 40 万词条，含词性、英文释义与例句。CC BY-SA。",
+        license: "CC BY-SA 3.0",
+        size_bytes: 387_569_265,
+        version: "kaikki",
+        format: "wiktionary_jsonl",
+        url: "https://kaikki.org/dictionary/Japanese/kaikki.org-dictionary-Japanese.jsonl",
+    },
+    CatalogSpec {
+        id: "kaikki-ko",
+        name: "Wiktionary 韩英词典",
+        source_lang: "ko",
+        target_lang: "en",
+        description: "韩文 Wiktionary 全量词条抽取，含英文释义与例句。CC BY-SA。",
+        license: "CC BY-SA 3.0",
+        size_bytes: 207_649_961,
+        version: "kaikki",
+        format: "wiktionary_jsonl",
+        url: "https://kaikki.org/dictionary/Korean/kaikki.org-dictionary-Korean.jsonl",
+    },
+    CatalogSpec {
+        id: "kaikki-fr",
+        name: "Wiktionary 法英词典",
+        source_lang: "fr",
+        target_lang: "en",
+        description: "法文 Wiktionary 全量词条抽取，含词性、英文释义、同义词与例句。CC BY-SA。",
+        license: "CC BY-SA 3.0",
+        size_bytes: 592_920_809,
+        version: "kaikki",
+        format: "wiktionary_jsonl",
+        url: "https://kaikki.org/dictionary/French/kaikki.org-dictionary-French.jsonl",
+    },
+    CatalogSpec {
+        id: "kaikki-de",
+        name: "Wiktionary 德英词典",
+        source_lang: "de",
+        target_lang: "en",
+        description: "德文 Wiktionary 全量词条抽取（约 1.1 GB 源文件），含词性、英文释义与例句。CC BY-SA。",
+        license: "CC BY-SA 3.0",
+        size_bytes: 1_095_258_648,
+        version: "kaikki",
+        format: "wiktionary_jsonl",
+        url: "https://kaikki.org/dictionary/German/kaikki.org-dictionary-German.jsonl",
+    },
+    CatalogSpec {
+        id: "kaikki-es",
+        name: "Wiktionary 西英词典",
+        source_lang: "es",
+        target_lang: "en",
+        description: "西班牙语 Wiktionary 全量词条抽取（约 1.1 GB 源文件），含词性、英文释义与例句。CC BY-SA。",
+        license: "CC BY-SA 3.0",
+        size_bytes: 1_119_672_965,
+        version: "kaikki",
+        format: "wiktionary_jsonl",
+        url: "https://kaikki.org/dictionary/Spanish/kaikki.org-dictionary-Spanish.jsonl",
+    },
+    CatalogSpec {
+        id: "kaikki-ru",
+        name: "Wiktionary 俄英词典",
+        source_lang: "ru",
+        target_lang: "en",
+        description: "俄文 Wiktionary 全量词条抽取（约 0.9 GB 源文件），含词性、英文释义与例句。CC BY-SA。",
+        license: "CC BY-SA 3.0",
+        size_bytes: 948_499_874,
+        version: "kaikki",
+        format: "wiktionary_jsonl",
+        url: "https://kaikki.org/dictionary/Russian/kaikki.org-dictionary-Russian.jsonl",
     },
 ];
 
@@ -259,7 +375,12 @@ fn installed_packs() -> Vec<(DictManifest, PathBuf, u64)> {
             }
         }
     }
-    out.sort_by(|a, b| a.0.name.cmp(&b.0.name));
+    // 先按用户排的优先级，再按名称稳定排序。
+    out.sort_by(|a, b| {
+        b.0.priority
+            .cmp(&a.0.priority)
+            .then_with(|| a.0.name.cmp(&b.0.name))
+    });
     out
 }
 
@@ -306,20 +427,43 @@ fn row_to_entry(row: &rusqlite::Row<'_>, manifest: &DictManifest) -> rusqlite::R
         target_lang: manifest.target_lang.clone(),
         pack_id: manifest.id.clone(),
         pack_name: manifest.name.clone(),
+        definition_html: row.get::<_, Option<String>>(6)?.unwrap_or_default(),
+        format: manifest.format.clone(),
     })
 }
 
+const RES_DIR: &str = "resources";
+
+/// 查词结果里的图片/样式引用统一换成 data URI：词典窗口没有自定义协议，
+/// 也不想为了几张图标去开 asset scope。
 fn query_pack(db_path: &Path, manifest: &DictManifest, term: &str, limit: usize) -> Vec<DictEntry> {
+    let mut rows = query_pack_raw(db_path, manifest, term, limit);
+    if manifest.has_resources && !rows.is_empty() {
+        if let Some(dir) = db_path.parent() {
+            let res_dir = dir.join(RES_DIR);
+            for row in rows.iter_mut() {
+                if !row.definition_html.is_empty() {
+                    row.definition_html =
+                        crate::commands::dict_formats::resolve_resources(&row.definition_html, &res_dir);
+                }
+            }
+        }
+    }
+    rows
+}
+
+fn query_pack_raw(db_path: &Path, manifest: &DictManifest, term: &str, limit: usize) -> Vec<DictEntry> {
     let normalized = normalize_term(term);
     if normalized.is_empty() {
         return Vec::new();
     }
+    ensure_entry_columns(db_path);
     let conn = match open_readonly(db_path) {
         Ok(v) => v,
         Err(_) => return Vec::new(),
     };
     let mut out = Vec::new();
-    let exact_sql = "SELECT term, phonetic, pos, meanings_json, examples_json, synonyms_json \
+    let exact_sql = "SELECT term, phonetic, pos, meanings_json, examples_json, synonyms_json, definition_html \
                      FROM entries WHERE normalized = ?1 LIMIT ?2";
     if let Ok(mut stmt) = conn.prepare(exact_sql) {
         if let Ok(rows) = stmt.query_map(params![normalized, limit as i64], |row| {
@@ -356,7 +500,7 @@ fn query_pack(db_path: &Path, manifest: &DictManifest, term: &str, limit: usize)
             return out;
         }
     }
-    let prefix_sql = "SELECT term, phonetic, pos, meanings_json, examples_json, synonyms_json \
+    let prefix_sql = "SELECT term, phonetic, pos, meanings_json, examples_json, synonyms_json, definition_html \
                       FROM entries WHERE normalized LIKE ?1 ORDER BY length(normalized) ASC LIMIT ?2";
     if let Ok(mut stmt) = conn.prepare(prefix_sql) {
         if let Ok(rows) = stmt.query_map(params![format!("{}%", normalized), limit as i64], |row| {
@@ -387,6 +531,9 @@ pub fn lookup_entries(
     let packs = installed_packs();
     let mut out = Vec::new();
     for (manifest, dir, _) in &packs {
+        if !manifest.enabled {
+            continue;
+        }
         if !pack_matches(manifest, &source, &target) {
             continue;
         }
@@ -528,7 +675,8 @@ fn create_schema(conn: &Connection) -> Result<(), String> {
             pos TEXT NOT NULL DEFAULT '',
             meanings_json TEXT NOT NULL DEFAULT '[]',
             examples_json TEXT NOT NULL DEFAULT '[]',
-            synonyms_json TEXT NOT NULL DEFAULT '[]'
+            synonyms_json TEXT NOT NULL DEFAULT '[]',
+            definition_html TEXT NOT NULL DEFAULT ''
         );
         CREATE INDEX IF NOT EXISTS idx_entries_normalized ON entries(normalized);
         CREATE TABLE IF NOT EXISTS lemmas (
@@ -537,10 +685,43 @@ fn create_schema(conn: &Connection) -> Result<(), String> {
             PRIMARY KEY(form, headword)
         );
         CREATE INDEX IF NOT EXISTS idx_lemmas_form ON lemmas(form);
-        PRAGMA user_version = 1;
+        PRAGMA user_version = 2;
         "#,
     )
     .map_err(|e| format!("创建词典索引失败: {}", e))
+}
+
+/// 老版本装好的词库（ECDICT / CC-CEDICT）没有 `definition_html` 列。
+/// 查询前补一列，避免升级后老词典整本查不出字。
+fn ensure_entry_columns(db_path: &Path) {
+    static UPGRADED: Lazy<Mutex<std::collections::HashSet<PathBuf>>> =
+        Lazy::new(|| Mutex::new(std::collections::HashSet::new()));
+    let key = db_path.to_path_buf();
+    if let Ok(set) = UPGRADED.lock() {
+        if set.contains(&key) {
+            return;
+        }
+    }
+    if let Ok(conn) = Connection::open(db_path) {
+        let has_column = conn
+            .prepare("PRAGMA table_info(entries)")
+            .ok()
+            .and_then(|mut stmt| {
+                let rows = stmt
+                    .query_map([], |row| row.get::<_, String>(1))
+                    .ok()?;
+                Some(rows.flatten().any(|name| name == "definition_html"))
+            })
+            .unwrap_or(true);
+        if !has_column {
+            let _ = conn.execute_batch(
+                "ALTER TABLE entries ADD COLUMN definition_html TEXT NOT NULL DEFAULT '';",
+            );
+        }
+    }
+    if let Ok(mut set) = UPGRADED.lock() {
+        set.insert(key);
+    }
 }
 
 struct EntryIn<'a> {
@@ -550,6 +731,7 @@ struct EntryIn<'a> {
     meanings: &'a [String],
     examples: &'a [String],
     synonyms: &'a [String],
+    definition: &'a str,
 }
 
 fn insert_entry(tx: &rusqlite::Transaction<'_>, entry: &EntryIn<'_>) -> Result<(), String> {
@@ -561,8 +743,8 @@ fn insert_entry(tx: &rusqlite::Transaction<'_>, entry: &EntryIn<'_>) -> Result<(
     let examples = serde_json::to_string(entry.examples).unwrap_or_else(|_| "[]".to_string());
     let synonyms = serde_json::to_string(entry.synonyms).unwrap_or_else(|_| "[]".to_string());
     tx.execute(
-        "INSERT INTO entries(term, normalized, phonetic, pos, meanings_json, examples_json, synonyms_json) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        "INSERT INTO entries(term, normalized, phonetic, pos, meanings_json, examples_json, synonyms_json, definition_html) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         params![
             entry.term.trim(),
             normalized,
@@ -570,7 +752,8 @@ fn insert_entry(tx: &rusqlite::Transaction<'_>, entry: &EntryIn<'_>) -> Result<(
             entry.pos.trim(),
             meanings,
             examples,
-            synonyms
+            synonyms,
+            entry.definition
         ],
     )
     .map_err(|e| format!("写入词典条目失败: {}", e))?;
@@ -703,6 +886,7 @@ fn import_ecdict(csv_path: &Path, db_path: &Path, job_id: &str) -> Result<i64, S
                 meanings: &meanings,
                 examples: &[],
                 synonyms: &[],
+                definition: "",
             },
         )?;
         if let Some(exchange) = i_exchange.and_then(|i| record.get(i)) {
@@ -816,6 +1000,7 @@ fn import_cedict(zip_path: &Path, db_path: &Path, job_id: &str) -> Result<i64, S
                     meanings: &meanings,
                     examples: &[],
                     synonyms: &[],
+                    definition: "",
                 },
             )?;
             count += 1;
@@ -887,6 +1072,7 @@ fn import_csv(
                 meanings: &meanings,
                 examples: &examples,
                 synonyms: &synonyms,
+                definition: "",
             },
         )?;
         count += 1;
@@ -954,6 +1140,7 @@ fn import_json(
                 meanings: &meanings,
                 examples: &examples,
                 synonyms: &synonyms,
+                definition: "",
             },
         )?;
         count += 1;
@@ -971,10 +1158,10 @@ async fn install_catalog(spec: &'static CatalogSpec, job_id: &str) -> Result<Dic
     let temp_dir = root.join(format!(".tmp-{}", spec.id));
     let _ = fs::remove_dir_all(&temp_dir);
     fs::create_dir_all(&temp_dir).map_err(|e| format!("创建词典目录失败: {}", e))?;
-    let download_path = temp_dir.join(if spec.format == "cedict_zip" {
-        "source.zip"
-    } else {
-        "source.csv"
+    let download_path = temp_dir.join(match spec.format {
+        "cedict_zip" => "source.zip",
+        "wiktionary_jsonl" => "source.jsonl",
+        _ => "source.csv",
     });
     set_job(job_id, "download", 0.0, "准备下载", "");
     let client = proxy_client()?;
@@ -995,6 +1182,8 @@ async fn install_catalog(spec: &'static CatalogSpec, job_id: &str) -> Result<Dic
     let entry_count = tauri::async_runtime::spawn_blocking(move || {
         if format == "cedict_zip" {
             import_cedict(&import_download, &import_db, &import_job)
+        } else if format == "wiktionary_jsonl" {
+            import_wiktionary_into(&import_download, &import_db, &import_job)
         } else {
             import_ecdict(&import_download, &import_db, &import_job)
         }
@@ -1012,6 +1201,11 @@ async fn install_catalog(spec: &'static CatalogSpec, job_id: &str) -> Result<Dic
         entry_count,
         installed_at: now_iso(),
         builtin: true,
+        format: spec.format.to_string(),
+        enabled: true,
+        priority: 0,
+        has_resources: false,
+        resource_bytes: 0,
     };
     write_manifest(&temp_dir, &manifest)?;
     let _ = fs::remove_file(&download_path);
@@ -1120,6 +1314,11 @@ fn normalized_manifest_from_zip(
         entry_count: 0,
         installed_at: now_iso(),
         builtin: false,
+        format: "zip".to_string(),
+        enabled: true,
+        priority: 0,
+        has_resources: false,
+        resource_bytes: 0,
     });
     let mut manifest = manifest;
     manifest.id = id;
@@ -1148,6 +1347,361 @@ fn extract_zip_member(zip_path: &Path, member: &str) -> Result<PathBuf, String> 
     Ok(temp)
 }
 
+fn format_label(format: &str) -> &'static str {
+    match format {
+        "mdx" => "MDict 词库",
+        "stardict" => "StarDict 词库",
+        "dsl" => "ABBYY DSL 词库",
+        "wiktionary" => "Wiktionary 词库",
+        "ecdict_csv" => "ECDICT 词库",
+        "cedict_zip" => "CC-CEDICT 词库",
+        "zip" => "词典包",
+        "csv" => "CSV 词库",
+        "json" => "JSON 词库",
+        _ => "离线词库",
+    }
+}
+
+fn pick_file(files: &[PathBuf], ext: &str) -> Option<PathBuf> {
+    files.iter().find(|path| {
+        path.extension()
+            .and_then(|value| value.to_str())
+            .map(|value| value.eq_ignore_ascii_case(ext))
+            .unwrap_or(false)
+    })
+    .cloned()
+}
+
+fn import_mdx_into(mdx: &Path, db_path: &Path, job_id: &str) -> Result<i64, String> {
+    let mut conn = Connection::open(db_path).map_err(|e| format!("创建词典数据库失败: {}", e))?;
+    create_schema(&conn)?;
+    let tx = conn.transaction().map_err(|e| format!("开始词典事务失败: {}", e))?;
+    let mut count = 0i64;
+    let mut scanned = 0i64;
+    set_job(job_id, "import", 55.0, "正在解析 MDX 词条", "");
+    let result = crate::commands::dict_formats::parse_mdx(mdx, |entry| {
+        scanned += 1;
+        if scanned % 5000 == 0 {
+            let percent = 55.0 + (scanned as f64 / 500_000.0 * 42.0).min(42.0);
+            set_job(job_id, "import", percent, &format!("已解析 {} 条", scanned), "");
+        }
+        if let Some(target) = entry.link.as_deref() {
+            add_lemma(&tx, &entry.term, target);
+            return Ok(());
+        }
+        insert_entry(
+            &tx,
+            &EntryIn {
+                term: &entry.term,
+                phonetic: &entry.phonetic,
+                pos: &entry.pos,
+                meanings: &entry.meanings,
+                examples: &entry.examples,
+                synonyms: &entry.synonyms,
+                definition: &entry.definition,
+            },
+        )?;
+        count += 1;
+        Ok(())
+    });
+    result?;
+    tx.commit().map_err(|e| format!("提交词典事务失败: {}", e))?;
+    let _ = conn.execute_batch("PRAGMA optimize;");
+    Ok(count)
+}
+
+fn import_stardict_into(ifo: &Path, db_path: &Path, job_id: &str) -> Result<(i64, String), String> {
+    let mut conn = Connection::open(db_path).map_err(|e| format!("创建词典数据库失败: {}", e))?;
+    create_schema(&conn)?;
+    let tx = conn.transaction().map_err(|e| format!("开始词典事务失败: {}", e))?;
+    set_job(job_id, "import", 55.0, "正在解析 StarDict 词库", "");
+    let mut count = 0i64;
+    let (parsed, name, _seq) = crate::commands::dict_formats::parse_stardict(ifo, |entry| {
+        insert_entry(
+            &tx,
+            &EntryIn {
+                term: &entry.term,
+                phonetic: &entry.phonetic,
+                pos: &entry.pos,
+                meanings: &entry.meanings,
+                examples: &entry.examples,
+                synonyms: &entry.synonyms,
+                definition: &entry.definition,
+            },
+        )?;
+        count += 1;
+        if count % 10_000 == 0 {
+            set_job(job_id, "import", 80.0, &format!("已导入 {} 条", count), "");
+        }
+        Ok(())
+    })?;
+    tx.commit().map_err(|e| format!("提交词典事务失败: {}", e))?;
+    let _ = conn.execute_batch("PRAGMA optimize;");
+    Ok((parsed, name))
+}
+
+fn import_dsl_into(dsl: &Path, db_path: &Path, job_id: &str) -> Result<(i64, String, String, String), String> {
+    let mut conn = Connection::open(db_path).map_err(|e| format!("创建词典数据库失败: {}", e))?;
+    create_schema(&conn)?;
+    let tx = conn.transaction().map_err(|e| format!("开始词典事务失败: {}", e))?;
+    set_job(job_id, "import", 55.0, "正在解析 DSL 词库", "");
+    let mut count = 0i64;
+    let (parsed, name, src, dst) = crate::commands::dict_formats::parse_dsl(dsl, |entry| {
+        insert_entry(
+            &tx,
+            &EntryIn {
+                term: &entry.term,
+                phonetic: &entry.phonetic,
+                pos: &entry.pos,
+                meanings: &entry.meanings,
+                examples: &entry.examples,
+                synonyms: &entry.synonyms,
+                definition: &entry.definition,
+            },
+        )?;
+        count += 1;
+        if count % 10_000 == 0 {
+            set_job(job_id, "import", 80.0, &format!("已导入 {} 条", count), "");
+        }
+        Ok(())
+    })?;
+    tx.commit().map_err(|e| format!("提交词典事务失败: {}", e))?;
+    let _ = conn.execute_batch("PRAGMA optimize;");
+    Ok((parsed, name, src, dst))
+}
+
+fn import_wiktionary_into(jsonl: &Path, db_path: &Path, job_id: &str) -> Result<i64, String> {
+    let mut conn = Connection::open(db_path).map_err(|e| format!("创建词典数据库失败: {}", e))?;
+    create_schema(&conn)?;
+    let tx = conn.transaction().map_err(|e| format!("开始词典事务失败: {}", e))?;
+    set_job(job_id, "import", 55.0, "正在解析 Wiktionary 词库", "");
+    let mut count = 0i64;
+    let mut scanned = 0i64;
+    let result = crate::commands::dict_formats::parse_wiktionary_jsonl(jsonl, |entry| {
+        scanned += 1;
+        if scanned % 5000 == 0 {
+            set_job(job_id, "import", 82.0, &format!("已解析 {} 条", scanned), "");
+        }
+        insert_entry(
+            &tx,
+            &EntryIn {
+                term: &entry.term,
+                phonetic: &entry.phonetic,
+                pos: &entry.pos,
+                meanings: &entry.meanings,
+                examples: &entry.examples,
+                synonyms: &entry.synonyms,
+                definition: &entry.definition,
+            },
+        )?;
+        count += 1;
+        Ok(())
+    });
+    result?;
+    tx.commit().map_err(|e| format!("提交词典事务失败: {}", e))?;
+    let _ = conn.execute_batch("PRAGMA optimize;");
+    Ok(count)
+}
+
+fn import_legacy_pack(
+    input: &Path,
+    db_path: &Path,
+    manifest: &mut DictManifest,
+    job_id: &str,
+) -> Result<i64, String> {
+    let ext = input
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .to_lowercase();
+    if ext == "zip" {
+        manifest.format = "zip".to_string();
+        let (zip_manifest, csv_member, json_member) = normalized_manifest_from_zip(
+            input,
+            &manifest.name,
+            &manifest.source_lang,
+            &manifest.target_lang,
+        )?;
+        manifest.name = zip_manifest.name;
+        manifest.source_lang = zip_manifest.source_lang;
+        manifest.target_lang = zip_manifest.target_lang;
+        manifest.version = zip_manifest.version;
+        manifest.license = zip_manifest.license;
+        if csv_member == "__cedict__" {
+            manifest.source_lang = "zh".to_string();
+            manifest.target_lang = "en".to_string();
+            import_cedict(input, db_path, job_id)
+        } else if !csv_member.is_empty() {
+            let temp_csv = extract_zip_member(input, &csv_member)?;
+            let count = import_csv(
+                &temp_csv,
+                db_path,
+                &manifest.source_lang,
+                &manifest.target_lang,
+                job_id,
+            );
+            let _ = fs::remove_file(temp_csv);
+            count
+        } else if !json_member.is_empty() {
+            let temp_json = extract_zip_member(input, &json_member)?;
+            let count = import_json(&temp_json, db_path, job_id);
+            let _ = fs::remove_file(temp_json);
+            count
+        } else {
+            Err("词典包里没有可导入的 CSV / JSON / CC-CEDICT 文本".to_string())
+        }
+    } else if ext == "json" {
+        manifest.format = "json".to_string();
+        import_json(input, db_path, job_id)
+    } else if ext == "csv" {
+        manifest.format = "csv".to_string();
+        import_csv(
+            input,
+            db_path,
+            &manifest.source_lang,
+            &manifest.target_lang,
+            job_id,
+        )
+    } else {
+        Err("无法识别的词典格式".to_string())
+    }
+}
+
+/// 把一组文件（.mdx + .mdd / .ifo 三件套 / .dsl / .jsonl / .zip / .csv / .json）
+/// 安装成一本词典。同名 .mdd 会自动一起解包成图片资源。
+fn build_pack(
+    files: &[PathBuf],
+    display_name: &str,
+    src_lang: &str,
+    dst_lang: &str,
+    job_id: &str,
+) -> Result<DictManifest, String> {
+    if files.is_empty() {
+        return Err("没有选择词典文件".to_string());
+    }
+    let primary = &files[0];
+    let stem = primary
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("imported")
+        .to_string();
+    let name = if display_name.trim().is_empty() {
+        stem
+    } else {
+        display_name.trim().to_string()
+    };
+
+    let root = dict_root()?;
+    let temp_dir = root.join(format!(".tmp-import-{}", Uuid::new_v4()));
+    fs::create_dir_all(&temp_dir).map_err(|e| format!("创建词典目录失败: {}", e))?;
+    let db_path = temp_dir.join(DICT_DB);
+    let res_dir = temp_dir.join(RES_DIR);
+
+    let mut manifest = DictManifest {
+        id: format!("{}_{}", sanitize_id(&name), Uuid::new_v4()),
+        name: name.clone(),
+        source_lang: src_lang.to_string(),
+        target_lang: dst_lang.to_string(),
+        version: "imported".to_string(),
+        license: "用户导入".to_string(),
+        description: String::new(),
+        entry_count: 0,
+        installed_at: now_iso(),
+        builtin: false,
+        format: String::new(),
+        enabled: true,
+        priority: 0,
+        has_resources: false,
+        resource_bytes: 0,
+    };
+    let mdx = pick_file(files, "mdx");
+    let mdd = pick_file(files, "mdd");
+    let ifo = pick_file(files, "ifo");
+    let dsl = pick_file(files, "dsl");
+    let jsonl = pick_file(files, "jsonl");
+
+    let count = if let Some(mdx_path) = mdx {
+        manifest.format = "mdx".to_string();
+        if manifest.source_lang.is_empty() || manifest.source_lang == "auto" {
+            manifest.source_lang = "en".to_string();
+        }
+        let count = import_mdx_into(&mdx_path, &db_path, &job_id)?;
+        if let Some(mdd_path) = mdd {
+            set_job(&job_id, "import", 96.0, "正在解包 MDD 图片资源", "");
+            let mut total = 0u64;
+            let saved = crate::commands::dict_formats::parse_mdd(
+                &mdd_path,
+                &res_dir,
+                512 * 1024 * 1024,
+                |_key, size| {
+                    total = size;
+                    Ok(())
+                },
+            )
+            .unwrap_or(0);
+            manifest.has_resources = saved > 0;
+            manifest.resource_bytes = total;
+        }
+        count
+    } else if let Some(ifo_path) = ifo {
+        manifest.format = "stardict".to_string();
+        let (count, book) = import_stardict_into(&ifo_path, &db_path, &job_id)?;
+        if display_name.trim().is_empty() && !book.trim().is_empty() {
+            manifest.name = book.trim().to_string();
+        }
+        count
+    } else if let Some(dsl_path) = dsl {
+        manifest.format = "dsl".to_string();
+        let (count, dsl_name, src_hint, dst_hint) = import_dsl_into(&dsl_path, &db_path, &job_id)?;
+        if display_name.trim().is_empty() && !dsl_name.trim().is_empty() {
+            manifest.name = dsl_name.trim().to_string();
+        }
+        if display_name.trim().is_empty() {
+            if !src_hint.trim().is_empty() {
+                manifest.source_lang = src_hint.trim().to_lowercase();
+            }
+            if !dst_hint.trim().is_empty() {
+                manifest.target_lang = dst_hint.trim().to_lowercase();
+            }
+        }
+        count
+    } else if let Some(jsonl_path) = jsonl {
+        manifest.format = "wiktionary".to_string();
+        import_wiktionary_into(&jsonl_path, &db_path, &job_id)?
+    } else if mdd.is_some() {
+        return Err("只选了 .mdd 资源包，请同时选择同名词库 .mdx".to_string());
+    } else {
+        import_legacy_pack(primary, &db_path, &mut manifest, &job_id)?
+    };
+
+    if count <= 0 {
+        let _ = fs::remove_dir_all(&temp_dir);
+        return Err("没有解析出任何词条，请确认文件格式与编码".to_string());
+    }
+    manifest.entry_count = count;
+    manifest.description = format!(
+        "{} · {} → {}",
+        format_label(&manifest.format),
+        manifest.source_lang,
+        manifest.target_lang
+    );
+    manifest.installed_at = now_iso();
+    write_manifest(&temp_dir, &manifest)?;
+    let final_dir = root.join(&manifest.id);
+    if final_dir.exists() {
+        fs::remove_dir_all(&final_dir).map_err(|e| format!("替换旧词典失败: {}", e))?;
+    }
+    fs::rename(&temp_dir, &final_dir).map_err(|e| format!("安装词典失败: {}", e))?;
+    set_job(
+        &job_id,
+        "done",
+        100.0,
+        &format!("已导入 {} 条", manifest.entry_count),
+        "",
+    );
+    Ok(manifest)
+}
+
 #[tauri::command]
 pub async fn language_learning_dict_import(
     path: String,
@@ -1162,71 +1716,196 @@ pub async fn language_learning_dict_import(
     let display_name = name.unwrap_or_default();
     let src = normalize_lang(source_lang.as_deref().unwrap_or("en"), "en");
     let dst = normalize_lang(target_lang.as_deref().unwrap_or("zh"), "zh");
+    let job_id = format!("import-{}", Uuid::new_v4());
     tauri::async_runtime::spawn_blocking(move || {
-        let root = dict_root()?;
-        let mut manifest = DictManifest {
-            id: format!("{}_{}", sanitize_id(if display_name.trim().is_empty() { "imported" } else { &display_name }), Uuid::new_v4()),
-            name: if display_name.trim().is_empty() { "导入词典".to_string() } else { display_name.trim().to_string() },
-            source_lang: src,
-            target_lang: dst,
-            version: "imported".to_string(),
-            license: "用户导入".to_string(),
-            description: "用户导入的离线词典包".to_string(),
-            entry_count: 0,
-            installed_at: now_iso(),
-            builtin: false,
-        };
-        let temp_dir = root.join(format!(".tmp-import-{}", Uuid::new_v4()));
-        fs::create_dir_all(&temp_dir).map_err(|e| format!("创建词典目录失败: {}", e))?;
-        let db_path = temp_dir.join(DICT_DB);
-        let ext = input
-            .extension()
-            .and_then(|x| x.to_str())
-            .unwrap_or_default()
-            .to_lowercase();
-        let job_id = format!("import-{}", manifest.id);
-        let count = if ext == "zip" {
-            let (zip_manifest, csv_member, json_member) =
-                normalized_manifest_from_zip(&input, &manifest.name, &manifest.source_lang, &manifest.target_lang)?;
-            manifest = zip_manifest;
-            if csv_member == "__cedict__" {
-                // 直接导入官方 CC-CEDICT 压缩包时，方向固定是 中→英。
-                manifest.source_lang = "zh".to_string();
-                manifest.target_lang = "en".to_string();
-                // 直接解析 zip 内的 CC-CEDICT
-                import_cedict(&input, &db_path, &job_id)?
-            } else if !csv_member.is_empty() {
-                let temp_csv = extract_zip_member(&input, &csv_member)?;
-                let count = import_csv(&temp_csv, &db_path, &manifest.source_lang, &manifest.target_lang, &job_id)?;
-                let _ = fs::remove_file(temp_csv);
-                count
-            } else if !json_member.is_empty() {
-                let temp_json = extract_zip_member(&input, &json_member)?;
-                let count = import_json(&temp_json, &db_path, &job_id)?;
-                let _ = fs::remove_file(temp_json);
-                count
-            } else {
-                return Err("词典包里没有可导入的 CSV/JSON".to_string());
-            }
-        } else if ext == "json" {
-            import_json(&input, &db_path, &job_id)?
-        } else if ext == "csv" {
-            import_csv(&input, &db_path, &manifest.source_lang, &manifest.target_lang, &job_id)?
-        } else {
-            return Err("仅支持 .zip / .csv / .json 词典包".to_string());
-        };
-        manifest.entry_count = count;
-        manifest.installed_at = now_iso();
-        write_manifest(&temp_dir, &manifest)?;
-        let final_dir = root.join(&manifest.id);
-        if final_dir.exists() {
-            fs::remove_dir_all(&final_dir).map_err(|e| format!("替换旧词典失败: {}", e))?;
-        }
-        fs::rename(&temp_dir, &final_dir).map_err(|e| format!("安装词典失败: {}", e))?;
-        Ok(manifest)
+        build_pack(&[input], &display_name, &src, &dst, &job_id)
     })
     .await
     .map_err(|e| format!("导入词典任务异常: {}", e))?
+}
+
+/// 多文件导入：MDX 常与 MDD 成对出现，StarDict 是 .ifo/.idx/.dict 三件套，
+/// 前端一次多选，这里按格式归组。
+#[tauri::command]
+pub async fn language_learning_dict_import_files(
+    paths: Vec<String>,
+    name: Option<String>,
+    source_lang: Option<String>,
+    target_lang: Option<String>,
+    job_id: Option<String>,
+) -> Result<DictManifest, String> {
+    let inputs: Vec<PathBuf> = paths
+        .iter()
+        .map(|path| PathBuf::from(path.trim()))
+        .filter(|path| path.is_file())
+        .collect();
+    if inputs.is_empty() {
+        return Err("要导入的词典文件不存在".to_string());
+    }
+    // 先按扩展名过一遍，能提前给出「不支持这个格式」而不是解析到一半才失败。
+    let recognized = inputs
+        .iter()
+        .filter(|path| !crate::commands::dict_formats::detect_format(path).is_empty())
+        .count();
+    if recognized == 0 {
+        return Err("暂不支持这些文件格式，可导入 .mdx/.mdd/.ifo/.dsl/.jsonl/.zip/.csv/.json".to_string());
+    }
+    let display_name = name.unwrap_or_default();
+    let src = normalize_lang(source_lang.as_deref().unwrap_or("en"), "en");
+    let dst = normalize_lang(target_lang.as_deref().unwrap_or("zh"), "zh");
+    let job_id = job_id
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| format!("import-{}", Uuid::new_v4()));
+    tauri::async_runtime::spawn_blocking(move || {
+        build_pack(&inputs, &display_name, &src, &dst, &job_id)
+    })
+    .await
+    .map_err(|e| format!("导入词典任务异常: {}", e))?
+}
+
+/// 按词典分组查词：词典应用要像欧路那样一本一本地展示命中。
+#[tauri::command]
+pub fn dict_lookup_grouped(
+    word: String,
+    source_lang: Option<String>,
+    target_lang: Option<String>,
+    per_pack_limit: Option<u32>,
+    max_packs: Option<u32>,
+) -> Vec<DictPackHits> {
+    let term = word.trim();
+    if term.is_empty() {
+        return Vec::new();
+    }
+    let source = source_lang.unwrap_or_else(|| "auto".to_string());
+    let source = if source.trim().is_empty() || source == "auto" {
+        detect_lang(term).to_string()
+    } else {
+        lang_key(&source)
+    };
+    let mut target = lang_key(&normalize_lang(target_lang.as_deref().unwrap_or("zh"), "zh"));
+    // 查中文词时用户想看的通常是英文释义（CC-CEDICT 是 中→英），
+    // 与语言学习里的方向翻转保持一致。
+    if source == "zh" && target == "zh" {
+        target = "en".to_string();
+    }
+    let per_pack = per_pack_limit.unwrap_or(3).clamp(1, 10) as usize;
+    let max_packs = max_packs.unwrap_or(6).clamp(1, 16) as usize;
+    let mut out = Vec::new();
+    for (manifest, dir, _) in installed_packs() {
+        if !manifest.enabled || !pack_matches(&manifest, &source, &target) {
+            continue;
+        }
+        let entries = query_pack(&dir.join(DICT_DB), &manifest, term, per_pack);
+        if entries.is_empty() {
+            continue;
+        }
+        out.push(DictPackHits {
+            pack_id: manifest.id.clone(),
+            pack_name: manifest.name.clone(),
+            source_lang: manifest.source_lang.clone(),
+            target_lang: manifest.target_lang.clone(),
+            format: manifest.format.clone(),
+            entry_count: manifest.entry_count,
+            entries,
+        });
+        if out.len() >= max_packs {
+            break;
+        }
+    }
+    out
+}
+
+/// 词典浏览器：按词条顺序翻阅或模糊搜索，不依赖查词精准命中。
+#[tauri::command]
+pub fn dict_browse_entries(
+    id: String,
+    keyword: Option<String>,
+    offset: Option<u32>,
+    limit: Option<u32>,
+) -> Vec<DictBrowserRow> {
+    let safe = sanitize_id(&id);
+    let dir = match dict_root() {
+        Ok(root) => root.join(safe),
+        Err(_) => return Vec::new(),
+    };
+    let db_path = dir.join(DICT_DB);
+    if !db_path.is_file() {
+        return Vec::new();
+    }
+    ensure_entry_columns(&db_path);
+    let conn = match open_readonly(&db_path) {
+        Ok(value) => value,
+        Err(_) => return Vec::new(),
+    };
+    let keyword = keyword.unwrap_or_default().trim().to_lowercase();
+    let offset = offset.unwrap_or(0) as i64;
+    let limit = limit.unwrap_or(60).clamp(1, 300) as i64;
+    let sql = if keyword.is_empty() {
+        "SELECT term, phonetic, pos, meanings_json FROM entries ORDER BY normalized ASC LIMIT ?1 OFFSET ?2"
+    } else {
+        "SELECT term, phonetic, pos, meanings_json FROM entries WHERE normalized LIKE ?3 ORDER BY length(normalized) ASC, normalized ASC LIMIT ?1 OFFSET ?2"
+    };
+    let mut stmt = match conn.prepare(sql) {
+        Ok(value) => value,
+        Err(_) => return Vec::new(),
+    };
+    let map_row = |row: &rusqlite::Row<'_>| -> rusqlite::Result<DictBrowserRow> {
+        let meanings_json: String = row.get(3)?;
+        let meanings: Vec<String> = serde_json::from_str(&meanings_json).unwrap_or_default();
+        Ok(DictBrowserRow {
+            term: row.get(0)?,
+            phonetic: row.get(1)?,
+            pos: row.get(2)?,
+            preview: meanings.first().cloned().unwrap_or_default(),
+        })
+    };
+    let rows = if keyword.is_empty() {
+        stmt.query_map(params![limit, offset], map_row)
+    } else {
+        stmt.query_map(params![limit, offset, format!("%{}%", keyword)], map_row)
+    };
+    match rows {
+        Ok(iter) => iter.flatten().collect(),
+        Err(_) => Vec::new(),
+    }
+}
+
+fn read_pack_dir(id: &str) -> Result<(DictManifest, PathBuf), String> {
+    let safe = sanitize_id(id);
+    if safe != id.trim().to_lowercase() && safe != id.trim() {
+        return Err("词典 ID 不合法".to_string());
+    }
+    let dir = dict_root()?.join(&safe);
+    let manifest = read_manifest(&dir).ok_or_else(|| "词典不存在".to_string())?;
+    Ok((manifest, dir))
+}
+
+#[tauri::command]
+pub fn dict_set_enabled(id: String, enabled: bool) -> Result<DictManifest, String> {
+    let (mut manifest, dir) = read_pack_dir(&id)?;
+    manifest.enabled = enabled;
+    write_manifest(&dir, &manifest)?;
+    Ok(manifest)
+}
+
+#[tauri::command]
+pub fn dict_set_priority(id: String, priority: i64) -> Result<DictManifest, String> {
+    let (mut manifest, dir) = read_pack_dir(&id)?;
+    manifest.priority = priority;
+    write_manifest(&dir, &manifest)?;
+    Ok(manifest)
+}
+
+/// 按传入顺序重排优先级（第一本最优先）。
+#[tauri::command]
+pub fn dict_reorder(ids: Vec<String>) -> Result<Vec<DictManifest>, String> {
+    let total = ids.len() as i64;
+    for (index, id) in ids.iter().enumerate() {
+        let (mut manifest, dir) = read_pack_dir(id)?;
+        manifest.priority = (total - index as i64) * 10;
+        write_manifest(&dir, &manifest)?;
+    }
+    Ok(installed_packs().into_iter().map(|(m, _, _)| m).collect())
 }
 
 #[tauri::command]

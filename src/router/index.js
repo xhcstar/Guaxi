@@ -30,7 +30,7 @@ import GuaxiMathWorkbench from '../components/HomeViewComponent/GuaxiMathWorkben
 
 import LifeAlbumApp from '../components/ApplicationViewComponent/apps/LifeAlbumApp.vue'
 import MusicPlayerApp from '../components/ApplicationViewComponent/apps/MusicPlayerApp.vue'
-import LanguageTranslatorApp from '../components/ApplicationViewComponent/apps/LanguageTranslatorApp.vue'
+import GuaxiDictionaryApp from '../components/ApplicationViewComponent/apps/GuaxiDictionaryApp.vue'
 import FileTransferAssistantApp from '../components/ApplicationViewComponent/apps/FileTransferAssistantApp.vue'
 import PythonPlaygroundApp from '../components/ApplicationViewComponent/apps/PythonPlaygroundApp.vue'
 import PlaceholderApp from '../components/ApplicationViewComponent/apps/PlaceholderApp.vue'
@@ -47,7 +47,7 @@ import TravelPrintView from '../views/TravelPrintView.vue'
 const APP_COMPONENT_MAP = {
   'life-album': LifeAlbumApp,
   'music-player': MusicPlayerApp,
-  'language-translator': LanguageTranslatorApp,
+  'language-translator': GuaxiDictionaryApp,
   'tools-file-transfer': FileTransferAssistantApp,
   'tools-python-playground': PythonPlaygroundApp,
   'tools-tts-book': TTSBookApp,
@@ -67,7 +67,7 @@ const GuaxiAppWindow = {
     const appId = computed(() => String(route.params?.appId || ''))
     const Comp = computed(() => APP_COMPONENT_MAP[appId.value] || PlaceholderApp)
     // Workbench-style apps own their full window layout, so the route host should not add outer padding.
-    const fullBleedAppIds = new Set(['life-album', 'music-player', 'tools-tts-book', 'work-resume', 'creation-ai-film-studio', 'tools-remote-terminal', 'tools-resource-hunter', 'tools-mail', 'life-travel-planner'])
+    const fullBleedAppIds = new Set(['life-album', 'language-translator', 'music-player', 'tools-tts-book', 'work-resume', 'creation-ai-film-studio', 'tools-remote-terminal', 'tools-resource-hunter', 'tools-mail', 'life-travel-planner'])
     const hostPadding = computed(() => (fullBleedAppIds.has(appId.value) ? '0px' : '16px'))
 
     return () =>
