@@ -238,6 +238,7 @@ import checkIcon from '@iconify-icons/lucide/check'
 import libraryIcon from '@iconify-icons/lucide/library'
 import uploadIcon from '@iconify-icons/lucide/upload'
 import loaderIcon from '@iconify-icons/lucide/loader-2'
+import { dictJobs, onDictJobFinished, startDictJobsPolling } from './dictJobs.js'
 
 const props = defineProps({
   show: { type: Boolean, default: false },
@@ -280,7 +281,6 @@ const activeTab = ref('installed')
 
 const packs = ref([])
 const catalog = ref([])
-const jobs = ref({})
 const enablingId = ref('')
 const busyCatalogId = ref('')
 
@@ -291,7 +291,8 @@ const importTo = ref('zh')
 const importing = ref(false)
 const importJobId = ref('')
 
-let pollTimer = 0
+// 任务状态来自共享 store：组件卸载 / 切页都不会中断轮询。
+const jobs = computed(() => dictJobs.map)
 
 const langOptions = [
   { label: '中文', value: 'zh' },
@@ -360,58 +361,33 @@ const onShowChange = (value) => emit('update:show', value)
 
 const refresh = async () => {
   try {
-    const [packList, catalogList, jobList] = await Promise.all([
+    const [packList, catalogList] = await Promise.all([
       invoke('language_learning_dict_list'),
       invoke('language_learning_dict_catalog'),
-      invoke('language_learning_dict_jobs'),
     ])
     packs.value = Array.isArray(packList) ? packList : []
     catalog.value = Array.isArray(catalogList) ? catalogList : []
-    const map = {}
-    ;(Array.isArray(jobList) ? jobList : []).forEach((job) => {
-      if (job?.id) map[job.id] = job
-    })
-    jobs.value = map
   } catch (err) {
     message.error(`读取词典库失败：${String(err?.message || err || '')}`)
   }
 }
 
-const refreshJobs = async () => {
-  try {
-    const jobList = await invoke('language_learning_dict_jobs')
-    const map = {}
-    ;(Array.isArray(jobList) ? jobList : []).forEach((job) => {
-      if (job?.id) map[job.id] = job
-    })
-    jobs.value = map
-    const running = Object.values(map).some((job) => job?.stage && !['done', 'error'].includes(job.stage))
-    if (!running) {
-      stopPolling()
-      await refresh()
-      emit('changed')
-    }
-  } catch {}
-}
-
-const ensurePolling = () => {
-  if (pollTimer) return
-  pollTimer = window.setInterval(refreshJobs, 900)
-}
-const stopPolling = () => {
-  if (!pollTimer) return
-  window.clearInterval(pollTimer)
-  pollTimer = 0
-}
+// 任务进度由 dictJobs 单例统一轮询：
+// 管理器只是「订阅方」，关掉它或者切到别的页面，下载与进度都不会断。
+// 完成提示统一由词典应用层弹（那里常驻，关掉管理器也能收到），
+// 这里只负责刷新列表，避免同一件事弹两次。
+const stopWatchingFinish = onDictJobFinished(async () => {
+  await refresh()
+  emit('changed')
+})
 
 watch(
   () => props.show,
   (visible) => {
     if (visible) {
       refresh()
-      ensurePolling()
+      startDictJobsPolling()
     } else {
-      stopPolling()
       // 管理器被关掉时，别让确认框的 Promise 悬着。
       settleConfirm(false)
     }
@@ -427,14 +403,14 @@ watch(
   },
 )
 
-onBeforeUnmount(stopPolling)
+onBeforeUnmount(stopWatchingFinish)
 
 const installPack = async (item) => {
   busyCatalogId.value = item.id
   try {
     await invoke('language_learning_dict_install', { id: item.id })
-    message.info(`已开始下载「${item.name}」`)
-    ensurePolling()
+    message.info(`已开始下载「${item.name}」，可以在后台继续，切换页面不会中断`)
+    startDictJobsPolling()
   } catch (err) {
     message.error(`启动下载失败：${String(err?.message || err || '')}`)
   } finally {
@@ -536,7 +512,7 @@ const doImport = async () => {
   importing.value = true
   const jobId = `import-${Date.now()}`
   importJobId.value = jobId
-  ensurePolling()
+  startDictJobsPolling()
   try {
     const manifest = await invoke('language_learning_dict_import_files', {
       paths: importPaths.value,

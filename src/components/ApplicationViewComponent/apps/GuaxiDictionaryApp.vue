@@ -67,6 +67,17 @@
         </div>
       </header>
 
+      <!-- 后台下载进度：轮询跑在 dictJobs 单例里，切页/关掉词典库都不会中断 -->
+      <div v-if="activeJob" class="gx-dl">
+        <Icon :icon="downloadIcon" width="14" height="14" class="gx-dl-icon" :class="{ spin: activeJob.job.stage === 'download' }" />
+        <span class="gx-dl-name">{{ activeJob.name }}</span>
+        <span class="gx-dl-track">
+          <i :style="{ width: `${Math.min(100, Math.round(activeJob.job.progress || 0))}%` }"></i>
+        </span>
+        <span class="gx-dl-pct">{{ Math.round(activeJob.job.progress || 0) }}%</span>
+        <button type="button" class="gx-dl-link" @click="managerVisible = true">查看</button>
+      </div>
+
       <div ref="scrollRef" class="gx-scroll">
         <!-- 查词 -->
         <div v-if="view === 'search'" class="gx-search-view">
@@ -326,6 +337,7 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
+import { useMessage } from 'naive-ui'
 import { Icon } from '@iconify/vue'
 import searchIcon from '@iconify-icons/lucide/search'
 import xIcon from '@iconify-icons/lucide/x'
@@ -339,6 +351,8 @@ import libraryIcon from '@iconify-icons/lucide/library'
 import historyIcon from '@iconify-icons/lucide/history'
 import bookIcon from '@iconify-icons/lucide/book-open'
 import DictionaryManager from './dictionary/DictionaryManager.vue'
+import { dictJobs, onDictJobFinished, startDictJobsPolling } from './dictionary/dictJobs.js'
+import downloadIcon from '@iconify-icons/lucide/download'
 
 const LANG_OPTIONS = [
   { label: '自动检测', value: 'auto' },
@@ -875,12 +889,40 @@ const deleteRecord = async (record) => {
   }
 }
 
+const message = useMessage()
+const catalogNames = ref({})
+
 const refreshPacks = async () => {
   try {
-    const list = await invoke('language_learning_dict_list')
+    const [list, catalogList] = await Promise.all([
+      invoke('language_learning_dict_list'),
+      invoke('language_learning_dict_catalog'),
+    ])
     packs.value = Array.isArray(list) ? list : []
+    const names = {}
+    ;(Array.isArray(catalogList) ? catalogList : []).forEach((item) => {
+      if (item?.id) names[item.id] = item.name
+    })
+    catalogNames.value = names
   } catch {}
 }
+
+// 正在下载 / 建索引的任务，用来在顶部显示进度条
+const activeJob = computed(() => {
+  const job = Object.values(dictJobs.map).find(
+    (item) => item?.stage && !['done', 'error'].includes(item.stage),
+  )
+  if (!job) return null
+  const pack = packs.value.find((item) => item.id === job.id)
+  return { job, name: pack?.name || catalogNames.value[job.id] || job.id }
+})
+
+const stopWatchingJobs = onDictJobFinished(async (job) => {
+  await refreshPacks()
+  const name = catalogNames.value[job.id] || job.id
+  if (job.stage === 'done') message.success(`「${name}」已就绪`)
+  else message.error(`「${name}」失败：${job.error || '未知错误'}`)
+})
 
 const onPacksChanged = () => {
   refreshPacks()
@@ -913,12 +955,15 @@ onMounted(() => {
     }
   } catch {}
   refreshPacks()
+  // 有没跑完的下载就接管进度显示；没有任务时 store 会自己停表。
+  startDictJobsPolling()
   recordLang.value = 'en'
   refreshVocabCount()
   searchInput.value?.focus()
 })
 
 onBeforeUnmount(() => {
+  stopWatchingJobs()
   if (debounceTimer) window.clearTimeout(debounceTimer)
   if (recordTimer) window.clearTimeout(recordTimer)
   if (activeAudio) {
@@ -1099,6 +1144,72 @@ watch([fromLang, toLang], () => {
   padding: 14px 22px;
   border-bottom: 1px solid var(--gx-rule);
   background: color-mix(in srgb, var(--gx-panel) 96%, var(--gx-jade) 4%);
+}
+
+/* 后台下载条：细，不抢搜索栏的注意力，但随时能看到进度 */
+.gx-dl {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 22px;
+  font-size: 12px;
+  color: var(--gx-muted);
+  border-bottom: 1px solid var(--gx-rule);
+  background: color-mix(in srgb, var(--gx-jade) 7%, transparent);
+}
+.gx-dl-icon {
+  color: var(--gx-jade);
+  flex: none;
+}
+.gx-dl-name {
+  flex: none;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--gx-text);
+  font-weight: 500;
+}
+.gx-dl-track {
+  flex: 1;
+  min-width: 60px;
+  height: 3px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--gx-jade) 16%, transparent);
+  overflow: hidden;
+}
+.gx-dl-track i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--gx-jade);
+  transition: width 0.4s ease;
+}
+.gx-dl-pct {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+  color: var(--gx-jade);
+  font-weight: 600;
+}
+.gx-dl-link {
+  flex: none;
+  border: 0;
+  background: none;
+  padding: 0;
+  font-size: 12px;
+  color: var(--gx-jade);
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.spin {
+  animation: gx-spin 1s linear infinite;
+}
+@keyframes gx-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .gx-field {

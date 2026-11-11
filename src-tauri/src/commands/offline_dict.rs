@@ -19,6 +19,7 @@ use std::fs;
 use std::io::{BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+use std::time::Duration;
 use tokio::io::AsyncWriteExt;
 use tracing::info;
 use uuid::Uuid;
@@ -172,76 +173,76 @@ const CATALOG: &[CatalogSpec] = &[
         url: CEDICT_URL,
     },
     CatalogSpec {
-        id: "kaikki-ja",
-        name: "Wiktionary 日英词典",
+        id: "zhwiktionary-ja",
+        name: "维基日汉词典",
         source_lang: "ja",
-        target_lang: "en",
-        description: "基于日文 Wiktionary 的完整词条抽取（kaikki.org），约 40 万词条，含词性、英文释义与例句。CC BY-SA。",
+        target_lang: "zh",
+        description: "取自中文维基词典的日语词条，简体中文释义，含词性、假名注音、同义词与例句。约 8 万条。CC BY-SA。",
         license: "CC BY-SA 3.0",
-        size_bytes: 387_569_265,
-        version: "kaikki",
+        size_bytes: 90_547_237,
+        version: "zhwiktionary",
         format: "wiktionary_jsonl",
-        url: "https://kaikki.org/dictionary/Japanese/kaikki.org-dictionary-Japanese.jsonl",
+        url: "https://kaikki.org/zhwiktionary/%E6%97%A5%E8%AA%9E/kaikki.org-dictionary-%E6%97%A5%E8%AA%9E.jsonl",
     },
     CatalogSpec {
-        id: "kaikki-ko",
-        name: "Wiktionary 韩英词典",
+        id: "zhwiktionary-ko",
+        name: "维基韩汉词典",
         source_lang: "ko",
-        target_lang: "en",
-        description: "韩文 Wiktionary 全量词条抽取，含英文释义与例句。CC BY-SA。",
+        target_lang: "zh",
+        description: "取自中文维基词典的朝鲜语词条，简体中文释义，含词性与例句。约 3 万条。CC BY-SA。",
         license: "CC BY-SA 3.0",
-        size_bytes: 207_649_961,
-        version: "kaikki",
+        size_bytes: 31_578_800,
+        version: "zhwiktionary",
         format: "wiktionary_jsonl",
-        url: "https://kaikki.org/dictionary/Korean/kaikki.org-dictionary-Korean.jsonl",
+        url: "https://kaikki.org/zhwiktionary/%E6%9C%9D%E9%AE%AE%E8%AA%9E/kaikki.org-dictionary-%E6%9C%9D%E9%AE%AE%E8%AA%9E.jsonl",
     },
     CatalogSpec {
-        id: "kaikki-fr",
-        name: "Wiktionary 法英词典",
+        id: "zhwiktionary-fr",
+        name: "维基法汉词典",
         source_lang: "fr",
-        target_lang: "en",
-        description: "法文 Wiktionary 全量词条抽取，含词性、英文释义、同义词与例句。CC BY-SA。",
+        target_lang: "zh",
+        description: "取自中文维基词典的法语词条，简体中文释义，含词性、音标与例句。约 8 万条。CC BY-SA。",
         license: "CC BY-SA 3.0",
-        size_bytes: 592_920_809,
-        version: "kaikki",
+        size_bytes: 79_830_943,
+        version: "zhwiktionary",
         format: "wiktionary_jsonl",
-        url: "https://kaikki.org/dictionary/French/kaikki.org-dictionary-French.jsonl",
+        url: "https://kaikki.org/zhwiktionary/%E6%B3%95%E8%AA%9E/kaikki.org-dictionary-%E6%B3%95%E8%AA%9E.jsonl",
     },
     CatalogSpec {
-        id: "kaikki-de",
-        name: "Wiktionary 德英词典",
+        id: "zhwiktionary-de",
+        name: "维基德汉词典",
         source_lang: "de",
-        target_lang: "en",
-        description: "德文 Wiktionary 全量词条抽取（约 1.1 GB 源文件），含词性、英文释义与例句。CC BY-SA。",
+        target_lang: "zh",
+        description: "取自中文维基词典的德语词条，简体中文释义，含词性、音标与例句。约 11 万条。CC BY-SA。",
         license: "CC BY-SA 3.0",
-        size_bytes: 1_095_258_648,
-        version: "kaikki",
+        size_bytes: 116_514_382,
+        version: "zhwiktionary",
         format: "wiktionary_jsonl",
-        url: "https://kaikki.org/dictionary/German/kaikki.org-dictionary-German.jsonl",
+        url: "https://kaikki.org/zhwiktionary/%E5%BE%B7%E8%AA%9E/kaikki.org-dictionary-%E5%BE%B7%E8%AA%9E.jsonl",
     },
     CatalogSpec {
-        id: "kaikki-es",
-        name: "Wiktionary 西英词典",
+        id: "zhwiktionary-es",
+        name: "维基西汉词典",
         source_lang: "es",
-        target_lang: "en",
-        description: "西班牙语 Wiktionary 全量词条抽取（约 1.1 GB 源文件），含词性、英文释义与例句。CC BY-SA。",
+        target_lang: "zh",
+        description: "取自中文维基词典的西班牙语词条，简体中文释义，含词性、音标与例句。约 11 万条。CC BY-SA。",
         license: "CC BY-SA 3.0",
-        size_bytes: 1_119_672_965,
-        version: "kaikki",
+        size_bytes: 119_562_856,
+        version: "zhwiktionary",
         format: "wiktionary_jsonl",
-        url: "https://kaikki.org/dictionary/Spanish/kaikki.org-dictionary-Spanish.jsonl",
+        url: "https://kaikki.org/zhwiktionary/%E8%A5%BF%E7%8F%AD%E7%89%99%E8%AA%9E/kaikki.org-dictionary-%E8%A5%BF%E7%8F%AD%E7%89%99%E8%AA%9E.jsonl",
     },
     CatalogSpec {
-        id: "kaikki-ru",
-        name: "Wiktionary 俄英词典",
+        id: "zhwiktionary-ru",
+        name: "维基俄汉词典",
         source_lang: "ru",
-        target_lang: "en",
-        description: "俄文 Wiktionary 全量词条抽取（约 0.9 GB 源文件），含词性、英文释义与例句。CC BY-SA。",
+        target_lang: "zh",
+        description: "取自中文维基词典的俄语词条，简体中文释义，含词性、音标与例句。约 9 万条。CC BY-SA。",
         license: "CC BY-SA 3.0",
-        size_bytes: 948_499_874,
-        version: "kaikki",
+        size_bytes: 97_303_085,
+        version: "zhwiktionary",
         format: "wiktionary_jsonl",
-        url: "https://kaikki.org/dictionary/Russian/kaikki.org-dictionary-Russian.jsonl",
+        url: "https://kaikki.org/zhwiktionary/%E4%BF%84%E8%AA%9E/kaikki.org-dictionary-%E4%BF%84%E8%AA%9E.jsonl",
     },
 ];
 
@@ -614,6 +615,21 @@ fn proxy_client() -> Result<Client, String> {
     crate::commands::resource_hunter::proxy::build_client_raw(proxy_url.as_deref())
 }
 
+/// 下载中的临时文件名：先写 `xxx.part`，完整收到后才改名。
+/// 中途退出 / 断网留下的半截文件下次能接着传，不会从 0 重来。
+fn partial_download_path(dest: &Path) -> PathBuf {
+    let name = dest
+        .file_name()
+        .map(|v| v.to_string_lossy().to_string())
+        .unwrap_or_else(|| "download".to_string());
+    dest.with_file_name(format!("{}.part", name))
+}
+
+/// 单块读超时：只要还有数据在流动就一直传下去。
+/// 不能用「整请求超时」——一本 1GB 的词典在慢速代理下几分钟都传不完，
+/// 会被 reqwest 直接判超时，表现就是「下载到一半被打断」。
+const DOWNLOAD_IDLE_TIMEOUT: Duration = Duration::from_secs(120);
+
 async fn download_file(
     client: &Client,
     url: &str,
@@ -621,44 +637,112 @@ async fn download_file(
     job_id: &str,
     expected_total: u64,
 ) -> Result<(), String> {
-    let response = client
-        .get(url)
-        .timeout(std::time::Duration::from_secs(900))
-        .send()
-        .await
-        .map_err(|e| format!("下载词典失败: {}", e))?;
-    if !response.status().is_success() {
-        return Err(format!("下载词典失败，状态码: {}", response.status()));
-    }
-    let total = response.content_length().unwrap_or(expected_total);
     if let Some(parent) = dest.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("创建词典临时目录失败: {}", e))?;
     }
-    let mut file = tokio::fs::File::create(dest)
-        .await
-        .map_err(|e| format!("创建词典文件失败: {}", e))?;
-    let mut stream = response.bytes_stream();
-    let mut written: u64 = 0;
-    while let Some(chunk) = stream.next().await {
-        let bytes = chunk.map_err(|e| format!("读取词典数据失败: {}", e))?;
-        file.write_all(&bytes)
+    let part = partial_download_path(dest);
+    let mut start_at = fs::metadata(&part).map(|m| m.len()).unwrap_or(0);
+    let mut attempt = 0;
+
+    loop {
+        attempt += 1;
+        let mut request = client.get(url);
+        if start_at > 0 {
+            request = request.header(reqwest::header::RANGE, format!("bytes={}-", start_at));
+        }
+        let response = request
+            .send()
             .await
-            .map_err(|e| format!("写入词典文件失败: {}", e))?;
-        written += bytes.len() as u64;
-        let percent = if total > 0 {
-            (written as f64 / total as f64 * 100.0).min(100.0)
-        } else {
-            0.0
-        };
-        let message = if total > 0 {
-            format!("下载中 {:.0}%", percent)
-        } else {
-            format!("下载中 {:.1} MB", written as f64 / 1_048_576.0)
-        };
-        set_job(job_id, "download", percent, &message, "");
+            .map_err(|e| format!("下载词典失败: {}", e))?;
+        let status = response.status();
+
+        // 服务器把上次没下完的当成完整文件了（416），说明 .part 已经够用或已失效，
+        // 直接删掉重来一次。
+        if status == reqwest::StatusCode::RANGE_NOT_SATISFIABLE && start_at > 0 {
+            let _ = fs::remove_file(&part);
+            start_at = 0;
+            if attempt < 3 {
+                continue;
+            }
+            return Err("下载词典失败：服务器拒绝续传".to_string());
+        }
+        if !status.is_success() {
+            return Err(format!("下载词典失败，状态码: {}", status));
+        }
+
+        let resumed = start_at > 0 && status == reqwest::StatusCode::PARTIAL_CONTENT;
+        if start_at > 0 && !resumed {
+            // 服务器忽略 Range，只能从头写。
+            start_at = 0;
+        }
+        let body_len = response.content_length().unwrap_or(0);
+        let total = if resumed { start_at + body_len } else { body_len };
+        let total = if total == 0 { expected_total } else { total };
+
+        let mut file = tokio::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .append(resumed)
+            .truncate(!resumed)
+            .open(&part)
+            .await
+            .map_err(|e| format!("创建词典文件失败: {}", e))?;
+
+        let mut written = start_at;
+        let mut stream = response.bytes_stream();
+        let mut last_report = std::time::Instant::now() - Duration::from_secs(1);
+        loop {
+            let next = tokio::time::timeout(DOWNLOAD_IDLE_TIMEOUT, stream.next()).await;
+            let chunk = match next {
+                Err(_) => {
+                    // 保留 .part，下次继续。
+                    return Err(format!(
+                        "下载超时（{} 秒无数据），已保留已下载的 {:.1} MB，可稍后重试继续",
+                        DOWNLOAD_IDLE_TIMEOUT.as_secs(),
+                        written as f64 / 1_048_576.0
+                    ));
+                }
+                Ok(None) => break,
+                Ok(Some(chunk)) => chunk.map_err(|e| format!("读取词典数据失败: {}", e))?,
+            };
+            file.write_all(&chunk)
+                .await
+                .map_err(|e| format!("写入词典文件失败: {}", e))?;
+            written += chunk.len() as u64;
+            // 每 300ms 才刷一次进度，几十万次 set_job 会白白抢锁。
+            if last_report.elapsed() >= Duration::from_millis(300) {
+                last_report = std::time::Instant::now();
+                let percent = if total > 0 {
+                    (written as f64 / total as f64 * 100.0).min(99.9)
+                } else {
+                    0.0
+                };
+                let message = if total > 0 {
+                    format!(
+                        "{} {:.0}% · {:.1}/{:.1} MB",
+                        if resumed { "续传中" } else { "下载中" },
+                        percent,
+                        written as f64 / 1_048_576.0,
+                        total as f64 / 1_048_576.0
+                    )
+                } else {
+                    format!("下载中 {:.1} MB", written as f64 / 1_048_576.0)
+                };
+                set_job(job_id, "download", percent, &message, "");
+            }
+        }
+        file.flush().await.map_err(|e| format!("写入词典文件失败: {}", e))?;
+
+        if total > 0 && written < total {
+            return Err(format!(
+                "下载不完整（{:.1}/{:.1} MB），已保留临时文件，下次会自动续传",
+                written as f64 / 1_048_576.0,
+                total as f64 / 1_048_576.0
+            ));
+        }
+        fs::rename(&part, dest).map_err(|e| format!("保存词典文件失败: {}", e))?;
+        return Ok(());
     }
-    file.flush().await.map_err(|e| format!("写入词典文件失败: {}", e))?;
-    Ok(())
 }
 
 fn create_schema(conn: &Connection) -> Result<(), String> {
@@ -1156,23 +1240,39 @@ async fn install_catalog(spec: &'static CatalogSpec, job_id: &str) -> Result<Dic
     let root = dict_root()?;
     let final_dir = root.join(spec.id);
     let temp_dir = root.join(format!(".tmp-{}", spec.id));
-    let _ = fs::remove_dir_all(&temp_dir);
-    fs::create_dir_all(&temp_dir).map_err(|e| format!("创建词典目录失败: {}", e))?;
     let download_path = temp_dir.join(match spec.format {
         "cedict_zip" => "source.zip",
         "wiktionary_jsonl" => "source.jsonl",
         _ => "source.csv",
     });
-    set_job(job_id, "download", 0.0, "准备下载", "");
-    let client = proxy_client()?;
-    download_file(
-        &client,
-        spec.url,
-        &download_path,
-        job_id,
-        spec.size_bytes,
-    )
-    .await?;
+    // 已经下完的文件（只有完整收到才会改名成正式文件名）直接复用：
+    // 上次若是「建索引」阶段失败，不必再把上百 MB 重下一遍。
+    let downloaded = fs::metadata(&download_path)
+        .map(|meta| meta.len() > 0)
+        .unwrap_or(false);
+    // 有半截文件就留着续传，别把已经下了几百 MB 的进度抹掉。
+    let partial = partial_download_path(&download_path);
+    let resumable = fs::metadata(&partial)
+        .map(|meta| meta.len() > 0)
+        .unwrap_or(false);
+    if !downloaded && !resumable {
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+    fs::create_dir_all(&temp_dir).map_err(|e| format!("创建词典目录失败: {}", e))?;
+    if downloaded {
+        set_job(job_id, "import", 80.0, "已下载过，直接建立索引", "");
+    } else {
+        set_job(job_id, "download", 0.0, "准备下载", "");
+        let client = proxy_client()?;
+        download_file(
+            &client,
+            spec.url,
+            &download_path,
+            job_id,
+            spec.size_bytes,
+        )
+        .await?;
+    }
     set_job(job_id, "import", 88.0, "正在建立词典索引", "");
     let db_path = temp_dir.join(DICT_DB);
     let format = spec.format.to_string();
