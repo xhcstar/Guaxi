@@ -660,7 +660,9 @@ onUnmounted(() => {
   gap: 10px;
   flex: 1 1 auto;
   min-height: 0;
-  overflow: auto;
+  min-width: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
   overscroll-behavior: contain;
   scrollbar-width: thin;
   scrollbar-color: color-mix(in srgb, var(--guaxi-border) 70%, transparent) transparent;
@@ -709,6 +711,8 @@ onUnmounted(() => {
   padding: 8px 10px;
   border: 1px solid var(--guaxi-border);
   border-radius: 12px;
+  min-width: 0;
+  max-width: 100%;
   background: linear-gradient(160deg, color-mix(in srgb, var(--guaxi-panel-bg) 96%, #8fb8ff 4%) 0%, color-mix(in srgb, var(--guaxi-panel-bg) 95%, #7ef0cb 5%) 100%);
 }
 
@@ -727,6 +731,8 @@ onUnmounted(() => {
   font-size: 30px;
   font-weight: 700;
   color: var(--guaxi-text-primary);
+  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 .word-meta-badges {
@@ -760,6 +766,26 @@ onUnmounted(() => {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+/* n-tag 默认 nowrap 且固定高度，长释义会把面板撑宽导致横向溢出 */
+.word-chip-wrap :deep(.n-tag),
+.word-meta-badges :deep(.n-tag) {
+  max-width: 100%;
+  height: auto;
+  min-height: 20px;
+  white-space: normal;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+.word-chip-wrap :deep(.n-tag .n-tag__content),
+.word-meta-badges :deep(.n-tag .n-tag__content) {
+  white-space: normal;
+  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 .word-sub-section {
@@ -769,6 +795,8 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  min-width: 0;
+  max-width: 100%;
   background: color-mix(in srgb, var(--guaxi-header-bg) 68%, transparent);
 }
 
