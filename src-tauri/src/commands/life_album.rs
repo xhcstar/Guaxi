@@ -166,11 +166,7 @@ pub fn life_album_get_internal_root_dir() -> Result<String, String> {
 }
 
 fn album_cache_dir() -> Result<PathBuf, String> {
-    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    let base = exe
-        .parent()
-        .ok_or_else(|| "无法获取可执行文件目录".to_string())?;
-    let dir = base.join("repos").join("life_album_cache");
+    let dir = crate::paths::repos_dir().join("life_album_cache");
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     Ok(dir)
 }

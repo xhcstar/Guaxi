@@ -40,6 +40,8 @@ pub mod readaloud;
 pub mod repoview;
 pub mod serverview;
 pub mod settingview;
+/// 前端 localStorage 的落盘镜像：重装/清 WebView 数据后还能把偏好和收藏补回来。
+pub mod app_state;
 pub mod templateview;
 pub mod resource_repo_window;
 /// 资源库管理器的只读支撑：一次扫描拿到全库条目、按需生成缩略图、反查资源被哪些文档引用。

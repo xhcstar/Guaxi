@@ -191,40 +191,18 @@ static HTTP_CLIENT: Lazy<reqwest::Client> = Lazy::new(|| {
 
 /// 计算 flipboard 订阅源配置文件路径：可执行文件同级目录下的 config/flipboard_feeds.json
 fn flipboard_config_path() -> Result<PathBuf, String> {
-    let exe_path = std::env::current_exe().map_err(|e| e.to_string())?;
-    let base_dir = exe_path
-        .parent()
-        .ok_or_else(|| "无法获取可执行文件目录".to_string())?;
-    let config_dir = base_dir.join("config");
-
-    if !config_dir.exists() {
-        fs::create_dir_all(&config_dir).map_err(|e| e.to_string())?;
-    }
+    let config_dir = crate::paths::config_dir();
 
     Ok(config_dir.join("flipboard_feeds.json"))
 }
 
 fn scheduler_state_path() -> Result<PathBuf, String> {
-    let exe_path = std::env::current_exe().map_err(|e| e.to_string())?;
-    let base_dir = exe_path
-        .parent()
-        .ok_or_else(|| "无法获取可执行文件目录".to_string())?;
-    let config_dir = base_dir.join("config");
-    if !config_dir.exists() {
-        fs::create_dir_all(&config_dir).map_err(|e| e.to_string())?;
-    }
+    let config_dir = crate::paths::config_dir();
     Ok(config_dir.join("flipboard_scheduler_state.json"))
 }
 
 fn feed_http_cache_path() -> Result<PathBuf, String> {
-    let exe_path = std::env::current_exe().map_err(|e| e.to_string())?;
-    let base_dir = exe_path
-        .parent()
-        .ok_or_else(|| "无法获取可执行文件目录".to_string())?;
-    let config_dir = base_dir.join("config");
-    if !config_dir.exists() {
-        fs::create_dir_all(&config_dir).map_err(|e| e.to_string())?;
-    }
+    let config_dir = crate::paths::config_dir();
     Ok(config_dir.join("flipboard_http_cache.json"))
 }
 
@@ -234,14 +212,7 @@ fn feed_http_cache_path() -> Result<PathBuf, String> {
 const FEEDS_SCHEMA_VERSION: u32 = 4;
 
 fn flipboard_feeds_version_path() -> Result<PathBuf, String> {
-    let exe_path = std::env::current_exe().map_err(|e| e.to_string())?;
-    let base_dir = exe_path
-        .parent()
-        .ok_or_else(|| "无法获取可执行文件目录".to_string())?;
-    let config_dir = base_dir.join("config");
-    if !config_dir.exists() {
-        fs::create_dir_all(&config_dir).map_err(|e| e.to_string())?;
-    }
+    let config_dir = crate::paths::config_dir();
     Ok(config_dir.join("flipboard_feeds_version.txt"))
 }
 
@@ -274,15 +245,7 @@ fn article_cache_db_path() -> Result<PathBuf, String> {
 /// 可执行文件同级的 `repos` 目录（数据库与 raw 都放这里）。
 /// raw HTML 路径统一相对它存储，避免"相对哪个根"的歧义。
 fn repos_dir() -> Result<PathBuf, String> {
-    let exe_path = std::env::current_exe().map_err(|e| e.to_string())?;
-    let base_dir = exe_path
-        .parent()
-        .ok_or_else(|| "无法获取可执行文件目录".to_string())?;
-    let repos = base_dir.join("repos");
-    if !repos.exists() {
-        fs::create_dir_all(&repos).map_err(|e| e.to_string())?;
-    }
-    Ok(repos)
+    Ok(crate::paths::repos_dir())
 }
 
 /// 内容寻址的 raw 文件路径：同一 URL+内容只存一份，天然去重。
@@ -1036,14 +999,7 @@ fn read_retention_policy() -> crate::commands::flipboard_feeds::RetentionPolicy 
 }
 
 fn retention_path() -> Result<PathBuf, String> {
-    let exe_path = std::env::current_exe().map_err(|e| e.to_string())?;
-    let base_dir = exe_path
-        .parent()
-        .ok_or_else(|| "无法获取可执行文件目录".to_string())?;
-    let config_dir = base_dir.join("config");
-    if !config_dir.exists() {
-        fs::create_dir_all(&config_dir).map_err(|e| e.to_string())?;
-    }
+    let config_dir = crate::paths::config_dir();
     Ok(config_dir.join("feeds_retention.json"))
 }
 
@@ -5095,14 +5051,7 @@ fn lookup_feed_id_for_article(article: &Article) -> String {
 /// 与 `flipboard_feeds.json`（源清单）并列，但语义独立——源清单是"抓什么"，
 /// 这里是"怎么存"。
 fn feeds_settings_path() -> Result<PathBuf, String> {
-    let exe_path = std::env::current_exe().map_err(|e| e.to_string())?;
-    let base_dir = exe_path
-        .parent()
-        .ok_or_else(|| "无法获取可执行文件目录".to_string())?;
-    let config_dir = base_dir.join("config");
-    if !config_dir.exists() {
-        fs::create_dir_all(&config_dir).map_err(|e| e.to_string())?;
-    }
+    let config_dir = crate::paths::config_dir();
     Ok(config_dir.join("feeds_settings.json"))
 }
 
@@ -5146,14 +5095,7 @@ fn persist_feeds_settings(s: &crate::commands::flipboard_feeds::FeedsSettings) -
 
 /// 每日入盘计数的落盘路径。
 fn daily_admit_path() -> Result<PathBuf, String> {
-    let exe_path = std::env::current_exe().map_err(|e| e.to_string())?;
-    let base_dir = exe_path
-        .parent()
-        .ok_or_else(|| "无法获取可执行文件目录".to_string())?;
-    let config_dir = base_dir.join("config");
-    if !config_dir.exists() {
-        fs::create_dir_all(&config_dir).map_err(|e| e.to_string())?;
-    }
+    let config_dir = crate::paths::config_dir();
     Ok(config_dir.join("feeds_daily_admit.json"))
 }
 

@@ -56,6 +56,7 @@ import { useChatStore } from './stores/chatStore'
 import { useRightSiderStore } from './stores/rightSiderStore'
 import { useSiderStore } from './stores/useSiderStore'
 import { initFrontendLogging, createLogger } from './utils/logger'
+import { installStorageMirror, restorePersistedState } from './utils/persistStorage'
 import { refreshLspRuntimeExtensionSnapshot } from './monaco/lspCapabilities'
 import { configureMonacoWorkers } from './monaco/workerBootstrap'
 import { initializeGuaxiVscodeServices } from './monaco/vscodeApiBootstrap'
@@ -110,6 +111,8 @@ for (const [name, data] of Object.entries(iconRegistry)) {
 }
 
 const bootstrap = async () => {
+  // 先把上次落盘的偏好补回 localStorage，再建应用：否则组件会先读到空值、把默认值写回去。
+  await restorePersistedState();
 const app = createApp(App);
 initFrontendLogging({
   scope: 'Main',
@@ -310,6 +313,9 @@ invoke('init_backend_services').catch(error => {
 });
 
 app.mount("#app");
+
+// mount 之后再挂监听，避免把初始化过程中的临时写入也镜像下去。
+installStorageMirror();
 
 // 应用卸载时清理
 window.addEventListener('beforeunload', async () => {

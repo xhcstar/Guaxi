@@ -5,7 +5,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use chrono::Local;
 use rusqlite::{params, Connection};
-use std::env;
 use tracing::{info, warn};
 
 /// 知识库新建时的输入结构体
@@ -45,16 +44,7 @@ pub struct FileNode {
 
 /// 创建数据库文件路径（如不存在则自动创建目录）
 fn create_db_file() -> Result<PathBuf, String> {
-    let exe_path = env::current_exe().map_err(|e| e.to_string())?;
-    let exe_dir = exe_path
-        .parent()
-        .ok_or("无法获取可执行文件所在目录".to_string())?
-        .to_path_buf();
-
-    let repo_dir = exe_dir.join("repos");
-    if !repo_dir.exists() {
-        fs::create_dir_all(&repo_dir).map_err(|e| e.to_string())?;
-    }
+    let repo_dir = crate::paths::repos_dir();
     let db_path = repo_dir.join("knowledge_bases.db");
     Ok(db_path)
 }

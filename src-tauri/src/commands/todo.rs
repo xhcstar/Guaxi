@@ -2,7 +2,7 @@ use chrono::Datelike;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use std::{env, fs};
+use std::fs;
 use tauri::Manager;
 use tracing::{info, warn};
 use uuid::Uuid;
@@ -116,16 +116,7 @@ fn valid_date_key(s: &str) -> bool {
 }
 
 fn resolve_db_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
-    let exe_path = env::current_exe().map_err(|e| format!("获取可执行文件路径失败: {}", e))?;
-    let exe_dir = exe_path
-        .parent()
-        .ok_or_else(|| "无法获取可执行文件所在目录".to_string())?
-        .to_path_buf();
-
-    let repos_dir = exe_dir.join("repos");
-    if !repos_dir.exists() {
-        fs::create_dir_all(&repos_dir).map_err(|e| format!("创建 repos 目录失败: {}", e))?;
-    }
+    let repos_dir = crate::paths::repos_dir();
 
     let dir = repos_dir.join(TODO_DIR_NAME);
     if !dir.exists() {

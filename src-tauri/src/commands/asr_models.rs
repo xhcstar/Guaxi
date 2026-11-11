@@ -16,7 +16,6 @@ use once_cell::sync::Lazy;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -90,12 +89,7 @@ fn now_iso() -> String {
 }
 
 fn learning_root() -> Result<PathBuf, String> {
-    let exe = env::current_exe().map_err(|e| format!("获取可执行文件路径失败: {}", e))?;
-    let root = exe
-        .parent()
-        .ok_or_else(|| "无法确定可执行文件目录".to_string())?
-        .join("repos")
-        .join(LANG_LEARN_DIR);
+    let root = crate::paths::repos_dir().join(LANG_LEARN_DIR);
     fs::create_dir_all(&root).map_err(|e| format!("创建语言学习目录失败: {}", e))?;
     Ok(root)
 }

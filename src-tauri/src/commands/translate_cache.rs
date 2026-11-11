@@ -14,7 +14,6 @@ use once_cell::sync::Lazy;
 use rusqlite::{params, Connection};
 use serde::Serialize;
 use std::collections::HashMap;
-use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -58,12 +57,7 @@ fn now_secs() -> i64 {
 }
 
 fn resolve_db_path() -> Result<PathBuf, String> {
-    let exe_dir = env::current_exe()
-        .map_err(|e| format!("获取可执行文件路径失败: {}", e))?
-        .parent()
-        .ok_or_else(|| "无法获取可执行文件所在目录".to_string())?
-        .to_path_buf();
-    let dir = exe_dir.join("repos").join(CACHE_DIR_NAME);
+    let dir = crate::paths::repos_dir().join(CACHE_DIR_NAME);
     if !dir.exists() {
         fs::create_dir_all(&dir).map_err(|e| format!("创建翻译缓存目录失败: {}", e))?;
     }
