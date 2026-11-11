@@ -206,13 +206,27 @@
       </div>
     </div>
   </n-modal>
+
+  <!-- 自带的确认框：应用没有 <n-dialog-provider>，useDialog() 会直接抛错，
+       这里用 preset=dialog 的 modal 顶替，主题仍然走外层 config-provider。 -->
+  <n-modal
+    v-model:show="confirmState.show"
+    preset="dialog"
+    type="warning"
+    :title="confirmState.title"
+    :content="confirmState.content"
+    :positive-text="confirmState.confirmLabel"
+    negative-text="取消"
+    @positive-click="settleConfirm(true)"
+    @negative-click="settleConfirm(false)"
+  />
 </template>
 
 <script setup>
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { open, save } from '@tauri-apps/plugin-dialog'
-import { useMessage, useDialog } from 'naive-ui'
+import { useMessage } from 'naive-ui'
 import { Icon } from '@iconify/vue'
 import xIcon from '@iconify-icons/lucide/x'
 import downloadIcon from '@iconify-icons/lucide/download'
@@ -231,7 +245,31 @@ const props = defineProps({
 const emit = defineEmits(['update:show', 'changed'])
 
 const message = useMessage()
-const dialog = useDialog()
+
+// 应用根节点只有 n-message-provider，没有 n-dialog-provider，
+// 所以用自带的 n-modal 做确认框，而不是 useDialog()。
+const confirmState = ref({
+  show: false,
+  title: '',
+  content: '',
+  confirmLabel: '确定',
+})
+let confirmResolve = null
+
+const askConfirm = ({ title, content, confirmLabel = '确定' }) =>
+  new Promise((resolve) => {
+    // 上一个确认尚未返回时先当作取消，避免 Promise 悬挂。
+    if (confirmResolve) settleConfirm(false)
+    confirmState.value = { show: true, title, content, confirmLabel }
+    confirmResolve = resolve
+  })
+
+function settleConfirm(result) {
+  const resolve = confirmResolve
+  confirmResolve = null
+  confirmState.value.show = false
+  if (typeof resolve === 'function') resolve(result)
+}
 
 const tabs = [
   { key: 'installed', label: '已安装' },
@@ -374,9 +412,19 @@ watch(
       ensurePolling()
     } else {
       stopPolling()
+      // 管理器被关掉时，别让确认框的 Promise 悬着。
+      settleConfirm(false)
     }
   },
   { immediate: true },
+)
+
+// ESC / 点遮罩关闭确认框时，modal 只把 show 置 false，这里补上 Promise 的落定。
+watch(
+  () => confirmState.value.show,
+  (visible) => {
+    if (!visible) settleConfirm(false)
+  },
 )
 
 onBeforeUnmount(stopPolling)
@@ -425,23 +473,21 @@ const movePack = async (index, delta) => {
   }
 }
 
-const removePack = (pack) => {
-  dialog.warning({
+const removePack = async (pack) => {
+  const ok = await askConfirm({
     title: '删除离线词典',
     content: `将删除「${pack.name}」及其本地索引${pack.has_resources ? '与已解包的图片资源' : ''}，之后查词会回退到其它词库。`,
-    positiveText: '删除',
-    negativeText: '取消',
-    onPositiveClick: async () => {
-      try {
-        await invoke('language_learning_dict_remove', { id: pack.id })
-        message.success('词典已删除')
-        await refresh()
-        emit('changed')
-      } catch (err) {
-        message.error(`删除失败：${String(err?.message || err || '')}`)
-      }
-    },
+    confirmLabel: '删除',
   })
+  if (!ok) return
+  try {
+    await invoke('language_learning_dict_remove', { id: pack.id })
+    message.success('词典已删除')
+    await refresh()
+    emit('changed')
+  } catch (err) {
+    message.error(`删除失败：${String(err?.message || err || '')}`)
+  }
 }
 
 const exportPack = async (pack) => {
