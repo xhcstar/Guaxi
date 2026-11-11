@@ -28,6 +28,8 @@ utils/
 
 # ── 构建产物（CLI 默认值，写全以防被本文件覆盖）──
 target/
+# 打包辅助工具（bundle-tools 独立 crate）的 target，编译产物不该触发 dev 重建
+target-bundle-tools/
 gen/
 Cargo.lock
 node_modules/

@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-#[path = "../../utils_zip_support.rs"]
+#[path = "../../../utils_zip_support.rs"]
 mod utils_zip_support;
 
 // Historical flag name is kept for compatibility with existing local scripts.
@@ -8,7 +8,11 @@ mod utils_zip_support;
 const REUSE_EXISTING_FLAG: &str = "--reuse-existing";
 
 fn manifest_dir() -> PathBuf {
+    // 工具是独立 crate（src-tauri/bundle-tools），utils 树在主 crate 那一级。
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("bundle-tools must live under src-tauri")
+        .to_path_buf()
 }
 
 fn should_reuse_existing_bundle() -> bool {

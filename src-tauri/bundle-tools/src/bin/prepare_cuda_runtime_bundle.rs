@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-#[path = "../../utils_zip_support.rs"]
+#[path = "../../../utils_zip_support.rs"]
 mod utils_zip_support;
 
 // The CUDA runtime cannot live inside the NSIS installer: together with the app

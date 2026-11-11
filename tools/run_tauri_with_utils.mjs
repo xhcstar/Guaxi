@@ -34,6 +34,10 @@ const cargoTargetDir = path.join(
   isGpuBuild ? 'target-gpu' : 'target',
 );
 const cargoReleaseDir = path.join(cargoTargetDir, 'release');
+// 打包/安装辅助工具是独立 crate（src-tauri/bundle-tools），用固定的 target 目录，
+// CPU / GPU 两种构建共用同一份工具产物，不再和应用的依赖图纠缠。
+const bundleToolsDir = path.join(projectRoot, 'src-tauri', 'bundle-tools');
+const bundleToolsTargetDir = path.join(projectRoot, 'src-tauri', 'target-bundle-tools');
 const utilsBundlesSourceDir = path.join(projectRoot, 'src-tauri', 'utils', '__bundles');
 const windowsNsisOutputDir = path.join(
   cargoReleaseDir,
@@ -43,7 +47,8 @@ const windowsNsisOutputDir = path.join(
 const windowsExternalBundlesDir = path.join(windowsNsisOutputDir, 'utils_bundles');
 const windowsExternalReadme = path.join(windowsNsisOutputDir, 'README_utils_bundles.txt');
 const windowsExtractHelperSource = path.join(
-  cargoReleaseDir,
+  bundleToolsTargetDir,
+  'release',
   'extract_utils_bundles.exe',
 );
 const windowsExtractHelperOutput = path.join(
@@ -326,14 +331,13 @@ async function verifyCudaRuntimeForRelease() {
     'verify_cuda_runtime',
     {},
     { label: 'CUDA 自检工具编译' },
-    false,
   );
   if (buildExitCode !== 0) {
     console.warn('[tauri] CUDA 自检工具构建失败，跳过自检。');
     return;
   }
 
-  const verifier = path.join(cargoTargetDir, 'debug', 'verify_cuda_runtime.exe');
+  const verifier = await binTargetPath('verify_cuda_runtime', true);
   if (!existsSync(verifier)) {
     console.warn(`[tauri] 未找到 CUDA 自检工具，跳过自检：${verifier}`);
     return;
@@ -436,21 +440,20 @@ function run(command, commandArgs, extraEnv = {}, options = {}) {
 }
 
 // 打包辅助 bin（prepare_utils_zip / prepare_cuda_runtime_bundle / extract_utils_bundles /
-// verify_cuda_runtime）的依赖很少，但每次 `cargo run/build` 都要校验整个依赖图 ——
-// 本项目有 5000+ 个 fingerprint，实测空跑一次就要 ~12s，比工具本身的工作还久。
-// exe 已存在且比它的全部输入新时直接执行（等价于 cargo 的 freshness 判断），
-// 否则退回 cargo 构建；`cargo clean` 后 exe 不在，自然会走回退路径。
+// verify_cuda_runtime）现在位于独立 crate `src-tauri/bundle-tools`，只依赖
+// rayon/zstd/tar/serde/blake3，不再牵动应用的整张依赖图（也不会触发 sherpa 的原生库
+// 构建脚本）。这里保留「exe 已是最新就直接执行」的快路径，免掉 cargo 的固定校验开销。
 async function binTargetPath(bin, release) {
   const exeName = process.platform === 'win32' ? `${bin}.exe` : bin;
-  return path.join(cargoTargetDir, release ? 'release' : 'debug', exeName);
+  return path.join(bundleToolsTargetDir, release ? 'release' : 'debug', exeName);
 }
 
 function binInputFiles(bin) {
   return [
     path.join(projectRoot, 'src-tauri', 'utils_zip_support.rs'),
-    path.join(projectRoot, 'src-tauri', 'src', 'bin', `${bin}.rs`),
-    path.join(projectRoot, 'src-tauri', 'Cargo.toml'),
-    path.join(projectRoot, 'src-tauri', 'Cargo.lock'),
+    path.join(bundleToolsDir, 'src', 'bin', `${bin}.rs`),
+    path.join(bundleToolsDir, 'Cargo.toml'),
+    path.join(bundleToolsDir, 'Cargo.lock'),
   ];
 }
 
@@ -483,7 +486,7 @@ function cargoBinArgs(bin, args, release) {
     '--quiet',
     ...(release ? ['--release'] : []),
     '--manifest-path',
-    'src-tauri/Cargo.toml',
+    'src-tauri/bundle-tools/Cargo.toml',
     '--bin',
     bin,
   ];
@@ -506,7 +509,7 @@ async function runCargoBin(bin, args, extraEnv = {}, options = {}, release = tru
   return run(
     'cargo',
     cargoBinArgs(bin, args, release),
-    { ...cargoTargetEnv(), ...extraEnv },
+    { ...bundleToolsEnv(), ...extraEnv },
     options,
   );
 }
@@ -525,13 +528,18 @@ async function ensureCargoBinBuilt(bin, extraEnv = {}, options = {}, release = t
       '--quiet',
       ...(release ? ['--release'] : []),
       '--manifest-path',
-      'src-tauri/Cargo.toml',
+      'src-tauri/bundle-tools/Cargo.toml',
       '--bin',
       bin,
     ],
-    { ...cargoTargetEnv(), ...extraEnv },
+    { ...bundleToolsEnv(), ...extraEnv },
     options,
   );
+}
+
+/// 打包工具是独立 crate，固定一份 target 目录即可；和应用的 target/target-gpu 无关。
+function bundleToolsEnv() {
+  return { CARGO_TARGET_DIR: bundleToolsTargetDir };
 }
 
 /// 所有 cargo 调用都用同一个 target 目录，和上面算出来的产物路径一一对应。

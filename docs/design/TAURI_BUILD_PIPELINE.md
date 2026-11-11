@@ -15,7 +15,7 @@
 | 正式发布（`utils` 没变，只改了前端/Rust） | `npm run tauri -- build --reuse-utils-zip` |
 | 只重新生成 `utils` 分包（不构建安装器） | `npm run prepare:tauri-utils` |
 | 发布 GPU 版 | `npm run sherpa:fetch:cuda`，再 `npm run tauri -- build -- --no-default-features --features gpu` |
-| 分包机制冒烟测试 | `cargo run --manifest-path src-tauri/Cargo.toml --bin verify_utils_bundle_roundtrip` |
+| 分包机制冒烟测试 | `cargo run --manifest-path src-tauri/bundle-tools/Cargo.toml --bin verify_utils_bundle_roundtrip` |
 
 Windows 发布时，下面这些必须放在**同一个目录**一起分发：
 
@@ -59,14 +59,19 @@ Windows 发布时，下面这些必须放在**同一个目录**一起分发：
 |---|---|
 | `src-tauri/build.rs` | release 编译前的**兜底**分包；debug 下只打日志跳过；另负责主线程栈大小与预览资源指纹 |
 | `src-tauri/utils_zip_support.rs` | **核心实现**：扫描、拆分、压缩、清单、增量解包、校验、跳过规则全在这里 |
-| `src-tauri/src/bin/prepare_utils_zip.rs` | 显式生成 `utils` 分包的 CLI |
-| `src-tauri/src/bin/prepare_cuda_runtime_bundle.rs` | 把 CUDA 运行时 DLL 打包成外部 payload 的 CLI |
-| `src-tauri/src/bin/extract_utils_bundles.rs` | 安装阶段解包用的 helper（也是给 CUDA payload 用的同一个程序） |
-| `src-tauri/src/bin/verify_cuda_runtime.rs` | GPU 版打包后自检 CUDA 运行库能否加载 |
-| `src-tauri/src/bin/verify_utils_bundle_roundtrip.rs` | 分包/解包/跳过规则的冒烟测试 |
+| `src-tauri/bundle-tools/src/bin/prepare_utils_zip.rs` | 显式生成 `utils` 分包的 CLI |
+| `src-tauri/bundle-tools/src/bin/prepare_cuda_runtime_bundle.rs` | 把 CUDA 运行时 DLL 打包成外部 payload 的 CLI |
+| `src-tauri/bundle-tools/src/bin/extract_utils_bundles.rs` | 安装阶段解包用的 helper（也是给 CUDA payload 用的同一个程序） |
+| `src-tauri/bundle-tools/src/bin/verify_cuda_runtime.rs` | GPU 版打包后自检 CUDA 运行库能否加载 |
+| `src-tauri/bundle-tools/src/bin/verify_utils_bundle_roundtrip.rs` | 分包/解包/跳过规则的冒烟测试 |
 | `src-tauri/src/guaxiservices/bundled_resources.rs` | 运行时 `utils/...` 路径解析、恢复、按需解包 |
 | `src-tauri/.cargo/config.toml` | 把 `SHERPA_ONNX_ARCHIVE_DIR` 指向预取归档，构建期零联网 |
 | `src-tauri/.taurignore` | 让 `tauri dev` 忽略 `utils/`、`logs/`、`target/` 等运行期写入，避免无意义的 Rust 全量重建 |
+
+> 五个打包/安装辅助 CLI 位于独立 crate `src-tauri/bundle-tools`（自带 workspace，产物在
+> `src-tauri/target-bundle-tools`）。它们只依赖 rayon/zstd/tar/serde/blake3，不再为了一个
+> 1MB 的工具把应用的整张依赖图（tauri / sherpa / polars…）编译一遍，也不会触发
+> `sherpa-onnx-sys` 的原生库构建脚本。
 
 ### 2.3 配置与安装
 
@@ -116,7 +121,7 @@ npm run tauri -- build -- --no-default-features --features gpu   # GPU 版
 | `npm run tauri -- build --reuse-utils-zip` | **信任已有清单、不重扫 `utils`**（唯一会跳过扫描的写法） |
 | `npm run tauri -- bundle` | 只做打包（不重新编译） |
 | `npm run prepare:tauri-assets` | 单独复制 Excalidraw/Vditor 资源 |
-| `npm run prepare:tauri-utils` | 单独生成分包（等价 `cargo run --bin prepare_utils_zip`） |
+| `npm run prepare:tauri-utils` | 单独生成分包（等价 `cargo run --manifest-path src-tauri/bundle-tools/Cargo.toml --bin prepare_utils_zip`） |
 | `npm run tauri:gpu` | GPU 开发模式（= `dev -- --no-default-features --features gpu`） |
 
 ### 3.4 依赖预取
@@ -224,12 +229,12 @@ release
 | S0 | `fetch_codex_sidecar.mjs` | **忽略**，仅在日志里告警 |
 | S0 | `fetch_sherpa_onnx_libs.mjs` | **中止**（缺静态库 cargo 必失败） |
 | S0' | GPU 构建：检查 `.sherpa-onnx-libs/1.13.8/cuda-lib` 是否存在 | 不存在直接退出，提示先跑 `npm run sherpa:fetch:cuda` |
-| S0' | GPU 构建：`cargo run --bin prepare_cuda_runtime_bundle -- --source-dir <cuda-lib> --bundle-dir src-tauri/target/cuda-runtime-bundles` | 中止 |
+| S0' | GPU 构建：`cargo run --manifest-path src-tauri/bundle-tools/Cargo.toml --bin prepare_cuda_runtime_bundle -- --source-dir <cuda-lib> --bundle-dir src-tauri/target/cuda-runtime-bundles` | 中止 |
 | S1 | `copy_excalidraw_assets.mjs` | 中止 |
 | S1 | `build_chart_preview_bundle.mjs` | 中止（Rust 侧 `include_str!` 依赖该产物） |
 | S1 | `prepare_rsshub_env.mjs` | **忽略**，缺 RSSHub 只降级聚合功能 |
-| S2 | `cargo run --bin prepare_utils_zip`；**带 `--reuse-utils-zip` 时整段跳过**（由 S4 的 `build.rs` 直接信任清单，167ms） | 中止 |
-| S3 | 仅 Windows：`cargo build --release --bin extract_utils_bundles` | 中止 |
+| S2 | `cargo run --manifest-path src-tauri/bundle-tools/Cargo.toml --bin prepare_utils_zip`；**带 `--reuse-utils-zip` 时整段跳过**（由 S4 的 `build.rs` 直接信任清单，167ms） | 中止 |
+| S3 | 仅 Windows：`cargo build --release --manifest-path src-tauri/bundle-tools/Cargo.toml --bin extract_utils_bundles` | 中止 |
 | S4 | `tauri build/bundle`（含 `beforeBuildCommand = npm run build`） | 中止 |
 | S5 | 仅 GPU：`verify_cuda_runtime --dir <target>/release` | 退出码 2 中止；其它非 0 只告警 |
 | S6 | 仅 Windows：把分包、helper、README 发布到 `<target>/release/bundle/nsis/` | 中止（找不到分包会直接报错） |
@@ -825,7 +830,7 @@ npm run prepare:tauri-utils
 
 3. **打包/解包往返**
    ```bash
-   cargo run --manifest-path src-tauri/Cargo.toml --bin verify_utils_bundle_roundtrip
+   cargo run --manifest-path src-tauri/bundle-tools/Cargo.toml --bin verify_utils_bundle_roundtrip
    ```
    关注 `smoke test passed`。
 

@@ -117,13 +117,24 @@ fn progress_mode() -> ProgressMode {
     let quiet = std::env::var("GUAXI_BUNDLE_LOG")
         .map(|value| value.eq_ignore_ascii_case("quiet"))
         .unwrap_or(false);
-    if quiet {
-        return ProgressMode::Silent;
-    }
-
     // 不能靠 OUT_DIR 判断「是否在 build 脚本里」：`cargo run` 启动的普通进程同样
     // 带着 OUT_DIR。build.rs 会显式调用 set_progress_mode(CargoWarning)，这里只管默认。
-    ProgressMode::Stdout
+    let resolved = if quiet {
+        ProgressMode::Silent
+    } else {
+        ProgressMode::Stdout
+    };
+
+    // 扫描循环会按条目调用这个函数（一次全量扫描约 50 万次）。`std::env::var`
+    // 在 Windows 上要拿环境锁并做编码转换，逐次读会凭空多出十几秒——解析一次
+    // 就写回原子；`set_progress_mode(Auto)` 会把原子清零，需要时仍可重新解析。
+    let resolved_raw = match resolved {
+        ProgressMode::Silent => 3,
+        _ => 1,
+    };
+    let _ = PROGRESS_MODE.compare_exchange(0, resolved_raw, Ordering::Relaxed, Ordering::Relaxed);
+
+    resolved
 }
 
 /// 安装日志文件。安装器只看得到子进程的 stdout（stdout 被 nsExec 收进安装日志），

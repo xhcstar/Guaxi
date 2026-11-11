@@ -2,7 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-#[path = "../../utils_zip_support.rs"]
+#[path = "../../../utils_zip_support.rs"]
 mod utils_zip_support;
 
 // The installer passes arguments explicitly so the helper can stay shell-agnostic
