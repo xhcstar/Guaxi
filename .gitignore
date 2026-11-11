@@ -76,3 +76,5 @@ src-tauri/assets/vendor/guaxi-chart-preview.js
 
 # RSSHub 由 tools/prepare_rsshub_env.mjs 克隆+构建（含自己的 .git/node_modules/dist），不入库
 src-tauri/utils/rsshub/
+
+.workbuddy/*
