@@ -807,7 +807,11 @@ async function main() {
   if (VERBOSE) {
     console.log(`[tauri] 心跳间隔 ${HEARTBEAT_MS}ms · 详细模式已开启`);
   }
-  if (isWindows) {
+  if (isWindows && !shouldPrepareForTauriCommand) {
+    // dev 不套 release 那套环境变量，这里明说一句，免得看到「没有并行度限制」以为是漏配。
+    console.log('[tauri] 非 build/bundle（如 dev）：增量编译保持开启、并行度交给 cargo 默认，不注入 release 变量');
+  }
+  if (isWindows && shouldPrepareForTauriCommand) {
     if (process.env.CARGO_BUILD_JOBS) {
       console.log(
         `[tauri] release 并行度 CARGO_BUILD_JOBS=${process.env.CARGO_BUILD_JOBS}（来自环境变量）`,
@@ -1039,7 +1043,10 @@ async function main() {
     // path because this env var is absent there.
     {
       ...cargoTargetEnv(),
-      ...releaseCargoEnv(),
+      // 只在 build / bundle 时套 release 环境：`CARGO_INCREMENTAL=0` 一旦带到 dev，
+      // 每改一行 Rust 都要把 20 万行的 crate 从头 codegen 一遍（实测 19 分钟），
+      // dev 的意义就没了。dev 用 cargo 自己的默认值：增量开、并行吃满所有核。
+      ...(shouldPrepareForTauriCommand ? releaseCargoEnv() : {}),
       ...(shouldPrepareForTauriCommand ? { GUAXI_REUSE_UTILS_ZIP: '1' } : {}),
       // GPU 构建才注入，且只注入到这一层：tauri 拉起的 cargo 会继承它，
       // 而上面那些辅助构建不会。

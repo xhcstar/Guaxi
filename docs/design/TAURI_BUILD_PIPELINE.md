@@ -244,6 +244,7 @@ release
   - 内存上限 = `可用物理内存 × 0.7 ÷ 2.5GB`（2.5GB 是单个 codegen 任务给 LLVM 的峰值预算）。
   - 取小值后夹在 2–10。**不能只看核数**：32GB 机器在只剩 15GB 可用内存时开 10 个 job，rustc 会在第 10 分钟 `rustc-LLVM ERROR: out of memory`，前面十几分钟全部白烧。`os.freemem()` 在 Windows 上返回的就是可用物理内存，正好用来判断。
   - `CARGO_INCREMENTAL=0` 保持不变（release 本来就默认关，这里只是写死避免被外部环境打开）。
+  - **只对 `build` / `bundle` 生效**。`dev` 不注入这套变量：增量编译必须开着，否则改一行 Rust 就要把 20 万行的 crate 从头 codegen 一遍（实测 19 分钟），热重载就失去意义了。
 - **CPU / GPU 各一份 target 目录**：`CPU(static)` 用 `src-tauri/target`，`GPU(shared)` 用 `src-tauri/target-gpu`。两套特性的依赖图不同（`sherpa-onnx` 的 `static` ↔ `shared` 会连带 `libgit2-sys`、`pyo3`、onnxruntime 一起重编），共用一个目录时每切一次特性就等于全量重编一轮。编排层通过 `CARGO_TARGET_DIR` 把目录传给**所有** cargo / tauri 调用，产物路径（helper、CUDA 自检、NSIS 输出）都由它推导，不再散落硬编码。
   - 代价：第一次跑 GPU 构建要从空的 `target-gpu` 编起（一次性）；之后来回切特性不再互相清缓存。
 
