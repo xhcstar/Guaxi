@@ -1362,16 +1362,6 @@ fn format_label(format: &str) -> &'static str {
     }
 }
 
-fn pick_file(files: &[PathBuf], ext: &str) -> Option<PathBuf> {
-    files.iter().find(|path| {
-        path.extension()
-            .and_then(|value| value.to_str())
-            .map(|value| value.eq_ignore_ascii_case(ext))
-            .unwrap_or(false)
-    })
-    .cloned()
-}
-
 fn import_mdx_into(mdx: &Path, db_path: &Path, job_id: &str) -> Result<i64, String> {
     let mut conn = Connection::open(db_path).map_err(|e| format!("创建词典数据库失败: {}", e))?;
     create_schema(&conn)?;
@@ -1614,11 +1604,25 @@ fn build_pack(
         has_resources: false,
         resource_bytes: 0,
     };
-    let mdx = pick_file(files, "mdx");
-    let mdd = pick_file(files, "mdd");
-    let ifo = pick_file(files, "ifo");
-    let dsl = pick_file(files, "dsl");
-    let jsonl = pick_file(files, "jsonl");
+    // 扩展名规则只放在 dict_formats::detect_format 一处，这里按它的判定归组。
+    let (mdx, mdd, ifo, dsl, jsonl) = {
+        let mut mdx: Option<PathBuf> = None;
+        let mut mdd: Option<PathBuf> = None;
+        let mut ifo: Option<PathBuf> = None;
+        let mut dsl: Option<PathBuf> = None;
+        let mut jsonl: Option<PathBuf> = None;
+        for file in files {
+            match crate::commands::dict_formats::detect_format(file) {
+                "mdx" if mdx.is_none() => mdx = Some(file.clone()),
+                "mdd" if mdd.is_none() => mdd = Some(file.clone()),
+                "stardict" if ifo.is_none() => ifo = Some(file.clone()),
+                "dsl" if dsl.is_none() => dsl = Some(file.clone()),
+                "wiktionary" if jsonl.is_none() => jsonl = Some(file.clone()),
+                _ => {}
+            }
+        }
+        (mdx, mdd, ifo, dsl, jsonl)
+    };
 
     let count = if let Some(mdx_path) = mdx {
         manifest.format = "mdx".to_string();
