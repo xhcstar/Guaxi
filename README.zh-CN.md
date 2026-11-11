@@ -212,6 +212,10 @@ npm run tauri -- build -- --no-default-features --features gpu
 `static`（CPU，默认，自包含无需分发 DLL）与 `shared`（GPU，动态链接 CUDA 运行库）互斥，
 **GPU 构建必须带 `--no-default-features`**。Windows 发布目录还额外需要 `cuda_runtime_bundles/`。
 
+CPU 与 GPU 各用一份 Cargo target 目录（`src-tauri/target` / `src-tauri/target-gpu`），
+来回切特性不会清掉另一边的增量缓存；GPU 产物因此落在 `src-tauri/target-gpu/release/`
+（`bundle/nsis/` 结构相同，多一个 `cuda_runtime_bundles/`）。
+
 ### 常用脚本
 
 | 脚本 | 说明 |

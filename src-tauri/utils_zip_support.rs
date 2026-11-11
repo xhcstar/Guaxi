@@ -148,6 +148,147 @@ pub fn set_log_file(path: &Path) -> io::Result<()> {
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// 控制台编码
+//
+// 安装器用 NSIS 的 nsExec::ExecToLog 拉起本程序，它把子进程 stdout 当成**ANSI**
+// （系统本地代码页）解码后再送进详情面板——不是 UTF-8，也不做探测。Rust 的
+// println! 写的是 UTF-8，于是简体中文 Windows 上「安装日志」「解包开始」全变成
+// 「瀹夎瑁呮棩蹇」这类乱码。
+//
+// 这里提供一个显式开关：安装器传 `--console-encoding ansi`，就把每一行按系统
+// ANSI 代码页（中文 Windows 是 936/GBK）编好字节再写；终端 / cargo 下保持
+// UTF-8 原样，不受影响。日志文件始终是 UTF-8，不跟着走。
+// ---------------------------------------------------------------------------
+
+/// stdout 的编码。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConsoleEncoding {
+    /// UTF-8（默认；终端、cargo、管道重定向都按这个读）。
+    Utf8,
+    /// 系统 ANSI 代码页（NSIS 安装器详情面板要求的）。
+    Ansi,
+}
+
+static CONSOLE_ENCODING: AtomicU8 = AtomicU8::new(0);
+
+/// 覆盖 stdout / stderr 的编码。安装器入口会先调用它再开始输出。
+pub fn set_console_encoding(encoding: ConsoleEncoding) {
+    CONSOLE_ENCODING.store(
+        match encoding {
+            ConsoleEncoding::Utf8 => 0,
+            ConsoleEncoding::Ansi => 1,
+        },
+        Ordering::Relaxed,
+    );
+}
+
+fn console_encoding() -> ConsoleEncoding {
+    if CONSOLE_ENCODING.load(Ordering::Relaxed) == 1 {
+        ConsoleEncoding::Ansi
+    } else {
+        ConsoleEncoding::Utf8
+    }
+}
+
+/// UTF-8 → 系统 ANSI 代码页。同样直接声明 kernel32 入口，避免为 build script
+/// 增加 windows-sys 依赖（本文件被 build.rs 以 `#[path]` 引入）。
+#[cfg(windows)]
+fn encode_for_console(text: &str) -> Vec<u8> {
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn GetACP() -> u32;
+        fn WideCharToMultiByte(
+            code_page: u32,
+            flags: u32,
+            wide_char_str: *const u16,
+            wide_char_count: i32,
+            multi_byte_str: *mut u8,
+            multi_byte_count: i32,
+            default_char: *const u8,
+            used_default_char: *const i32,
+        ) -> i32;
+    }
+
+    let wide: Vec<u16> = text.encode_utf16().collect();
+    if wide.is_empty() {
+        return Vec::new();
+    }
+    let code_page = unsafe { GetACP() };
+    // 目标代码页表示不了的字符（英文系统上的中文）会被替换成 '?'，这是 ANSI
+    // 转换的既定行为：宁可显示成问号，也不要把整行变成乱码。
+    let needed = unsafe {
+        WideCharToMultiByte(
+            code_page,
+            0,
+            wide.as_ptr(),
+            wide.len() as i32,
+            std::ptr::null_mut(),
+            0,
+            std::ptr::null(),
+            std::ptr::null(),
+        )
+    };
+    if needed <= 0 {
+        return text.as_bytes().to_vec();
+    }
+    let mut buffer = vec![0u8; needed as usize];
+    let written = unsafe {
+        WideCharToMultiByte(
+            code_page,
+            0,
+            wide.as_ptr(),
+            wide.len() as i32,
+            buffer.as_mut_ptr(),
+            needed,
+            std::ptr::null(),
+            std::ptr::null(),
+        )
+    };
+    if written <= 0 {
+        return text.as_bytes().to_vec();
+    }
+    buffer.truncate(written as usize);
+    buffer
+}
+
+#[cfg(not(windows))]
+fn encode_for_console(text: &str) -> Vec<u8> {
+    text.as_bytes().to_vec()
+}
+
+/// 输出一行到 stdout（不带前缀），编码跟着 `console_encoding()` 走。
+fn write_console_line(text: &str) {
+    match console_encoding() {
+        // 终端 / cargo 走 println!，行为与改造前完全一致（Windows 下 Rust 会用
+        // WriteConsoleW，控制台代码页无关）。
+        ConsoleEncoding::Utf8 => println!("{text}"),
+        ConsoleEncoding::Ansi => {
+            let mut bytes = encode_for_console(text);
+            // NSIS 详情面板是逐行读的，CRLF 才能保证每行进自己的位置。
+            bytes.extend_from_slice(b"\r\n");
+            let stdout = io::stdout();
+            let mut handle = stdout.lock();
+            let _ = handle.write_all(&bytes);
+            let _ = handle.flush();
+        }
+    }
+}
+
+fn write_console_error(text: &str) {
+    match console_encoding() {
+        ConsoleEncoding::Utf8 => eprintln!("{text}"),
+        ConsoleEncoding::Ansi => {
+            let mut bytes = encode_for_console(text);
+            bytes.extend_from_slice(b"\r\n");
+            let stderr = io::stderr();
+            let mut handle = stderr.lock();
+            let _ = handle.write_all(&bytes);
+            let _ = handle.flush();
+        }
+    }
+}
+
 /// 写一行到安装日志（带相对时间，方便看每一步花了多久）。没有日志文件时是空操作。
 fn log_line(message: &str) {
     let mut guard = LOG_SINK
@@ -168,7 +309,7 @@ fn log_line(message: &str) {
 fn progress_emit(message: &str) {
     match progress_mode() {
         // Auto 只作为「未设置」的取值存在，progress_mode() 不会把它返回。
-        ProgressMode::Auto | ProgressMode::Stdout => println!("{message}"),
+        ProgressMode::Auto | ProgressMode::Stdout => write_console_line(message),
         ProgressMode::CargoWarning => println!("cargo:warning={message}"),
         ProgressMode::Silent => {}
     }
@@ -185,11 +326,12 @@ pub fn emit_line(message: &str) {
 /// 刻意绕过 `progress_emit`：`GUAXI_BUNDLE_LOG=quiet` 只该压掉进度行，不该吞掉错误。
 pub fn report_error(message: &str) {
     match progress_mode() {
+        // cargo 读的是 UTF-8，不能跟着控制台代码页走。
         ProgressMode::CargoWarning => println!("cargo:warning={message}"),
-        _ => println!("{message}"),
+        _ => write_console_line(message),
     }
     log_line(message);
-    eprintln!("{message}");
+    write_console_error(message);
 }
 
 fn format_bytes(bytes: u64) -> String {

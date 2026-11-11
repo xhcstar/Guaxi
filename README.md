@@ -224,6 +224,11 @@ npm run sherpa:fetch:cuda      # assemble CUDA native libs and runtime (~2 GB)
 npm run tauri -- build -- --no-default-features --features gpu
 ```
 
+CPU and GPU builds keep **separate Cargo target directories** (`src-tauri/target` vs
+`src-tauri/target-gpu`) so switching between the two feature sets never invalidates the other
+one's incremental cache. GPU artifacts therefore land under `src-tauri/target-gpu/release/`
+(with the same `bundle/nsis/` layout plus an extra `cuda_runtime_bundles/`).
+
 `static` (CPU, the default: self-contained, no DLLs to ship) and `shared` (GPU: dynamically linked
 against the CUDA runtime) are mutually exclusive, so **GPU builds must pass `--no-default-features`**.
 A Windows release directory additionally needs `cuda_runtime_bundles/`.

@@ -1,5 +1,6 @@
 import { copyFile, mkdir, readdir, readFile, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 
@@ -14,22 +15,35 @@ const tauriSubcommand = tauriArgs[0] ?? '';
 const shouldPrepareForTauriCommand =
   tauriSubcommand === 'build' || tauriSubcommand === 'bundle';
 const projectRoot = process.cwd();
-const utilsBundlesSourceDir = path.join(projectRoot, 'src-tauri', 'utils', '__bundles');
-const windowsNsisOutputDir = path.join(
+
+// ---------------------------------------------------------------------------
+// CPU 版与 GPU 版各用一份 target 目录
+//
+// 两套特性的依赖图不是同一份：`gpu` 把 sherpa-onnx 从 static 换成 shared，连带
+// libgit2-sys / pyo3 / onnxruntime 这些又慢又大的 crate 都要重编。以前两种构建
+// 共用 `src-tauri/target`，在 CPU ↔ GPU 之间来回切一次就等于「全量重编一轮」，
+// 17 分钟的编译时间里有一大半是这么白烧的。
+//
+// 拆开之后：同一台机器上切特性只是换一个 target 目录，各自的增量仍然有效。
+// CPU(默认) 继续用原来的 `target`，GPU 用 `target-gpu`（已在 .gitignore 里）。
+// ---------------------------------------------------------------------------
+const isGpuBuild = usesGpuFeature(tauriArgs);
+const cargoTargetDir = path.join(
   projectRoot,
   'src-tauri',
-  'target',
-  'release',
+  isGpuBuild ? 'target-gpu' : 'target',
+);
+const cargoReleaseDir = path.join(cargoTargetDir, 'release');
+const utilsBundlesSourceDir = path.join(projectRoot, 'src-tauri', 'utils', '__bundles');
+const windowsNsisOutputDir = path.join(
+  cargoReleaseDir,
   'bundle',
   'nsis',
 );
 const windowsExternalBundlesDir = path.join(windowsNsisOutputDir, 'utils_bundles');
 const windowsExternalReadme = path.join(windowsNsisOutputDir, 'README_utils_bundles.txt');
 const windowsExtractHelperSource = path.join(
-  projectRoot,
-  'src-tauri',
-  'target',
-  'release',
+  cargoReleaseDir,
   'extract_utils_bundles.exe',
 );
 const windowsExtractHelperOutput = path.join(
@@ -37,9 +51,7 @@ const windowsExtractHelperOutput = path.join(
   'extract_utils_bundles.exe',
 );
 const windowsCudaRuntimeSourceBundlesDir = path.join(
-  projectRoot,
-  'src-tauri',
-  'target',
+  cargoTargetDir,
   'cuda-runtime-bundles',
 );
 const windowsCudaRuntimeBundlesDir = path.join(
@@ -123,6 +135,126 @@ function stageSkipped(title, reason) {
   console.log(`[tauri] [${stageIndex}/${stageTotal}] ${title} 跳过 · ${reason}`);
 }
 
+/// 「Tauri 构建与打包」内部还有三个子步骤，最长的那个能跑十几分钟。
+///
+/// tauri CLI 的 stdout 是 inherit 的（不经过本进程），没法靠解析输出来切分阶段；
+/// 但三步各自会落一个产物文件，于是改成盯文件：产物一出现就打印一条带耗时的
+/// 里程碑，心跳也顺便告诉你「现在卡在哪一步」。
+///
+/// probe() 返回产物的 mtimeMs，拿不到就返回 null（这一步还没开始）。
+function trackBuildPhases(phases, startedAt) {
+  const startedAtMs = startedAt;
+  let index = 0;
+  let phaseStartedAt = startedAtMs;
+  let polling = false;
+  let stopped = false;
+
+  const probe = async (phase) => {
+    try {
+      return await phase.probe();
+    } catch {
+      return null;
+    }
+  };
+  // 产物是这一步写出来的才算数：上一轮留下的旧文件不能拿来充数。
+  const landed = (stamp) => Boolean(stamp) && stamp >= startedAtMs - 1000;
+
+  console.log(
+    `[tauri]      阶段内里程碑：${phases.map((phase) => phase.label).join(' → ')}（逐个打印耗时）`,
+  );
+
+  const tick = async () => {
+    if (stopped || polling) {
+      return;
+    }
+    polling = true;
+    try {
+      while (index < phases.length) {
+        const phase = phases[index];
+        if (landed(await probe(phase))) {
+          const now = Date.now();
+          console.log(
+            `[tauri]      ✓ ${phase.label} 完成 · 本步 ${formatDuration(now - phaseStartedAt)} · 阶段内 ${formatDuration(now - startedAtMs)}`,
+          );
+          index += 1;
+          phaseStartedAt = now;
+          continue;
+        }
+        // 后面的步骤已经落产物、而这一步还没有 → cargo/tauri 这轮把它跳过了
+        // （比如源码没变，链接被判定为 fresh）。不然后面的里程碑会被一步卡死。
+        let skipped = false;
+        for (let later = index + 1; later < phases.length; later += 1) {
+          if (landed(await probe(phases[later]))) {
+            skipped = true;
+            break;
+          }
+        }
+        if (!skipped) {
+          break;
+        }
+        const now = Date.now();
+        console.log(
+          `[tauri]      · ${phase.label} 未产生新产物（本轮跳过）· 阶段内 ${formatDuration(now - startedAtMs)}`,
+        );
+        index += 1;
+        phaseStartedAt = now;
+      }
+    } finally {
+      polling = false;
+    }
+  };
+
+  const timer = setInterval(tick, 2000);
+  timer.unref?.();
+
+  return {
+    currentLabel() {
+      if (index >= phases.length) {
+        return null;
+      }
+      return phases[index].label;
+    },
+    currentElapsedMs() {
+      return Date.now() - phaseStartedAt;
+    },
+    remainingLabels() {
+      return phases.slice(index).map((phase) => phase.label);
+    },
+    /// 阶段结束时补一次探测：最后一步往往在两次轮询之间就完成了（NSIS 只跑 3 分钟，
+    /// 但真正落盘是在收尾那一秒），不补这一次就会漏掉最后一条里程碑。
+    async stop() {
+      clearInterval(timer);
+      // 先补跑一次 tick 再置 stopped：tick 开头会挡掉 stopped 之后的调用。
+      await tick();
+      stopped = true;
+      // 只有「真的跑了很久却什么都没观测到」才值得提一句；秒过的空构建不必刷屏。
+      if (Date.now() - startedAtMs > 120000 && index < phases.length) {
+        console.log(
+          `[tauri]      未观测到产物的子步骤：${this.remainingLabels().join(' → ')}`,
+        );
+      }
+    },
+  };
+}
+
+/// 取某个文件/目录里最新 .exe 的 mtime，用来判断 NSIS 是否已经产出安装包。
+async function newestExeMtime(dir) {
+  const entries = await readdir(dir, { withFileTypes: true });
+  let newest = null;
+  for (const entry of entries) {
+    if (!entry.isFile() || !entry.name.toLowerCase().endsWith('.exe')) {
+      continue;
+    }
+    const info = await stat(path.join(dir, entry.name));
+    newest = newest === null ? info.mtimeMs : Math.max(newest, info.mtimeMs);
+  }
+  return newest;
+}
+
+async function fileMtime(target) {
+  return (await stat(target)).mtimeMs;
+}
+
 /// 中文字符在终端占 2 列，用 padEnd 对不齐，这里按显示宽度补空格。
 function padLabel(text, width) {
   let used = 0;
@@ -184,7 +316,7 @@ async function verifyCudaRuntimeForRelease() {
     return;
   }
 
-  const releaseDir = path.join(projectRoot, 'src-tauri', 'target', 'release');
+  const releaseDir = cargoReleaseDir;
   if (!existsSync(releaseDir)) {
     console.warn(`[tauri] 未找到 release 产物目录，跳过 CUDA 自检：${releaseDir}`);
     return;
@@ -201,7 +333,7 @@ async function verifyCudaRuntimeForRelease() {
     return;
   }
 
-  const verifier = path.join(projectRoot, 'src-tauri', 'target', 'debug', 'verify_cuda_runtime.exe');
+  const verifier = path.join(cargoTargetDir, 'debug', 'verify_cuda_runtime.exe');
   if (!existsSync(verifier)) {
     console.warn(`[tauri] 未找到 CUDA 自检工具，跳过自检：${verifier}`);
     return;
@@ -241,7 +373,7 @@ function tauriInvocation() {
 }
 
 function run(command, commandArgs, extraEnv = {}, options = {}) {
-  const { label, heartbeatMs = HEARTBEAT_MS } = options;
+  const { label, heartbeatMs = HEARTBEAT_MS, heartbeatNote } = options;
   if (VERBOSE) {
     console.log(`[tauri]     $ ${[command, ...commandArgs].join(' ')}`);
   }
@@ -266,8 +398,16 @@ function run(command, commandArgs, extraEnv = {}, options = {}) {
     let heartbeatTimer = null;
     if (label && heartbeatMs > 0) {
       heartbeatTimer = setInterval(() => {
+        let note = null;
+        if (typeof heartbeatNote === 'function') {
+          try {
+            note = heartbeatNote();
+          } catch {
+            note = null;
+          }
+        }
         console.log(
-          `[tauri]     … ${label} 仍在进行，已用 ${formatDuration(Date.now() - startedAt)}`,
+          `[tauri]     … ${label} 仍在进行，已用 ${formatDuration(Date.now() - startedAt)}${note ? ` · ${note}` : ''}`,
         );
       }, heartbeatMs);
       heartbeatTimer.unref?.();
@@ -302,13 +442,7 @@ function run(command, commandArgs, extraEnv = {}, options = {}) {
 // 否则退回 cargo 构建；`cargo clean` 后 exe 不在，自然会走回退路径。
 async function binTargetPath(bin, release) {
   const exeName = process.platform === 'win32' ? `${bin}.exe` : bin;
-  return path.join(
-    projectRoot,
-    'src-tauri',
-    'target',
-    release ? 'release' : 'debug',
-    exeName,
-  );
+  return path.join(cargoTargetDir, release ? 'release' : 'debug', exeName);
 }
 
 function binInputFiles(bin) {
@@ -369,7 +503,12 @@ async function runCargoBin(bin, args, extraEnv = {}, options = {}, release = tru
   if (VERBOSE || options.label) {
     console.log(`[tauri]     ${bin}: 可执行文件缺失或已过期，先 cargo build（首次可能要编译一批依赖）`);
   }
-  return run('cargo', cargoBinArgs(bin, args, release), extraEnv, options);
+  return run(
+    'cargo',
+    cargoBinArgs(bin, args, release),
+    { ...cargoTargetEnv(), ...extraEnv },
+    options,
+  );
 }
 
 async function ensureCargoBinBuilt(bin, extraEnv = {}, options = {}, release = true) {
@@ -390,9 +529,50 @@ async function ensureCargoBinBuilt(bin, extraEnv = {}, options = {}, release = t
       '--bin',
       bin,
     ],
-    extraEnv,
+    { ...cargoTargetEnv(), ...extraEnv },
     options,
   );
+}
+
+/// 所有 cargo 调用都用同一个 target 目录，和上面算出来的产物路径一一对应。
+/// CPU 版 / GPU 版各走各的，互不清空对方的增量缓存。
+function cargoTargetEnv() {
+  return { CARGO_TARGET_DIR: cargoTargetDir };
+}
+
+/// 单个 rustc codegen 任务的峰值内存估算（GB）。
+///
+/// 这个 crate 20 万行、release 下 `codegen-units = 16`，单个 CGU 的 LLVM 峰值实测
+/// 在 1.5–2.5 GB。用 2.5 当前界：宁可少开两个 job，也不要 OOM 掉一整轮编译
+/// （32GB 机器、15GB 可用内存开 10 个 job 时，rustc 会在第 10 分钟直接
+/// `rustc-LLVM ERROR: out of memory`，前面十几分钟全白烧）。
+const RUSTC_PEAK_GB_PER_JOB = 2.5;
+
+/// 可用内存里只敢用掉这么多：IDE、浏览器、杀软扫描、vite 残留都还要吃内存。
+const MEMORY_HEADROOM = 0.7;
+
+/// release 构建的并行度：**按可用内存算，再受核数约束**。
+///
+/// 早先写死 4 是为了不 OOM，代价是 20 线程的机器只用了 1/5 的算力；改成「核数一半」
+/// 之后又反过来炸了内存——因为真正决定能不能开 10 个 job 的不是核数，而是此刻还剩
+/// 多少内存。`os.freemem()` 在 Windows 上返回的就是「可用物理内存」，正好用来判断。
+///
+/// 结果取两者较小值，并且夹在 2–10 之间：内存紧张时降到 2 也比 OOM 强。
+/// 想自己控制就用 `CARGO_BUILD_JOBS` 覆盖。
+function releaseJobsBudget() {
+  const cores = typeof os.availableParallelism === 'function'
+    ? os.availableParallelism()
+    : os.cpus().length;
+  const coreLimit = Math.max(4, Math.min(10, Math.round(cores / 2)));
+  const freeGb = os.freemem() / 1024 ** 3;
+  const usableGb = freeGb * MEMORY_HEADROOM;
+  const memoryLimit = Math.floor(usableGb / RUSTC_PEAK_GB_PER_JOB);
+  const jobs = Math.max(2, Math.min(coreLimit, memoryLimit));
+  return { jobs, cores, coreLimit, freeGb, memoryLimit };
+}
+
+function defaultReleaseJobs() {
+  return releaseJobsBudget().jobs;
 }
 
 function releaseCargoEnv() {
@@ -401,11 +581,7 @@ function releaseCargoEnv() {
   }
 
   return {
-    // Windows release builds for this crate are memory-heavy, so keep a modest
-    // ceiling instead of saturating every core. The release profile already
-    // drops debug info, so 4 parallel rustc jobs use the CPU well without
-    // letting LLVM's peak memory get out of hand. Override with CARGO_BUILD_JOBS.
-    CARGO_BUILD_JOBS: process.env.CARGO_BUILD_JOBS || '4',
+    CARGO_BUILD_JOBS: process.env.CARGO_BUILD_JOBS || String(defaultReleaseJobs()),
     CARGO_INCREMENTAL: '0',
   };
 }
@@ -606,7 +782,6 @@ async function publishExternalWindowsBundles(includeCudaRuntime) {
 }
 
 async function main() {
-  const isGpuBuild = usesGpuFeature(tauriArgs);
   const isWindows = process.platform === 'win32';
 
   // 阶段总数先算出来，日志里才能显示「第几步 / 共几步」，让人知道离结束还有多远。
@@ -626,8 +801,24 @@ async function main() {
     `[tauri] 启动 ${tauriArgs.join(' ') || '(无子命令)'} · 平台 ${process.platform} · ` +
       `${isGpuBuild ? 'GPU(shared)' : 'CPU(static)'}${reuseExisting ? ' · 复用已有分包' : ''} · 共 ${stageTotal} 步`,
   );
+  console.log(
+    `[tauri] target 目录 ${path.relative(projectRoot, cargoTargetDir) || '.'}（CPU / GPU 各一份，互不覆盖增量）`,
+  );
   if (VERBOSE) {
     console.log(`[tauri] 心跳间隔 ${HEARTBEAT_MS}ms · 详细模式已开启`);
+  }
+  if (isWindows) {
+    if (process.env.CARGO_BUILD_JOBS) {
+      console.log(
+        `[tauri] release 并行度 CARGO_BUILD_JOBS=${process.env.CARGO_BUILD_JOBS}（来自环境变量）`,
+      );
+    } else {
+      const budget = releaseJobsBudget();
+      console.log(
+        `[tauri] release 并行度 CARGO_BUILD_JOBS=${budget.jobs}` +
+          `（${budget.cores} 线程上限 ${budget.coreLimit} · 可用内存 ${budget.freeGb.toFixed(1)}GB 上限 ${budget.memoryLimit} · 单个 rustc 峰值按 ${RUSTC_PEAK_GB_PER_JOB}GB 估）`,
+      );
+    }
   }
 
   // Codex Agent 引擎依赖 `src-tauri/utils/codex/codex.exe`。这一步是幂等的（已存在即跳过），
@@ -812,11 +1003,33 @@ async function main() {
   const tauriIsBuild = shouldPrepareForTauriCommand;
   const tauriTitle = tauriIsBuild ? 'Tauri 构建与打包' : `Tauri ${tauriSubcommand || 'CLI'}`;
   const tauriDetail = tauriIsBuild
-    ? 'rustc + NSIS，通常 5–15 分钟'
+    ? 'vite + rustc + NSIS，通常 5–15 分钟'
     : tauriSubcommand === 'dev'
       ? '首次编译依赖较慢，之后热重载'
       : '执行 CLI 子命令';
   const tauriStage = stage(tauriTitle, tauriDetail);
+  const tauriStartedAt = Date.now();
+  const buildPhases = tauriIsBuild
+    ? [
+        {
+          label: '前端构建（vite）',
+          probe: () => fileMtime(path.join(projectRoot, 'dist', 'index.html')),
+        },
+        {
+          label: 'rustc 编译 + 链接',
+          probe: () =>
+            fileMtime(
+              path.join(cargoReleaseDir, isWindows ? 'guaxi.exe' : 'guaxi'),
+            ),
+        },
+        {
+          label: 'NSIS 生成安装包',
+          probe: () => newestExeMtime(windowsNsisOutputDir),
+        },
+      ]
+    : [];
+  const phaseTracker =
+    buildPhases.length > 0 ? trackBuildPhases(buildPhases, tauriStartedAt) : null;
   const tauriExitCode = await run(
     tauri.command,
     tauri.args,
@@ -825,14 +1038,22 @@ async function main() {
     // second time; a direct `cargo build --release` still uses the incremental
     // path because this env var is absent there.
     {
+      ...cargoTargetEnv(),
       ...releaseCargoEnv(),
       ...(shouldPrepareForTauriCommand ? { GUAXI_REUSE_UTILS_ZIP: '1' } : {}),
       // GPU 构建才注入，且只注入到这一层：tauri 拉起的 cargo 会继承它，
       // 而上面那些辅助构建不会。
       ...(gpuSherpaLibDir ? { SHERPA_ONNX_LIB_DIR: gpuSherpaLibDir } : {}),
     },
-    { label: tauriTitle },
+    {
+      label: tauriTitle,
+      heartbeatNote: phaseTracker
+        ? () =>
+            `当前：${phaseTracker.currentLabel() ?? '收尾'}（已 ${formatDuration(phaseTracker.currentElapsedMs())}）`
+        : undefined,
+    },
   );
+  await phaseTracker?.stop();
   if (tauriExitCode !== 0) {
     process.exit(tauriExitCode);
   }

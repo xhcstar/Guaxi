@@ -231,15 +231,21 @@ release
 | S2 | `cargo run --bin prepare_utils_zip`；**带 `--reuse-utils-zip` 时整段跳过**（由 S4 的 `build.rs` 直接信任清单，167ms） | 中止 |
 | S3 | 仅 Windows：`cargo build --release --bin extract_utils_bundles` | 中止 |
 | S4 | `tauri build/bundle`（含 `beforeBuildCommand = npm run build`） | 中止 |
-| S5 | 仅 GPU：`verify_cuda_runtime --dir target/release` | 退出码 2 中止；其它非 0 只告警 |
-| S6 | 仅 Windows：把分包、helper、README 发布到 `target/release/bundle/nsis/` | 中止（找不到分包会直接报错） |
+| S5 | 仅 GPU：`verify_cuda_runtime --dir <target>/release` | 退出码 2 中止；其它非 0 只告警 |
+| S6 | 仅 Windows：把分包、helper、README 发布到 `<target>/release/bundle/nsis/` | 中止（找不到分包会直接报错） |
 
 要点补充：
 
 - **S2 必须在 S4 之前**：`prepare_utils_zip` 生成的清单要先进位，S4 里 `build.rs` 才能「信任清单」而不是重扫十几万文件。
 - **S3 为什么要单独设环境变量**：helper 也是本包的一个 bin，release 编译会再触发一次 `build.rs`。所以 S3 无条件传 `GUAXI_SKIP_BUNDLE_PREPARE=1`（分包要么已在 S2 备好、要么马上由 S4 处理），否则会出现「主流程已备好分包，helper 又重打一遍」。`skip` 的判断在 `reuse` 之前，因此这里不需要再叠加 `GUAXI_REUSE_UTILS_ZIP`。
 - **S4 传给 `tauri` 的环境**：`GUAXI_REUSE_UTILS_ZIP=1`（让 `build.rs` 信任刚生成的清单）；GPU 构建再加 `SHERPA_ONNX_LIB_DIR`（只注入这一层，不能挂到 `process.env`，否则前面以默认 `static` 特性跑的辅助构建会找不到静态库）。
-- **Windows 内存优化**：`releaseCargoEnv()` 在 Windows 上固定 `CARGO_BUILD_JOBS=4`（可用同名环境变量覆盖）、`CARGO_INCREMENTAL=0`。这个 crate 的 release 链接/codegen 峰值很高，限制并行度 + 关增量能降低 rustc/LLVM OOM 概率。
+- **并行度**：`releaseCargoEnv()` 在 Windows 上设 `CARGO_BUILD_JOBS`，取「核数上限」与「内存上限」的较小值：
+  - 核数上限 = 逻辑核数的一半，夹在 4–10（20 线程 → 10）；
+  - 内存上限 = `可用物理内存 × 0.7 ÷ 2.5GB`（2.5GB 是单个 codegen 任务给 LLVM 的峰值预算）。
+  - 取小值后夹在 2–10。**不能只看核数**：32GB 机器在只剩 15GB 可用内存时开 10 个 job，rustc 会在第 10 分钟 `rustc-LLVM ERROR: out of memory`，前面十几分钟全部白烧。`os.freemem()` 在 Windows 上返回的就是可用物理内存，正好用来判断。
+  - `CARGO_INCREMENTAL=0` 保持不变（release 本来就默认关，这里只是写死避免被外部环境打开）。
+- **CPU / GPU 各一份 target 目录**：`CPU(static)` 用 `src-tauri/target`，`GPU(shared)` 用 `src-tauri/target-gpu`。两套特性的依赖图不同（`sherpa-onnx` 的 `static` ↔ `shared` 会连带 `libgit2-sys`、`pyo3`、onnxruntime 一起重编），共用一个目录时每切一次特性就等于全量重编一轮。编排层通过 `CARGO_TARGET_DIR` 把目录传给**所有** cargo / tauri 调用，产物路径（helper、CUDA 自检、NSIS 输出）都由它推导，不再散落硬编码。
+  - 代价：第一次跑 GPU 构建要从空的 `target-gpu` 编起（一次性）；之后来回切特性不再互相清缓存。
 
 ### 6.2 环境变量一览
 
@@ -249,7 +255,8 @@ release
 | `GUAXI_SKIP_BUNDLE_PREPARE=1` | 编排层（仅 helper 编译） | `build.rs` 完全跳过分包准备 |
 | `SHERPA_ONNX_ARCHIVE_DIR` | `.cargo/config.toml` | 静态库归档位置，构建期零联网 |
 | `SHERPA_ONNX_LIB_DIR` | 编排层（仅 GPU 的最终调用） | 动态库（CUDA）目录 |
-| `CARGO_BUILD_JOBS` / `CARGO_INCREMENTAL` | 编排层（仅 Windows release） | 降低 release 构建内存峰值 |
+| `CARGO_BUILD_JOBS` / `CARGO_INCREMENTAL` | 编排层（仅 Windows release） | 并行度（核数与可用内存取小，2–10）与关闭增量 |
+| `CARGO_TARGET_DIR` | 编排层（所有 cargo / tauri 调用） | 区分 `target`（CPU）/ `target-gpu`（GPU） |
 
 ### 6.3 构建产物
 
@@ -258,7 +265,7 @@ src-tauri/utils/__bundles/
     <bundle>.tar.zst ...
     bundle-manifest.json
 
-src-tauri/target/release/
+src-tauri/target/release/          ← GPU 构建是 src-tauri/target-gpu/release/
     guaxi.exe
     extract_utils_bundles.exe
     (GPU) onnxruntime*.dll、cudart64_*.dll ... 由 sherpa-onnx-sys 的 build.rs 拷来
@@ -304,9 +311,29 @@ src-tauri/target/release/bundle/nsis/
 | 前缀 | 谁打印 | 回答什么 |
 |---|---|---|
 | `[tauri] [i/N] …` | `tools/run_tauri_with_utils.mjs` | 现在在第几步、这一步做什么、离结束还有几步 |
+| `[tauri]      ✓ / ·` | `tools/run_tauri_with_utils.mjs` | 大阶段内部的里程碑（vite / rustc / NSIS）与各自耗时 |
 | `[utils.bundle]` / `[cuda.bundle]` | `utils_zip_support.rs` | 扫描/压缩/解包的具体进度、每个分包的大小与耗时 |
-| `[tauri]     …` | 心跳 | 子进程（编译、`makensis`）长时间没输出时，报一次已用时间 |
+| `[tauri]     …` | 心跳 | 子进程（编译、`makensis`）长时间没输出时，报一次已用时间 + 当前子步骤 |
 | `cargo:warning=[build.rs]` | `src-tauri/build.rs` | 直接 `cargo build` 时的等价信息（build 脚本 stdout 会被 cargo 吞掉） |
+
+**「Tauri 构建与打包」不是一个黑盒**
+
+这一段最慢（十几到二十几分钟），但它的三段子任务（vite 打包前端 → rustc 编译链接 →
+`makensis` 压安装包）都各自会落一个产物文件。编排层用 `trackBuildPhases()` 每 2 秒
+`stat` 一次这些产物，产物一出现就打一条里程碑，心跳也会带上「当前在哪一步」：
+
+```text
+[tauri] [8/9] Tauri 构建与打包 · vite + rustc + NSIS，通常 5–15 分钟
+[tauri]      阶段内里程碑：前端构建（vite） → rustc 编译 + 链接 → NSIS 生成安装包（逐个打印耗时）
+[tauri]     … Tauri 构建与打包 仍在进行，已用 6m12s · 当前：rustc 编译 + 链接（已 1m20s）
+[tauri]      ✓ 前端构建（vite） 完成 · 本步 4m52s · 阶段内 4m52s
+[tauri]      ✓ rustc 编译 + 链接 完成 · 本步 16m55s · 阶段内 21m47s
+[tauri]      ✓ NSIS 生成安装包 完成 · 本步 2m6s · 阶段内 23m53s
+[tauri] [8/9] Tauri 构建与打包 完成 · 24m56s
+```
+
+这样「这次到底慢在哪」不用再看 `Finished release profile` 那一行猜了：vite 慢是前端
+资源体积、rustc 慢是编译、最后一段慢是 NSIS 压缩。
 
 结束时还有一张阶段耗时表，定位「这次比上次慢在哪一步」：
 
@@ -373,6 +400,26 @@ utils 资源解包退出码：0
 helper 的 stdout 被 `nsExec` 收进详情面板，stderr 在无控制台的安装进程里会被丢弃，
 因此错误信息通过 stdout + 日志文件双写（`report_error`）。`GUAXI_BUNDLE_LOG=quiet`
 对安装阶段同样生效，但错误行不受影响。
+
+**编码契约（中文不能乱码）**
+
+`nsExec::ExecToLog` 把子进程 stdout 按**系统本地代码页**解码后塞进详情面板——不是
+UTF-8，也不做探测。Rust 的 `println!` 写的是 UTF-8，于是中文 Windows 上会出现
+「瀹夎瑁呮棩蹇」这种乱码。所以安装器调用 helper 时固定带 `--console-encoding ansi`：
+
+| 场景 | 开启方式 | stdout 编码 |
+|---|---|---|
+| 安装器详情面板 | 安装钩子传 `--console-encoding ansi` | 系统 ANSI 代码页（zh-CN 是 936/GBK） |
+| 终端 / CI / `cargo run` | 默认 | UTF-8（行为与改造前一致） |
+
+编码转换在 `utils_zip_support::set_console_encoding()` 里做：UTF-8 → UTF-16 →
+`WideCharToMultiByte(GetACP())`，行尾统一成 CRLF。目标代码页表示不了的字符会变成
+`?`（英文系统上的中文），但不会把整行变成乱码。
+
+`install.log` 则是**纯 UTF-8**：NSIS 的 `FileWrite` 只能写本地代码页字节，所以它的
+`[nsis]` 标记行一律用 ASCII 英文，文件头的 UTF-8 BOM 用 `FileWriteByte 0xEF/0xBB/0xBF`
+手写；helper 追加的是 UTF-8。两边拼起来是一份合法的 UTF-8 文件，记事本 / VS Code
+打开都不会串码。
 
 
 ---
@@ -484,6 +531,8 @@ helper 的 stdout 被 `nsExec` 收进详情面板，stderr 在无控制台的安
 | `--bundle-root` | 分包目录（必填） |
 | `--destination` | 解包目标（必填） |
 | `--state-file` | 增量安装状态；**不传**则退化为全量解包（兼容旧包） |
+| `--log-file` | 把同样的进度行追加进安装日志（UTF-8） |
+| `--console-encoding ansi` | stdout 按系统 ANSI 代码页输出，给 NSIS `nsExec` 用；不传则 UTF-8 |
 | `--no-marker` | 不写完成标记（用于落在安装根的 payload，如 CUDA） |
 
 退出码约定：`0` 成功；`1` 解包/校验失败；`2` 缺必填参数。任一失败都不要放过——半套资源比装不上更难排查。

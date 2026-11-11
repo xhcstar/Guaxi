@@ -21,6 +21,30 @@ fn parse_optional_arg(flag: &str) -> Option<PathBuf> {
     None
 }
 
+/// 安装器传 `--console-encoding ansi`：它的详情面板按系统本地代码页解码子进程
+/// stdout，UTF-8 中文进去会变成「瀹夎瑁呮棩蹇」这类乱码。默认仍是 UTF-8，
+/// 所以 `cargo run --bin extract_utils_bundles` 在终端里输出照旧。
+fn apply_console_encoding() {
+    let mut args = std::env::args().skip(1);
+    while let Some(arg) = args.next() {
+        let requested = if arg == "--console-encoding" {
+            args.next()
+        } else {
+            arg.strip_prefix("--console-encoding=").map(str::to_string)
+        };
+        if let Some(value) = requested {
+            let value = value.trim().to_ascii_lowercase();
+            let encoding = if matches!(value.as_str(), "ansi" | "gbk" | "acp" | "local") {
+                utils_zip_support::ConsoleEncoding::Ansi
+            } else {
+                utils_zip_support::ConsoleEncoding::Utf8
+            };
+            utils_zip_support::set_console_encoding(encoding);
+            return;
+        }
+    }
+}
+
 /// 安装失败时给出可执行的方向，而不是把 Rust 的原始错误直接甩给用户。
 fn report_failure(error: &str, bundle_root: &Path, destination: &Path, log_file: Option<&Path>) {
     utils_zip_support::report_error(&format!("[utils.bundle] 安装阶段解压失败：{error}"));
@@ -43,6 +67,9 @@ fn report_failure(error: &str, bundle_root: &Path, destination: &Path, log_file:
 
 fn main() {
     let started = Instant::now();
+    // 安装器的详情面板（nsExec::ExecToLog）按系统 ANSI 代码页解码子进程输出，
+    // 必须先切编码再开口说话，否则前面几行仍然是乱码。
+    apply_console_encoding();
     let bundle_root = parse_arg("--bundle-root").unwrap_or_else(|error| {
         eprintln!("{error}");
         std::process::exit(2);
