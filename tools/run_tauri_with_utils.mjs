@@ -809,7 +809,10 @@ async function main() {
   }
   if (isWindows && !shouldPrepareForTauriCommand) {
     // dev 不套 release 那套环境变量，这里明说一句，免得看到「没有并行度限制」以为是漏配。
-    console.log('[tauri] 非 build/bundle（如 dev）：增量编译保持开启、并行度交给 cargo 默认，不注入 release 变量');
+    console.log(
+      '[tauri] 非 build/bundle（如 dev）：增量编译保持开启、并行度交给 cargo 默认，不注入 release 变量；\n' +
+        '[tauri]     编译进度由 cargo 自己打印（Compiling / Building [===>]），这里不发心跳',
+    );
   }
   if (isWindows && shouldPrepareForTauriCommand) {
     if (process.env.CARGO_BUILD_JOBS) {
@@ -1054,6 +1057,10 @@ async function main() {
     },
     {
       label: tauriTitle,
+      // dev 是常驻会话，不是「有始有终的构建步骤」：心跳会每 20s 刷一行，一直刷到关窗口，
+      // 还会跟 cargo 的 `Building [====>]` 进度条互相撕行。cargo 自己就会持续输出编译进度，
+      // 启动后应用日志也在滚动，这里不需要心跳来证明「没卡死」。
+      heartbeatMs: shouldPrepareForTauriCommand ? HEARTBEAT_MS : 0,
       heartbeatNote: phaseTracker
         ? () =>
             `当前：${phaseTracker.currentLabel() ?? '收尾'}（已 ${formatDuration(phaseTracker.currentElapsedMs())}）`
