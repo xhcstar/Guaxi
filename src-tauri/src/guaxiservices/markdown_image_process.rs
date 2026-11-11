@@ -239,15 +239,23 @@ fn resolve_local_image_url(img_path: &str, base_path: &Path) -> Option<String> {
     }
 
     let normalized_path = img_path.replace('\\', "/");
-    let full_path = base_path.join(&normalized_path).canonicalize().ok()?;
-    if !full_path.is_file() {
+    served_url_for_file(&base_path.join(&normalized_path))
+}
+
+/// 把一个确定存在的文件登记为可服务，并返回 `serve_image` 的 URL。
+///
+/// 抽出来是为了让「破图重试」复用同一套登记逻辑：重试时文件可能是刚刚才被补回来的，
+/// 走这条路径才会补上 `ResolvedImageRegistry` 的授权，否则浏览器取图仍然 403。
+fn served_url_for_file(full_path: &Path) -> Option<String> {
+    let canonical = full_path.canonicalize().ok()?;
+    if !canonical.is_file() {
         return None;
     }
 
     // 登记这个文件及其所在目录，让 serve_image 放行（详见 ResolvedImageRegistry 的说明）。
-    remember_resolved_image(&full_path);
+    remember_resolved_image(&canonical);
 
-    let abs = full_path
+    let abs = canonical
         .to_string_lossy()
         .trim_start_matches(r"\\?\")
         .trim_start_matches('/')
@@ -320,7 +328,7 @@ fn proxy_html_images(content: &str, base_path: &Path, mappings: &mut Vec<ImageMa
                 // 没有可服务的地址：占位图是内联 SVG，调用方据此跳过二次替换。
                 served_path: String::new(),
             });
-            broken_image_placeholder(&alt)
+            broken_image_placeholder(&alt, url, base_path)
         })
         .to_string()
 }
@@ -381,10 +389,10 @@ fn process_image_paths(content: &str, base_path: &Path) -> (String, Vec<ImageMap
             );
             mappings.push(ImageMapping {
                 original_path: img_path.to_string(),
-                // 没有可服务的地址：占位图是内联 SVG，调用方据此跳过二次替换。
+                // 没有可服务的地址：占位块是内联 HTML，调用方据此跳过二次替换。
                 served_path: String::new(),
             });
-            broken_image_placeholder(alt)
+            broken_image_placeholder(alt, img_path, base_path)
         })
         .to_string();
 
@@ -427,6 +435,60 @@ async fn process_chat_markdown(req: web::Json<MarkdownRequest>) -> HttpResponse 
         "processed_content": processed,
         "mappings": mappings
     }))
+}
+
+#[derive(Debug, Deserialize)]
+struct ResolveImageRequest {
+    /// 原始路径：绝对路径优先，其次才是 Markdown 里的相对路径。
+    path: String,
+    #[serde(default)]
+    base_path: Option<String>,
+}
+
+/// 破图占位块上「重新加载」按钮的后端。
+///
+/// 为什么不复用 `/api/markdown/image_process`：那条链路要重新处理整篇文档，
+/// 前端还有片段缓存、全文缓存、后端 sqlite 缓存三层，重试一张图要么撞缓存拿到旧结果，
+/// 要么为了一个文件把所有缓存打穿。这里只解决"这个文件现在能不能服务"，
+/// 成功就返回 serve_image 的地址，由前端把占位块就地换成 `<img>`。
+#[post("/api/markdown/resolve_image")]
+async fn resolve_image(req: web::Json<ResolveImageRequest>) -> HttpResponse {
+    let raw = req.path.trim();
+    if raw.is_empty() {
+        return HttpResponse::Ok().json(serde_json::json!({
+            "served_url": serde_json::Value::Null,
+            "reason": "empty_path"
+        }));
+    }
+
+    let candidate = PathBuf::from(raw.replace('\\', "/"));
+    let full_path = if candidate.is_absolute() {
+        candidate
+    } else {
+        match req.base_path.as_deref().map(str::trim) {
+            Some(base) if !base.is_empty() => PathBuf::from(base).join(&candidate),
+            _ => {
+                return HttpResponse::Ok().json(serde_json::json!({
+                    "served_url": serde_json::Value::Null,
+                    "reason": "missing_base_path"
+                }));
+            }
+        }
+    };
+
+    match served_url_for_file(&full_path) {
+        Some(url) => {
+            info!(path = raw, served = %url, "broken image retry resolved");
+            HttpResponse::Ok().json(serde_json::json!({
+                "served_url": url,
+                "reason": serde_json::Value::Null
+            }))
+        }
+        None => HttpResponse::Ok().json(serde_json::json!({
+            "served_url": serde_json::Value::Null,
+            "reason": "not_found"
+        })),
+    }
 }
 
 #[get("/markdown/api/images/{path:.*}")]
@@ -626,31 +688,74 @@ async fn register_resource(req: web::Json<ResourceRegisterRequest>) -> HttpRespo
 // `![](http://127.0.0.1:8080/...)` 不能借代理变成一次 SSRF。
 // 缓存落在 exe 同级 cache/remote-images/，按 URL 哈希命名。
 
-/// 无法解析的图片替换成这段内联 SVG 占位图。
+/// 无法解析的图片替换成这段内联 HTML 占位块。
 ///
 /// 为什么不是 data URI：markdown-it 的 validateLink 只放行
 /// `data:image/(gif|png|jpeg|webp)`，`data:image/svg+xml` 会被判为不安全，
 /// 图片/链接语法整段退化成源码文本（就是"预览里出现一长串 base64"的原因）。
-/// 内联 SVG 走原始 HTML 通道（预览器 html: true），不受链接校验影响。
+/// 内联 HTML 走原始 HTML 通道（预览器 html: true），不受链接校验影响。
 ///
 /// 颜色一律用 `currentColor` + 透明度：浅色主题继承深色文字、暗色主题继承浅色文字，
-/// 底色/描边/文字自动跟着明暗主题走，不需要为两套主题各准备一张图。
-/// `alt` 放进 aria-label，读屏和悬停提示仍能说明这是什么。
-fn broken_image_placeholder(alt: &str) -> String {
-    let escaped = html_escape_attr(alt);
-    let label = if escaped.trim().is_empty() {
-        "image unavailable".to_string()
+/// 底色/描边/文字自动跟着明暗主题走，不需要为两套主题各准备一套样式。
+///
+/// 为什么从裸 `<svg>` 改成 `<span>`：破图同样需要「重新加载 / 复制路径」两个动作，
+/// 裸 SVG 里塞不进可点击元素，用户除了看到一块灰图什么也做不了。
+///
+/// 几个约定：
+/// - `data-gx-broken-src` 保留 Markdown 里写的原始路径，供「复制路径」直接取用；
+/// - `data-gx-broken-abs` 是拼出来的绝对路径，前端拿它调 `/api/markdown/resolve_image`
+///   重试即可，不必为了补一张图重渲染整篇文档（那还会撞上各级渲染缓存）；
+/// - 整个块必须写成一行：Markdown 的原始 HTML 通道按行解析，换行会被拆成普通文本。
+fn broken_image_placeholder(alt: &str, original: &str, base_path: &Path) -> String {
+    let escaped_alt = html_escape_attr(alt);
+    let escaped_src = html_escape_attr(original);
+    let label = if escaped_alt.trim().is_empty() {
+        "图片无法加载"
     } else {
-        escaped
+        escaped_alt.as_str()
     };
+
+    // 文件名单独展示一行：多数破图是「路径写错 / 文件被挪走」，看路径比看 alt 更好定位。
+    let file_name = original
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let escaped_name = html_escape_attr(if file_name.is_empty() {
+        "未命名图片"
+    } else {
+        file_name.as_str()
+    });
+
+    // base_path 为空说明当前文档没有可用基准目录，拼出来的绝对路径没有意义，
+    // 重试按钮会退化成"再查一次相对路径"（必然失败），所以干脆不写。
+    let abs = if base_path.as_os_str().is_empty() {
+        String::new()
+    } else {
+        base_path
+            .join(original.replace('\\', "/"))
+            .to_string_lossy()
+            .replace('\\', "/")
+    };
+    let escaped_abs = html_escape_attr(&abs);
+
     format!(
-        "<svg class=\"guaxi-broken-image\" xmlns=\"http://www.w3.org/2000/svg\" width=\"320\" \
-height=\"200\" viewBox=\"0 0 320 200\" role=\"img\" aria-label=\"{label}\" \
-style=\"max-width:100%;height:auto;\">\
-<rect x=\"0.5\" y=\"0.5\" width=\"319\" height=\"199\" rx=\"6\" fill=\"currentColor\" fill-opacity=\"0.05\" stroke=\"currentColor\" stroke-opacity=\"0.15\"/>\
-<path d=\"M30 30l260 140M290 30L30 170\" stroke=\"currentColor\" stroke-opacity=\"0.22\" stroke-width=\"2\"/>\
-<text x=\"160\" y=\"105\" fill=\"currentColor\" fill-opacity=\"0.6\" font-family=\"system-ui, sans-serif\" \
-font-size=\"14\" text-anchor=\"middle\" dominant-baseline=\"middle\">image unavailable</text></svg>"
+        "<span class=\"guaxi-broken-image\" data-gx-broken-src=\"{escaped_src}\" \
+data-gx-broken-abs=\"{escaped_abs}\" data-gx-broken-alt=\"{escaped_alt}\">\
+<span class=\"guaxi-broken-image__icon\" aria-hidden=\"true\">\
+<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"22\" height=\"22\" viewBox=\"0 0 24 24\" \
+fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.6\" stroke-linecap=\"round\" \
+stroke-linejoin=\"round\"><rect x=\"3\" y=\"4\" width=\"18\" height=\"16\" rx=\"2.5\"/>\
+<circle cx=\"8.8\" cy=\"9.2\" r=\"1.5\"/><path d=\"M3.5 17.2l4.6-4.6 3.4 3.4 2.8-2.8 5.9 5.9\"/>\
+<path d=\"M4 20L20 4\"/></svg></span>\
+<span class=\"guaxi-broken-image__body\">\
+<span class=\"guaxi-broken-image__title\">{label}</span>\
+<span class=\"guaxi-broken-image__name\" title=\"{escaped_src}\">{escaped_name}</span></span>\
+<span class=\"guaxi-broken-image__actions\">\
+<button type=\"button\" class=\"guaxi-broken-image__btn\" data-gx-broken-action=\"retry\">重新加载</button>\
+<button type=\"button\" class=\"guaxi-broken-image__btn\" data-gx-broken-action=\"copy\">复制路径</button>\
+</span></span>"
     )
 }
 
@@ -666,11 +771,13 @@ fn html_escape_attr(raw: &str) -> String {
 ///
 /// 这是一个真实的 HTTP 图片响应（内容不能是 data URI 字符串本身），
 /// 颜色写死为浅色系——它只出现在"外链图片连不上"的降级场景里。
+/// 文案与内联占位块保持一致：这里拿不到原路径，也没有交互能力（它是一张位图响应），
+/// 所以只能告诉用户"这张外链图取不回来"。
 const BROKEN_IMAGE_SVG: &str = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"320\" \
 height=\"200\" viewBox=\"0 0 320 200\"><rect width=\"320\" height=\"200\" fill=\"#f2f2f2\"/>\
 <path d=\"M30 30l260 140M290 30L30 170\" stroke=\"#ccc\" stroke-width=\"2\"/>\
 <text x=\"160\" y=\"105\" font-family=\"sans-serif\" font-size=\"14\" fill=\"#999\" \
-text-anchor=\"middle\">image unavailable</text></svg>";
+text-anchor=\"middle\">图片无法加载</text></svg>";
 
 const REMOTE_IMAGE_MAX_BYTES: usize = 20 * 1024 * 1024;
 
@@ -928,6 +1035,7 @@ async fn remote_image_legacy(query: web::Query<RemoteImageQuery>) -> HttpRespons
 pub fn config(cfg: &mut web::ServiceConfig) {
     cfg.service(process_markdown)
         .service(process_chat_markdown)
+        .service(resolve_image)
         .service(serve_image)
         .service(serve_bed_image)
         .service(register_resource)
@@ -954,13 +1062,49 @@ mod tests {
             out.contains("currentColor") && !out.contains("data:image/"),
             "placeholder must adapt to the theme and avoid data URIs, got: {out}"
         );
+        // 原始路径会保留在 data 属性里供「复制路径」使用，但绝不能再出现在图片位置：
+        // 只要输出里没有 `<img`，浏览器就不会去请求这个不存在的文件。
         assert!(
-            !out.contains("lark2pad-1793718531-2.jpg"),
-            "the broken relative path must not survive in the output"
+            !out.contains("<img"),
+            "broken image must not survive as an <img> tag, got: {out}"
+        );
+        assert!(
+            out.contains("data-gx-broken-src=\"lark2pad-1793718531-2.jpg\""),
+            "original path must be kept in data attribute for the copy action, got: {out}"
         );
         assert_eq!(mappings.len(), 1);
         assert_eq!(mappings[0].original_path, "lark2pad-1793718531-2.jpg");
         assert_eq!(mappings[0].served_path, "");
+    }
+
+    #[test]
+    fn placeholder_exposes_retry_and_copy_actions() {
+        // 占位块必须带两个可点击动作，否则用户只能看着一块灰图。
+        let dir = std::env::temp_dir().join("guaxi-note-dir");
+        let (out, _) = process_image_paths("![图](images/nope.png)", &dir);
+
+        assert!(
+            out.contains("data-gx-broken-action=\"retry\""),
+            "placeholder must expose a retry action, got: {out}"
+        );
+        assert!(
+            out.contains("data-gx-broken-action=\"copy\""),
+            "placeholder must expose a copy-path action, got: {out}"
+        );
+        // 有 base_path 时必须给出绝对路径，重试接口才能不依赖文档上下文。
+        assert!(
+            out.contains("data-gx-broken-abs=\""),
+            "placeholder must carry a resolved absolute path when base_path is known, got: {out}"
+        );
+        assert!(
+            out.contains("images/nope.png"),
+            "placeholder must show the file name, got: {out}"
+        );
+        // 中文文案：界面上不该再出现英文 image unavailable。
+        assert!(
+            out.contains("图片无法加载") && !out.contains("image unavailable"),
+            "placeholder copy must be localized, got: {out}"
+        );
     }
 
     #[test]
@@ -984,7 +1128,7 @@ mod tests {
     #[test]
     fn placeholder_keeps_alt_and_escapes_it() {
         let (out, _) = process_image_paths("![封面\"图](../nope.png)", Path::new(""));
-        assert!(out.contains("aria-label=\"封面&quot;图\""), "got: {out}");
+        assert!(out.contains("data-gx-broken-alt=\"封面&quot;图\""), "got: {out}");
     }
 
     #[test]
@@ -1031,8 +1175,9 @@ mod tests {
             &mut mappings,
         );
         assert!(out.contains("class=\"guaxi-broken-image\""), "got: {out}");
-        assert!(out.contains("aria-label=\"x\""), "got: {out}");
-        assert!(!out.contains("lark2pad"), "broken path must not survive");
+        assert!(out.contains("data-gx-broken-alt=\"x\""), "got: {out}");
+        // 原始路径只允许出现在 data 属性里，不能留在 src 上被浏览器请求。
+        assert!(!out.contains("<img"), "broken tag must be fully replaced, got: {out}");
     }
 
     #[test]

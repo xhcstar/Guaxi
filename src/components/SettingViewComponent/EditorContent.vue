@@ -72,6 +72,77 @@
 
       <n-divider />
 
+      <h3>Markdown 图片</h3>
+      <p class="setting-page-desc">
+        预览与探索者里图片的显示口径。宽度与圆角通过 CSS 变量全局下发，改完立刻生效，
+        不用重开文档，也不用重新渲染。
+      </p>
+      <n-form label-placement="left" label-width="auto" :show-require-mark="false">
+        <n-form-item label="宽度上限">
+          <n-space align="center" :size="8">
+            <n-input-number
+              :value="settingsStore.previewImage.max_width"
+              :min="PREVIEW_IMAGE_MAX_WIDTH_MIN"
+              :max="PREVIEW_IMAGE_MAX_WIDTH_MAX"
+              :step="20"
+              :precision="0"
+              :disabled="loading || previewImageSaving"
+              style="width: 140px"
+              @update:value="(v) => handlePreviewImageChange('max_width', Number(v) || DEFAULT_PREVIEW_IMAGE_OPTIONS.max_width)"
+            />
+            <span class="setting-page-desc">
+              允许 {{ PREVIEW_IMAGE_MAX_WIDTH_MIN }}–{{ PREVIEW_IMAGE_MAX_WIDTH_MAX }}px，默认 860。
+              这是「不放大」的上限：原图比它窄就按原始尺寸显示，只有超过时才等比收缩。
+            </span>
+          </n-space>
+        </n-form-item>
+        <n-form-item label="圆角">
+          <n-space align="center" :size="8">
+            <n-input-number
+              :value="settingsStore.previewImage.radius"
+              :min="0"
+              :max="PREVIEW_IMAGE_RADIUS_MAX"
+              :step="1"
+              :precision="0"
+              :disabled="loading || previewImageSaving"
+              style="width: 140px"
+              @update:value="(v) => handlePreviewImageChange('radius', Number(v) || 0)"
+            />
+            <span class="setting-page-desc">
+              0–{{ PREVIEW_IMAGE_RADIUS_MAX }}px，默认 12。设为 0 是直角，截图的四个角完全方正。
+            </span>
+          </n-space>
+        </n-form-item>
+        <n-form-item label="显示图注">
+          <n-space align="center" :size="8">
+            <n-switch
+              :value="settingsStore.previewImage.show_caption"
+              :disabled="loading || previewImageSaving"
+              @update:value="(v) => handlePreviewImageChange('show_caption', !!v)"
+            />
+            <span class="setting-page-desc">
+              把图片的 alt 文字显示在图片下方（13px、居中、弱化色）。alt 为空的图片不占位，
+              图集里图注最多两行。
+            </span>
+          </n-space>
+        </n-form-item>
+        <n-form-item label="预览">
+          <div class="preview-image-sample">
+            <div
+              class="preview-image-sample__frame"
+              :style="previewImageSampleStyle"
+            >
+              <span class="preview-image-sample__hint">示例图片</span>
+            </div>
+            <span v-if="settingsStore.previewImage.show_caption" class="preview-image-sample__caption">
+              示例图注：这里就是 alt 文字
+            </span>
+          </div>
+        </n-form-item>
+      </n-form>
+
+      <n-divider />
+
       <h3>LSP 配置</h3>
       <p class="setting-page-desc">
         LSP 能力统一由下方语言扩展提供；安装对应扩展后，新建或重新打开编辑器即可获得语法高亮和语义补全。
@@ -205,6 +276,10 @@ import {
   EDITOR_FONT_FALLBACK_STACK,
   resolveEditorFontFamily,
   resolveEditorLineHeight,
+  DEFAULT_PREVIEW_IMAGE_OPTIONS,
+  PREVIEW_IMAGE_MAX_WIDTH_MIN,
+  PREVIEW_IMAGE_MAX_WIDTH_MAX,
+  PREVIEW_IMAGE_RADIUS_MAX,
 } from '../../stores/settingsStore'
 import LspExtensionPanel from './LspExtensionPanel.vue'
 
@@ -218,6 +293,7 @@ const codeThemeOptions = GUAXI_CODE_THEMES.map((theme) => ({ label: theme.label,
 const pythonCodegenAssistEnabled = ref(false)
 const markdownFormatSaving = ref(false)
 const editorDisplaySaving = ref(false)
+const previewImageSaving = ref(false)
 const loading = ref(false)
 
 // 预设字体链。标签只写字体名，选中后落盘的是整条 CSS font-family，
@@ -302,6 +378,21 @@ const editorDisplayPreviewStyle = computed(() => {
   }
 })
 
+/**
+ * 图片示例框：宽度、圆角按当前设置 1:1 渲染，面板放不下时才收缩。
+ * 只用真实的 px 值，不做等比缩放——否则把 720 调到 860 在窄面板里看不出变化，
+ * 用户会以为设置没生效。
+ */
+const previewImageSampleStyle = computed(() => {
+  const image = settingsStore.previewImage || {}
+  const width = Number(image.max_width) || DEFAULT_PREVIEW_IMAGE_OPTIONS.max_width
+  const radius = Number(image.radius)
+  return {
+    width: `min(100%, ${width}px)`,
+    borderRadius: `${Number.isFinite(radius) && radius >= 0 ? radius : DEFAULT_PREVIEW_IMAGE_OPTIONS.radius}px`,
+  }
+})
+
 onMounted(async () => {
   try {
     loading.value = true
@@ -380,6 +471,22 @@ const handleEditorDisplayChange = async (key, value) => {
   }
 }
 
+/**
+ * 图片显示三项：先让 store 把 CSS 变量刷到根节点（预览/探索者立刻变化），再落盘。
+ * 落盘失败时 store 已经把值改了，这里只记日志不回滚——回滚会让界面在
+ * 「已经看到变化」和「设置项跳回旧值」之间来回闪，体验更差。
+ */
+const handlePreviewImageChange = async (key, value) => {
+  try {
+    previewImageSaving.value = true
+    await settingsStore.setPreviewImageOption(key, value)
+  } catch (error) {
+    logger.error('更新 Markdown 图片设置失败:', error)
+  } finally {
+    previewImageSaving.value = false
+  }
+}
+
 const handlePythonCodegenAssistChange = async (value) => {
   try {
     loading.value = true
@@ -426,5 +533,39 @@ const handlePythonCodegenAssistChange = async (value) => {
 
 .editor-display-preview .tok-cmt {
   color: var(--guaxi-syntax-comment);
+}
+
+/* 图片示例框：宽度与圆角由行内 style 跟着 store 走，
+   这里只给底色/描边，让它看起来像一张“截图”而不是一块色块。 */
+.preview-image-sample {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  max-width: 100%;
+}
+
+.preview-image-sample__frame {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 132px;
+  /* 与真实图片同一道极淡描边，圆角变化才看得出来。 */
+  border: 1px solid var(--guaxi-border-weak, rgba(15, 23, 42, 0.12));
+  background: repeating-linear-gradient(
+    135deg,
+    var(--guaxi-content-bg) 0 12px,
+    var(--guaxi-hover-bg, rgba(15, 23, 42, 0.04)) 12px 24px
+  );
+  color: var(--guaxi-text-tertiary, rgba(107, 114, 128, 0.9));
+  font-size: 12px;
+}
+
+.preview-image-sample__caption {
+  max-width: 100%;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--guaxi-text-tertiary, rgba(107, 114, 128, 0.92));
+  text-align: center;
 }
 </style>

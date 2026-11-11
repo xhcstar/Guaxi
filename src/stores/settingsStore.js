@@ -51,6 +51,27 @@ export const EDITOR_FONT_SIZE_MIN = 8
 export const EDITOR_FONT_SIZE_MAX = 48
 
 /**
+ * Markdown 图片显示配置的默认值，与后端 PreviewImageConfig::default() 对齐。
+ *
+ * 860 / 12 / 不显示图注 = 此前写死在预览与探索者样式里的那一组，
+ * 所以升级后没动过设置的用户看到的图片和以前完全一样。
+ */
+export const DEFAULT_PREVIEW_IMAGE_OPTIONS = {
+  max_width: 860,
+  radius: 12,
+  show_caption: false,
+}
+
+/** 与后端 normalize_preview_image_config 的夹取区间保持一致。 */
+export const PREVIEW_IMAGE_MAX_WIDTH_MIN = 320
+export const PREVIEW_IMAGE_MAX_WIDTH_MAX = 1400
+export const PREVIEW_IMAGE_RADIUS_MAX = 28
+
+/** 图片宽度上限/圆角落到 CSS 变量上的名字：样式里只认这两个变量，不认具体数值。 */
+export const PREVIEW_IMAGE_MAX_WIDTH_VAR = '--guaxi-figure-max-width'
+export const PREVIEW_IMAGE_RADIUS_VAR = '--guaxi-figure-radius'
+
+/**
  * 主编辑器字体链的中文/缺字回退段。
  *
  * 这里的 Maple Mono NF CN 是必需的，不是随手加的：它的中文字形宽 1.2em、拉丁 0.6em，
@@ -105,6 +126,10 @@ export const useSettingsStore = defineStore("settings", {
     // 与 markdownFormat 一样不做驼峰转换，省掉一层映射。
     editorDisplay: { ...DEFAULT_EDITOR_DISPLAY_OPTIONS },
     editorDisplayLoaded: false,
+    // Markdown 图片的宽度上限、圆角与图注开关。宽度/圆角通过 CSS 变量下发，
+    // 图注开关由预览与探索者的媒体组增强逻辑直接读取。
+    previewImage: { ...DEFAULT_PREVIEW_IMAGE_OPTIONS },
+    previewImageLoaded: false,
   }),
   actions: {
     setSelectedMenu(menu) {
@@ -225,6 +250,72 @@ export const useSettingsStore = defineStore("settings", {
         console.error('[SettingsStore] editor display config persist failed:', error)
         throw error
       }
+    },
+
+    async loadPreviewImageConfig() {
+      if (this.previewImageLoaded) {
+        this.applyPreviewImageVars()
+        return
+      }
+      try {
+        const loaded = await invoke('get_preview_image_config')
+        if (loaded && typeof loaded === 'object') {
+          // 与 editorDisplay 同一套写法：合并而不是整体替换，后端新增字段时不会丢。
+          this.previewImage = { ...DEFAULT_PREVIEW_IMAGE_OPTIONS, ...loaded }
+        }
+      } catch (error) {
+        console.warn('[SettingsStore] load preview image config failed, keep defaults:', error)
+      }
+      this.previewImageLoaded = true
+      this.applyPreviewImageVars()
+    },
+
+    /**
+     * 局部更新图片显示配置并落盘。
+     *
+     * 先改 store 并立刻把 CSS 变量刷到根节点（图片尺寸即时变化），再写配置文件；
+     * 后端会夹取区间后回传，所以最后用返回的那份覆盖本地值。
+     */
+    async setPreviewImageOption(key, value) {
+      const next = { ...this.previewImage, [key]: value }
+      this.previewImage = next
+      this.previewImageLoaded = true
+      this.applyPreviewImageVars()
+      try {
+        const saved = await invoke('set_preview_image_config', {
+          previewImageConfig: next,
+        })
+        if (saved && typeof saved === 'object') {
+          this.previewImage = { ...DEFAULT_PREVIEW_IMAGE_OPTIONS, ...saved }
+          this.applyPreviewImageVars()
+        }
+      } catch (error) {
+        console.error('[SettingsStore] preview image config persist failed:', error)
+        throw error
+      }
+    },
+
+    /**
+     * 把宽度上限与圆角写成根节点上的 CSS 变量。
+     *
+     * 样式里所有图片尺寸都走 var(--guaxi-figure-max-width, 860px) 这类写法，
+     * 所以这里改一次全局生效，不用去碰预览、探索者、阅读器各自的样式表。
+     * 幂等，可重复调用。
+     */
+    applyPreviewImageVars() {
+      const root = typeof document !== 'undefined' ? document.documentElement : null
+      if (!root?.style) return
+      const maxWidth = Number(this.previewImage?.max_width)
+      const radius = Number(this.previewImage?.radius)
+      const safeMaxWidth =
+        Number.isFinite(maxWidth) && maxWidth > 0 ? maxWidth : DEFAULT_PREVIEW_IMAGE_OPTIONS.max_width
+      const safeRadius =
+        Number.isFinite(radius) && radius >= 0 ? radius : DEFAULT_PREVIEW_IMAGE_OPTIONS.radius
+      root.style.setProperty(PREVIEW_IMAGE_MAX_WIDTH_VAR, `${safeMaxWidth}px`)
+      root.style.setProperty(PREVIEW_IMAGE_RADIUS_VAR, `${safeRadius}px`)
+      // 图注开关只切一个根节点类：媒体组增强阶段已经把 alt 写进 data-gx-caption，
+      // 这里加/删类即可让图注显隐，不需要为了一个开关重渲染预览或探索者面板。
+      root.classList.toggle('guaxi-show-figure-caption', !!this.previewImage?.show_caption)
     },
 
     async loadAppearanceConfig() {

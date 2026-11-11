@@ -141,6 +141,9 @@ pub struct AppConfig {
     /// 主编辑器（Monaco）的字体、字号与小地图开关，由「设置 → 编辑器 → 编辑器外观」驱动。
     #[serde(default)]
     editor_display_config: EditorDisplayConfig,
+    /// Markdown 图片（预览 / 探索者 / 阅读器）的宽度上限、圆角与图注开关。
+    #[serde(default)]
+    preview_image_config: PreviewImageConfig,
 }
 
 /// Markdown 格式化的默认选项。
@@ -831,6 +834,47 @@ impl Default for EditorDisplayConfig {
     }
 }
 
+/// Markdown 图片的显示配置：单图宽度上限、圆角、是否把 alt 渲染成图注。
+///
+/// 默认值等于此前写死在样式里的那组（860px / 12px / 不显示图注），
+/// 所以升级后没动过设置的用户，预览和探索者里的图片和以前完全一致。
+///
+/// 为什么宽度上限要 clamp：这个值会被直接拼进 CSS 变量，不夹住的话
+/// 用户填 99999 会把图片撑到需要横向滚动，填 0 会让图片彻底看不见。
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct PreviewImageConfig {
+    #[serde(default = "default_preview_image_max_width")]
+    pub max_width: u16,
+    #[serde(default = "default_preview_image_radius")]
+    pub radius: u8,
+    #[serde(default = "default_preview_image_show_caption")]
+    pub show_caption: bool,
+}
+
+fn default_preview_image_max_width() -> u16 {
+    860
+}
+
+fn default_preview_image_radius() -> u8 {
+    12
+}
+
+fn default_preview_image_show_caption() -> bool {
+    // 默认关：很多文档的 alt 是 `image`、`截图` 这类占位文字，
+    // 直接显示成图注只会让正文变吵。想要图注的用户自己打开。
+    false
+}
+
+impl Default for PreviewImageConfig {
+    fn default() -> Self {
+        PreviewImageConfig {
+            max_width: default_preview_image_max_width(),
+            radius: default_preview_image_radius(),
+            show_caption: default_preview_image_show_caption(),
+        }
+    }
+}
+
 /// AI 影像工坊的持久化配置：Blender / FFmpeg 可执行文件路径与本地资产库根目录。
 /// 空字符串表示“未配置”，前端会回退到自动探测。这些不是机密，明文保存即可。
 #[derive(Serialize, Deserialize, Debug, Default)]
@@ -999,6 +1043,7 @@ impl Default for AppConfig {
             film_studio_config: FilmStudioConfig::default(),
             markdown_format_options: default_markdown_format_options(),
             editor_display_config: EditorDisplayConfig::default(),
+            preview_image_config: PreviewImageConfig::default(),
             disabled_services: Vec::new(),
         }
     }
@@ -1537,6 +1582,49 @@ fn normalize_editor_display_config(input: EditorDisplayConfig) -> EditorDisplayC
             .font_size
             .clamp(EDITOR_FONT_SIZE_MIN, EDITOR_FONT_SIZE_MAX),
         minimap_enabled: input.minimap_enabled,
+    }
+}
+
+#[tauri::command]
+pub fn get_preview_image_config() -> PreviewImageConfig {
+    let config = load_config();
+    config.preview_image_config
+}
+
+/// 保存 Markdown 图片显示配置，并回传夹取后的结果。
+///
+/// 与 `set_editor_display_config` 同理：入参来自可手打的输入框，
+/// 必须把真正落盘的那份值返回给前端，否则输入框和实际渲染会对不上。
+#[tauri::command]
+pub fn set_preview_image_config(preview_image_config: PreviewImageConfig) -> PreviewImageConfig {
+    let next = normalize_preview_image_config(preview_image_config);
+    info!(
+        max_width = next.max_width,
+        radius = next.radius,
+        show_caption = next.show_caption,
+        "set_preview_image_config"
+    );
+
+    let mut config = load_config();
+    config.preview_image_config = next.clone();
+    save_config(&config);
+    next
+}
+
+/// 单图宽度上限的可调区间。低于 320 会让流程图/表格截图不可读，
+/// 高于 1400 在 1080p 屏上必然横向滚动。
+const PREVIEW_IMAGE_MAX_WIDTH_MIN: u16 = 320;
+const PREVIEW_IMAGE_MAX_WIDTH_MAX: u16 = 1400;
+/// 圆角上限：再大就不像圆角卡片，而像被裁掉一角的图。
+const PREVIEW_IMAGE_RADIUS_MAX: u8 = 28;
+
+fn normalize_preview_image_config(input: PreviewImageConfig) -> PreviewImageConfig {
+    PreviewImageConfig {
+        max_width: input
+            .max_width
+            .clamp(PREVIEW_IMAGE_MAX_WIDTH_MIN, PREVIEW_IMAGE_MAX_WIDTH_MAX),
+        radius: input.radius.min(PREVIEW_IMAGE_RADIUS_MAX),
+        show_caption: input.show_caption,
     }
 }
 

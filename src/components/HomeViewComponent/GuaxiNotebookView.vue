@@ -912,7 +912,12 @@ import {
   clearSearchHighlights,
   setActiveSearchHit,
 } from '../../utils/domTextSearch'
-import { renderMarkdown, addCopyButtons } from '../GuaxiMarkdownRender/GuaxiMarker'
+import {
+  renderMarkdown,
+  addCopyButtons,
+  addMediaViewerButtons,
+  bindBrokenImagePlaceholders,
+} from '../GuaxiMarkdownRender/GuaxiMarker'
 import {
   createPythonCellId,
   createPythonSessionId,
@@ -5011,6 +5016,12 @@ const enhanceNotebookHtmlWithMediaGroups = (html) => {
       }
       item.host.classList.add('guaxi-media-group__item')
       item.image.classList.add('guaxi-media-group__image')
+      // 图注：alt 原样带到媒体项上，显示与否由根节点的 guaxi-show-figure-caption 类控制，
+      // 与主预览共用同一套 CSS 开关，切设置不需要重渲染 cell。
+      const captionText = String(item.image.getAttribute('alt') || '').trim()
+      if (captionText) {
+        item.host.setAttribute('data-gx-caption', captionText)
+      }
     }
 
     mediaGroupCount += 1
@@ -9242,16 +9253,26 @@ watch([notebookSearchCaseSensitive, notebookSearchWholeWord, notebookSearchUseRe
 // 设计说明（Q3）：探索者模式 cell 用 worker 渲染、buttons:false，所以渲染结果里没有复制按钮。
 // 这里在渲染结果落 DOM 后，对每个 Markdown cell 预览区与输出富文本区补挂复制按钮（addCopyButtons 幂等）。
 // 复制按钮的具体位置由作用域 CSS 控制（移到左上角，避开右上角的 cell 删除按钮）。
-const injectNotebookCopyButtons = (reason = 'unknown') => {
+//
+// 设计说明（图片工具条）：探索者的图片此前只剩一张裸图——预览模式有的「查看 / OCR 取字 / 保存到文件」
+// 三个按钮完全没有挂上，因为 addMediaViewerButtons 只在主预览里被调用过。图片与复制按钮走同一条注入链，
+// 保证两边能力对齐；addMediaViewerButtons 内部先删后建，重复调用只更新主题，不会叠出第二套按钮。
+const injectNotebookContentButtons = (reason = 'unknown') => {
   const root = notebookRootRef.value
   if (!(root instanceof HTMLElement)) return
-  const containers = root.querySelectorAll('.guaxi-notebook__markdown-preview, .guaxi-notebook__rich')
+  const containers = root.querySelectorAll(
+    '.guaxi-notebook__markdown-preview, .guaxi-notebook__output-markdown, .guaxi-notebook__rich',
+  )
   if (!containers.length) return
   containers.forEach((container) => {
     try {
       addCopyButtons(container, { theme: props.theme })
+      addMediaViewerButtons(container, { theme: props.theme })
+      // 占位块的「重新加载 / 复制路径」也走这条注入链：探索者分段渲染，
+      // 每个 cell 落 DOM 后都要各自接线，函数内部按 data 标记幂等。
+      bindBrokenImagePlaceholders(container)
     } catch (error) {
-      logger.warn('[Notebook] inject copy buttons failed', { reason, error: String(error?.message || error) })
+      logger.warn('[Notebook] inject content buttons failed', { reason, error: String(error?.message || error) })
     }
   })
 }
@@ -9260,7 +9281,7 @@ watch(
   [renderedMarkdownHtmlMap, renderedOutputMarkdownHtmlMap],
   () => {
     nextTick(() => {
-      injectNotebookCopyButtons('rendered-html-watch')
+      injectNotebookContentButtons('rendered-html-watch')
       if (notebookSearchVisible.value && String(notebookSearchKeyword.value || '').trim()) {
         applyNotebookSearchDomHighlights('rendered-html-watch')
       }
@@ -10822,7 +10843,7 @@ defineExpose({
 
 .guaxi-notebook__markdown-preview :deep(.guaxi-media-group),
 .guaxi-notebook__rich.markdown-body :deep(.guaxi-media-group) {
-  --guaxi-media-gap: clamp(14px, 2vw, 24px);
+  --guaxi-media-gap: 16px;
   display: flex !important;
   flex-wrap: wrap;
   justify-content: center !important;
@@ -10831,7 +10852,7 @@ defineExpose({
   gap: var(--guaxi-media-gap);
   width: 100% !important;
   max-width: 1000px;
-  margin: 22px auto !important;
+  margin: 24px auto !important;
   padding: 6px 0;
 }
 
@@ -10851,12 +10872,34 @@ defineExpose({
    * 2. 图集使用等宽 1fr 列，避免每张图按原始宽度各自收缩造成左右边缘不齐。
    * 3. 单图不走这里的网格规则，继续按原始尺寸优先、只在超过阅读宽度时收缩。
    */
-  grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr));
   justify-content: center !important;
   justify-items: stretch;
-  align-items: start;
-  padding-left: 6px;
-  padding-right: 6px;
+  /* 设计说明：stretch 而非 start，理由同主预览：
+     短图贴行首会在下方留死白，一组图显得一高一低；撑满行高再内部居中，上下留白对称。 */
+  align-items: stretch;
+  gap: var(--guaxi-media-gap);
+  padding-left: 0;
+  padding-right: 0;
+}
+
+/* 设计说明（与主预览同一套口径）：
+ * `auto-fit` 只看列宽不看张数，会把 4 张图排成 3+1、3 张排成 2+1，末行孤一张。
+ * 渲染阶段已经把张数写进 `data-guaxi-media-count`，这里按张数定列。
+ */
+.guaxi-notebook__markdown-preview :deep(.guaxi-media-group.is-gallery[data-guaxi-media-count='2']),
+.guaxi-notebook__rich.markdown-body :deep(.guaxi-media-group.is-gallery[data-guaxi-media-count='2']) {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.guaxi-notebook__markdown-preview :deep(.guaxi-media-group.is-gallery[data-guaxi-media-count='3']),
+.guaxi-notebook__rich.markdown-body :deep(.guaxi-media-group.is-gallery[data-guaxi-media-count='3']) {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.guaxi-notebook__markdown-preview :deep(.guaxi-media-group.is-gallery[data-guaxi-media-count='4']),
+.guaxi-notebook__rich.markdown-body :deep(.guaxi-media-group.is-gallery[data-guaxi-media-count='4']) {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .guaxi-notebook__markdown-preview :deep(.guaxi-media-group__item),
@@ -10865,7 +10908,10 @@ defineExpose({
   align-items: center;
   justify-content: center;
   min-width: 0;
-  width: fit-content;
+  /* 设计说明：这里必须是 100%，不能是 fit-content。
+   * fit-content 会让每一列按图片自身宽度收缩，两张不同尺寸的图就变成一大一小、
+   * 中间空出一大片（探索者里图片「散开、尺寸不齐」的直接原因）。 */
+  width: 100%;
   max-width: 100%;
   box-sizing: border-box;
   padding: 0;
@@ -10875,6 +10921,16 @@ defineExpose({
   overflow: visible;
   text-decoration: none;
   transition: opacity 0.18s ease;
+}
+
+/* 工具栏包裹层（addMediaViewerButtons 注入）在图集里必须撑满整列，
+   否则图片按包裹层的收缩宽度计算 100%，等宽规则会再次失效。
+   单图不加这条：包裹层收缩时才贴得住图片右上角，不至于把按钮甩到容器边缘。 */
+.guaxi-notebook__markdown-preview :deep(.guaxi-media-group.is-gallery > .guaxi-media-group__item > .media-viewer-wrap),
+.guaxi-notebook__rich.markdown-body :deep(.guaxi-media-group.is-gallery > .guaxi-media-group__item > .media-viewer-wrap) {
+  display: block !important;
+  width: 100%;
+  max-width: 100%;
 }
 
 .guaxi-notebook__markdown-preview :deep(.guaxi-media-group__item:hover),
@@ -10888,7 +10944,8 @@ defineExpose({
   flex: 0 1 auto;
   min-width: 0;
   width: 100%;
-  max-width: 100%;
+  /* 单图与主预览口径一致：宽度上限取设置变量（默认 860px），超出居中收缩 */
+  max-width: min(100%, var(--guaxi-figure-max-width, 860px));
   margin-left: auto;
   margin-right: auto;
   padding: 0;
@@ -10908,10 +10965,14 @@ defineExpose({
   display: block;
   width: 100%;
   max-width: 100%;
-  max-height: min(56vh, 420px);
+  max-height: min(60vh, 460px);
   height: auto;
   margin: 0;
-  border-radius: 14px;
+  border-radius: var(--guaxi-figure-radius, 12px);
+  /* 截图类图片在浅色底上容易「糊边」，加一道极淡的描边即可收紧轮廓；
+     暗色主题由变量翻转，不用另写一套规则。 */
+  border: 1px solid var(--guaxi-figure-border, rgba(15, 23, 42, 0.08));
+  background: var(--guaxi-figure-bg, transparent);
   object-fit: contain;
 }
 
@@ -10949,6 +11010,16 @@ defineExpose({
   .guaxi-notebook__rich.markdown-body :deep(.guaxi-media-group__item) {
     max-width: 100%;
     width: 100%;
+  }
+
+  /* 窄屏一律单列：按张数固定出来的 2/3 列会把截图压成不可读的细条。 */
+  .guaxi-notebook__markdown-preview :deep(.guaxi-media-group.is-gallery[data-guaxi-media-count='2']),
+  .guaxi-notebook__markdown-preview :deep(.guaxi-media-group.is-gallery[data-guaxi-media-count='3']),
+  .guaxi-notebook__markdown-preview :deep(.guaxi-media-group.is-gallery[data-guaxi-media-count='4']),
+  .guaxi-notebook__rich.markdown-body :deep(.guaxi-media-group.is-gallery[data-guaxi-media-count='2']),
+  .guaxi-notebook__rich.markdown-body :deep(.guaxi-media-group.is-gallery[data-guaxi-media-count='3']),
+  .guaxi-notebook__rich.markdown-body :deep(.guaxi-media-group.is-gallery[data-guaxi-media-count='4']) {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 

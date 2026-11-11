@@ -515,3 +515,111 @@ export const buildExportCodeThemeCss = () =>
   scopeExportHljsSelectors(
     buildSyntaxTokenCssForPalette(getCodeThemePalette(getActiveCodeThemeId(), 'light')),
   )
+
+/**
+ * 导出 HTML/PDF 里的图片排版样式。
+ *
+ * 为什么不直接复用 guaxiMarkdownExtras.css：
+ * 1. 那份是应用内的全局样式，导出文件是独立 HTML，拿不到应用的 CSS 变量与主题类；
+ * 2. 导出只有一套浅色打印稿，宽度上限/圆角需要按用户设置**当时的值**写死，
+ *    而不是留 var() —— 导出文件被单独打开时没有变量可解析。
+ *
+ * 结构与应用内保持一致：p.guaxi-media-group（单图 is-single / 多图 is-gallery）+
+ * .guaxi-media-group__item + img.guaxi-media-group__image，
+ * 由调用方在导出前跑一次 enhancePreviewHtmlWithMediaGroups 得到。
+ */
+export const buildExportFigureCss = (options = {}) => {
+  const maxWidth = Number(options.maxWidth)
+  const radius = Number(options.radius)
+  const safeMaxWidth = Number.isFinite(maxWidth) && maxWidth > 0 ? Math.round(maxWidth) : 860
+  const safeRadius = Number.isFinite(radius) && radius >= 0 ? Math.round(radius) : 12
+  const showCaption = !!options.showCaption
+
+  // 图注：导出没有根节点类可挂，直接由函数决定是否输出这段规则。
+  const captionCss = showCaption
+    ? `
+  .export-content .guaxi-media-group__item[data-gx-caption]:not([data-gx-caption=""]) {
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .export-content .guaxi-media-group__item[data-gx-caption]:not([data-gx-caption=""])::after {
+    content: attr(data-gx-caption);
+    display: block;
+    width: 100%;
+    font-size: 13px;
+    line-height: 1.55;
+    text-align: center;
+    color: #6b7280;
+    overflow-wrap: anywhere;
+  }
+`
+    : ''
+
+  return `
+  /* ---- Markdown 图片 ---- */
+  .export-content p.guaxi-media-group {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    align-items: stretch;
+    gap: 16px;
+    margin: 24px 0;
+    /* 覆盖上方 .export-content img 的 max-width，改为由媒体项控制宽度。 */
+    text-align: center;
+  }
+
+  .export-content .guaxi-media-group__item {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 0;
+    margin: 0;
+    padding: 0;
+    border: none;
+    background: transparent;
+  }
+
+  .export-content .guaxi-media-group.is-single > .guaxi-media-group__item {
+    flex: 0 1 auto;
+    width: 100%;
+    /* 不放大：原图比上限窄就保持原始尺寸。 */
+    max-width: min(100%, ${safeMaxWidth}px);
+    margin-left: auto;
+    margin-right: auto;
+  }
+
+  /* 两张及以上平分一行：列宽由容器决定，两张不同尺寸的截图才会左右边缘对齐。 */
+  .export-content .guaxi-media-group.is-gallery > .guaxi-media-group__item {
+    flex: 1 1 0;
+    max-width: min(100%, 420px);
+  }
+
+  .export-content .guaxi-media-group__image,
+  .export-content .guaxi-media-group__item img {
+    display: block;
+    width: 100%;
+    max-width: 100%;
+    height: auto;
+    margin: 0;
+    /* 打印稿里 1px 描边能把浅色截图从白纸上收出轮廓。 */
+    border: 1px solid #e5e7eb;
+    border-radius: ${safeRadius}px;
+    object-fit: contain;
+  }
+
+  /* 单图不强行拉满列宽，否则小图标会被放大到糊。 */
+  .export-content .guaxi-media-group.is-single .guaxi-media-group__image {
+    width: auto;
+  }
+${captionCss}
+  @media print {
+    /* 打印时不让一组图跨页撕开。 */
+    .export-content p.guaxi-media-group {
+      break-inside: avoid;
+      page-break-inside: avoid;
+    }
+  }
+`
+}

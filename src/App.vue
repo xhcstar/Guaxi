@@ -83,6 +83,9 @@ onMounted(async () => {
   // 主编辑器的字体/字号/小地图同理：编辑器是按需懒建的，配置必须先到位，
   // 否则首个打开的标签页会先按默认字号渲染一次再跳变。
   await settingsStore.loadEditorDisplayConfig()
+  // 图片宽度/圆角走 CSS 变量下发，必须在首帧前落到根节点，
+  // 否则预览会先按默认 860px 渲染一次再跳变。
+  await settingsStore.loadPreviewImageConfig()
   decorateGlobalNavIcons()
   navIconObserver = new MutationObserver(decorateGlobalNavIcons)
   navIconObserver.observe(document.body, {
@@ -176,6 +179,10 @@ const themeOverrides = computed(() => {
   /* 弱分隔线（表格行、面板底边等）。此前从未定义，所有用它的地方都回退到
      rgba(0,0,0,.06)——在暗色下等于不可见，于是表格行边界整片消失。 */
   --guaxi-border-weak: rgba(0, 0, 0, 0.08);
+  /* Markdown 图片外框：圆角卡片式缩略图的描边与底纹。
+     不用纯白底，避免透明 PNG / 浅色截图在亮色主题下「看不见边界」。 */
+  --guaxi-figure-border: rgba(15, 23, 42, 0.08);
+  --guaxi-figure-bg: transparent;
   /* Markdown 表格配色：预览、阅读器窗口、语法手册三处共用这一组，改一处全局生效。
      亮色走「白底 + 极浅表头 + 发丝线」，暗色不用纯黑，跟随面板底色提亮两档。 */
   --guaxi-table-bg: #ffffff;
@@ -281,6 +288,9 @@ const themeOverrides = computed(() => {
   --guaxi-border-color: var(--guaxi-border);
   /* 暗色下的弱分隔线要比亮色更亮一档，否则表格行边界完全看不见。 */
   --guaxi-border-weak: rgba(255, 255, 255, 0.11);
+  /* 暗色下图片外框要比亮色更明显一点，否则白色截图会「发光」糊在深色底上。 */
+  --guaxi-figure-border: rgba(255, 255, 255, 0.12);
+  --guaxi-figure-bg: transparent;
   /* 暗色滚动条：浅色半透明滑块，不能继续用亮色主题的深灰。 */
   --guaxi-scrollbar-thumb: rgba(255, 255, 255, 0.18);
   --guaxi-scrollbar-thumb-hover: rgba(255, 255, 255, 0.32);

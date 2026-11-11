@@ -26,6 +26,9 @@
   /* 弱分隔线（表格行、面板底边）。此前未定义，全部回退到 rgba(0,0,0,.06)，
      暗色下不可见，表格行边界会整片消失。 */
   --guaxi-border-weak: rgba(0, 0, 0, 0.08);
+  /* Markdown 图片外框：与 App.vue 的 :root 保持同一组值（两个入口各一份，原因见文件头）。 */
+  --guaxi-figure-border: rgba(15, 23, 42, 0.08);
+  --guaxi-figure-bg: transparent;
   /* Markdown 表格配色，与 App.vue 的 :root 保持同一组值（两个入口各一份，原因见文件头）。 */
   --guaxi-table-bg: #ffffff;
   --guaxi-table-border: #e4e8ee;
@@ -103,6 +106,8 @@
   --guaxi-border: #3e4451;
   --guaxi-border-color: var(--guaxi-border);
   --guaxi-border-weak: rgba(255, 255, 255, 0.11);
+  --guaxi-figure-border: rgba(255, 255, 255, 0.12);
+  --guaxi-figure-bg: transparent;
   --guaxi-table-bg: #21252b;
   --guaxi-table-border: #353c47;
   --guaxi-table-border-strong: #434b58;

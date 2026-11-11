@@ -286,13 +286,140 @@ export const addCopyButtons = (container, options = {}) => {
   });
 };
 
+// 破图占位块上的两个动作（「重新加载」「复制路径」）。
+//
+// 背景：图片路径解析失败时，后端 markdown_image_process 会把图片换成一段内联 HTML 占位块，
+// 因为 markdown-it 的 validateLink 不放行 `data:image/svg+xml`，用 data URI 会让整段图片语法
+// 退化成源码文本。占位块自带 data-gx-broken-src / data-gx-broken-abs，这里只负责接线。
+//
+// 为什么重试走独立接口而不是重渲染：整篇文档有片段缓存、全文缓存、后端 sqlite 缓存三层，
+// 为了补一张图去打穿所有缓存代价太大，而且很可能拿到旧结果。这里只问一句
+// 「这个文件现在能不能服务」，成功就把占位块原地换成 <img>。
+const BROKEN_IMAGE_RESOLVE_API = 'http://localhost:8888/api/markdown/resolve_image';
+
+const flashButtonLabel = (btn, label, restoreAfterMs = 1600) => {
+  const original = btn.dataset.gxOriginalLabel || btn.textContent || '';
+  btn.dataset.gxOriginalLabel = original;
+  btn.textContent = label;
+  window.clearTimeout(Number(btn.dataset.gxLabelTimer || 0));
+  const timer = window.setTimeout(() => {
+    btn.textContent = original;
+    btn.disabled = false;
+  }, restoreAfterMs);
+  btn.dataset.gxLabelTimer = String(timer);
+};
+
+const copyTextToClipboard = async (text) => {
+  const value = String(text || '');
+  if (!value) return false;
+  try {
+    if (navigator?.clipboard?.writeText) {
+      await navigator.clipboard.writeText(value);
+      return true;
+    }
+  } catch (error) {
+    logger.warn('[BrokenImage] clipboard.writeText failed, fallback to execCommand', error);
+  }
+  try {
+    const textarea = document.createElement('textarea');
+    textarea.value = value;
+    textarea.setAttribute('readonly', 'readonly');
+    textarea.style.cssText = 'position:fixed;top:-1000px;left:-1000px;opacity:0;';
+    document.body.appendChild(textarea);
+    textarea.select();
+    const ok = document.execCommand('copy');
+    document.body.removeChild(textarea);
+    return ok;
+  } catch (error) {
+    logger.warn('[BrokenImage] copy fallback failed', error);
+    return false;
+  }
+};
+
+export const bindBrokenImagePlaceholders = (container, options = {}) => {
+  try {
+    if (!(container instanceof HTMLElement)) return;
+
+    container.querySelectorAll('.guaxi-broken-image').forEach((placeholder) => {
+      if (!(placeholder instanceof HTMLElement)) return;
+      // 幂等：addMediaViewerButtons 会被 MutationObserver / 主题切换反复调用。
+      if (placeholder.dataset.gxBrokenBound === '1') return;
+      placeholder.dataset.gxBrokenBound = '1';
+
+      const src = String(placeholder.dataset.gxBrokenSrc || '').trim();
+      const abs = String(placeholder.dataset.gxBrokenAbs || '').trim();
+
+      placeholder.querySelectorAll('[data-gx-broken-action]').forEach((btn) => {
+        if (!(btn instanceof HTMLElement)) return;
+        btn.addEventListener('click', async (event) => {
+          // 预览/探索者的外层容器有点击跳源码行的行为，这里必须阻断。
+          event.preventDefault();
+          event.stopPropagation();
+
+          const action = btn.dataset.gxBrokenAction;
+
+          if (action === 'copy') {
+            const ok = await copyTextToClipboard(src || abs);
+            flashButtonLabel(btn, ok ? '已复制' : '复制失败');
+            return;
+          }
+
+          if (action !== 'retry') return;
+          if (!abs && !src) {
+            flashButtonLabel(btn, '无路径信息');
+            return;
+          }
+
+          btn.disabled = true;
+          flashButtonLabel(btn, '检查中…', 8000);
+          try {
+            const response = await fetch(BROKEN_IMAGE_RESOLVE_API, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              // 绝对路径优先：相对路径离开了文档上下文就没法解析。
+              body: JSON.stringify({ path: abs || src }),
+            });
+            const data = await response.json().catch(() => ({}));
+            const servedUrl = String(data?.served_url || '').trim();
+            if (!servedUrl) {
+              flashButtonLabel(btn, data?.reason === 'missing_base_path' ? '缺少目录信息' : '仍未找到');
+              return;
+            }
+
+            const img = document.createElement('img');
+            img.src = servedUrl;
+            img.alt = String(placeholder.dataset.gxBrokenAlt || '');
+            img.className = 'guaxi-recovered-image';
+            img.loading = 'lazy';
+            placeholder.replaceWith(img);
+
+            // 新插入的 <img> 会触发容器上的 MutationObserver，工具条随即补上；
+            // 这里额外通知宿主，方便做滚动定位等收尾。
+            try {
+              if (typeof options?.onImageRecovered === 'function') options.onImageRecovered(img, servedUrl);
+            } catch (error) {
+              logger.warn('[BrokenImage] onImageRecovered threw', error);
+            }
+            logger.info('[BrokenImage] placeholder recovered', { src, servedUrl });
+          } catch (error) {
+            logger.warn('[BrokenImage] retry failed', error);
+            flashButtonLabel(btn, '重试失败');
+          }
+        });
+      });
+    });
+  } catch (error) {
+    logger.error('[BrokenImage] bind 失败:', error);
+  }
+};
+
 export const addMediaViewerButtons = (container, options = {}) => {
   try {
     if (!(container instanceof HTMLElement)) return;
 
-    container
-      .querySelectorAll('.media-viewer-button, .media-save-button, .media-ocr-button')
-      .forEach((btn) => btn.remove());
+    // 设计说明：这里不再做「整容器先删一遍按钮」。
+    // 按钮是否重建由 addBtnsToWrap 按主题签名判定；整容器删除会让探索者模式
+    // 每次 cell 增量渲染时，屏幕上所有图片的工具栏同时闪一下。
 
     const theme = String(options?.theme || '').trim().toLowerCase();
     const fromDom =
@@ -384,7 +511,7 @@ export const addMediaViewerButtons = (container, options = {}) => {
       icon.innerHTML = iconSvg;
       btn.appendChild(icon);
 
-      btn.style.cssText = `position:absolute;right:${rightPx}px;top:12px;height:24px;min-width:24px;padding:0 6px;border-radius:6px;display:inline-flex;align-items:center;justify-content:center;color:${isDark ? 'rgba(255,255,255,0.85)' : 'rgba(0,0,0,0.62)'};background:${isDark ? 'rgba(60,60,60,0.85)' : 'rgba(255,255,255,0.92)'};border:1px solid ${isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.12)'};cursor:pointer;z-index:10;opacity:0;transition:opacity 0.15s ease;`;
+      btn.style.cssText = `position:absolute;right:${rightPx}px;top:10px;height:26px;min-width:26px;padding:0 4px;border-radius:8px;display:inline-flex;align-items:center;justify-content:center;color:${isDark ? 'rgba(255,255,255,0.85)' : 'rgba(0,0,0,0.62)'};background:${isDark ? 'rgba(60,60,60,0.85)' : 'rgba(255,255,255,0.92)'};border:1px solid ${isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.12)'};cursor:pointer;z-index:10;opacity:0;transition:opacity 0.15s ease;`;
       btn.style.setProperty('opacity', '0', 'important');
       return btn;
     };
@@ -1805,8 +1932,27 @@ export const addMediaViewerButtons = (container, options = {}) => {
       if (!(wrap instanceof HTMLElement)) return;
       if (!wrap.style.position) wrap.style.position = 'relative';
 
-      const viewBtn = makeBtn('media-viewer-button', 12, titles?.viewTitle || '预览（打开查看器）', ICONS.view);
-      const saveBtn = makeBtn('media-save-button', 60, titles?.saveTitle || '保存到文件', ICONS.save);
+      // 设计说明：
+      // 1. 这个方法会被 MutationObserver、主题切换、探索者逐个 cell 渲染反复调用。
+      // 2. 旧实现每次都「先删后建」，图片一多就整屏按钮闪烁，还会把 hover 状态清掉。
+      // 3. 这里按「主题 + 按钮数量」做幂等判断：签名一致就只重新绑定 hover，直接返回。
+      const themeKey = isDark ? 'dark' : 'light';
+      const needOcr = typeof handlers?.onOcr === 'function';
+      const expectedCount = needOcr ? 3 : 2;
+      const existingCount = wrap.querySelectorAll(
+        '.media-viewer-button, .media-save-button, .media-ocr-button',
+      ).length;
+      if (wrap.dataset.mvReady === '1' && wrap.dataset.mvThemeKey === themeKey && existingCount === expectedCount) {
+        bindHover(wrap);
+        return;
+      }
+
+      wrap.querySelectorAll('.media-viewer-button, .media-save-button, .media-ocr-button').forEach((btn) => btn.remove());
+      wrap.dataset.mvReady = '1';
+      wrap.dataset.mvThemeKey = themeKey;
+
+      const viewBtn = makeBtn('media-viewer-button', 8, titles?.viewTitle || '预览（打开查看器）', ICONS.view);
+      const saveBtn = makeBtn('media-save-button', 38, titles?.saveTitle || '保存到文件', ICONS.save);
 
       viewBtn.addEventListener('click', (e) => {
         e.preventDefault();
@@ -1825,7 +1971,7 @@ export const addMediaViewerButtons = (container, options = {}) => {
 
       // 取字按钮只在调用方给了 onOcr 时才挂（目前只有 <img> 需要）。
       if (typeof handlers?.onOcr === 'function') {
-        const ocrBtn = makeBtn('media-ocr-button', 108, titles?.ocrTitle || '提取图片文字 (OCR)', ICONS.ocr);
+        const ocrBtn = makeBtn('media-ocr-button', 68, titles?.ocrTitle || '提取图片文字 (OCR)', ICONS.ocr);
         ocrBtn.addEventListener('click', (e) => {
           e.preventDefault();
           e.stopPropagation();
@@ -1891,6 +2037,9 @@ export const addMediaViewerButtons = (container, options = {}) => {
         }
       );
     });
+
+    // 破图占位块不是 <img>，走不到上面的图片循环，这里单独接线。
+    bindBrokenImagePlaceholders(container, options);
   } catch (e) {
     logger.error('[MediaViewer] addMediaViewerButtons 失败:', e);
   }

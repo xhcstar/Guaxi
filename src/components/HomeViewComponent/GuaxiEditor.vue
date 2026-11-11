@@ -1526,7 +1526,7 @@ import { GUAXI_SHORTCUTS, matchesShortcut, shortcutText } from '../../composable
 import GuaxiOrgTaskPreview from './GuaxiOrgTaskPreview.vue'
 import { validateTaskBlocks, parseTaskBlocks, serializeBlock, replaceBlockInContent, buildNewBlock } from '../../utils/guaxiTaskParser'
 import GuaxiTerminalPanel from './GuaxiTerminalPanel.vue'
-import { EXPORT_SHELL_CSS, EXPORT_PYCELL_CSS, buildExportCodeThemeCss } from './guaxiExportStyles'
+import { EXPORT_SHELL_CSS, EXPORT_PYCELL_CSS, buildExportCodeThemeCss, buildExportFigureCss } from './guaxiExportStyles'
 import { upgradeHtmlCodeBlocks } from '../../monaco/previewTokenHighlight'
 import { NTooltip, NIcon, useMessage, NDropdown, NPopover, NInputNumber, NBreadcrumb, NBreadcrumbItem, NSelect } from 'naive-ui'
 import { Icon } from '@iconify/vue'
@@ -1590,7 +1590,7 @@ import tableColumnPlusAfter from '@iconify-icons/mdi/table-column-plus-after'
 import tableColumnRemove from '@iconify-icons/mdi/table-column-remove'
 import { dirname, homeDir } from '@tauri-apps/api/path'
 import { openUrl } from '@tauri-apps/plugin-opener'
-import { renderMarkdown, addCopyButtons, addMediaViewerButtons } from '../GuaxiMarkdownRender/GuaxiMarker'
+import { renderMarkdown, addCopyButtons, addMediaViewerButtons, bindBrokenImagePlaceholders } from '../GuaxiMarkdownRender/GuaxiMarker'
 import { renderChartEmbeds, disposeChartInstances, bindExcalidrawOpenButtons, materializeChartEmbedsForExport, renderChartFenceToSvg, renderExcalidrawFenceToSvg, collectFenceBlocks } from '../GuaxiMarkdownRender/guaxiChartEmbeds'
 import { svgToPngBlob } from '../GuaxiMarkdownRender/guaxiChartExport'
 // 渲染结果的持久缓存：Worker 里没有 invoke，所以由主线程代查、代写（见 renderPreviewMarkdownHtmlWithWorker）。
@@ -20918,6 +20918,13 @@ const enhancePreviewHtmlWithMediaGroups = (html) => {
       }
       item.host.classList.add('guaxi-media-group__item')
       item.image.classList.add('guaxi-media-group__image')
+      // 图注：把 alt 复制到媒体项的 data 属性上，是否显示交给 CSS 里的
+      // html.guaxi-show-figure-caption 开关决定（设置项「显示图注」）。
+      // 这样切换设置只需要加/删根节点一个类，不用重渲染整篇预览。
+      const captionText = String(item.image.getAttribute('alt') || '').trim()
+      if (captionText) {
+        item.host.setAttribute('data-gx-caption', captionText)
+      }
     }
 
     mediaGroupCount += 1
@@ -23081,6 +23088,9 @@ watch(renderedHtml, () => {
       addMediaViewerButtons(previewContainer.value, {
         theme: getMarkdownPreviewThemeName()
       });
+      // 破图占位块上的「重新加载 / 复制路径」：占位块由后端渲染阶段输出，
+      // 这里只做事件接线（内部幂等，重复调用不会叠监听）。
+      bindBrokenImagePlaceholders(previewContainer.value);
       syncAllPreviewPythonCells()
       void renderPreviewMermaidDiagrams(previewContainer.value).catch((error) => {
         logger.error('预览区 Mermaid 渲染失败', error);
@@ -23243,6 +23253,12 @@ const buildPrintHtml = (bodyHtml, title, options = {}) => {
   const safeTitle = escapeExportHtml(title || '未命名文档')
   const baseHref = String(options?.baseHref || '').trim()
   const baseTag = baseHref ? `<base href="${escapeExportHtml(baseHref)}" />` : ''
+  // 图片样式按导出这一刻的设置写死值：导出文件是独立 HTML，读不到应用的 CSS 变量。
+  const figureCss = buildExportFigureCss({
+    maxWidth: settingsStore.previewImage?.max_width,
+    radius: settingsStore.previewImage?.radius,
+    showCaption: settingsStore.previewImage?.show_caption,
+  })
 
   return `<!DOCTYPE html>
 <html lang="zh-CN">
@@ -23252,6 +23268,7 @@ ${baseTag}
 <title>${safeTitle}</title>
 <style>${EXPORT_SHELL_CSS}${buildExportCodeThemeCss()}</style>
 <style>${EXPORT_PYCELL_CSS}</style>
+<style>${figureCss}</style>
 </head>
 <body>
   <div class="export-root">
@@ -23536,9 +23553,11 @@ const renderMarkdownForExportHtml = async (context) => {
     },
     'export-rendered-html',
   )
-  const bodyHtml = await upgradeHtmlCodeBlocks(
-    stripInteractiveExportArtifacts(
-      await materializeChartEmbedsInHtml(rawBodyHtml, context),
+  const bodyHtml = enhancePreviewHtmlWithMediaGroups(
+    await upgradeHtmlCodeBlocks(
+      stripInteractiveExportArtifacts(
+        await materializeChartEmbedsInHtml(rawBodyHtml, context),
+      ),
     ),
   )
   const html = buildPrintHtml(bodyHtml, context.title, { baseHref: context.baseHref })
@@ -27926,10 +27945,18 @@ onUnmounted(() => {
  *    从而把普通链接挤到行尾，表现成参考式链接、列表项排版错乱。
  * 2. 这里对预览容器里的基础文档流做一次轻量重置，只修正文档段落与列表的布局，
  *    不影响专门的文件卡片、目录卡片等自定义组件。
+ * 3. 纯图片段落必须排除在外：
+ *    这里原先是无条件 display:block !important，把渲染器的「并排 + 居中」flex 规则
+ *    整条打死，于是预览里两张图永远一上一下——这就是「多图对比排不出来」的原因。
+ *    注意排除条件要同时认两种形态：一是 `enhancePreviewHtmlWithMediaGroups` 给 `<p>` 本体
+ *    加的 `guaxi-media-group`（图片已被 span 包住，`:has(> img)` 命中不到），
+ *    二是没有经过媒体组增强、图片直接挂在 `<p>` 下的情况。
+ *    另外这条规则在 scoped 块里会编译成 `.preview p[data-v-x]`（0,2,1），
+ *    正好压过非 scoped 块里的 `.preview .guaxi-media-group`（0,2,0），所以必须显式排除。
  */
-.preview :deep(p),
+.preview :deep(p:not(.guaxi-media-group):not(:has(> img, > .media-viewer-wrap, > .guaxi-broken-image))),
 .preview :deep(li > p),
-.preview :deep(.md-paragraph) {
+.preview :deep(.md-paragraph:not(.guaxi-media-group):not(:has(> img, > .media-viewer-wrap, > .guaxi-broken-image))) {
   display: block !important;
   box-sizing: border-box;
   width: auto !important;
@@ -30038,9 +30065,31 @@ body.guaxi-tab-dragging * {
   grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr));
   justify-content: center !important;
   justify-items: stretch;
-  align-items: start;
+  /* 设计说明：这里用 stretch 而不是 start。
+     start 会让高度较小的那张图贴在行首，下方留出一块死白，一组图看起来「一高一低」；
+     stretch 让每个单元格撑满行高，再由单元格内部的 flex 居中，短图上下留白对称，整组更稳。 */
+  align-items: stretch;
   padding-left: 6px;
   padding-right: 6px;
+}
+
+/* 设计说明：
+ * 1. `auto-fit` 只看列宽、不看张数，在 860–1000px 的阅读宽度里会把 4 张图排成 3+1、
+ *    3 张图排成 2+1，最后一行孤零零一张，是“图集看起来散”的主因。
+ * 2. 渲染时已经把张数写进 `data-guaxi-media-count`，这里直接按张数定列：
+ *    2 张严格两列（对比语义）、3 张一行三列、4 张 2×2，5 张以上才回退到自适应。
+ * 3. 窄屏由文件末尾的媒体查询统一压回单列。
+ */
+.preview .guaxi-media-group.is-gallery[data-guaxi-media-count='2'] {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.preview .guaxi-media-group.is-gallery[data-guaxi-media-count='3'] {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.preview .guaxi-media-group.is-gallery[data-guaxi-media-count='4'] {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .preview .guaxi-media-group__item {
@@ -30069,7 +30118,8 @@ body.guaxi-tab-dragging * {
   flex: 0 1 auto;
   min-width: 0;
   width: 100%;
-  max-width: 100%;
+  /* 单图宽度上限跟设置走：默认 860px，窄面板时自动收缩到 100%。 */
+  max-width: min(100%, var(--guaxi-figure-max-width, 860px));
   margin-left: auto;
   margin-right: auto;
   padding: 0;
@@ -30083,6 +30133,18 @@ body.guaxi-tab-dragging * {
   max-width: 100%;
 }
 
+/* 设计说明：
+ * 1. 图片工具条由 addMediaViewerButtons 注入，它会在 img 外再包一层 `.media-viewer-wrap`，
+ *    默认是 `inline-block + max-width:100%`，宽度按图片原始宽度收缩。
+ * 2. 在等宽列里这会让同一组图宽度不齐（小图缩在格子里、大图撑满），所以图集里必须让它撑满单元格。
+ * 3. 只对图集生效：单图保持收缩宽度，工具条才能贴着图片右上角而不是跑到容器边缘。
+ */
+.preview .guaxi-media-group.is-gallery > .guaxi-media-group__item > .media-viewer-wrap {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+}
+
 .preview .guaxi-media-group__image {
   display: block;
   width: 100%;
@@ -30090,7 +30152,11 @@ body.guaxi-tab-dragging * {
   max-height: min(56vh, 420px);
   height: auto;
   margin: 0;
-  border-radius: 16px;
+  /* 与探索者、Markdown 渲染器同一套视觉口径：圆角 + 极淡描边。
+     圆角读「设置 → 编辑器 → 图片」下发的变量（默认 12px），描边走变量、暗色自动翻转。 */
+  border-radius: var(--guaxi-figure-radius, 12px);
+  border: 1px solid var(--guaxi-figure-border, rgba(15, 23, 42, 0.08));
+  background: var(--guaxi-figure-bg, transparent);
   object-fit: contain;
 }
 
@@ -30119,6 +30185,13 @@ body.guaxi-tab-dragging * {
   .preview .guaxi-media-group.is-gallery {
     width: 100%;
     max-width: 100%;
+  }
+
+  /* 窄屏一律单列：按张数固定出来的 2/3 列在手机上会把截图压成不可读的细条。 */
+  .preview .guaxi-media-group.is-gallery[data-guaxi-media-count='2'],
+  .preview .guaxi-media-group.is-gallery[data-guaxi-media-count='3'],
+  .preview .guaxi-media-group.is-gallery[data-guaxi-media-count='4'] {
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .preview .guaxi-media-group__item {

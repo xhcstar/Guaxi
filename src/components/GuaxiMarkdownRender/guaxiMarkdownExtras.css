@@ -7,36 +7,229 @@
  * 2. 图片布局：仅含图片的段落（相邻图片之间无其它 Markdown 元素 → markdown-it 归到同一段落）
  *    采用 flex 居中 + 自动换行：能并排就并排、放不下自动换行、整体居中，且不强制缩小到不可读。
  *    用 :has() 精确命中“纯图片段落”，不改 DOM，保留行号等数据属性；预览与探索者模式同源生效。
+ * 3. 图片工具条（预览 / OCR / 保存）由 addMediaViewerButtons 注入，它会在 <p> 与 <img> 之间
+ *    插入 `<span class="media-viewer-wrap">`。所有“纯图片段落”的判定与排版规则都必须把这个
+ *    包裹层当作图片本身对待，否则插入按钮的那一刻布局就会退化成普通文档流
+ *    （历史上只认 `> img` 直系子元素，包装之后规则全灭）。
+ * 4. 视觉口径（与探索者模式保持同一套数字）：圆角 12px、1px 极淡描边、单图上限 860px、
+ *    两张图等宽并排（各自 420px 上限）、三张以上自动换行、间距 16px、上下留白 24px。
  */
 
-/* ===================== 图片布局：纯图片段落 flex 居中自适应 ===================== */
+/* ===================== 图片：基础视觉 ===================== */
 /* 普通段落内的图片始终响应式，避免溢出容器 */
 .md-paragraph img {
   max-width: 100%;
   height: auto;
 }
-/* 图片不可用占位图是内联 SVG：颜色全部走 currentColor，
-   浅色主题继承深色文字、暗色主题继承浅色文字，无需额外换图。 */
-.md-paragraph svg.guaxi-broken-image {
-  display: inline-block;
-  vertical-align: middle;
-  max-width: 100%;
-  height: auto;
+
+/* 统一圆角与描边：截图类图片在浅色底上容易糊边，一道极淡描边即可收紧轮廓。
+   颜色走变量，暗色主题自动翻转，不需要另写一套规则。 */
+.md-paragraph > img,
+.md-paragraph > a > img,
+.md-paragraph > .media-viewer-wrap > img {
+  border-radius: var(--guaxi-figure-radius, 12px);
+  border: 1px solid var(--guaxi-figure-border, rgba(15, 23, 42, 0.08));
+  background: var(--guaxi-figure-bg, transparent);
 }
-/* 纯图片段落（只含 <img>/占位 SVG/<br>/空白）：并排 + 自动换行 + 居中。
-   例外检查只看直接子元素：占位图是内联 SVG，它自己的 <rect>/<path> 不能算成"其它内容"。 */
-.md-paragraph:has(img, .guaxi-broken-image):not(:has(> :not(img):not(.guaxi-broken-image):not(br))) {
+
+/* ===================== 破图占位块 ===================== */
+/* 占位块由后端 markdown_image_process 生成的单行内联 HTML 渲染而来：
+   `<span class="guaxi-broken-image">` 里放图标、说明、文件名和两个动作按钮。
+   为什么不再是裸 SVG：破图也需要「重新加载 / 复制路径」，SVG 里塞不进可点击元素。
+   颜色一律走 currentColor，明暗主题自动跟随，不需要两套样式。 */
+.guaxi-broken-image {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  box-sizing: border-box;
+  width: min(100%, 440px);
+  max-width: 100%;
+  margin: 4px 0;
+  padding: 12px 14px;
+  border-radius: var(--guaxi-figure-radius, 12px);
+  border: 1px dashed var(--guaxi-figure-border, rgba(15, 23, 42, 0.16));
+  background: color-mix(in srgb, currentColor 4%, transparent);
+  color: inherit;
+  vertical-align: middle;
+  text-align: left;
+}
+
+.guaxi-broken-image__icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  opacity: 0.5;
+}
+
+.guaxi-broken-image__body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.guaxi-broken-image__title {
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.35;
+  opacity: 0.85;
+}
+
+.guaxi-broken-image__name {
+  font-size: 12px;
+  line-height: 1.35;
+  opacity: 0.55;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.guaxi-broken-image__actions {
+  display: inline-flex;
+  flex: 0 0 auto;
+  gap: 6px;
+}
+
+.guaxi-broken-image__btn {
+  appearance: none;
+  -webkit-appearance: none;
+  padding: 5px 9px;
+  border-radius: 7px;
+  border: 1px solid var(--guaxi-figure-border, rgba(15, 23, 42, 0.16));
+  background: transparent;
+  color: inherit;
+  font-size: 12px;
+  line-height: 1;
+  opacity: 0.75;
+  cursor: pointer;
+  transition: opacity 0.15s ease, background 0.15s ease;
+}
+
+.guaxi-broken-image__btn:hover {
+  opacity: 1;
+  background: color-mix(in srgb, currentColor 9%, transparent);
+}
+
+.guaxi-broken-image__btn:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+/* 重试成功后替换进来的真实图片：沿用图片统一视觉，避免出现一张无描边的裸图。 */
+.md-paragraph img.guaxi-recovered-image {
+  max-width: min(100%, var(--guaxi-figure-max-width, 860px));
+  height: auto;
+  border-radius: var(--guaxi-figure-radius, 12px);
+  border: 1px solid var(--guaxi-figure-border, rgba(15, 23, 42, 0.08));
+}
+
+/* 窄屏：两个按钮会挤掉文件名，改成上下两行。 */
+@media (max-width: 520px) {
+  .guaxi-broken-image {
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+
+  .guaxi-broken-image__actions {
+    width: 100%;
+    justify-content: flex-end;
+  }
+}
+
+/* ===================== 图片：纯图片段落（单图居中 / 多图并排） ===================== */
+/* 命中条件：段落里只含 <img>、工具条包裹层、破图占位块、<br> 与空白。
+   例外检查只看直接子元素：占位块内部自己的结构不能算成“其它内容”。 */
+.md-paragraph:has(> img, > .media-viewer-wrap, > .guaxi-broken-image):not(:has(> :not(img):not(.media-viewer-wrap):not(.guaxi-broken-image):not(br))) {
   display: flex;
   flex-wrap: wrap;
   justify-content: center;
   align-items: flex-start;
-  gap: 10px;
+  gap: 16px;
+  margin: 24px 0;
 }
-.md-paragraph:has(img, .guaxi-broken-image):not(:has(> :not(img):not(.guaxi-broken-image):not(br))) > img,
-.md-paragraph:has(img, .guaxi-broken-image):not(:has(> :not(img):not(.guaxi-broken-image):not(br))) > .guaxi-broken-image {
-  /* 保持图片自然宽度（不强制缩小到不可读），放不下时整张换行；单图过宽则限制到容器宽度 */
-  flex: 0 0 auto;
-  max-width: 100%;
+
+/* 单图与多图共用的尺寸基线：保持自然尺寸（不放大、不强行缩小到不可读），
+   单图最宽取 --guaxi-figure-max-width（默认 860px，见「设置 → 编辑器 → 图片」）；只有超过容器宽度时才收缩。 */
+.md-paragraph:has(> img, > .media-viewer-wrap, > .guaxi-broken-image):not(:has(> :not(img):not(.media-viewer-wrap):not(.guaxi-broken-image):not(br))) > img,
+.md-paragraph:has(> img, > .media-viewer-wrap, > .guaxi-broken-image):not(:has(> :not(img):not(.media-viewer-wrap):not(.guaxi-broken-image):not(br))) > a,
+.md-paragraph:has(> img, > .media-viewer-wrap, > .guaxi-broken-image):not(:has(> :not(img):not(.media-viewer-wrap):not(.guaxi-broken-image):not(br))) > .media-viewer-wrap,
+.md-paragraph:has(> img, > .media-viewer-wrap, > .guaxi-broken-image):not(:has(> :not(img):not(.media-viewer-wrap):not(.guaxi-broken-image):not(br))) > .guaxi-broken-image {
+  flex: 0 1 auto;
+  max-width: min(100%, var(--guaxi-figure-max-width, 860px));
   height: auto;
   margin: 0;
+}
+
+/* 两张：严格两列等宽 */
+.md-paragraph:has(> :nth-child(2)):has(> img, > .media-viewer-wrap):not(:has(> :not(img):not(.media-viewer-wrap):not(.guaxi-broken-image):not(br))) > img,
+.md-paragraph:has(> :nth-child(2)):has(> img, > .media-viewer-wrap):not(:has(> :not(img):not(.media-viewer-wrap):not(.guaxi-broken-image):not(br))) > .media-viewer-wrap,
+.md-paragraph:has(> :nth-child(2)):has(> img, > .media-viewer-wrap):not(:has(> :not(img):not(.media-viewer-wrap):not(.guaxi-broken-image):not(br))) > a {
+  flex: 1 1 0;
+  min-width: 0;
+  max-width: min(100%, 420px);
+}
+
+/* 三张及以上：给一个 220px 的最小基准，放不下自动换行，避免被压成一条竖条 */
+.md-paragraph:has(> :nth-child(3)):has(> img, > .media-viewer-wrap):not(:has(> :not(img):not(.media-viewer-wrap):not(.guaxi-broken-image):not(br))) > img,
+.md-paragraph:has(> :nth-child(3)):has(> img, > .media-viewer-wrap):not(:has(> :not(img):not(.media-viewer-wrap):not(.guaxi-broken-image):not(br))) > .media-viewer-wrap,
+.md-paragraph:has(> :nth-child(3)):has(> img, > .media-viewer-wrap):not(:has(> :not(img):not(.media-viewer-wrap):not(.guaxi-broken-image):not(br))) > a {
+  flex: 1 1 220px;
+  min-width: 0;
+  max-width: min(100%, 420px);
+}
+
+/* 包裹层撑满自己的单元之后，图片才能按单元宽度等比铺满 */
+.md-paragraph:has(> :nth-child(2)) > .media-viewer-wrap > img,
+.md-paragraph:has(> :nth-child(2)) > a > img {
+  width: 100%;
+  height: auto;
+  object-fit: contain;
+}
+
+/* 窄屏一律单列，避免出现横向滚动 */
+@media (max-width: 760px) {
+  .md-paragraph:has(> img, > .media-viewer-wrap, > .guaxi-broken-image):not(:has(> :not(img):not(.media-viewer-wrap):not(.guaxi-broken-image):not(br))) {
+    gap: 12px;
+    margin: 18px 0;
+  }
+
+  .md-paragraph:has(> :nth-child(2)):has(> img, > .media-viewer-wrap):not(:has(> :not(img):not(.media-viewer-wrap):not(.guaxi-broken-image):not(br))) > img,
+  .md-paragraph:has(> :nth-child(2)):has(> img, > .media-viewer-wrap):not(:has(> :not(img):not(.media-viewer-wrap):not(.guaxi-broken-image):not(br))) > .media-viewer-wrap,
+  .md-paragraph:has(> :nth-child(2)):has(> img, > .media-viewer-wrap):not(:has(> :not(img):not(.media-viewer-wrap):not(.guaxi-broken-image):not(br))) > a {
+    flex: 1 1 100%;
+    max-width: 100%;
+  }
+}
+
+/* ===================== 图注（设置 → 编辑器 → 图片 → 显示图注） ===================== */
+/* 图注内容来自 alt：媒体组增强阶段把 alt 写进 data-gx-caption，
+   这里用 attr() 渲染，不额外插节点。显隐只由根节点的 guaxi-show-figure-caption 控制，
+   切换设置时样式即时生效，不会触发预览/探索者重渲染。 */
+html.guaxi-show-figure-caption .guaxi-media-group__item[data-gx-caption]:not([data-gx-caption=""]) {
+  flex-direction: column;
+  justify-content: flex-start;
+  align-items: center;
+  gap: 8px;
+}
+
+html.guaxi-show-figure-caption .guaxi-media-group__item[data-gx-caption]:not([data-gx-caption=""])::after {
+  content: attr(data-gx-caption);
+  display: block;
+  width: 100%;
+  margin: 0;
+  /* 与正文拉开层级：比正文小一号、颜色降级，但保持可读。 */
+  font-size: 13px;
+  line-height: 1.55;
+  text-align: center;
+  color: var(--guaxi-text-tertiary, rgba(107, 114, 128, 0.92));
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+/* 图集里图注可能长于图片宽度，限两行避免把整行撑高。 */
+html.guaxi-show-figure-caption .guaxi-media-group.is-gallery .guaxi-media-group__item[data-gx-caption]::after {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
