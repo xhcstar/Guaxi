@@ -18,13 +18,14 @@ use std::ffi::OsStr;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufWriter, Read, Write};
 use std::path::{Component, Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
-use tar::{Archive, Builder, EntryType};
+use tar::{Archive, Builder, EntryType, Header};
 use zstd::stream::{Decoder, Encoder};
 
 const ZSTD_COMPRESSION_LEVEL: i32 = 3;
@@ -68,6 +69,248 @@ const SKIPPED_DIRECTORIES: &[&str] = &[
     "whisper",
     GENERATED_BUNDLES_DIR,
 ];
+
+// ---------------------------------------------------------------------------
+// 构建期进度输出
+//
+// 打包 utils / CUDA 运行库要扫描十几万文件、把数 GB 数据压成 tar.zst，纯计算阶段
+// 一句日志都没有，很容易被当成构建卡死。这里提供统一的进度行，并按运行环境选择
+// 输出去向：`cargo run --bin ...` 直接写 stdout；build.rs 里 stdout 会被 cargo 丢掉，
+// 只有 `cargo:warning=` 能显示出来。
+// ---------------------------------------------------------------------------
+
+/// 进度行的去向。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProgressMode {
+    /// 按运行环境自动判断（默认）。
+    Auto,
+    /// 直接写 stdout。
+    Stdout,
+    /// 写成 `cargo:warning=`，供 build.rs 使用。
+    CargoWarning,
+    /// 完全静默。
+    Silent,
+}
+
+static PROGRESS_MODE: AtomicU8 = AtomicU8::new(0);
+
+/// 覆盖进度输出方式。build.rs 在调用打包函数前会显式设为 `CargoWarning`。
+pub fn set_progress_mode(mode: ProgressMode) {
+    let value = match mode {
+        ProgressMode::Auto => 0,
+        ProgressMode::Stdout => 1,
+        ProgressMode::CargoWarning => 2,
+        ProgressMode::Silent => 3,
+    };
+    PROGRESS_MODE.store(value, Ordering::Relaxed);
+}
+
+fn progress_mode() -> ProgressMode {
+    match PROGRESS_MODE.load(Ordering::Relaxed) {
+        1 => return ProgressMode::Stdout,
+        2 => return ProgressMode::CargoWarning,
+        3 => return ProgressMode::Silent,
+        _ => {}
+    }
+
+    // `GUAXI_BUNDLE_LOG=quiet` 用于收敛日志（例如 CI 里只想看摘要）。
+    let quiet = std::env::var("GUAXI_BUNDLE_LOG")
+        .map(|value| value.eq_ignore_ascii_case("quiet"))
+        .unwrap_or(false);
+    if quiet {
+        return ProgressMode::Silent;
+    }
+
+    // 不能靠 OUT_DIR 判断「是否在 build 脚本里」：`cargo run` 启动的普通进程同样
+    // 带着 OUT_DIR。build.rs 会显式调用 set_progress_mode(CargoWarning)，这里只管默认。
+    ProgressMode::Stdout
+}
+
+/// 输出一行进度。调用方负责保证单行（`cargo:warning=` 不认多行）。
+fn progress_emit(message: &str) {
+    match progress_mode() {
+        // Auto 只作为「未设置」的取值存在，progress_mode() 不会把它返回。
+        ProgressMode::Auto | ProgressMode::Stdout => println!("{message}"),
+        ProgressMode::CargoWarning => println!("cargo:warning={message}"),
+        ProgressMode::Silent => {}
+    }
+}
+
+fn format_bytes(bytes: u64) -> String {
+    const MB: f64 = 1024.0 * 1024.0;
+    const GB: f64 = MB * 1024.0;
+    let value = bytes as f64;
+    if value >= GB {
+        format!("{:.2} GB", value / GB)
+    } else if value >= MB {
+        format!("{:.0} MB", value / MB)
+    } else {
+        format!("{:.0} KB", value / 1024.0)
+    }
+}
+
+fn format_duration(duration: Duration) -> String {
+    let total_seconds = duration.as_secs_f64();
+    if total_seconds < 10.0 {
+        format!("{total_seconds:.1}s")
+    } else if total_seconds < 60.0 {
+        format!("{total_seconds:.0}s")
+    } else {
+        let minutes = (total_seconds / 60.0).floor();
+        let seconds = (total_seconds % 60.0).round();
+        format!("{minutes:.0}m{seconds:02.0}s")
+    }
+}
+
+/// 一次打包任务的进度。多线程压缩时由各 worker 原子累加，后台线程定期打印一行，
+/// 让终端不至于长时间空白。
+struct BundleProgress {
+    started: Instant,
+    total_files: usize,
+    total_bytes: u64,
+    done_files: AtomicUsize,
+    done_bytes: AtomicU64,
+    stop: AtomicBool,
+    ticker_enabled: bool,
+}
+
+impl BundleProgress {
+    fn new(total_files: usize, total_bytes: u64) -> Arc<Self> {
+        Arc::new(Self {
+            started: Instant::now(),
+            total_files,
+            total_bytes,
+            done_files: AtomicUsize::new(0),
+            done_bytes: AtomicU64::new(0),
+            stop: AtomicBool::new(false),
+            // 小体量分包几秒就完事，为它开线程只是噪音。
+            ticker_enabled: progress_mode() != ProgressMode::Silent
+                && total_bytes >= 64 * 1024 * 1024,
+        })
+    }
+
+    fn advance(&self, bytes: u64) {
+        self.done_files.fetch_add(1, Ordering::Relaxed);
+        self.done_bytes.fetch_add(bytes, Ordering::Relaxed);
+    }
+
+    /// 边读边记：单个文件可能几百 MB，必须按字节推进，否则进度会长时间停在原地。
+    fn add_bytes(&self, bytes: u64) {
+        self.done_bytes.fetch_add(bytes, Ordering::Relaxed);
+    }
+
+    fn complete_entry(&self) {
+        self.done_files.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn spawn_ticker(self: &Arc<Self>) -> Option<thread::JoinHandle<()>> {
+        if !self.ticker_enabled {
+            return None;
+        }
+        // build.rs 的每行都会变成一条 warning，间隔放大一点免得刷屏。
+        let interval = match progress_mode() {
+            ProgressMode::CargoWarning => Duration::from_secs(20),
+            _ => Duration::from_secs(5),
+        };
+        let this = Arc::clone(self);
+        Some(thread::spawn(move || {
+            let mut waited = Duration::ZERO;
+            while !this.stop.load(Ordering::Relaxed) {
+                if waited >= interval {
+                    this.emit_progress();
+                    waited = Duration::ZERO;
+                }
+                thread::sleep(Duration::from_millis(250));
+                waited += Duration::from_millis(250);
+            }
+        }))
+    }
+
+    fn emit_progress(&self) {
+        let done_bytes = self.done_bytes.load(Ordering::Relaxed);
+        let elapsed = self.started.elapsed();
+        let elapsed_seconds = elapsed.as_secs_f64();
+        let percent = if self.total_bytes == 0 {
+            0.0
+        } else {
+            done_bytes as f64 / self.total_bytes as f64 * 100.0
+        };
+        let rate = if elapsed_seconds > 0.5 {
+            done_bytes as f64 / elapsed_seconds
+        } else {
+            0.0
+        };
+        let remaining = if rate > 1.0 && self.total_bytes > done_bytes {
+            format_duration(Duration::from_secs_f64(
+                (self.total_bytes - done_bytes) as f64 / rate,
+            ))
+        } else {
+            "?".to_string()
+        };
+        progress_emit(&format!(
+            "[utils.bundle] 压缩中 {percent:.0}% · {}/{} 文件 · {} / {} · {} / 已用 {} · 预计还需 {}",
+            self.done_files.load(Ordering::Relaxed),
+            self.total_files,
+            format_bytes(done_bytes),
+            format_bytes(self.total_bytes),
+            if rate > 1.0 {
+                format!("{} /s", format_bytes(rate as u64))
+            } else {
+                "—".to_string()
+            },
+            format_duration(elapsed),
+            remaining
+        ));
+    }
+
+    fn finish(&self, bundle_count: usize, archived_bytes: u64) {
+        self.stop.store(true, Ordering::Relaxed);
+        progress_emit(&format!(
+            "[utils.bundle] 压缩完成 · {} 个分包 · {} 原始 → {} 归档 · 用时 {}",
+            bundle_count,
+            format_bytes(self.total_bytes),
+            format_bytes(archived_bytes),
+            format_duration(self.started.elapsed())
+        ));
+    }
+}
+
+/// 扫描阶段的轻量计数器：目录树遍历是单线程的，只需要节流打印。
+struct ScanProgress {
+    started: Instant,
+    entries: AtomicUsize,
+    last_emit: Mutex<Instant>,
+}
+
+impl ScanProgress {
+    fn new() -> Self {
+        Self {
+            started: Instant::now(),
+            entries: AtomicUsize::new(0),
+            last_emit: Mutex::new(Instant::now()),
+        }
+    }
+
+    fn record(&self, count: usize) {
+        let total = self.entries.fetch_add(count, Ordering::Relaxed) + count;
+        if progress_mode() == ProgressMode::Silent {
+            return;
+        }
+        let mut last = match self.last_emit.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if last.elapsed() < Duration::from_secs(3) {
+            return;
+        }
+        *last = Instant::now();
+        drop(last);
+        progress_emit(&format!(
+            "[utils.bundle] 扫描中 · 已遍历 {total} 个条目 · 用时 {}",
+            format_duration(self.started.elapsed())
+        ));
+    }
+}
 
 #[derive(Debug, Clone, Copy)]
 pub enum BundleStrategy {
@@ -322,6 +565,11 @@ fn prepare_bundles_in_dir(
                     bundle_dir,
                     manifest.bundles.iter().map(|bundle| bundle.name.clone()),
                 )?;
+                progress_emit(&format!(
+                    "[utils.bundle] 复用现有清单 · {} 个分包均已就绪（无需重扫）· {}",
+                    manifest.bundles.len(),
+                    format_duration(started_at.elapsed())
+                ));
                 return Ok(PrepareResult {
                     bundle_dir: bundle_dir.to_path_buf(),
                     strategy: BundleStrategy::RustTarZstd,
@@ -338,7 +586,32 @@ fn prepare_bundles_in_dir(
         }
     }
 
+    progress_emit(&format!(
+        "[utils.bundle] 开始扫描 · source={} · bundleDir={}{}",
+        source_dir.display(),
+        bundle_dir.display(),
+        if reuse_existing {
+            " · 复用清单不可用，退回完整扫描"
+        } else {
+            ""
+        }
+    ));
+
+    let scan_started = Instant::now();
     let specs = collect_bundle_specs(source_dir, bundle_dir, include_extension)?;
+    let total_files: usize = specs
+        .iter()
+        .map(|spec| spec.stats.file_count + spec.stats.empty_dir_count)
+        .sum();
+    let total_bytes: u64 = specs.iter().map(|spec| spec.stats.total_bytes).sum();
+    progress_emit(&format!(
+        "[utils.bundle] 扫描完成 · {} 个分包 · 去重后 {} 个条目 · {} · 用时 {}",
+        specs.len(),
+        total_files,
+        format_bytes(total_bytes),
+        format_duration(scan_started.elapsed())
+    ));
+
     // Drop bundles whose names are no longer part of the payload before
     // rebuilding. During the first split migration this frees the old
     // multi-GB top-level archives instead of keeping both generations at once.
@@ -390,13 +663,50 @@ fn prepare_bundles_in_dir(
             .unwrap_or(1);
         let encoder_threads = (cores / rebuild_indices.len())
             .clamp(1, cores) as u32;
+        let rebuild_bytes: u64 = rebuild_indices
+            .iter()
+            .map(|index| specs[*index].stats.total_bytes)
+            .sum();
+        progress_emit(&format!(
+            "[utils.bundle] 开始压缩 · 复用 {} 个（摘要未变）· 重压 {} 个（{}）· 每包 {} 线程 / 共 {} 核",
+            specs.len() - rebuild_indices.len(),
+            rebuild_indices.len(),
+            format_bytes(rebuild_bytes),
+            encoder_threads,
+            cores
+        ));
+
+        let progress = BundleProgress::new(
+            rebuild_indices
+                .iter()
+                .map(|index| specs[*index].stats.file_count + specs[*index].stats.empty_dir_count)
+                .sum(),
+            rebuild_bytes,
+        );
+        let ticker = progress.spawn_ticker();
         let results: Vec<Result<PreparedMeta, String>> = rebuild_indices
             .par_iter()
-            .map(|&index| prepare_single_bundle(&specs[index], encoder_threads))
+            .map(|&index| prepare_single_bundle(&specs[index], encoder_threads, &progress))
             .collect();
+        progress.stop.store(true, Ordering::Relaxed);
+        if let Some(handle) = ticker {
+            let _ = handle.join();
+        }
         for (index, result) in rebuild_indices.iter().zip(results) {
             prepared[*index] = Some(result?);
         }
+        let archived_bytes = prepared
+            .iter()
+            .flatten()
+            .filter(|meta| meta.rebuilt)
+            .map(|meta| meta.archive_bytes)
+            .sum();
+        progress.finish(rebuild_indices.len(), archived_bytes);
+    } else {
+        progress_emit(&format!(
+            "[utils.bundle] 全部 {} 个分包均可复用（源文件未变），本轮不压缩",
+            specs.len()
+        ));
     }
 
     // If every spec reused its previous archive and the manifest has no extra
@@ -572,9 +882,11 @@ fn collect_bundle_specs(
 
     // Metadata traversal stays sequential: on Windows the parallel version
     // thrashed the disk/antivirus and was slower than this single pass.
+    // 十几万文件可能扫十几秒，带上计数器让终端每隔几秒有一行输出。
+    let scan = ScanProgress::new();
     let mut units = Vec::new();
     for (path, relative) in top_entries {
-        collect_units(&path, &relative, 0, &mut units)?;
+        collect_units(&path, &relative, 0, &mut units, &scan)?;
     }
 
     let mut specs = Vec::with_capacity(units.len());
@@ -606,9 +918,11 @@ fn collect_units(
     relative: &Path,
     depth: usize,
     units: &mut Vec<BundleUnit>,
+    scan: &ScanProgress,
 ) -> Result<(), String> {
     if path.is_file() {
         let entry = file_entry(relative, path)?;
+        scan.record(1);
         units.push(BundleUnit {
             relative: relative.to_path_buf(),
             source_kind: SourceKind::File,
@@ -618,7 +932,7 @@ fn collect_units(
         return Ok(());
     }
 
-    let entries = collect_entries(relative, path)?;
+    let entries = collect_entries(relative, path, scan)?;
     if entries.is_empty() {
         let empty = BundleEntrySpec {
             relative: relative.to_path_buf(),
@@ -646,7 +960,7 @@ fn collect_units(
 
     if should_split {
         for (child_path, child_relative) in children {
-            collect_units(&child_path, &child_relative, depth + 1, units)?;
+            collect_units(&child_path, &child_relative, depth + 1, units, scan)?;
         }
         return Ok(());
     }
@@ -700,7 +1014,11 @@ fn entry_spec(relative: &Path, source: &Path, metadata: &fs::Metadata) -> Bundle
     }
 }
 
-fn collect_entries(root_relative: &Path, current_dir: &Path) -> Result<Vec<BundleEntrySpec>, String> {
+fn collect_entries(
+    root_relative: &Path,
+    current_dir: &Path,
+    scan: &ScanProgress,
+) -> Result<Vec<BundleEntrySpec>, String> {
     let mut entries = fs::read_dir(current_dir)
         .map_err(|e| format!("failed to read dir {}: {e}", current_dir.display()))?
         .flatten()
@@ -735,8 +1053,9 @@ fn collect_entries(root_relative: &Path, current_dir: &Path) -> Result<Vec<Bundl
             .unwrap_or_else(|| file_type.is_dir());
 
         if is_dir {
-            let nested_entries = collect_entries(&relative, &path)?;
+            let nested_entries = collect_entries(&relative, &path, scan)?;
             if nested_entries.is_empty() {
+                scan.record(1);
                 collected.push(BundleEntrySpec {
                     relative,
                     source: path,
@@ -754,6 +1073,7 @@ fn collect_entries(root_relative: &Path, current_dir: &Path) -> Result<Vec<Bundl
                 .metadata()
                 .map_err(|e| format!("failed to read metadata {}: {e}", path.display()))?,
         };
+        scan.record(1);
         collected.push(entry_spec(&relative, &path, &metadata));
     }
 
@@ -873,10 +1193,28 @@ impl<W: Write> Write for HashingWriter<W> {
     }
 }
 
+/// 读取源文件的同时把「已读字节数」记进进度，供压缩阶段的实时百分比与 ETA 使用。
+struct ProgressReader<'a, R> {
+    inner: R,
+    progress: &'a BundleProgress,
+}
+
+impl<R: Read> Read for ProgressReader<'_, R> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let read = self.inner.read(buf)?;
+        if read > 0 {
+            self.progress.add_bytes(read as u64);
+        }
+        Ok(read)
+    }
+}
+
 fn prepare_single_bundle(
     bundle: &BundleSpec,
     encoder_threads: u32,
+    progress: &BundleProgress,
 ) -> Result<PreparedMeta, String> {
+    let started_at = Instant::now();
     // Write to a temporary file first so aborted builds never leave a partially
     // valid bundle behind that might later be mistaken for a complete artifact.
     let temp_bundle_path = bundle.bundle_path.with_file_name(format!(
@@ -916,10 +1254,25 @@ fn prepare_single_bundle(
                             bundle.bundle_path.display()
                         )
                     })?;
+                progress.complete_entry();
             }
             BundleEntryKind::File { .. } => {
+                // 这里刻意不用 append_path_with_name：它无法在读取文件时回报进度，
+                // 一个 500 MB 的 DLL 会让进度条钉死几十秒。手写 header 后走 append_data，
+                // 中间插入 ProgressReader，压缩比为 1:1 地反映真实读取量。
+                let stat = fs::metadata(&entry.source).map_err(|e| {
+                    format!("failed to read metadata {}: {e}", entry.source.display())
+                })?;
+                let file = File::open(&entry.source)
+                    .map_err(|e| format!("failed to open {}: {e}", entry.source.display()))?;
+                let mut header = Header::new_gnu();
+                header.set_metadata_in_mode(&stat, tar::HeaderMode::Deterministic);
+                let mut reader = ProgressReader {
+                    inner: file,
+                    progress,
+                };
                 archive
-                    .append_path_with_name(&entry.source, &entry.relative)
+                    .append_data(&mut header, &entry.relative, &mut reader)
                     .map_err(|e| {
                         format!(
                             "failed to add file {} to archive {}: {e}",
@@ -927,6 +1280,7 @@ fn prepare_single_bundle(
                             bundle.bundle_path.display()
                         )
                     })?;
+                progress.complete_entry();
             }
         }
     }
@@ -957,6 +1311,21 @@ fn prepare_single_bundle(
             bundle.bundle_path.display()
         )
     })?;
+
+    // 每个分包完成后打一行，出问题能立刻定位到是哪个包（含压缩比与耗时）。
+    let ratio = if bundle.stats.total_bytes > 0 {
+        archive_bytes as f64 / bundle.stats.total_bytes as f64 * 100.0
+    } else {
+        0.0
+    };
+    progress_emit(&format!(
+        "[utils.bundle] 完成 {} · {} → {}（{ratio:.0}%）· {} 个条目 · {}",
+        bundle.bundle_name,
+        format_bytes(bundle.stats.total_bytes),
+        format_bytes(archive_bytes),
+        bundle.stats.file_count,
+        format_duration(started_at.elapsed())
+    ));
 
     Ok(PreparedMeta {
         archive_bytes,
@@ -1236,14 +1605,30 @@ fn run_extraction(
     }
 
     let state_mutex = state_file.map(|_| Mutex::new(state));
+    let extract_started = Instant::now();
+    progress_emit(&format!(
+        "[utils.bundle] 安装解包 · 共 {} 个分包 · 本次解压 {} 个 · 增量跳过 {} 个 · 目标 {}",
+        plans.len(),
+        extract_indices.len(),
+        result.skipped_bundle_count,
+        destination.display()
+    ));
     let extract_results: Vec<Result<ExtractBundleStats, String>> = extract_indices
         .par_iter()
         .map(|&index| {
             let plan = &plans[index];
+            let bundle_started = Instant::now();
             let stats = extract_single_bundle(&plan.path, destination, plan.manifest)?;
             if let Some(entry) = plan.manifest {
                 verify_files_complete(destination, entry)?;
             }
+            progress_emit(&format!(
+                "[utils.bundle] 解包完成 {} · 写入 {} 个文件 · 跳过 {} 个 · {}",
+                plan.name,
+                stats.written_files,
+                stats.skipped_files,
+                format_duration(bundle_started.elapsed())
+            ));
             Ok(stats)
         })
         .collect();
@@ -1287,6 +1672,14 @@ fn run_extraction(
             eprintln!("[utils.bundle] failed to save install state: {error}");
         }
     }
+
+    progress_emit(&format!(
+        "[utils.bundle] 安装解包完成 · 解压 {} 个分包 · 写入 {} 个文件 · 跳过 {} 个文件 · 总用时 {}",
+        result.extracted_bundle_count,
+        result.written_file_count,
+        result.skipped_file_count,
+        format_duration(extract_started.elapsed())
+    ));
 
     Ok(result)
 }

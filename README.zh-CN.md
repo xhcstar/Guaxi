@@ -414,6 +414,7 @@ Guaxi 建立在这些优秀项目之上（节选，按用途分组）：
 | Linux 安装后提示资源缺失 | 确认 `utils/__bundles` 已作为 resources 打进包；首次启动会解包并在 `utils` 同级写 `.guaxi_utils_extract_complete`，残留 `utils.__extracting_*` 会在下次启动自动续做或清理 |
 | dev 下报「资源缺失」但文件明明在 | 代码绕过了 `ensure_relative_dir()` 自拼路径；统一走该入口 |
 | GPU 版实际还在跑 CPU | 缺 CUDA 运行时 DLL 或驱动过旧；`npm run sherpa:fetch:cuda` 后重打，看自检退出码 |
+| 构建时长时间没有任何输出，像卡住了 | 多半是 `utils` 扫描/压缩或 `makensis` 封包；编排层会打印阶段头、进度行和 20s 心跳。心跳都不再出现且 CPU 空闲才是真卡住。详见[构建日志说明](docs/design/TAURI_BUILD_PIPELINE.md#64-构建日志怎么读) |
 
 完整排错表见构建文档的 [第 11 章](docs/design/TAURI_BUILD_PIPELINE.md#11-排错速查)。
 

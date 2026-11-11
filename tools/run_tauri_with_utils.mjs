@@ -48,6 +48,103 @@ const windowsCudaRuntimeBundlesDir = path.join(
 );
 const BUNDLE_MANIFEST_FILE = 'bundle-manifest.json';
 
+// ---------------------------------------------------------------------------
+// 构建日志
+//
+// 这条链路上有几段是「一句话都不说地跑几分钟」：扫十几万个文件、把几 GB 数据压成
+// tar.zst、makensis 封安装包。以前只有结束时的摘要，中途完全空白，很容易被当成卡死。
+// 这里给每一步加三样东西：
+//   · 阶段头（第几步 / 共几步 + 这一步在做什么）；
+//   · 心跳（子进程长时间没输出时，每 20s 报一次已用时间）；
+//   · 结束耗时（最后汇总成一张阶段耗时表，方便定位是哪一步变慢了）。
+//
+// 环境变量：
+//   GUAXI_BUILD_HEARTBEAT_MS  心跳间隔，0 关闭（默认 20000）
+//   GUAXI_BUILD_VERBOSE=1     额外打印每一步的完整命令行
+// ---------------------------------------------------------------------------
+const HEARTBEAT_MS = (() => {
+  const raw = Number(process.env.GUAXI_BUILD_HEARTBEAT_MS ?? 20000);
+  return Number.isFinite(raw) && raw >= 0 ? raw : 20000;
+})();
+const VERBOSE = ['1', 'true', 'yes', 'on'].includes(
+  String(process.env.GUAXI_BUILD_VERBOSE ?? '').toLowerCase(),
+);
+const stageTimings = [];
+let stageIndex = 0;
+let stageTotal = 0;
+const buildStartedAt = Date.now();
+
+function formatDuration(ms) {
+  const seconds = ms / 1000;
+  if (seconds < 10) {
+    return `${seconds.toFixed(1)}s`;
+  }
+  if (seconds < 60) {
+    return `${Math.round(seconds)}s`;
+  }
+  const minutes = Math.floor(seconds / 60);
+  const rest = Math.round(seconds % 60);
+  return `${minutes}m${String(rest).padStart(2, '0')}s`;
+}
+
+function formatBytes(bytes) {
+  const MB = 1024 * 1024;
+  const GB = MB * 1024;
+  if (bytes >= GB) {
+    return `${(bytes / GB).toFixed(2)} GB`;
+  }
+  if (bytes >= MB) {
+    return `${Math.round(bytes / MB)} MB`;
+  }
+  return `${Math.round(bytes / 1024)} KB`;
+}
+
+/// 打印阶段头。detail 用来交代「为什么要做这一步」和预期耗时。
+function stage(title, detail) {
+  stageIndex += 1;
+  console.log(
+    `\n[tauri] [${stageIndex}/${stageTotal}] ${title}${detail ? ` · ${detail}` : ''}`,
+  );
+  return { title, startedAt: Date.now() };
+}
+
+function stageDone(reference, note) {
+  const elapsed = Date.now() - reference.startedAt;
+  stageTimings.push({ title: reference.title, elapsed });
+  console.log(
+    `[tauri] [${stageIndex}/${stageTotal}] ${reference.title} 完成 · ${formatDuration(elapsed)}${note ? ` · ${note}` : ''}`,
+  );
+}
+
+/// 跳过某个阶段时也留一行，否则日志里会「少一步」而看不出是刻意跳过。
+function stageSkipped(title, reason) {
+  stageIndex += 1;
+  stageTimings.push({ title, elapsed: 0, skipped: true });
+  console.log(`[tauri] [${stageIndex}/${stageTotal}] ${title} 跳过 · ${reason}`);
+}
+
+/// 中文字符在终端占 2 列，用 padEnd 对不齐，这里按显示宽度补空格。
+function padLabel(text, width) {
+  let used = 0;
+  for (const char of text) {
+    used += /[\u3000-\u9fff\uff00-\uffef]/.test(char) ? 2 : 1;
+  }
+  return text + ' '.repeat(Math.max(1, width - used));
+}
+
+function printSummary() {
+  if (stageTimings.length === 0) {
+    return;
+  }
+  const total = Date.now() - buildStartedAt;
+  console.log(`\n[tauri] ───── 构建结束 · 总用时 ${formatDuration(total)} ─────`);
+  for (const entry of stageTimings) {
+    const label = entry.skipped ? '跳过' : formatDuration(entry.elapsed);
+    console.log(`[tauri]   ${padLabel(entry.title, 30)}${label}`);
+  }
+}
+
+
 // 语音功能的 GPU 构建需要 SHERPA_ONNX_LIB_DIR 指向已装配的 CUDA 库目录。
 // 与其让每台机器各自 export 一遍，不如在这里按 `--features gpu` 自动补上——
 // 命令因此保持成一条，文档和 CI 都不必再记环境变量。
@@ -93,7 +190,12 @@ async function verifyCudaRuntimeForRelease() {
     return;
   }
 
-  const buildExitCode = await ensureCargoBinBuilt('verify_cuda_runtime', {}, false);
+  const buildExitCode = await ensureCargoBinBuilt(
+    'verify_cuda_runtime',
+    {},
+    { label: 'CUDA 自检工具编译' },
+    false,
+  );
   if (buildExitCode !== 0) {
     console.warn('[tauri] CUDA 自检工具构建失败，跳过自检。');
     return;
@@ -106,7 +208,7 @@ async function verifyCudaRuntimeForRelease() {
   }
 
   console.log('[tauri] GPU 版自检：检查安装目录旁的 CUDA 运行库能否加载 …');
-  const exitCode = await run(verifier, ['--dir', releaseDir]);
+  const exitCode = await run(verifier, ['--dir', releaseDir], {}, { label: 'CUDA 自检' });
   if (exitCode === 2) {
     console.error(
       '[tauri] GPU 版自检发现打包缺陷（安装目录缺少 CUDA 运行库），已中止构建。\n' +
@@ -138,8 +240,13 @@ function tauriInvocation() {
   };
 }
 
-function run(command, commandArgs, extraEnv = {}) {
+function run(command, commandArgs, extraEnv = {}, options = {}) {
+  const { label, heartbeatMs = HEARTBEAT_MS } = options;
+  if (VERBOSE) {
+    console.log(`[tauri]     $ ${[command, ...commandArgs].join(' ')}`);
+  }
   return new Promise((resolve, reject) => {
+    const startedAt = Date.now();
     // Disable npm's own update notifier so build logs stay focused on the
     // project pipeline instead of tool-upgrade suggestions.
     const child = spawn(command, commandArgs, {
@@ -154,7 +261,26 @@ function run(command, commandArgs, extraEnv = {}) {
       },
     });
 
+    // 子进程自己多久没输出是无法直接观测的（stdio 走 inherit），所以这里按固定
+    // 间隔无条件报一次「还在跑」。宁可偶尔多说一句，也不要让终端长时间定格。
+    let heartbeatTimer = null;
+    if (label && heartbeatMs > 0) {
+      heartbeatTimer = setInterval(() => {
+        console.log(
+          `[tauri]     … ${label} 仍在进行，已用 ${formatDuration(Date.now() - startedAt)}`,
+        );
+      }, heartbeatMs);
+      heartbeatTimer.unref?.();
+    }
+    const stopHeartbeat = () => {
+      if (heartbeatTimer) {
+        clearInterval(heartbeatTimer);
+        heartbeatTimer = null;
+      }
+    };
+
     child.on('exit', (code, signal) => {
+      stopHeartbeat();
       if (signal) {
         reject(new Error(`${command} terminated by signal ${signal}`));
         return;
@@ -162,7 +288,10 @@ function run(command, commandArgs, extraEnv = {}) {
       resolve(code ?? 0);
     });
 
-    child.on('error', reject);
+    child.on('error', (error) => {
+      stopHeartbeat();
+      reject(error);
+    });
   });
 }
 
@@ -230,15 +359,24 @@ function cargoBinArgs(bin, args, release) {
   return cargoArgs;
 }
 
-async function runCargoBin(bin, args, extraEnv = {}, release = true) {
+async function runCargoBin(bin, args, extraEnv = {}, options = {}, release = true) {
   if (await isPrebuiltBinFresh(bin, release)) {
-    return run(await binTargetPath(bin, release), args, extraEnv);
+    if (VERBOSE) {
+      console.log(`[tauri]     ${bin}: 复用已编译好的可执行文件（输入未变）`);
+    }
+    return run(await binTargetPath(bin, release), args, extraEnv, options);
   }
-  return run('cargo', cargoBinArgs(bin, args, release), extraEnv);
+  if (VERBOSE || options.label) {
+    console.log(`[tauri]     ${bin}: 可执行文件缺失或已过期，先 cargo build（首次可能要编译一批依赖）`);
+  }
+  return run('cargo', cargoBinArgs(bin, args, release), extraEnv, options);
 }
 
-async function ensureCargoBinBuilt(bin, extraEnv = {}, release = true) {
+async function ensureCargoBinBuilt(bin, extraEnv = {}, options = {}, release = true) {
   if (await isPrebuiltBinFresh(bin, release)) {
+    if (VERBOSE) {
+      console.log(`[tauri]     ${bin}: 复用已编译好的可执行文件（输入未变）`);
+    }
     return 0;
   }
   return run(
@@ -253,6 +391,7 @@ async function ensureCargoBinBuilt(bin, extraEnv = {}, release = true) {
       bin,
     ],
     extraEnv,
+    options,
   );
 }
 
@@ -406,6 +545,14 @@ async function publishExternalWindowsBundles(includeCudaRuntime) {
     : [];
 
   await mkdir(windowsNsisOutputDir, { recursive: true });
+  const totalSourceBytes = [...utilsEntries, ...cudaEntries].reduce(
+    (sum, entry) => sum + entry.size,
+    0,
+  );
+  console.log(
+    `[tauri]     待发布 ${utilsEntries.length + cudaEntries.length} 个分包 · ${formatBytes(totalSourceBytes)}（内容未变的会跳过复制）`,
+  );
+  const publishStartedAt = Date.now();
   const utilsPublish = await publishBundleDir(
     utilsBundlesSourceDir,
     windowsExternalBundlesDir,
@@ -453,20 +600,58 @@ async function publishExternalWindowsBundles(includeCudaRuntime) {
       `[cuda.bundle] published external windows bundles dir=${windowsCudaRuntimeBundlesDir} bundleCount=${cudaEntries.length} copied=${cudaPublish.copied} skipped=${cudaPublish.skipped}`,
     );
   }
+  console.log(
+    `[tauri]     发布完成 · 用时 ${formatDuration(Date.now() - publishStartedAt)} · 目录 ${windowsNsisOutputDir}`,
+  );
 }
 
 async function main() {
+  const isGpuBuild = usesGpuFeature(tauriArgs);
+  const isWindows = process.platform === 'win32';
+
+  // 阶段总数先算出来，日志里才能显示「第几步 / 共几步」，让人知道离结束还有多远。
+  stageTotal = 2;
+  if (isGpuBuild && shouldPrepareForTauriCommand) {
+    stageTotal += 1;
+  }
+  if (shouldPrepareForTauriCommand) {
+    stageTotal += 4 + (isWindows ? 1 : 0);
+  }
+  stageTotal += 1;
+  if (shouldPrepareForTauriCommand) {
+    stageTotal += (isGpuBuild ? 1 : 0) + 1;
+  }
+
+  console.log(
+    `[tauri] 启动 ${tauriArgs.join(' ') || '(无子命令)'} · 平台 ${process.platform} · ` +
+      `${isGpuBuild ? 'GPU(shared)' : 'CPU(static)'}${reuseExisting ? ' · 复用已有分包' : ''} · 共 ${stageTotal} 步`,
+  );
+  if (VERBOSE) {
+    console.log(`[tauri] 心跳间隔 ${HEARTBEAT_MS}ms · 详细模式已开启`);
+  }
+
   // Codex Agent 引擎依赖 `src-tauri/utils/codex/codex.exe`。这一步是幂等的（已存在即跳过），
   // 并且刻意不校验退出码：拿不到 codex 时智能助手会回退到内置 Python Agent，
   // 不应该因为下载失败就阻断 dev / build。
-  await run('node', ['./tools/fetch_codex_sidecar.mjs']);
+  const codexStage = stage('Codex 侧车', 'src-tauri/utils/codex，缺失只告警不阻断');
+  await run('node', ['./tools/fetch_codex_sidecar.mjs'], {}, { label: 'Codex 侧车准备' });
+  stageDone(codexStage);
 
   // 语音功能的原生库与模型。必须放在这里（而不是 only-in-build 分支里），原因有两条：
   //   · 原生库要赶在**任何** cargo 构建之前就位——sherpa-onnx 的 build.rs 找不到归档时
   //     会自己去联网下载，而只有系统代理（注册表）的环境下会直接卡住；
   //   · 模型要赶在 prepare_utils_zip 打包之前就位，否则不会被打进离线包。
   // 脚本自身幂等（已存在即跳过），所以 dev 下重复执行没有代价。
-  const sherpaExitCode = await run('node', ['./tools/fetch_sherpa_onnx_libs.mjs']);
+  const sherpaStage = stage(
+    '语音原生库与模型',
+    'sherpa-onnx 静态库 + TTS/ASR 模型，已就位则秒过',
+  );
+  const sherpaExitCode = await run(
+    'node',
+    ['./tools/fetch_sherpa_onnx_libs.mjs'],
+    {},
+    { label: '语音库预取' },
+  );
   if (sherpaExitCode !== 0) {
     console.error(
       '[tauri] 语音库与模型准备失败。原生库缺失会让 cargo 构建直接失败，故在此中止；\n' +
@@ -474,11 +659,12 @@ async function main() {
     );
     process.exit(sherpaExitCode);
   }
+  stageDone(sherpaStage);
 
   // 仅 GPU 构建时非空：见下面那段说明，它只在最终 tauri 调用时注入。
   let gpuSherpaLibDir = null;
 
-  if (usesGpuFeature(tauriArgs)) {
+  if (isGpuBuild) {
     if (!existsSync(sherpaCudaLibDir)) {
       console.error(
         `[tauri] 指定了 gpu 特性，但 CUDA 库目录不存在：${sherpaCudaLibDir}\n` +
@@ -491,13 +677,17 @@ async function main() {
     // 下面那些默认特性（static）的辅助构建会直接报
     // "could not find native static library `sherpa-onnx-core`"。
     gpuSherpaLibDir = process.env.SHERPA_ONNX_LIB_DIR || sherpaCudaLibDir;
-    console.log(`[tauri] GPU 构建：SHERPA_ONNX_LIB_DIR=${gpuSherpaLibDir}`);
+    console.log(`[tauri]     SHERPA_ONNX_LIB_DIR=${gpuSherpaLibDir}`);
     if (shouldPrepareForTauriCommand) {
       // 2.7GB 的 CUDA 运行库不能作为 bundle.resources 塞进安装包：连同
       // guaxi.exe 会超过 makensis 数据块的 ~2GB 上限，直接报
       // "error mmapping datablock" 打包失败。这里沿用 utils 的外置分包机制，
       // 构建期压成 tar.zst，安装时由 extract_utils_bundles 解压到 $INSTDIR
       // （guaxi.exe 旁边，Windows 加载器与 onnxruntime 都在那里找 DLL）。
+      const cudaStage = stage(
+        'CUDA 运行时分包',
+        '约 2.8 GB DLL 压成 tar.zst，首次数分钟、之后只压变化的包',
+      );
       const prepareArgs = [
         '--source-dir',
         gpuSherpaLibDir,
@@ -513,35 +703,51 @@ async function main() {
         'prepare_cuda_runtime_bundle',
         prepareArgs,
         { GUAXI_SKIP_BUNDLE_PREPARE: '1' },
+        { label: 'CUDA 运行库压缩' },
       );
       if (prepareExitCode !== 0) {
         process.exit(prepareExitCode);
       }
+      stageDone(cudaStage);
     }
   }
 
   if (shouldPrepareForTauriCommand) {
     // Release packaging depends on pre-copied frontend assets because the final
     // bundle cannot fetch editor/viewer assets from the network at runtime.
-    const prepareAssetsExitCode = await run('node', ['./tools/copy_excalidraw_assets.mjs']);
+    const assetsStage = stage('前端离线资源', 'Excalidraw 资源整包预拷贝');
+    const prepareAssetsExitCode = await run(
+      'node',
+      ['./tools/copy_excalidraw_assets.mjs'],
+      {},
+      { label: '前端资源拷贝' },
+    );
     if (prepareAssetsExitCode !== 0) {
       process.exit(prepareAssetsExitCode);
     }
+    stageDone(assetsStage);
 
     // 浏览器预览页（/browser/preview）的 ```chart 围栏复用软件内同一份图表模块。
     // 这里生成它的单文件产物，产物由 Rust 侧 include_str! 打进二进制；
     // 不重新生成的话，发布包里会带着 build 前那一版（或根本不存在，直接编译失败）。
-    const prepareChartPreviewExitCode = await run('node', [
-      './tools/build_chart_preview_bundle.mjs',
-    ]);
+    const chartStage = stage('图表预览产物', 'Vite + esbuild 打成单文件');
+    const prepareChartPreviewExitCode = await run(
+      'node',
+      ['./tools/build_chart_preview_bundle.mjs'],
+      {},
+      { label: '图表预览产物生成' },
+    );
     if (prepareChartPreviewExitCode !== 0) {
       process.exit(prepareChartPreviewExitCode);
     }
+    stageDone(chartStage);
 
     // RSSHub 进程内集成：把 rsshub 装进 SlidevEnv/node_modules（复用其 node.exe），
     // 必须在 prepare_utils_zip 打包 utils 树之前，装好的 rsshub 才会被一起打进离线包。
     // 幂等（已装则跳过）、不校验退出码（缺失只降级，不阻断 build）。
-    await run('node', ['./tools/prepare_rsshub_env.mjs']);
+    const rsshubStage = stage('RSSHub 环境', '缺失只降级聚合功能，不阻断构建');
+    await run('node', ['./tools/prepare_rsshub_env.mjs'], {}, { label: 'RSSHub 环境准备' });
+    stageDone(rsshubStage);
 
     // Bundle the heavy `src-tauri/utils` runtime tree into external tar.zst
     // parts before Tauri starts the actual release build.
@@ -552,37 +758,65 @@ async function main() {
     // ——调用 tauri 时已经带上 GUAXI_REUSE_UTILS_ZIP=1，它会走同一条
     // 「清单完整就跳过扫描」的快路径。少一次进程、少一处重复判断。
     if (reuseExisting) {
-      console.log(
-        '[utils.bundle] reuse requested: skipping prepare, build.rs will trust the existing manifest',
-      );
+      stageSkipped('utils 外置分包', '--reuse-utils-zip：交给 build.rs 直接信任现有清单');
     } else {
-      const prepareExitCode = await runCargoBin('prepare_utils_zip', [], {
-        // release profile 会触发 build.rs 的 release 分支，这里跳过：
-        // 分包正是本进程要做的，重复处理只会把同一批文件压两次。
-        GUAXI_SKIP_BUNDLE_PREPARE: '1',
-      });
+      const utilsStage = stage('utils 外置分包', '扫描 12 万文件并压成 tar.zst');
+      console.log(
+        '[tauri]     首次或源文件变动时这一步最慢（分钟级）；未变的分包会按摘要自动跳过。',
+      );
+      const prepareExitCode = await runCargoBin(
+        'prepare_utils_zip',
+        [],
+        {
+          // release profile 会触发 build.rs 的 release 分支，这里跳过：
+          // 分包正是本进程要做的，重复处理只会把同一批文件压两次。
+          GUAXI_SKIP_BUNDLE_PREPARE: '1',
+        },
+        { label: 'utils 分包压缩' },
+      );
       if (prepareExitCode !== 0) {
         process.exit(prepareExitCode);
       }
+      stageDone(utilsStage);
     }
 
-    if (process.platform === 'win32') {
+    if (isWindows) {
       // The installer invokes this helper during installation to expand the
       // external utils bundles into the final install directory.
-      const helperBuildExitCode = await ensureCargoBinBuilt('extract_utils_bundles', {
-        ...releaseCargoEnv(),
-        // helper 只是打包用的 bin，同样会触发 build.rs。它的分包要么已由上面
-        // 准备好、要么马上由主构建的 build.rs 处理，所以这里无条件跳过准备，
-        // 不必再叠加 GUAXI_REUSE_UTILS_ZIP（skip 的判断在 reuse 之前）。
-        GUAXI_SKIP_BUNDLE_PREPARE: '1',
-      });
+      const helperStage = stage('安装期解包 helper', 'extract_utils_bundles.exe，安装时调用');
+      const helperBuildExitCode = await ensureCargoBinBuilt(
+        'extract_utils_bundles',
+        {
+          ...releaseCargoEnv(),
+          // helper 只是打包用的 bin，同样会触发 build.rs。它的分包要么已由上面
+          // 准备好、要么马上由主构建的 build.rs 处理，所以这里无条件跳过准备，
+          // 不必再叠加 GUAXI_REUSE_UTILS_ZIP（skip 的判断在 reuse 之前）。
+          GUAXI_SKIP_BUNDLE_PREPARE: '1',
+        },
+        { label: '解包 helper 编译' },
+      );
       if (helperBuildExitCode !== 0) {
         process.exit(helperBuildExitCode);
       }
+      stageDone(helperStage);
     }
+
+    console.log(
+      '[tauri]     下一阶段由 Tauri CLI 接管：前端构建 → rustc release → makensis。\n' +
+        '[tauri]     中途出现 "Finished `release` profile" 后又长时间无输出，是 makensis 在\n' +
+        '[tauri]     压缩安装包（utils 已外置，通常 1–3 分钟），属正常现象。',
+    );
   }
 
   const tauri = tauriInvocation();
+  const tauriIsBuild = shouldPrepareForTauriCommand;
+  const tauriTitle = tauriIsBuild ? 'Tauri 构建与打包' : `Tauri ${tauriSubcommand || 'CLI'}`;
+  const tauriDetail = tauriIsBuild
+    ? 'rustc + NSIS，通常 5–15 分钟'
+    : tauriSubcommand === 'dev'
+      ? '首次编译依赖较慢，之后热重载'
+      : '执行 CLI 子命令';
+  const tauriStage = stage(tauriTitle, tauriDetail);
   const tauriExitCode = await run(
     tauri.command,
     tauri.args,
@@ -597,23 +831,37 @@ async function main() {
       // 而上面那些辅助构建不会。
       ...(gpuSherpaLibDir ? { SHERPA_ONNX_LIB_DIR: gpuSherpaLibDir } : {}),
     },
+    { label: tauriTitle },
   );
   if (tauriExitCode !== 0) {
     process.exit(tauriExitCode);
   }
+  stageDone(tauriStage);
 
   if (shouldPrepareForTauriCommand && (tauriSubcommand === 'build' || tauriSubcommand === 'bundle')) {
-    const isGpuBuild = usesGpuFeature(tauriArgs);
     if (isGpuBuild) {
+      const verifyStage = stage('CUDA 运行时自检', '检查安装目录旁的 DLL 能否加载');
       await verifyCudaRuntimeForRelease();
+      stageDone(verifyStage);
     }
-    await publishExternalWindowsBundles(isGpuBuild);
+    if (isWindows) {
+      const publishStage = stage('发布外置分包', '把分包与 helper 摆到安装包同级目录');
+      await publishExternalWindowsBundles(isGpuBuild);
+      stageDone(publishStage);
+    } else {
+      // publishExternalWindowsBundles 在非 Windows 直接返回；Linux 走 resources 内嵌。
+      stageSkipped('发布外置分包', '仅 Windows 走外置分包；Linux 把分包作为 resources 内嵌');
+    }
   }
 
+  printSummary();
   process.exit(tauriExitCode);
 }
 
 main().catch((error) => {
   console.error(error instanceof Error ? error.message : String(error));
+  console.error(`[tauri] 失败于第 ${stageIndex}/${stageTotal} 步（见上面的阶段头）`);
+  printSummary();
   process.exit(1);
 });
+

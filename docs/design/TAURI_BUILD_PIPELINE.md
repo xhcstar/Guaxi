@@ -239,7 +239,7 @@ release
 - **S2 必须在 S4 之前**：`prepare_utils_zip` 生成的清单要先进位，S4 里 `build.rs` 才能「信任清单」而不是重扫十几万文件。
 - **S3 为什么要单独设环境变量**：helper 也是本包的一个 bin，release 编译会再触发一次 `build.rs`。所以 S3 无条件传 `GUAXI_SKIP_BUNDLE_PREPARE=1`（分包要么已在 S2 备好、要么马上由 S4 处理），否则会出现「主流程已备好分包，helper 又重打一遍」。`skip` 的判断在 `reuse` 之前，因此这里不需要再叠加 `GUAXI_REUSE_UTILS_ZIP`。
 - **S4 传给 `tauri` 的环境**：`GUAXI_REUSE_UTILS_ZIP=1`（让 `build.rs` 信任刚生成的清单）；GPU 构建再加 `SHERPA_ONNX_LIB_DIR`（只注入这一层，不能挂到 `process.env`，否则前面以默认 `static` 特性跑的辅助构建会找不到静态库）。
-- **Windows 内存优化**：`releaseCargoEnv()` 在 Windows 上固定 `CARGO_BUILD_JOBS=1`、`CARGO_INCREMENTAL=0`。这个 crate 的 release 链接/codegen 峰值很高，串行化 + 关增量能显著降低 rustc/LLVM OOM 概率。
+- **Windows 内存优化**：`releaseCargoEnv()` 在 Windows 上固定 `CARGO_BUILD_JOBS=4`（可用同名环境变量覆盖）、`CARGO_INCREMENTAL=0`。这个 crate 的 release 链接/codegen 峰值很高，限制并行度 + 关增量能降低 rustc/LLVM OOM 概率。
 
 ### 6.2 环境变量一览
 
@@ -272,6 +272,70 @@ src-tauri/target/release/bundle/nsis/
 ```
 
 `README_utils_bundles.txt` 由编排层生成，列出每个分包的文件名与字节数，发版时用来核对「带出去的到底是不是这一版」。
+
+### 6.4 构建日志怎么读
+
+打包链路上有几段天然很慢又没什么输出（扫十几万文件、把几 GB 数据压成 `tar.zst`、`makensis`
+封安装包）。以前这些阶段只有结束时的摘要，中途终端完全空白，很容易被当成卡死。现在分三层
+输出：**阶段头**（编排层）、**进度行**（Rust 分包工具）、**心跳**（子进程长时间无输出时）。
+
+正常输出长这样（GPU 构建、部分分包需要重压）：
+
+```text
+[tauri] 启动 build -- --no-default-features --features gpu · 平台 win32 · GPU(shared) · 共 10 步
+
+[tauri] [1/10] Codex 侧车 · src-tauri/utils/codex，缺失只告警不阻断
+[tauri] [1/10] Codex 侧车 完成 · 0.2s
+...
+[tauri] [7/10] utils 外置分包 · 扫描 12 万文件并压成 tar.zst
+[tauri]     首次或源文件变动时这一步最慢（分钟级）；未变的分包会按摘要自动跳过。
+[utils.bundle] 开始扫描 · source=D:\...\src-tauri\utils · bundleDir=...\__bundles
+[utils.bundle] 扫描中 · 已遍历 60000 个文件条目 · 用时 8.2s
+[utils.bundle] 扫描完成 · 9 个分包 · 120974 个条目 · 4.32 GB · 用时 16.4s
+[utils.bundle] 开始压缩 · 复用 7 个（摘要未变）· 重压 2 个（860 MB）· 每包 3 线程 / 共 32 核
+[utils.bundle] 压缩中 46% · 9200/12000 文件 · 396 MB / 860 MB · 461 MB /s / 已用 0.9s
+[utils.bundle] 完成 Models/asr/sense-voice.tar.zst · 812 MB → 76 MB（9%）· 12 个条目 · 4.1s
+[utils.bundle] 压缩完成 · 2 个分包 · 860 MB 原始 → 132 MB 归档 · 用时 8.6s
+[tauri] [7/10] utils 外置分包 完成 · 25.0s
+```
+
+三层日志各自回答一个问题：
+
+| 前缀 | 谁打印 | 回答什么 |
+|---|---|---|
+| `[tauri] [i/N] …` | `tools/run_tauri_with_utils.mjs` | 现在在第几步、这一步做什么、离结束还有几步 |
+| `[utils.bundle]` / `[cuda.bundle]` | `utils_zip_support.rs` | 扫描/压缩/解包的具体进度、每个分包的大小与耗时 |
+| `[tauri]     …` | 心跳 | 子进程（编译、`makensis`）长时间没输出时，报一次已用时间 |
+| `cargo:warning=[build.rs]` | `src-tauri/build.rs` | 直接 `cargo build` 时的等价信息（build 脚本 stdout 会被 cargo 吞掉） |
+
+结束时还有一张阶段耗时表，定位「这次比上次慢在哪一步」：
+
+```text
+[tauri] ───── 构建结束 · 总用时 12m04s ─────
+[tauri]   Codex 侧车                     0.2s
+[tauri]   utils 外置分包                 25.0s
+[tauri]   Tauri 构建与打包               10m31s
+[tauri]   发布外置分包                   18.4s
+```
+
+**哪些「空白」是正常的**
+
+| 现象 | 说明 |
+|---|---|
+| `Compiling foo v0.1.0` 停在同一行几分钟 | rustc 在处理大 crate（`guaxi` 本体、`pdfium`、`sherpa-onnx-sys`），心跳会按时冒一行 |
+| `Finished release [optimized]` 之后没有输出 | `makensis` 在压缩安装包，CPU 在跑但 NSIS 不打印进度；utils 已外置，通常 1–3 分钟 |
+| 首次构建 `prepare_cuda_runtime_bundle` 很慢 | 2.8 GB DLL 压缩，release 版的 zstd 约 300–600 MB/s |
+| 第二次构建几乎没有 `[utils.bundle]` 压缩行 | 源文件未变，分包按摘要复用，只剩扫描（或用 `--reuse-utils-zip` 连扫描也跳过） |
+
+**相关开关**
+
+| 环境变量 | 作用 |
+|---|---|
+| `GUAXI_BUILD_HEARTBEAT_MS` | 心跳间隔，默认 `20000`；设 `0` 关闭 |
+| `GUAXI_BUILD_VERBOSE=1` | 打印每一步的完整命令行，以及「复用已编译的 bin / 需要重新 cargo build」的判断 |
+| `GUAXI_BUNDLE_LOG=quiet` | 关掉 Rust 侧的进度行，只保留摘要（CI 用） |
+| `GUAXI_SKIP_BUNDLE_PREPARE=1` | 让 `build.rs` 完全跳过分包准备（编排层给辅助 bin 用的，不建议手工设置） |
+
 
 ---
 

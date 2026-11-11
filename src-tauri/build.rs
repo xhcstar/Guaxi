@@ -91,6 +91,10 @@ fn main() {
         println!("cargo:rustc-link-arg-bins=/STACK:16777216");
     }
 
+    // build 脚本的 stdout 会被 cargo 吞掉，只有 `cargo:warning=` 能显示出来；
+    // 让分包工具把进度按这个格式输出，直接 `cargo build --release` 也能看到进展。
+    utils_zip_support::set_progress_mode(utils_zip_support::ProgressMode::CargoWarning);
+
     // Cargo runs this script before compiling the main Tauri crate.
     // We use it as a release-mode safety net: even if the outer npm wrapper
     // was skipped, a release build still gets the external utils bundles.
@@ -98,6 +102,7 @@ fn main() {
         PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").expect("missing CARGO_MANIFEST_DIR"));
     // 必须排在 preview_asset_version 之前：那个指纹会遍历 assets/vendor 下的全部文件，
     // 产物若此时还不存在，算出来的版本号就是错的（且 include_str! 会直接编译失败）。
+    let build_script_started = std::time::Instant::now();
     ensure_chart_preview_bundle(&manifest_dir);
     let utils_dir = manifest_dir.join("utils");
     let profile = std::env::var("PROFILE").unwrap_or_default();
@@ -115,6 +120,10 @@ fn main() {
     println!("cargo:rerun-if-env-changed=GUAXI_SKIP_BUNDLE_PREPARE");
     println!("cargo:rerun-if-env-changed=PROFILE");
 
+    println!(
+        "cargo:warning=[build.rs] 开始 · profile={profile} · reuseUtilsZip={reuse_existing} · skipBundlePrepare={skip_bundle_prepare}"
+    );
+
     // 浏览器预览页把 vendor 资源以 `?v=<内容指纹>` 引入并允许浏览器永久缓存，
     // 指纹必须随资源内容变化，否则升级后浏览器会一直用旧的 mermaid / ECharts。
     println!(
@@ -124,6 +133,10 @@ fn main() {
 
     if skip_bundle_prepare {
         println!("cargo:warning=[utils.bundle] skipped by GUAXI_SKIP_BUNDLE_PREPARE");
+        println!(
+            "cargo:warning=[build.rs] 前置准备完成 · 用时 {:.1}s · 进入 tauri_build::build()",
+            build_script_started.elapsed().as_secs_f64()
+        );
         tauri_build::build();
         return;
     }
@@ -161,5 +174,9 @@ fn main() {
         // Keep the debug log explicit so developers know the skip is intentional.
         println!("cargo:warning=[utils.bundle] skipped in debug profile");
     }
+    println!(
+        "cargo:warning=[build.rs] 前置准备完成 · 用时 {:.1}s · 进入 tauri_build::build()",
+        build_script_started.elapsed().as_secs_f64()
+    );
     tauri_build::build()
 }

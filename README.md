@@ -428,6 +428,7 @@ Guaxi stands on these projects (a selection, grouped by role):
 | Resources reported missing after a Linux install | Check that `utils/__bundles` was packaged as resources. First launch extracts it and writes `.guaxi_utils_extract_complete` next to `utils`; leftover `utils.__extracting_*` directories are resumed or cleaned up on the next launch |
 | "Resource missing" in dev although the files are clearly there | Code built the path by hand instead of going through `ensure_relative_dir()`; route it through that entry point |
 | GPU build still runs on CPU | CUDA runtime DLLs missing or the driver is outdated; rerun `npm run sherpa:fetch:cuda`, rebuild, and check the self-check exit code |
+| Build appears frozen during packaging | It is usually the `utils` scan/compression or `makensis`; the wrapper prints a stage header, progress lines and a 20 s heartbeat. Silence longer than a heartbeat with no CPU use means a real hang. See [build log guide](docs/design/TAURI_BUILD_PIPELINE.md#64-构建日志怎么读) (Chinese) |
 
 The complete troubleshooting table is [chapter 11 of the build doc](docs/design/TAURI_BUILD_PIPELINE.md#11-排错速查) (Chinese).
 
