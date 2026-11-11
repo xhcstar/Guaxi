@@ -156,6 +156,22 @@ defineEmits(['update:active', 'close', 'resize-start'])
   min-height: 0;
   overflow: auto;
   padding: 6px 4px 12px;
+  display: flex;
+  flex-direction: column;
+}
+
+/*
+ * 插槽内容撑满侧栏高度。
+ *
+ * 大纲面板（GuaxiOutline）是「搜索框 + flex:1 的可滚动树」的结构，自身靠 height:100%
+ * 取高度；而各阅读器都习惯在插槽外面再套一层 `<div @click.stop>`。那层 div 默认按内容
+ * 定高，百分比高度失去参照，树区（flex:1 1 0 + height:0）就塌成 0 —— 面板里只剩一个
+ * 搜索框，大纲一条也看不见。让插槽根节点成为撑满的 flex 子项，大纲树才有高度参照。
+ * 只撑大、不压缩（flex-shrink: 0）：书签/笔记列表超长时仍按内容定高，由本容器滚动。
+ */
+:slotted(*) {
+  flex: 1 0 auto;
+  min-height: 0;
 }
 
 /* 拖拽把手压在右边框上：1px 的边框不好瞄准，给一条 5px 的透明热区。 */

@@ -871,22 +871,17 @@ const focusSearchInput = async (reason = 'shortcut') => {
 }
 
 /**
- * 平滑滚动到指定位置，页面不可见时退回瞬时滚动。
+ * 跳转落位：直接把目标位置写进 scrollTop，不做平滑滚动。
  *
- * 为什么需要这层包装：WebView2 在窗口最小化 / 被系统节流 / 文档隐藏时会**整次丢弃**
- * `behavior:'smooth'` 的滚动调用——实测同一容器 smooth 滚到 3,000,000 后 scrollTop
- * 仍是 0，而同步赋值立刻到位。跳页、搜索命中、大纲跳转、正反向定位全走这里，
- * 不加兜底就会表现成「点了完全没反应」，而且只在用户切走窗口再回来时偶发。
+ * 翻页 / 大纲 / 链接 / 搜索命中都是一次「定位」，不是一段浏览过程：平滑滚动在几百页
+ * 的文档里要滚上半秒，途中不断挂载、释放页面并触发整页栅格化，越厚的书越像卡死；
+ * EPUB 阅读器同样是直接落位，匀速掠过几十页没有任何信息量。同步赋值还顺带绕开了
+ * WebView2 在窗口不可见时整次丢弃 smooth 滚动的问题。
  */
-const smoothScrollTo = (el, top, reason) => {
+const jumpScrollTo = (el, top, reason) => {
   if (!el) return
-  const hidden = typeof document !== 'undefined' && document.visibilityState === 'hidden'
-  if (hidden) {
-    el.scrollTop = Math.max(0, top)
-    logger.debug('PDF跳转（页面不可见，瞬时落位）', { reason, top })
-    return
-  }
-  el.scrollTo({ top: Math.max(0, top), behavior: 'smooth' })
+  el.scrollTop = Math.max(0, top)
+  logger.debug('PDF跳转落位', { reason, top })
 }
 
 const scrollViewerBy = (deltaY, reason) => {
@@ -1868,9 +1863,11 @@ const scrollToPagePoint = (pageNum, yPt) => {
   // 跳转前把「离开的位置」记进阅读历史：搜索命中、大纲、外链都走这里。
   readingHistory.markJump()
   const target = item.top + yPt * cssScale.value - el.clientHeight * 0.35
-  recomputeWindow()
-  smoothScrollTo(el, target, 'page-point')
-  scheduleRenderVisible()
+  jumpScrollTo(el, target, 'page-point')
+  // 瞬时落位不会产生逐步的 scroll 过程，窗口和渲染都得在这里主动跟上：
+  // 否则落地首帧挂着的仍是旧页，要点的那一页要等下一次滚动事件才进 DOM。
+  updateVisible()
+  renderVisible()
 }
 
 const showFlashBox = (box) => {
@@ -1937,32 +1934,27 @@ const goToPage = (n, { align = 'top' } = {}) => {
   // 视觉上留一截空白。直接贴顶更符合「跳到第一页」的预期。
   const top = num === 1 ? 0 : Math.max(0, item.top - offset)
 
-  // 翻页 / 页码输入 / 目录跳转都从这里发出：先把离开的位置记进历史再滚。
+  // 翻页 / 页码输入 / 目录跳转都从这里发出：先把离开的位置记进历史再跳。
   readingHistory.markJump()
 
-  // 滚过去之后窗口会重算并挂载目标页；这里先把「当前页」定下来，
-  // 避免滚动动画期间页码指示器还停在旧值。
   currentPage.value = num
   syncPageInput()
   emit('page-change', num)
 
-  // 立即重算一次窗口：平滑滚动的第一帧之前就把目标页放进 DOM，
-  // 用户不会看到一屏空白再慢慢填内容。
-  recomputeWindow()
-
   // 目标页高优先级渲染，并顺带预热它的前后一页。
   // 翻页是「可预测的下一步」，提前把邻页栅格化好，连翻时就不再每页都等一次骨架。
-  // 这里不 await：骨架只是兜底，真实目标是滚动动画停止时图已经在解码缓存里。
+  // 这里不 await：骨架只是兜底，真实目标是落地那一帧图已经在解码缓存里。
   const target = pages[num - 1]
   if (target) {
     doc.renderPage(target, renderDpi.value)
     doc.prefetchAdjacent(target, renderDpi.value)
   }
 
-  smoothScrollTo(el, top, 'go-to-page')
-
-  // 滚动结束后再校准一次（滚动过程中布局可能因图片加载而变化）。
-  scheduleRenderVisible()
+  jumpScrollTo(el, top, 'go-to-page')
+  // 瞬时落位后同步重算窗口、挂载并渲染目标页：跳过去的下一帧就该是新内容，
+  // 不能等 scroll 事件再到（那样会先闪一帧旧页）。
+  updateVisible()
+  renderVisible()
   logger.info('PDF页码跳转完成', { targetPage: num, totalPages: totalPages.value, top })
 }
 
