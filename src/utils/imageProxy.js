@@ -28,8 +28,12 @@ const HTTP_SCHEME_RE = /^https?:\/\//i
  */
 export function proxiedImageUrl(url) {
   if (!url) return ''
-  const trimmed = url.trim()
+  let trimmed = url.trim()
   if (!trimmed) return ''
+  // 协议相对地址（`//cdn.example.com/a.png`）在 WebView 里会被解析到应用自己的
+  // origin（tauri://localhost，dev 下是 localhost:1420），那里没有这张图，请求必然失败。
+  // RSS 源里这种写法很常见，补上协议后再走代理。
+  if (trimmed.startsWith('//')) trimmed = `https:${trimmed}`
   if (INLINE_SCHEME_RE.test(trimmed)) return trimmed
   if (LOCAL_HOST_RE.test(trimmed)) return trimmed
   if (!HTTP_SCHEME_RE.test(trimmed)) return trimmed

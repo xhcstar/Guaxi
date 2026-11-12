@@ -251,6 +251,22 @@ fn remote_proxy_url(url: &str) -> String {
     )
 }
 
+/// Tauri asset 协议地址（前端 `convertFileSrc()` 的产物）。
+///
+/// 阅读器在渲染前会把相对路径图片转成 asset 地址，让 WebView 通过 assetProtocol
+/// 直接读盘。这类地址**不是外链**：`asset.localhost` 解析到回环地址，交给远程图片
+/// 代理只会被 SSRF 防护拒掉（"拒绝代理内网或本机地址"），整张图退化成破图占位。
+/// 各阅读器的 Markdown 图片长期显示「图片无法加载」就是这个原因。
+///
+/// 原样保留即可：CSP 的 img-src 与 tauri.conf.json 的 assetProtocol scope 都已放行。
+fn is_local_asset_url(url: &str) -> bool {
+    let lower = url.to_ascii_lowercase();
+    lower.starts_with("http://asset.localhost/")
+        || lower.starts_with("https://asset.localhost/")
+        || lower.starts_with("asset://localhost/")
+        || lower.starts_with("asset://")
+}
+
 /// 把本地图片路径解析成 `serve_image` 能放行并服务的 URL。
 /// 解析失败（没有 base_path、文件不存在）返回 None，由调用方决定降级方式。
 fn resolve_local_image_url(img_path: &str, base_path: &Path) -> Option<String> {
@@ -307,10 +323,11 @@ fn proxy_html_images(content: &str, base_path: &Path, mappings: &mut Vec<ImageMa
             if url.is_empty() {
                 return tag;
             }
-            // 已经是本地服务或内联数据，原样保留。
+            // 已经是本地服务、本地 asset 协议或内联数据，原样保留。
             if url.starts_with("http://localhost:8888/")
                 || url.starts_with("data:")
                 || url.starts_with("blob:")
+                || is_local_asset_url(url)
             {
                 return tag;
             }
@@ -370,10 +387,11 @@ fn process_image_paths(content: &str, base_path: &Path) -> (String, Vec<ImageMap
             let title = caps.get(3).map(|m| m.as_str()).unwrap_or("");
             let keep = || caps.get(0).map(|m| m.as_str().to_string()).unwrap_or_default();
 
-            // 已经是内联数据或本地服务地址，原样保留。
+            // 已经是本地服务、本地 asset 协议或内联数据，原样保留。
             if img_path.starts_with("data:")
                 || img_path.starts_with("blob:")
                 || img_path.starts_with("http://localhost:8888/")
+                || is_local_asset_url(img_path)
             {
                 return keep();
             }
@@ -429,11 +447,23 @@ fn process_all_images(content: &str, base_path: &Path) -> (String, Vec<ImageMapp
     (processed, mappings)
 }
 
+/// 解析调用方给的基准路径。
+///
+/// 约定是「目录」，但调用方历史上有的传的是文档**文件**路径（任务/org 预览把
+/// `documentPath` 直接传下来）。拿文件路径去 join `./images/x.png` 会拼成
+/// `<文件>/images/x.png`，永远解析不到。这里统一归一：是存在的文件就取它所在目录。
 fn resolve_base_path(req: &MarkdownRequest) -> PathBuf {
-    req.base_path
+    let path = req
+        .base_path
         .as_ref()
         .map(PathBuf::from)
-        .unwrap_or_default()
+        .unwrap_or_default();
+    if path.is_file() {
+        if let Some(parent) = path.parent() {
+            return parent.to_path_buf();
+        }
+    }
+    path
 }
 
 #[post("/api/markdown/image_process")]
@@ -865,6 +895,44 @@ fn remote_image_content_type(ext: &str) -> &'static str {
     }
 }
 
+/// 按文件头识别图片类型，作为 Content-Type 的兜底。
+///
+/// 不少图床/CDN 不按图片类型返回响应头（实测 img.36krcdn.com 对一张 PNG 返回
+/// `application/octet-stream`）。只信头部的话，明明是图片的内容会被当成
+/// "不是图片类型" 拒掉，最终显示破图占位 —— 这类外链图片「怎么都加载不出来」
+/// 就是被这里拦下的。字节已经到了，用魔数判断比相信头部可靠。
+fn sniff_image_ext(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.starts_with(&[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a]) {
+        return Some("png");
+    }
+    if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        return Some("jpg");
+    }
+    if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        return Some("gif");
+    }
+    if bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+        return Some("webp");
+    }
+    if bytes.starts_with(b"BM") {
+        return Some("bmp");
+    }
+    // AVIF/AVIS：ISO BMFF，第 5..8 字节是 "ftyp"，随后是品牌名。
+    if bytes.len() >= 12
+        && &bytes[4..8] == b"ftyp"
+        && (&bytes[8..12] == b"avif" || &bytes[8..12] == b"avis" || &bytes[8..12] == b"mif1")
+    {
+        return Some("avif");
+    }
+    let head = &bytes[..bytes.len().min(1024)];
+    if let Ok(text) = std::str::from_utf8(head) {
+        if text.trim_start().starts_with("<svg") {
+            return Some("svg");
+        }
+    }
+    None
+}
+
 fn ip_is_forbidden(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(v4) => {
@@ -1011,8 +1079,8 @@ async fn fetch_remote_image(url_str: &str) -> Result<(String, Vec<u8>), String> 
         .and_then(|v| v.to_str().ok())
         .unwrap_or("")
         .to_string();
-    let ext = remote_image_ext(&content_type)
-        .ok_or_else(|| format!("不是图片类型: {content_type}"))?;
+    // 头部只是优先线索：真正的类型判断放到读完字节之后（见下面的 sniff 兜底）。
+    let ext_by_header = remote_image_ext(&content_type);
     if let Some(len) = resp.content_length() {
         if len as usize > REMOTE_IMAGE_MAX_BYTES {
             return Err("图片过大".to_string());
@@ -1022,6 +1090,9 @@ async fn fetch_remote_image(url_str: &str) -> Result<(String, Vec<u8>), String> 
     if bytes.len() > REMOTE_IMAGE_MAX_BYTES {
         return Err("图片过大".to_string());
     }
+    let ext = ext_by_header
+        .or_else(|| sniff_image_ext(&bytes))
+        .ok_or_else(|| format!("不是图片类型: {content_type}"))?;
 
     if let Some(dir) = remote_image_cache_dir() {
         let key = remote_image_cache_key(url_str);
@@ -1244,6 +1315,69 @@ mod tests {
         let out = proxy_html_images(html, Path::new(""), &mut mappings);
         assert_eq!(out, html);
         assert!(mappings.is_empty());
+    }
+
+    #[test]
+    fn tauri_asset_urls_are_left_alone() {
+        // 阅读器把相对图片转成 asset 协议地址交给 WebView 直读。这类地址不是外链：
+        // 交给远程代理会被 SSRF 防护拒掉（asset.localhost 解析到回环地址），
+        // 整张图退化成破图占位 —— 各阅读器 Markdown 图片集体「无法加载」的根因。
+        let md = "![a](http://asset.localhost/D%3A%5Ctmp%5Ca.png)";
+        let (out, mappings) = process_image_paths(md, Path::new(""));
+        assert_eq!(out, md);
+        assert!(mappings.is_empty());
+
+        let mut mappings = Vec::new();
+        let html = r#"<img src="http://asset.localhost/D%3A%5Ctmp%5Ca.png">"#;
+        let out = proxy_html_images(html, Path::new(""), &mut mappings);
+        assert_eq!(out, html);
+        assert!(mappings.is_empty());
+
+        assert!(is_local_asset_url("asset://localhost/tmp/a.png"));
+        assert!(is_local_asset_url("https://asset.localhost/tmp/a.png"));
+        assert!(!is_local_asset_url("https://example.com/a.png"));
+    }
+
+    #[test]
+    fn sniffs_image_type_when_header_lies() {
+        // 实测 36kr CDN：PNG 内容 + application/octet-stream 响应头。
+        let png = [0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0];
+        assert_eq!(sniff_image_ext(&png), Some("png"));
+        assert_eq!(sniff_image_ext(&[0xFF, 0xD8, 0xFF, 0xE0]), Some("jpg"));
+        assert_eq!(sniff_image_ext(b"GIF89a......"), Some("gif"));
+        assert_eq!(sniff_image_ext(b"RIFF\0\0\0\0WEBPVP8 "), Some("webp"));
+        assert_eq!(sniff_image_ext(b"\0\0\0\x1cftypavif"), Some("avif"));
+        assert_eq!(
+            sniff_image_ext(b"<svg xmlns=\"http://www.w3.org/2000/svg\">"),
+            Some("svg")
+        );
+        // HTML 错误页不能当成图片收下。
+        assert_eq!(sniff_image_ext(b"<html><body>404</body></html>"), None);
+        assert_eq!(sniff_image_ext(b""), None);
+    }
+
+    #[test]
+    fn base_path_normalizes_document_file_to_its_directory() {
+        let dir = std::env::temp_dir().join(format!("guaxi-basepath-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let doc = dir.join("note.md");
+        std::fs::write(&doc, b"# t").unwrap();
+
+        // 传文件路径（任务/org 预览就是这样传的）→ 归一成所在目录。
+        let req = MarkdownRequest {
+            content: String::new(),
+            base_path: Some(doc.to_string_lossy().to_string()),
+        };
+        assert_eq!(resolve_base_path(&req), dir);
+
+        // 本来就是目录：原样保留。
+        let req = MarkdownRequest {
+            content: String::new(),
+            base_path: Some(dir.to_string_lossy().to_string()),
+        };
+        assert_eq!(resolve_base_path(&req), dir);
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
