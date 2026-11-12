@@ -14017,9 +14017,16 @@ function countLines(text) {
 
 // 当前文档语言（Monaco languageId）。工具栏按它决定显示哪些按钮、插入什么语法。
 // 别名保持 14006 那个函数原来的名字与语义，只是把「仅 markdown」放宽为「工具栏支持的语言」。
+//
+// 必须显式读一次 editorStore.language：computed 只在「响应式依赖」变化时重算，
+// 而 editor 实例和它的 model 都是普通对象。只在里面读 model 的话，首次渲染
+// （Monaco 还没创建）算出的 other 会被永久缓存，切换文件也不会重算 ——
+// 结果是工具栏上所有格式按钮（都受 v-if 控制）一直不出现，只剩未受控的撤销/重做。
+// editorStore.language 由 activateEditorLanguageFeatures 在模型/语言切换时更新，是这条链路的响应式信号。
 const currentToolbarLanguage = computed(() => {
+  const publishedLanguage = editorStore.language
   const model = getActiveEditor()?.getModel?.() || editor?.getModel?.()
-  return normalizeToolbarLanguage(model?.getLanguageId?.() || '')
+  return normalizeToolbarLanguage(model?.getLanguageId?.() || publishedLanguage)
 })
 
 // 工具栏动作是否对当前语言可用（模板里 v-if 用）。
