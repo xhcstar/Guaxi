@@ -1526,7 +1526,7 @@ import { GUAXI_SHORTCUTS, matchesShortcut, shortcutText } from '../../composable
 import GuaxiOrgTaskPreview from './GuaxiOrgTaskPreview.vue'
 import { validateTaskBlocks, parseTaskBlocks, serializeBlock, replaceBlockInContent, buildNewBlock } from '../../utils/guaxiTaskParser'
 import GuaxiTerminalPanel from './GuaxiTerminalPanel.vue'
-import { EXPORT_SHELL_CSS, EXPORT_PYCELL_CSS, buildExportCodeThemeCss, buildExportFigureCss } from './guaxiExportStyles'
+import { EXPORT_SHELL_CSS, EXPORT_PYCELL_CSS, buildExportCodeThemeCss, buildExportFigureCss, buildPandocSyntaxTheme } from './guaxiExportStyles'
 import { upgradeHtmlCodeBlocks } from '../../monaco/previewTokenHighlight'
 import { NTooltip, NIcon, useMessage, NDropdown, NPopover, NInputNumber, NBreadcrumb, NBreadcrumbItem, NSelect } from 'naive-ui'
 import { Icon } from '@iconify/vue'
@@ -6853,7 +6853,9 @@ const installMonacoLinkLikeDecorations = (targetEditor, { tag = 'left' } = {}) =
   let timerId = null;
 
   const wikiRe = /\[\[[^\]]+?\]\]/g;
-  const mdInlineLinkRe = /\[([^\]\n]+?)\]\(\s*([^\s)]+)(?:\s+"[^"]*")?\s*\)/g;
+  // 文本部分允许出现完整的图片语法：[![alt](img)](url)。
+  // 否则 `[^\]\n]+?` 会停在图片自己的 `]`，把内层图片地址当成外层链接目标着色。
+  const mdInlineLinkRe = /\[((?:!\[[^\]\n]*\]\([^\s)]*(?:\s+"[^"]*")?\)|[^\]\n])+?)\]\(\s*([^\s)]+)(?:\s+"[^"]*")?\s*\)/g;
   const mdRefLinkRe = /\[([^\]\n]+?)\]\s*\[([^\]\n]*?)\]/g;
   const mdAutoLinkUrlRe = /<((?:https?|ftp):\/\/[^>\s]+)>/g;
   const mdAutoLinkEmailRe = /<((?:mailto:)?[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*)>/g;
@@ -6964,8 +6966,9 @@ const installMonacoLinkLikeDecorations = (targetEditor, { tag = 'left' } = {}) =
         const whole = String(m[0] || '');
         const startWhole = Number(m.index || 0);
 
-        const closeBracketRel = whole.indexOf(']');
-        if (closeBracketRel < 1) continue;
+        // 文本里可能有嵌套的图片语法，`]` 不能取第一个匹配到的（那属于内层图片）。
+        const closeBracketRel = 1 + rawText.length;
+        if (whole.charAt(closeBracketRel) !== ']') continue;
 
         const openParenRel = whole.indexOf('(', closeBracketRel);
         const closeParenRel = whole.lastIndexOf(')');
@@ -6973,7 +6976,45 @@ const installMonacoLinkLikeDecorations = (targetEditor, { tag = 'left' } = {}) =
 
         // '[' text ']'
         decs.push({ range: new monaco.Range(ln, startWhole + 1, ln, startWhole + 2), options: { inlineClassName: classMdBracket, stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges } });
-        if (rawText) decs.push({ range: new monaco.Range(ln, startWhole + 2, ln, startWhole + closeBracketRel + 1), options: { inlineClassName: classMdText, stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges } });
+        // 链接文本里嵌图片（[![alt](img)](url)）时按图片语法拆开着色：
+        // 否则 `![`、括号和图片地址会跟链接文本同色，与普通图片语法的配色不一致。
+        const textCol = startWhole + 2;
+        const nestedImageRe = /!\[([^\]\n]*)\]\(([^\s)]*)((?:\s+"[^"]*")?)\)/g;
+        let textCursor = 0;
+        let hasNestedImage = false;
+        for (const im of rawText.matchAll(nestedImageRe)) {
+          hasNestedImage = true;
+          const imgStart = Number(im.index || 0);
+          const imgRaw = String(im[0] || '');
+          const imgAlt = String(im[1] || '');
+          const imgSrc = String(im[2] || '');
+          const imgEnd = imgStart + imgRaw.length;
+
+          if (imgStart > textCursor) {
+            decs.push({ range: new monaco.Range(ln, textCol + textCursor, ln, textCol + imgStart), options: { inlineClassName: classMdText, stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges } });
+          }
+
+          // '!' 保持普通文本色，'[' alt ']'
+          const altRel = imgStart + 2;
+          decs.push({ range: new monaco.Range(ln, textCol + imgStart + 1, ln, textCol + imgStart + 2), options: { inlineClassName: classMdBracket, stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges } });
+          if (imgAlt) decs.push({ range: new monaco.Range(ln, textCol + altRel, ln, textCol + altRel + imgAlt.length), options: { inlineClassName: classMdText, stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges } });
+          const imgCloseBracket = imgStart + 2 + imgAlt.length;
+          decs.push({ range: new monaco.Range(ln, textCol + imgCloseBracket, ln, textCol + imgCloseBracket + 1), options: { inlineClassName: classMdBracket, stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges } });
+
+          // '(' src ')'
+          const imgOpenParen = imgCloseBracket + 1;
+          decs.push({ range: new monaco.Range(ln, textCol + imgOpenParen, ln, textCol + imgOpenParen + 1), options: { inlineClassName: classMdParen, stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges } });
+          const imgSrcRel = imgSrc ? imgStart + imgRaw.indexOf(imgSrc) : -1;
+          if (imgSrcRel >= 0) decs.push({ range: new monaco.Range(ln, textCol + imgSrcRel, ln, textCol + imgSrcRel + imgSrc.length), options: { inlineClassName: classMdTarget, stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges } });
+          decs.push({ range: new monaco.Range(ln, textCol + imgEnd - 1, ln, textCol + imgEnd), options: { inlineClassName: classMdParen, stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges } });
+
+          textCursor = imgEnd;
+        }
+        if (!hasNestedImage) {
+          if (rawText) decs.push({ range: new monaco.Range(ln, textCol, ln, textCol + rawText.length), options: { inlineClassName: classMdText, stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges } });
+        } else if (textCursor < rawText.length) {
+          decs.push({ range: new monaco.Range(ln, textCol + textCursor, ln, textCol + rawText.length), options: { inlineClassName: classMdText, stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges } });
+        }
         decs.push({ range: new monaco.Range(ln, startWhole + closeBracketRel + 1, ln, startWhole + closeBracketRel + 2), options: { inlineClassName: classMdBracket, stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges } });
 
         // '(' target ')'（括号不下划线）
@@ -20296,13 +20337,12 @@ const hasPreviewTocMarker = (markdown = '') => /^\s*(?:\[\[\s*(?:toc|目录)\s*\
 // 1. 编辑器预览与探索者模式一样，Markdown 主体渲染是最耗时的一段，适合搬到 Worker 里做。
 // 2. 主线程只保留 Mermaid 与数学节点的轻量收尾，这样输入时卡顿会明显下降。
 // 3. Worker 不可用时自动回退到主线程，保证功能不退化。
+// 代码块只做普通高亮：预览里不再提供「运行 / 运行并写回 / 显示结果」工具条（该功能已废弃）。
 const buildPreviewMarkdownRenderOptions = (options = {}) => ({
   basePath: options.basePath || '',
   mermaid: true,
   math: true,
   codeHighlight: true,
-  pythonCells: true,
-  codeCells: true,
   theme: options.theme || getMarkdownPreviewThemeName(),
 })
 
@@ -23729,6 +23769,33 @@ const exportMarkdownRenderedPdf = async (context, outputPath) => {
 const MERMAID_EXPORT_FONT_FAMILY =
   '"Trebuchet MS", "Noto Sans SC", "Microsoft YaHei", "PingFang SC", "Helvetica Neue", Arial, sans-serif'
 
+// Word 默认正文区（Letter/A4 常见页边距）约 5.8 英寸宽、8 英寸高。图片越过这个盒子
+// 就会被 Word 跨页截断，所以按比例缩进盒子内——宁可小一点，也要整张图完整可见。
+// 宽度取 5.8 而不是 6：pandoc 的 docx 图片宽度上限实测约 5.83 英寸，超过会被它二次缩放。
+const PANDOC_IMAGE_MAX_WIDTH_IN = 5.8
+const PANDOC_IMAGE_MAX_HEIGHT_IN = 8
+const fitPandocImageSize = (widthPx, heightPx) => {
+  const widthIn = Math.max(1, Number(widthPx) || 0) / 96
+  const heightIn = Math.max(1, Number(heightPx) || 0) / 96
+  const scale = Math.min(1, PANDOC_IMAGE_MAX_WIDTH_IN / widthIn, PANDOC_IMAGE_MAX_HEIGHT_IN / heightIn)
+  // 只防 0 尺寸；不再额外抬高下限，否则极端长宽比会被拉宽、比例失真。
+  return {
+    width: Math.max(0.01, widthIn * scale),
+    height: Math.max(0.01, heightIn * scale),
+  }
+}
+
+// pandoc 图片属性：docx/odt 是分页排版，宽高都要给（否则超高图会被 Word 跨页截断）；
+// epub 是流式排版、没有固定页高，沿用原来的“只限宽”逻辑，避免屏幕阅读时把图缩得太小。
+const buildPandocImageSizeAttr = (widthPx, heightPx, format) => {
+  if (format === 'epub') {
+    const widthIn = Math.min(6, Math.max(1, (Number(widthPx) || 0) / 96))
+    return `width=${widthIn.toFixed(2)}in`
+  }
+  const fitSize = fitPandocImageSize(widthPx, heightPx)
+  return `width=${fitSize.width.toFixed(2)}in height=${fitSize.height.toFixed(2)}in`
+}
+
 // 设计说明：
 // mermaid.render 产出的 SVG 偶尔缺少根 xmlns 命名空间，
 // 直接当作 <img> 资源加载时浏览器会判定为非法 SVG 触发 onerror，
@@ -23975,7 +24042,7 @@ const prerenderDisplayMathForPandoc = async (markdown) => {
   return result
 }
 
-const prerenderMermaidForPandoc = async (markdown) => {
+const prerenderMermaidForPandoc = async (markdown, format = '') => {
   const text = String(markdown || '')
 
   // 收集所有 mermaid 代码块（支持 ``` 和 ~~~ 两种围栏）。
@@ -24046,6 +24113,10 @@ const prerenderMermaidForPandoc = async (markdown) => {
         if (!svgEl) throw new Error('mermaid.run produced no svg')
         // 关键：把 SVG 固化成明确的像素尺寸。mermaid 默认给的是 viewBox + style:max-width，
         // 没有 width/height 属性时，作为 <img> 加载再画到 canvas 常常按 0 尺寸绘制 → 栅格化失败/空白。
+        //
+        // 尺寸必须以 viewBox 为准。getBBox() 不能当主依据：gantt 图里它实测会返回二十多万的
+        // 荒谬宽度，拿去当 width 属性后，SVG 内容会被压成画布中间的一条细线（Word/PDF 里
+        // 「甘特图变成竖线」就是这么来的）。只有完全没有 viewBox 时才退回 client 尺寸兜底。
         let bboxWidth = 0
         let bboxHeight = 0
         try {
@@ -24058,10 +24129,12 @@ const prerenderMermaidForPandoc = async (markdown) => {
           })
         }
         const viewBoxParts = String(svgEl.getAttribute('viewBox') || '').split(/[\s,]+/).map(Number)
-        const fallbackWidth = viewBoxParts.length === 4 && Number.isFinite(viewBoxParts[2]) ? viewBoxParts[2] : 0
-        const fallbackHeight = viewBoxParts.length === 4 && Number.isFinite(viewBoxParts[3]) ? viewBoxParts[3] : 0
-        const finalWidth = Math.max(1, bboxWidth || fallbackWidth || Math.ceil(svgEl.clientWidth) || 800)
-        const finalHeight = Math.max(1, bboxHeight || fallbackHeight || Math.ceil(svgEl.clientHeight) || 600)
+        const viewBoxWidth = viewBoxParts.length === 4 && Number.isFinite(viewBoxParts[2]) ? viewBoxParts[2] : 0
+        const viewBoxHeight = viewBoxParts.length === 4 && Number.isFinite(viewBoxParts[3]) ? viewBoxParts[3] : 0
+        const clientWidth = Math.ceil(Number(svgEl.clientWidth) || 0)
+        const clientHeight = Math.ceil(Number(svgEl.clientHeight) || 0)
+        const finalWidth = Math.max(1, viewBoxWidth || clientWidth || bboxWidth || 800)
+        const finalHeight = Math.max(1, viewBoxHeight || clientHeight || bboxHeight || 600)
         svgEl.setAttribute('width', String(finalWidth))
         svgEl.setAttribute('height', String(finalHeight))
         svgEl.style.maxWidth = 'none'
@@ -24070,12 +24143,12 @@ const prerenderMermaidForPandoc = async (markdown) => {
         const png = await rasterizeMermaidSvgToPng(svgEl.outerHTML)
         const filePath = await join(baseDir, `mermaid_${i + 1}.png`)
         await writeFile(filePath, png)
-        // 设计说明（尺寸）：PNG 以 scale=2 栅格化，像素宽是逻辑宽的 2 倍；pandoc/Word 默认按
-        // 像素@96dpi 摆放图片 → 图会大一倍甚至超出页宽。这里用 pandoc 图片属性 {width=..in}
-        // 显式指定显示宽度（只给宽、高按比例自动缩放），并按逻辑宽换算成英寸后封顶到正文宽度(~6in)，
-        // 避免溢出页面。
-        const displayWidthIn = Math.min(6, Math.max(1, finalWidth / 96))
-        const ref = `![mermaid diagram](${filePath.replace(/\\/g, '/')}){width=${displayWidthIn.toFixed(2)}in}`
+        // 设计说明（尺寸）：PNG 以 scale=2 栅格化，pandoc/Word 默认按像素@96dpi 摆放图片。
+        // 这里按逻辑尺寸换算成英寸，并同时给出宽和高：只给宽度时，超高图会越过页面高度，
+        // Word 会把它拦腰截断到下一页；等比缩进正文区后，整张图才能落在一页里。
+        const sizeAttr = buildPandocImageSizeAttr(finalWidth, finalHeight, format)
+        // 空 alt：pandoc 的 implicit_figures 会用 alt 当图注，成品里不需要「mermaid diagram」这行说明。
+        const ref = `![](${filePath.replace(/\\/g, '/')}){${sizeAttr}}`
         // 用函数式 replace，避免文件路径里出现 $ 时被当成替换占位符。
         // full 里包含触发匹配的换行，替换时补回去，否则相邻段落会被粘成一行。
         result = result.replace(blocks[i].full, () => `${blocks[i].lead}${ref}`)
@@ -24126,11 +24199,17 @@ const svgToPngBlobBytes = async (svgText) => {
   // 逻辑尺寸优先取 viewBox；没有就退 width/height 属性。
   const vb = String(svgText.match(/viewBox=["']([^"']+)["']/i)?.[1] || '').trim().split(/[\s,]+/).map(Number)
   let width = vb.length === 4 && Number.isFinite(vb[2]) && vb[2] > 0 ? vb[2] : 0
+  let height = vb.length === 4 && Number.isFinite(vb[3]) && vb[3] > 0 ? vb[3] : 0
   if (!width) {
     const w = Number(svgText.match(/\bwidth=["']([\d.]+)/i)?.[1])
     if (Number.isFinite(w) && w > 0) width = w
   }
-  return { bytes, width: width || 900 }
+  if (!height) {
+    const h = Number(svgText.match(/\bheight=["']([\d.]+)/i)?.[1])
+    if (Number.isFinite(h) && h > 0) height = h
+  }
+  // height 为 0 表示 SVG 里没有可用的高度信息；调用方此时退回“只给宽”，避免猜错比例导致拉伸。
+  return { bytes, width: width || 900, height: height || 0 }
 }
 
 /**
@@ -24142,7 +24221,7 @@ const svgToPngBlobBytes = async (svgText) => {
  *
  * 尽力而为：单块失败保留源码并记录，绝不阻断导出。
  */
-const prerenderChartEmbedsForPandoc = async (markdown, baseDocPath) => {
+const prerenderChartEmbedsForPandoc = async (markdown, baseDocPath, format = '') => {
   const text = String(markdown || '')
 
   // 围栏必须从行首开始：正文/标题里出现的「```chart」「```excalidraw」字面量
@@ -24185,8 +24264,13 @@ const prerenderChartEmbedsForPandoc = async (markdown, baseDocPath) => {
       const fileName = `${blocks[i].kind}_${i + 1}.png`
       const filePath = await join(baseDir, fileName)
       await writeFile(filePath, png.bytes)
-      const displayWidthIn = Math.min(6, Math.max(1, png.width / 96))
-      const ref = `![${blocks[i].kind}](${filePath.replace(/\\/g, '/')}){width=${displayWidthIn.toFixed(2)}in}`
+      // 与 mermaid 同一套适配：docx/odt 同时给宽高，等比缩进正文区，避免超高图跨页截断。
+      // 拿不到高度时只给宽，交给 pandoc 按图片自身比例换算，绝不用猜的值去拉伸。
+      const sizeAttr = png.height > 0
+        ? buildPandocImageSizeAttr(png.width, png.height, format)
+        : `width=${Math.min(6, Math.max(1, png.width / 96)).toFixed(2)}in`
+      // 空 alt：与 mermaid 同理，避免 pandoc 把「chart」之类文字当成图注写进成品。
+      const ref = `![](${filePath.replace(/\\/g, '/')}){${sizeAttr}}`
       // 函数式 replace：路径里出现 $ 时不会被当成替换占位符；lead 是触发匹配的换行。
       result = result.replace(blocks[i].full, () => `${blocks[i].lead}${ref}`)
       rendered += 1
@@ -24212,6 +24296,33 @@ const prerenderChartEmbedsForPandoc = async (markdown, baseDocPath) => {
   return result
 }
 
+/**
+ * 把当前代码主题的亮色色板写成 pandoc 能读的 `.theme`（JSON）。
+ *
+ * pandoc 的 docx/odt 高亮只认这个文件：不传就会退回 pygments，成品代码块
+ * 与软件内预览是两套配色。写文件失败不阻断导出，退回 pandoc 默认配色。
+ */
+const preparePandocSyntaxThemeFile = async () => {
+  try {
+    const [{ tempDir, join }, { writeFile, mkdir }] = await Promise.all([
+      import('@tauri-apps/api/path'),
+      import('@tauri-apps/plugin-fs'),
+    ])
+    const baseDir = await join(await tempDir(), 'guaxi_export_theme', String(Date.now()))
+    await mkdir(baseDir, { recursive: true })
+    const themePath = await join(baseDir, 'guaxi.theme')
+    const theme = buildPandocSyntaxTheme()
+    await writeFile(themePath, new TextEncoder().encode(JSON.stringify(theme, null, 2)))
+    logger.info('[Export] pandoc syntax theme prepared', { themePath })
+    return themePath
+  } catch (error) {
+    logger.warn('[Export] prepare pandoc syntax theme failed, fall back to pandoc default', {
+      error: String(error?.message || error),
+    })
+    return null
+  }
+}
+
 const exportMarkdownPandoc = async (context, outputPath) => {
   logger.info('[Export] export markdown via pandoc', {
     inputPath: context.inputPath,
@@ -24221,9 +24332,9 @@ const exportMarkdownPandoc = async (context, outputPath) => {
 
   // 只有当确实把 mermaid 替换成图片后才传 sourceMarkdown；否则保持后端从磁盘读原文的既有行为。
   const originalMarkdown = String(context?.markdown || '')
-  let processedMarkdown = await prerenderMermaidForPandoc(originalMarkdown)
+  let processedMarkdown = await prerenderMermaidForPandoc(originalMarkdown, context.format)
   // 图表 / 白板与 mermaid 同理：pandoc 不认识这些围栏，必须先渲染成图片。
-  processedMarkdown = await prerenderChartEmbedsForPandoc(processedMarkdown, context?.inputPath)
+  processedMarkdown = await prerenderChartEmbedsForPandoc(processedMarkdown, context?.inputPath, context.format)
   // 设计说明：EPUB 阅读器普遍不渲染 MathML，块级公式会退化成 LaTeX 源码，
   // 这里把块级数学公式预渲染成图片（docx 走 OMML、PDF 走浏览器，均无需此步）。
   if (context.format === 'epub') {
@@ -24231,11 +24342,16 @@ const exportMarkdownPandoc = async (context, outputPath) => {
   }
   const sourceMarkdown = processedMarkdown !== originalMarkdown ? processedMarkdown : null
 
+  // 代码块配色：docx/odt/epub 都走 pandoc 高亮，统一套用预览用的语义色板。
+  const needsSyntaxTheme = ['docx', 'odt', 'epub'].includes(context.format)
+  const syntaxThemePath = needsSyntaxTheme ? await preparePandocSyntaxThemeFile() : null
+
   await invoke('export_markdown_pandoc', {
     inputPath: context.inputPath,
     outputPath,
     format: context.format,
     sourceMarkdown,
+    syntaxThemePath,
   })
 }
 

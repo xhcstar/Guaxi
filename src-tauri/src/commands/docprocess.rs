@@ -1199,7 +1199,7 @@ pub async fn export_markdown_pdf_pandoc(
     input_path: String,
     output_path: String,
 ) -> Result<(), String> {
-    export_markdown_pandoc(input_path, output_path, "pdf".to_string(), None).await
+    export_markdown_pandoc(input_path, output_path, "pdf".to_string(), None, None).await
 }
 
 fn escape_html_attr(value: &str) -> String {
@@ -1368,6 +1368,12 @@ fn run_chromium_print_to_pdf(
         // 这样导出的 PDF 在阅读器“书签 / 大纲”面板里可以直接按标题层级导航。
         // 该开关只在现代 headless（--headless=new）下生效，旧版会忽略未知开关，因此始终携带是安全的。
         .arg("--generate-pdf-document-outline")
+        // Chromium 默认页眉页脚会写入临时 HTML 的 file:// 路径、打印时间和文档标题，
+        // 这些都不该出现在成品里。关掉之后由 stamp_pdf_page_numbers 只写页码。
+        // 新版 headless 只认 --no-pdf-header-footer；旧版认 --print-to-pdf-no-header。
+        // 互相不认识的开关会被忽略，因此两个都带上。
+        .arg("--no-pdf-header-footer")
+        .arg("--print-to-pdf-no-header")
         // 注意：不要加 `--no-startup-window`。该参数会让 Edge/Chrome 在后台启动且不创建窗口、
         // 不加载页面，配合 headless `--print-to-pdf` 时浏览器会以退出码 0 “成功”结束，但根本
         // 不会渲染 HTML、也不会写出 PDF，导致随后读取输出文件报 os error 2（找不到文件）。
@@ -1445,6 +1451,132 @@ fn run_chromium_print_to_pdf(
     ))
 }
 
+/// 读取页面尺寸（MediaBox，可能继承自 Pages 节点）。失败时调用方回退到 A4。
+fn pdf_page_size(doc: &lopdf::Document, page_id: lopdf::ObjectId) -> Option<(f32, f32)> {
+    let mut node_id = page_id;
+    for _ in 0..32 {
+        let node = doc.get_dictionary(node_id).ok()?;
+        if let Ok(media_box) = node.get(b"MediaBox") {
+            let resolved = match media_box {
+                lopdf::Object::Reference(id) => doc.get_object(*id).ok(),
+                other => Some(other),
+            };
+            if let Some(lopdf::Object::Array(items)) = resolved {
+                // MediaBox 里整数与实数混用（如 `[0 0 594.95 841.92]`），as_float 两者都能取。
+                let nums: Vec<f32> = items.iter().filter_map(|v| v.as_float().ok()).collect();
+                if nums.len() == 4 && nums[2] > nums[0] && nums[3] > nums[1] {
+                    return Some((nums[2] - nums[0], nums[3] - nums[1]));
+                }
+            }
+        }
+        node_id = node.get(b"Parent").and_then(|o| o.as_reference()).ok()?;
+    }
+    None
+}
+
+/// 把一段内容流插到页面内容的最前面（lopdf 只提供追加）。
+fn pdf_prepend_page_content(
+    doc: &mut lopdf::Document,
+    page_id: lopdf::ObjectId,
+    content: Vec<u8>,
+) -> Result<(), String> {
+    let stream_id = doc.add_object(lopdf::Object::Stream(lopdf::Stream::new(
+        lopdf::Dictionary::new(),
+        content,
+    )));
+    let page = doc
+        .get_dictionary_mut(page_id)
+        .map_err(|e| format!("读取页面字典失败: {e}"))?;
+    let mut contents = match page.get(b"Contents") {
+        Ok(lopdf::Object::Reference(id)) => vec![lopdf::Object::Reference(*id)],
+        Ok(lopdf::Object::Array(items)) => items.clone(),
+        _ => Vec::new(),
+    };
+    contents.insert(0, lopdf::Object::Reference(stream_id));
+    page.set("Contents", lopdf::Object::Array(contents));
+    Ok(())
+}
+
+/// 把页码字体挂到页面资源里。
+///
+/// 名称用 `GXPN` 而不是 `F1`：Chromium 正文流自己的字体就叫 /F1、/F2，
+/// 覆盖同名资源会让整页文字错位甚至消失。
+fn pdf_register_page_number_font(
+    doc: &mut lopdf::Document,
+    page_id: lopdf::ObjectId,
+    font_id: lopdf::ObjectId,
+) -> Result<(), String> {
+    let page = doc
+        .get_dictionary(page_id)
+        .map_err(|e| format!("读取页面字典失败: {e}"))?
+        .clone();
+    let mut resources = match page.get(b"Resources") {
+        Ok(lopdf::Object::Reference(id)) => doc
+            .get_dictionary(*id)
+            .map_err(|e| format!("读取页面资源失败: {e}"))?
+            .clone(),
+        Ok(lopdf::Object::Dictionary(dict)) => dict.clone(),
+        _ => lopdf::Dictionary::new(),
+    };
+    let mut fonts = match resources.get(b"Font") {
+        Ok(lopdf::Object::Reference(id)) => doc.get_dictionary(*id).cloned().unwrap_or_default(),
+        Ok(lopdf::Object::Dictionary(dict)) => dict.clone(),
+        _ => lopdf::Dictionary::new(),
+    };
+    fonts.set("GXPN", lopdf::Object::Reference(font_id));
+    resources.set("Font", lopdf::Object::Dictionary(fonts));
+    let resources_id = doc.add_object(lopdf::Object::Dictionary(resources));
+    doc.get_dictionary_mut(page_id)
+        .map_err(|e| format!("写入页面资源失败: {e}"))?
+        .set("Resources", lopdf::Object::Reference(resources_id));
+    Ok(())
+}
+
+/// 在每页底部居中写入「当前页 / 总页数」。
+///
+/// Chromium 的默认页眉页脚已被 `--no-pdf-header-footer` 关掉（它会暴露临时
+/// HTML 路径、打印时间和标题），页码在这里补回来。标准 14 字体 Helvetica
+/// 不需要嵌入字体文件，也不会影响正文已有的字体资源。
+fn stamp_pdf_page_numbers(path: &Path) -> Result<(), String> {
+    let mut doc = lopdf::Document::load(path).map_err(|e| format!("读取 PDF 失败: {e}"))?;
+    let pages = doc.get_pages();
+    let total = pages.len();
+    if total == 0 {
+        return Ok(());
+    }
+
+    let mut font_dict = lopdf::Dictionary::new();
+    font_dict.set("Type", "Font");
+    font_dict.set("Subtype", "Type1");
+    font_dict.set("BaseFont", "Helvetica");
+    font_dict.set("Encoding", "WinAnsiEncoding");
+    let font_id = doc.add_object(lopdf::Object::Dictionary(font_dict));
+
+    for (number, page_id) in pages {
+        let (width, _height) = pdf_page_size(&doc, page_id).unwrap_or((595.28, 841.89));
+        let label = format!("{number} / {total}");
+        // 9pt Helvetica 的数字约 5pt 宽、斜杠与空格约 2.5pt；页码不参与正文排版，
+        // 按字符数估算宽度做居中即可。
+        let text_width = label.chars().count() as f32 * 4.6;
+        let x = ((width - text_width) / 2.0).max(0.0);
+        let y = 22.0;
+        let stream = format!(
+            "q 0.45 g BT /GXPN 9 Tf 1 0 0 1 {x:.2} {y:.2} Tm ({label}) Tj ET Q\n"
+        );
+        // 必须插到页面内容的最前面：Chromium 的正文流第一行就是一条未闭合的
+        // `0.24 0 0 -0.24 0 841.92 cm`（整页缩放 + 上下翻转）。追加在它后面时，
+        // 我们写的坐标也会被这条矩阵变换，页码会跑到页面右上角。
+        // 自己的流用 q/Q 包住，执行完把图形状态还原，不影响后面的正文。
+        pdf_prepend_page_content(&mut doc, page_id, stream.into_bytes())
+            .map_err(|e| format!("写入页码失败: {e}"))?;
+        pdf_register_page_number_font(&mut doc, page_id, font_id)?;
+    }
+
+    doc.save(path)
+        .map_err(|e| format!("保存带页码的 PDF 失败: {e}"))?;
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn export_rendered_html_pdf(
     html: String,
@@ -1514,6 +1646,15 @@ pub async fn export_rendered_html_pdf(
             &base_dir,
             "--headless",
         )?;
+    }
+
+    // 页眉页脚已在浏览器侧关掉，这里补回页码；写失败时保留无页码的 PDF，不影响导出。
+    if let Err(err) = stamp_pdf_page_numbers(&output) {
+        warn!(
+            output = %output.display(),
+            error = %err,
+            "[ExportPdf] stamp page numbers failed, keep pdf without page numbers"
+        );
     }
 
     let size = fs::metadata(&output)
@@ -2138,6 +2279,7 @@ pub async fn export_markdown_pandoc(
     output_path: String,
     format: String,
     source_markdown: Option<String>,
+    syntax_theme_path: Option<String>,
 ) -> Result<(), String> {
     info!(
         "Exporting markdown via pandoc: input={}, output={}, format={}, source_override={}",
@@ -2212,11 +2354,21 @@ pub async fn export_markdown_pandoc(
         //    必须额外开 tex_math_single_backslash，否则这些公式会被原样当作源码输出（EPUB 尤其明显）。
         .arg("markdown+hard_line_breaks+raw_html+implicit_figures+fenced_code_blocks+backtick_code_blocks+pipe_tables+task_lists+footnotes+tex_math_dollars+tex_math_single_backslash")
         .arg("--resource-path")
-        .arg(input_dir_str)
-        // 设计说明：
-        // 1. Pandoc 新参数名是 `--syntax-highlighting`，但取值仍需使用它支持的内置风格。
-        // 2. `highlight` 不是合法值，这里改回稳定可用的 `default`，避免导出直接失败。
-        .arg("--syntax-highlighting=default");
+        .arg(input_dir_str);
+
+    // 代码语法高亮：
+    // 1. Pandoc 新参数名是 `--syntax-highlighting`，取值用内置风格名或 .theme 文件。
+    // 2. 前端按当前代码主题生成 skylighting JSON（.theme）；传了就用它，让 Word/ODT/EPUB
+    //    的代码配色与软件内预览一致，没传（生成失败）则退回 pandoc 默认。
+    let syntax_theme = syntax_theme_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|path| !path.is_empty());
+    if let Some(theme_path) = syntax_theme {
+        cmd.arg(format!("--syntax-highlighting={theme_path}"));
+    } else {
+        cmd.arg("--syntax-highlighting=default");
+    }
 
     if format == "pdf" {
         let pdf_engine = select_pandoc_pdf_engine()?;

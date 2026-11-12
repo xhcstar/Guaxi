@@ -194,6 +194,48 @@ export const EXPORT_SHELL_CSS = `
       overflow-wrap: anywhere;
       overflow: visible;
     }
+
+    /* 图片 / 图表整块不跨页：剩余空间放不下时整体移到下一页，
+       而不是拦腰截断。 */
+    .export-content img,
+    .export-content .mermaid,
+    .export-content .mermaid svg,
+    .export-content p.guaxi-media-group,
+    .export-content .guaxi-media-group__item,
+    .export-content .guaxi-chart-block,
+    .export-content .guaxi-excalidraw-embed {
+      break-inside: avoid;
+      page-break-inside: avoid;
+    }
+
+    /* 高过一页的图与图表按内容区高度（A4 正文约 265mm）等比缩小：
+       宁可小一号，也不要被分页线切断。 */
+    .export-content img,
+    .export-content .mermaid svg,
+    .export-content .guaxi-chart-block svg,
+    .export-content .guaxi-excalidraw-embed svg {
+      max-height: 240mm;
+    }
+
+    /* 宽度被列宽（或 100%）固定时，max-height 可能把图片压扁；
+       contain 保证内容按原比例缩放，宁可留白也不变形。 */
+    .export-content img {
+      object-fit: contain;
+    }
+
+    /* mermaid 的内联样式已经把宽度定成 100%，这里只需要把高度交回内容
+       自带的宽高比，再交给 max-height 限高；viewBox 的 preserveAspectRatio
+       会保证图形按比例缩放，不会被压扁。 */
+    .export-content .mermaid svg {
+      height: auto;
+      max-width: 100%;
+    }
+
+    /* 单图在纸面上不设宽度下限：超高窄图被 max-height 压缩时，
+       min-width 会反过来把它拉宽，比例会失真。 */
+    .export-content .guaxi-media-group.is-single .guaxi-media-group__image {
+      min-width: 0;
+    }
   }
 `;
 
@@ -515,6 +557,74 @@ export const buildExportCodeThemeCss = () =>
   scopeExportHljsSelectors(
     buildSyntaxTokenCssForPalette(getCodeThemePalette(getActiveCodeThemeId(), 'light')),
   )
+
+/**
+ * pandoc/skylighting 的代码配色（`--syntax-highlighting=<file>.theme`）。
+ *
+ * Word/ODT/EPUB 走 pandoc，默认用 pygments 配色，和软件内预览是两套颜色。
+ * 这里把同一份语义色板（当前代码主题的亮色版）映射到 skylighting 的 token 类型，
+ * 生成的 .theme 让成品代码块与预览保持一致。
+ */
+export const buildPandocSyntaxTheme = () => {
+  const palette = getCodeThemePalette(getActiveCodeThemeId(), 'light') || {}
+  const pick = (...buckets) => {
+    for (const bucket of buckets) {
+      if (palette[bucket]) return palette[bucket]
+    }
+    return palette.base || '#383a42'
+  }
+  const style = (buckets, extra = {}) => ({
+    'text-color': pick(...buckets),
+    'background-color': null,
+    bold: false,
+    italic: false,
+    underline: false,
+    ...extra,
+  })
+
+  // 键名必须是 skylighting 认识的 token 类型（见 pandoc --print-highlight-style）。
+  const textStyles = {
+    Alert: style(['tag', 'keyword']),
+    Annotation: style(['decorator', 'macro']),
+    Attribute: style(['attribute', 'property']),
+    BaseN: style(['number']),
+    BuiltIn: style(['builtin']),
+    Char: style(['string']),
+    Comment: style(['comment'], { italic: true }),
+    CommentVar: style(['comment']),
+    Constant: style(['constant', 'boolean']),
+    ControlFlow: style(['keyword']),
+    DataType: style(['type', 'class']),
+    DecVal: style(['number']),
+    Documentation: style(['comment'], { italic: true }),
+    Error: style(['tag', 'keyword']),
+    Extension: style(['decorator', 'keyword']),
+    Float: style(['number']),
+    Function: style(['function', 'method']),
+    Import: style(['macro', 'keyword']),
+    Information: style(['base']),
+    Keyword: style(['keyword']),
+    Normal: style(['base']),
+    Operator: style(['operator']),
+    Other: style(['base']),
+    Preprocessor: style(['macro', 'keyword']),
+    RegionMarker: style(['label', 'keyword']),
+    SpecialChar: style(['escape', 'string']),
+    SpecialString: style(['regexp', 'string']),
+    String: style(['string']),
+    Variable: style(['variable', 'parameter']),
+    VerbatimString: style(['string']),
+    Warning: style(['keyword']),
+  }
+
+  return {
+    'text-color': pick('base'),
+    'background-color': null,
+    'line-number-color': '#aaaaaa',
+    'line-number-background-color': null,
+    'text-styles': textStyles,
+  }
+}
 
 /**
  * 导出 HTML/PDF 里的图片排版样式。
