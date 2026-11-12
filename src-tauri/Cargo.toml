@@ -199,21 +199,24 @@ chromiumoxide = { version = "0.9.1", features = ["fetcher", "native-tls", "zip8"
 
 # Typst：纯 Rust 的 .typ → PDF 编译（无 C 依赖，Windows MSVC 直接构建）。
 # 所有 typst sub-crate 必须严格同版本。
-# fonts=系统字体；embed-fonts=内嵌 Typst 默认字体（LibertinusSerif 正文 / NewCMMath 数学公式 / DejaVuSansMono 代码），
-#   不依赖系统是否安装这些字体，修复数学公式与默认正文渲染异常；
-# packages=支持 @preview 包（首次用到时联网下载并缓存）。Windows 上 downloads 走 native-tls(schannel)，无需 openssl。
-typst = "=0.14.2"
-typst-pdf = "=0.14.2"
+# 0.15 起 typst-kit 的 feature 改名：
+#   scan-fonts       = 扫描系统字体（原 fonts）
+#   embedded-fonts   = 内嵌默认字体（Libertinus Serif / New Computer Modern Math / DejaVu Sans Mono，
+#                      原 embed-fonts），不依赖系统是否装过这些字体
+#   system-packages  = 系统包目录 + 官方 registry 下载（原 packages）
+# 不再需要我们自己实现下载层：0.15 的 UniversePackages::with_url 原生支持镜像地址，
+# SystemPackages::from_parts 可以指定缓存目录。
+typst = "=0.15.1"
+typst-pdf = "=0.15.1"
 # HTML 导出（Typst 0.13+ 的 html 目标）。编译成 HtmlDocument 后再编码成字符串。
-typst-html = "=0.14.2"
+typst-html = "=0.15.1"
 # SVG 导出：逐页导出为矢量图，用于「导出图片」。
-typst-svg = "=0.14.2"
-# Typst 包下载：自行实现（支持镜像前缀与显式代理），版本与 typst-kit 保持同一条依赖链。
-ureq = "2"
-env_proxy = "0.4"
-typst-kit = { version = "=0.14.2", default-features = false, features = ["fonts", "embed-fonts", "packages"] }
+typst-svg = "=0.15.1"
+# 文档类型：0.15 起 PagedDocument 由 typst-layout 导出（typst 只重新导出几何子模块）。
+typst-layout = "=0.15.1"
+typst-kit = { version = "=0.15.1", default-features = false, features = ["scan-fonts", "embedded-fonts", "system-packages", "universe-packages", "system-downloader"] }
 # typst-ide：源码 <-> 渲染文档的双向跳转（jump_from_click / jump_from_cursor），供内嵌阅读器双向定位。
-typst-ide = "=0.14.2"
+typst-ide = "=0.15.1"
 comemo = "0.5"
 # 纯 Rust SSH 客户端栈（自带,不依赖系统 ssh）。0.45 的 ed25519-dalek v2 与 iroh 的 v3 pre 共存不冲突。
 # keys 通过 russh::keys 重导出使用，无需单列 russh-keys。

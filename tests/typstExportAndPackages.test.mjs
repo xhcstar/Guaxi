@@ -104,13 +104,16 @@ test('包下载配置支持镜像地址、缓存目录、代理与离线开关',
 })
 
 test('已缓存的包不会重复联网（第二次编译快的前提）', () => {
-  const rs = read('src-tauri/src/commands/typst_package.rs')
-  const start = rs.indexOf('pub fn ensure_package')
-  const body = rs.slice(start, start + 1200)
-  assert.ok(
-    body.includes('if target.is_dir()') && body.includes('return Ok(target)'),
-    '命中本地缓存时应直接返回，不应继续下载',
-  )
+  // 0.15 把「先查数据目录、再查缓存目录、都没有才下载」交给了 typst-kit 的
+  // SystemPackages::obtain。这里锁的是：我们确实用的它，而不是又自己实现一遍。
+  const rs = read('src-tauri/src/commands/typst_compile.rs')
+  assert.ok(rs.includes('package_storage()'), '包解析应走统一的包存储')
+  assert.ok(rs.includes('.obtain(spec)'), '应调用上游 obtain（内部即缓存优先）')
+
+  const pkg = read('src-tauri/src/commands/typst_package.rs')
+  // 离线模式必须能表达「只用本地」，否则「不重复联网」在断网场景下无从谈起。
+  assert.ok(pkg.includes('offline'), '应保留离线开关')
+  assert.ok(pkg.includes('FsPackages::system_cache'), '缓存目录应交给上游 FsPackages')
 })
 
 test('包缓存布局与官方一致：<cache>/<ns>/<name>/<version>', () => {
@@ -127,10 +130,16 @@ test('下载地址按 <registry>/<ns>/<name>-<version>.tar.gz 拼接（镜像可
   assert.ok(body.includes('{registry}/{namespace}/{name}-{version}.tar.gz'), body)
 })
 
-test('World 的包解析改走可配置实现，不再是写死 registry 的 PackageStorage', () => {
+test('包 registry 可换镜像，而不是写死官方地址', () => {
+  const pkg = read('src-tauri/src/commands/typst_package.rs')
   const rs = read('src-tauri/src/commands/typst_compile.rs')
-  assert.ok(!rs.includes('PackageStorage::new'), '不应再用写死 registry 的 PackageStorage')
-  assert.ok(rs.includes('typst_package::ensure_package'), '应走可配置的包解析')
+
+  // 0.15 的 UniversePackages::with_url 是唯一的可配置入口，
+  // 必须用它（而不是 UniversePackages::new，那是写死官方源的）。
+  assert.ok(pkg.includes('UniversePackages::with_url'), '应支持自定义 registry')
+  assert.ok(!pkg.includes('UniversePackages::new('), '不能用写死官方源的构造器')
+  assert.ok(pkg.includes('cfg.registry'), 'registry 应来自配置')
+  assert.ok(rs.includes('typst_package::package_storage'), '编译侧应复用同一份包存储')
 })
 
 test('设置页提供 Typst 包下载配置入口', () => {

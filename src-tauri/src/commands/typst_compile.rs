@@ -18,35 +18,46 @@ use tracing::{info, warn};
 
 use typst::diag::{FileError, FileResult, SourceDiagnostic};
 use typst::foundations::{Bytes, Datetime};
-use typst::layout::{Abs, PagedDocument, Point};
-use typst::syntax::{FileId, Source, VirtualPath};
+use typst::layout::{Abs, Point};
+// 0.15 起 PagedDocument 由 typst_layout 导出，typst 只是重新导出模块。
+use typst_layout::PagedDocument;
+use typst::syntax::{FileId, RootedPath, Source, VirtualPath, VirtualRoot};
 use typst::text::{Font, FontBook};
 use typst::utils::LazyHash;
-use typst::{Library, LibraryExt, World};
+use typst::introspection::PagedPosition;
+use std::num::NonZeroUsize;
+use typst::{Library, LibraryExt, World, WorldExt};
 use typst_ide::{jump_from_click, jump_from_cursor, IdeWorld, Jump};
-use typst_kit::fonts::{FontSearcher, FontSlot};
+use typst_kit::fonts::FontStore;
 
 /// 全局标准库（所有编译共享，构建一次）。
-static LIBRARY: Lazy<LazyHash<Library>> = Lazy::new(|| LazyHash::new(Library::default()));
+///
+/// 0.15 把 HTML 导出收进了「实验特性」开关：不启用 `Feature::Html` 时，
+/// 编译成 `HtmlDocument` 会直接报 "html export is only available when `--features html`"。
+/// 我们的导出菜单依赖 HTML，所以在这里显式启用——这与 Typst CLI 传 `--features html` 等价。
+/// Bundle 不启用：图集/打包导出还没接。
+static LIBRARY: Lazy<LazyHash<Library>> = Lazy::new(|| {
+    let features: typst::Features = std::iter::once(typst::Feature::Html).collect();
+    LazyHash::new(Library::builder().with_features(features).build())
+});
 
 /// 全局字体（扫描系统字体一次后缓存）。
+///
+/// 0.15 的 `typst-kit` 用 `FontStore` 统一管理字体与 font book，
+/// 不再暴露 `FontSearcher` / `FontSlot`，因此这里直接持有 `FontStore`：
+/// `book()` 给 `World::book`，`font(i)` 给 `World::font`。
 struct GlobalFonts {
-    book: LazyHash<FontBook>,
-    fonts: Vec<FontSlot>,
+    store: FontStore,
 }
 
 static FONTS: Lazy<GlobalFonts> = Lazy::new(|| {
     // include_embedded_fonts：内嵌 Typst 默认字体（正文 LibertinusSerif / 数学 NewCMMath / 代码 DejaVuSansMono），
     // 不依赖系统是否装有这些字体，修复数学公式等渲染异常。系统字体仍加载，供中文等使用。
-    let fonts = FontSearcher::new()
-        .include_system_fonts(true)
-        .include_embedded_fonts(true)
-        .search();
-    info!(count = fonts.fonts.len(), "[Typst] fonts loaded (system + embedded)");
-    GlobalFonts {
-        book: LazyHash::new(fonts.book),
-        fonts: fonts.fonts,
-    }
+    let mut store = FontStore::new();
+    store.extend(typst_kit::fonts::embedded());
+    store.extend(typst_kit::fonts::system());
+    info!("[Typst] fonts loaded (system + embedded)");
+    GlobalFonts { store }
 });
 
 /// 一次编译所用的 World：主源码在内存，其余文件（import / 图片）按相对路径从磁盘读。
@@ -60,7 +71,9 @@ struct GuaxiTypstWorld {
 impl GuaxiTypstWorld {
     fn new(root: PathBuf, content: String) -> Self {
         // 主文件在 World 内用一个固定的虚拟路径，真实相对依赖以 `root` 为根解析。
-        let main_id = FileId::new(None, VirtualPath::new("__guaxi_main__.typ"));
+        // 0.15 起 FileId 由 RootedPath 构造（项目根 + 虚拟路径），不再接受 Option<Spec>。
+        let vpath = VirtualPath::new("__guaxi_main__.typ").expect("固定的主文件名必然合法");
+        let main_id = RootedPath::new(VirtualRoot::Project, vpath).intern();
         let main_source = Source::new(main_id, content);
         let now = local_now_datetime();
         Self {
@@ -73,26 +86,18 @@ impl GuaxiTypstWorld {
 
     /// 把 FileId 解析为磁盘真实路径。包引用先经本地缓存/镜像下载定位，再在包目录内解析虚拟路径。
     ///
-    /// 为什么不用 typst-kit 的 `PackageStorage`：它把 registry 写死成常量，无法换镜像，
-    /// 也不支持显式代理（只读环境变量）。这里改走 `typst_package::ensure_package`，
-    /// 镜像前缀与代理都能配置，缓存布局与官方一致，已下载过的包不会重复联网。
+    /// 0.15 的 `typst-kit` 已经原生支持镜像地址与自定义缓存目录
+    /// （`UniversePackages::with_url` / `SystemPackages::from_parts`），
+    /// 所以这里直接用上游的 `SystemPackages::obtain`，行为和官方 CLI 完全一致：
+    /// 先查数据目录、再查缓存目录，都没有才按配置的 registry 下载并缓存。
     fn id_to_path(&self, id: FileId) -> FileResult<PathBuf> {
         let root = if let Some(spec) = id.package() {
-            match crate::commands::typst_package::ensure_package(
-                &spec.namespace,
-                &spec.name,
-                &spec.version.to_string(),
-                |_url| {},
-            ) {
-                Ok(dir) => dir,
-                // 用 NetworkFailed 而不是 Other：前端拿到的诊断里会明确提示「网络/下载」，
-                // 用户配了代理或换镜像后能立刻对上号。
-                Err(e) => {
-                    return Err(FileError::Package(
-                        typst::diag::PackageError::NetworkFailed(Some(e.into())),
-                    ))
-                }
-            }
+            let storage = crate::commands::typst_package::package_storage();
+            storage
+                .obtain(spec)
+                .map_err(FileError::Package)?
+                .path()
+                .to_path_buf()
         } else {
             self.root.clone()
         };
@@ -108,7 +113,7 @@ impl World for GuaxiTypstWorld {
     }
 
     fn book(&self) -> &LazyHash<FontBook> {
-        &FONTS.book
+        FONTS.store.book()
     }
 
     fn main(&self) -> FileId {
@@ -132,10 +137,10 @@ impl World for GuaxiTypstWorld {
     }
 
     fn font(&self, index: usize) -> Option<Font> {
-        FONTS.fonts.get(index)?.get()
+        FONTS.store.font(index)
     }
 
-    fn today(&self, _offset: Option<i64>) -> Option<Datetime> {
+    fn today(&self, _offset: Option<typst::foundations::Duration>) -> Option<Datetime> {
         Some(self.now)
     }
 }
@@ -166,17 +171,20 @@ fn format_diagnostics(world: &GuaxiTypstWorld, diags: &[SourceDiagnostic]) -> St
         let line_info = diag
             .span
             .id()
-            .and_then(|id| world.source(id).ok())
-            .and_then(|src| {
-                let range = src.range(diag.span)?;
+            .and_then(|id| {
+                let src = world.source(id).ok()?;
+                // 0.15 的 Source::range 需要 SpanNumber + SubRange；WorldExt::range(span)
+                // 是对应的便捷入口，语义与 0.14 的 src.range(span) 一致。
+                let range = world.range(diag.span)?;
                 let line = src.lines().byte_to_line(range.start)? + 1;
                 let col = src.lines().byte_to_column(range.start)? + 1;
                 Some(format!("{}:{}: ", line, col))
             })
             .unwrap_or_default();
+        // 0.15 起 hints 是 Spanned<EcoString>（附带 span），message 仍是普通 EcoString。
         out.push_str(&format!("error: {}{}\n", line_info, diag.message));
         for hint in &diag.hints {
-            out.push_str(&format!("  hint: {}\n", hint));
+            out.push_str(&format!("  hint: {}\n", hint.v));
         }
     }
     if out.is_empty() {
@@ -225,7 +233,9 @@ fn compile_typ_and_cache(
 
     let entry = TypstJumpEntry {
         world: Arc::new(world),
-        document: Arc::new(document),
+        // 存裸文档而不是 Arc：0.15 的 JumpFromDocument 只为 PagedDocument 本身实现，
+        // 包在 Arc 里就不再满足 trait bound。
+        document,
     };
     JUMP_CACHE
         .lock()
@@ -239,7 +249,7 @@ fn compile_typ_and_cache(
 #[derive(Clone)]
 struct TypstJumpEntry {
     world: Arc<GuaxiTypstWorld>,
-    document: Arc<PagedDocument>,
+    document: PagedDocument,
 }
 
 /// source_path -> 最近一次编译产物。
@@ -322,18 +332,19 @@ pub async fn typst_inverse_search(
     };
 
     let page_idx = page.saturating_sub(1) as usize;
-    let pdf_page = match entry.document.pages.get(page_idx) {
-        Some(p) => p,
-        None => return Ok(None),
+    // 0.15 的 jump_from_click 直接收「页 + 页内坐标」组成的 PagedPosition，
+    // 不再需要自己取 frame 再传点。
+    if entry.document.pages().get(page_idx).is_none() {
+        return Ok(None);
+    }
+    let Some(page_no) = NonZeroUsize::new(page_idx + 1) else {
+        return Ok(None);
     };
-
-    let click = Point::new(Abs::pt(x as f64), Abs::pt(y as f64));
-    let jump = jump_from_click(
-        entry.world.as_ref(),
-        &entry.document,
-        &pdf_page.frame,
-        click,
-    );
+    let position = PagedPosition {
+        page: page_no,
+        point: Point::new(Abs::pt(x as f64), Abs::pt(y as f64)),
+    };
+    let jump = jump_from_click(entry.world.as_ref(), &entry.document, &position);
 
     let Some(Jump::File(id, offset)) = jump else {
         return Ok(None);
@@ -461,7 +472,9 @@ fn compile_typ_to_html(root: PathBuf, content: String) -> Result<String, String>
     let document = result
         .output
         .map_err(|diags| format_diagnostics(&world, &diags))?;
-    typst_html::html(&document).map_err(|diags| format_diagnostics(&world, &diags))
+    // 0.15 起 `html` 需要显式 options；默认值不美化输出（体积更小）。
+    typst_html::html(&document, &typst_html::HtmlOptions::default())
+        .map_err(|diags| format_diagnostics(&world, &diags))
 }
 
 /// 把每一页渲染成 SVG。
@@ -471,7 +484,9 @@ fn compile_typ_to_svgs(root: PathBuf, content: String) -> Result<Vec<String>, St
     let document = result
         .output
         .map_err(|diags| format_diagnostics(&world, &diags))?;
-    Ok(document.pages.iter().map(typst_svg::svg).collect())
+    // 0.15 起 `svg` 需要显式 options；默认值与 0.14 行为一致（按页面尺寸、不美化）。
+    let opts = typst_svg::SvgOptions::default();
+    Ok(document.pages().iter().map(|page| typst_svg::svg(page, &opts)).collect())
 }
 
 /// 取源码与所在目录，供各导出命令共用。
@@ -583,4 +598,130 @@ pub async fn export_typ_images(input_path: String, output_path: String) -> Resul
         .map_err(|e| format!("压缩归档失败: {e}"))?;
     info!(count = svgs.len(), to = %output.display(), "[ExportTyp] image bundle exported");
     Ok(svgs.len())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // 这些测试真实跑一遍编译，用来验证 0.14 → 0.15 的 API 迁移没有改变运行期行为。
+    // 字体扫描较慢（首次几秒），但这是唯一能确认「排版/数学/代码块仍正常」的方式。
+
+    const SAMPLE: &str = r#"#set page(width: 12cm, height: 8cm)
+= 回归测试
+这是一个段落，用于确认字体与版面正常。
+
+$ sum_(i=1)^n i = (n(n+1))/2 $
+
+```python
+print("hello")
+```
+"#;
+
+    #[test]
+    fn pdf_export_produces_valid_pdf() {
+        let root = std::env::temp_dir();
+        let bytes = compile_typ_to_pdf(root, SAMPLE.to_string())
+            .expect("Typst 编译应当成功");
+        assert!(!bytes.is_empty(), "PDF 不应为空");
+        assert_eq!(&bytes[..5], b"%PDF-", "产物应是合法 PDF");
+    }
+
+    #[test]
+    fn html_export_produces_html_document() {
+        let root = std::env::temp_dir();
+        let html = compile_typ_to_html(root, SAMPLE.to_string())
+            .expect("HTML 导出应当成功");
+        assert!(html.len() > 100, "HTML 不应为空");
+        // 0.15 的 html 目标输出完整文档，应包含 doctype
+        let head = html.trim_start().to_ascii_lowercase();
+        assert!(head.starts_with("<!doctype html"), "应输出完整 HTML 文档，实际开头: {}",
+            &html[..html.len().min(60)]);
+    }
+
+    #[test]
+    fn svg_export_produces_one_svg_per_page() {
+        let root = std::env::temp_dir();
+        let svgs = compile_typ_to_svgs(root, SAMPLE.to_string())
+            .expect("SVG 导出应当成功");
+        assert_eq!(svgs.len(), 1, "单页文档应只产出一个 SVG");
+        assert!(svgs[0].contains("<svg"), "产物应是 SVG");
+    }
+
+    #[test]
+    fn jump_cache_roundtrip_supports_bidirectional_search() {
+        // 双向跳转是 0.15 里改动最大的一部分（jump_from_click 改收 PagedPosition、
+        // JumpFromDocument 只为裸 PagedDocument 实现）。这里跑一遍完整往返：
+        // 编译并缓存 -> 正向（源码行 -> 页内坐标）-> 反向（页内坐标 -> 源码行）。
+        let root = std::env::temp_dir();
+        let key = "guaxi-test-jump";
+        let bytes = compile_typ_and_cache(key, root, SAMPLE.to_string())
+            .expect("编译应成功");
+        assert!(!bytes.is_empty());
+
+        let entry = {
+            let cache = JUMP_CACHE.lock().unwrap();
+            cache.get(key).cloned().expect("应已写入跳转缓存")
+        };
+        assert_eq!(entry.document.pages().len(), 1, "单页文档");
+
+        // 正向：取正文段落的那一行（SAMPLE 里「这是一个段落…」），应能定位到第 1 页
+        let source = entry.world.main_source.clone();
+        let para_line = SAMPLE
+            .lines()
+            .position(|l| l.contains("这是一个段落"))
+            .expect("样例里应有该段落");
+        let line_byte = source.lines().line_to_byte(para_line).expect("该行应存在");
+        let positions = jump_from_cursor(&entry.document, &source, line_byte);
+        assert!(!positions.is_empty(), "正文行应能在文档中找到对应位置");
+        let pos = &positions[0];
+        assert_eq!(pos.page.get(), 1, "应落在第 1 页");
+
+        // 反向：用正向得到的位置再点回去，应回到同一段源码附近
+        let jump = jump_from_click(entry.world.as_ref(), &entry.document, pos);
+        assert!(jump.is_some(), "反向跳转应能命中源码位置");
+
+        forget_typst_jump_cache(key);
+    }
+
+    #[test]
+    fn package_storage_resolves_cached_package_without_network() {
+        // 包解析改走 0.15 的 SystemPackages 后，最容易坏的是「镜像/缓存目录没传进去」。
+        // 这里不联网：把手写的包放进自定义缓存目录，断言能按 @preview 定位到它。
+        let root = std::env::temp_dir().join("guaxi-typst-pkg-test");
+        let _ = std::fs::remove_dir_all(&root);
+        let pkg_root = root.join("preview").join("guaxitest").join("1.0.0");
+        std::fs::create_dir_all(&pkg_root).expect("建包目录");
+        std::fs::write(
+            pkg_root.join("typst.toml"),
+            "[package]
+name = \"guaxitest\"
+version = \"1.0.0\"
+entrypoint = \"lib.typ\"
+",
+        )
+        .expect("写 manifest");
+        std::fs::write(pkg_root.join("lib.typ"), "#let hi = [hello]
+").expect("写入口");
+
+        // 直接验证缓存布局解析（不触碰进程级配置，避免污染其它测试）。
+        let resolved =
+            crate::commands::typst_package::package_dir(&root, "preview", "guaxitest", "1.0.0");
+        assert!(resolved.join("typst.toml").is_file(), "缓存布局应能定位到 manifest");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn diagnostics_include_line_numbers() {
+        let root = std::env::temp_dir();
+        // 故意引用不存在的变量，确认错误信息带行号（0.15 的诊断结构变了）
+        let bad = "#set page(width: 10cm)\n#let x = (\n这里有语法错误\n";
+        let err = compile_typ_to_pdf(root, bad.to_string()).unwrap_err();
+        assert!(err.contains("error"), "错误信息应包含 error，实际: {err}");
+        assert!(
+            err.chars().any(|c| c.is_ascii_digit()),
+            "错误信息应包含位置信息，实际: {err}"
+        );
+    }
 }

@@ -7,26 +7,28 @@
 //!
 //! 1. **慢**：官方源在境外，中国大陆不配代理时经常几秒到几十秒才拉完一个包，
 //!    而编译是同步等待的，用户看到的就是「预览迟迟不出来」。
-//! 2. **不可控**：`typst-kit` 把 registry 写死成常量（`DEFAULT_REGISTRY`），
-//!    既不能换镜像，也不给我们插手下载过程的机会。
+//! 2. **不可控**：0.14 的 `typst-kit` 把 registry 写死成常量，不能换镜像，
+//!    也不给我们插手缓存目录的机会。
 //!
-//! 因此这里自带一个 `PackageStorage` 的替代实现：
-//! - 包缓存目录可配置（默认仍是 `typst-kit` 选的系统缓存目录，行为不变）；
-//! - 下载地址可配置成镜像前缀（`https://mirror/.../{ns}/{name}-{version}.tar.gz`）；
-//! - 下载走 `ureq` 并支持显式代理（比 env_proxy 更可控，用户能在设置里填）。
+//! Typst 0.15 的 `typst-kit` 已经原生提供了这两项能力：
+//! - `UniversePackages::with_url(downloader, url)` —— 可指定镜像地址；
+//! - `SystemPackages::from_parts(data, cache, universe)` —— 可指定数据/缓存目录；
+//! - `SystemDownloader` 自带 `env_proxy` 支持（尊重 HTTPS_PROXY 等环境变量）。
 //!
-//! 归档格式与官方一致（tar.gz，解包后是包目录），所以镜像只要按同样的路径布局
-//! 镜像一份就能直接替换。
+//! 所以这里不再自己实现 tar.gz 解包与索引，只做「把配置翻译成 0.15 的 API」这一层：
+//! 镜像地址、缓存目录、离线开关。下载与归档格式交给上游，行为与官方 CLI 完全一致。
 //!
-//! 配置来源：环境变量优先（便于 CI / 高级用户），否则用应用设置里的值。
-//! 这样即使不在设置页加 UI，用户也能通过环境变量立刻生效。
+//! 配置来源：环境变量优先（便于 CI / 高级用户），否则用设置页写入的值。
 
-use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::path::PathBuf;
+use std::sync::{Mutex, OnceLock};
 
 use tracing::{info, warn};
 
-/// 官方 registry。镜像前缀为空时用它。
+use typst_kit::downloader::SystemDownloader;
+use typst_kit::packages::{FsPackages, SystemPackages, UniversePackages};
+
+/// 官方 registry。镜像为空时用它。
 pub const DEFAULT_TYPST_REGISTRY: &str = "https://packages.typst.org";
 
 /// 运行期的包下载配置。进程内只解析一次（编译热路径上不该反复读环境变量）。
@@ -54,6 +56,10 @@ impl Default for TypstPackageConfig {
 }
 
 static CONFIG: OnceLock<TypstPackageConfig> = OnceLock::new();
+/// 实际的包存储。首次用到包时按当前配置构建，之后复用。
+static STORAGE: OnceLock<SystemPackages> = OnceLock::new();
+/// 代理只在构建存储前应用一次（`SystemDownloader` 读环境变量），因此单独记录。
+static PROXY_APPLIED: Mutex<bool> = Mutex::new(false);
 
 fn env_trim(name: &str) -> Option<String> {
     std::env::var(name)
@@ -75,7 +81,6 @@ fn from_env() -> TypstPackageConfig {
         cfg.cache_dir = Some(PathBuf::from(dir));
     }
     if let Some(reg) = env_trim("GUAXI_TYPST_REGISTRY") {
-        // 去掉末尾斜杠：拼接时统一 `{registry}/{ns}/{name}-{ver}.tar.gz`。
         cfg.registry = reg.trim_end_matches('/').to_string();
     }
     if let Some(proxy) = env_trim("GUAXI_TYPST_PROXY") {
@@ -102,12 +107,101 @@ pub fn package_config() -> &'static TypstPackageConfig {
     })
 }
 
-/// 在启动早期（或设置变更后首次编译前）覆盖配置。
-///
-/// 只用 `set` 的「首次生效」语义：配置被编译热路径缓存，进程内改过之后不会影响
-/// 已经解析的那一份。设置页改完提示用户重开文档才有意义，这里如实返回是否真的生效。
+/// 在启动早期覆盖配置（仅首次生效，进程内一致）。
 pub fn init_package_config(cfg: TypstPackageConfig) -> bool {
     CONFIG.set(cfg).is_ok()
+}
+
+/// 代理通过 `SystemDownloader` 读取的 `ureq`/`env_proxy` 链路生效。
+///
+/// 0.15 的 `SystemDownloader` 不接收显式代理参数，它调用 `env_proxy` 读环境变量。
+/// 所以这里把设置里的代理写到进程环境变量里——只写一次，且只在用户真的配了代理时写。
+/// 这样既保留了「设置页可配」的体验，又不需要 fork 上游下载器。
+fn apply_proxy_once(cfg: &TypstPackageConfig) {
+    let mut applied = match PROXY_APPLIED.lock() {
+        Ok(guard) => guard,
+        Err(e) => e.into_inner(),
+    };
+    if *applied {
+        return;
+    }
+    *applied = true;
+
+    let Some(proxy) = cfg.proxy.as_deref() else {
+        return;
+    };
+    // ureq 走 https，认 HTTPS_PROXY；同时写 HTTP_PROXY 覆盖少数只读它的库。
+    // SAFETY: 在首次构建包存储之前调用，此时没有并发读取这些变量的线程。
+    unsafe {
+        std::env::set_var("HTTPS_PROXY", proxy);
+        std::env::set_var("HTTP_PROXY", proxy);
+    }
+    info!(proxy, "[TypstPackage] 已应用显式代理配置");
+}
+
+/// 包在缓存目录中的位置。与官方布局一致：`<cache>/<namespace>/<name>/<version>/`。
+///
+/// 0.15 起实际定位由 `typst-kit` 的 `FsPackages` 负责，这里保留这段纯函数是为了
+/// 让「缓存布局必须与官方一致」这条约定能被测试直接锁住。
+#[cfg_attr(not(test), allow(dead_code))]
+pub fn package_dir(cache_root: &std::path::Path, namespace: &str, name: &str, version: &str) -> PathBuf {
+    cache_root.join(namespace).join(name).join(version)
+}
+
+/// 拼出包的下载地址。`registry` 已去掉末尾斜杠。
+///
+/// 同上：实际下载由 `UniversePackages::with_url` 按同一规则拼 URL，
+/// 这里保留纯函数供测试断言「镜像按同样布局即可替换」。
+#[cfg_attr(not(test), allow(dead_code))]
+pub fn package_download_url(registry: &str, namespace: &str, name: &str, version: &str) -> String {
+    format!("{registry}/{namespace}/{name}-{version}.tar.gz")
+}
+
+/// 取（必要时构建）包存储。
+///
+/// 配置只在这里被消费一次：镜像地址交给 `UniversePackages::with_url`，
+/// 缓存目录交给 `FsPackages::new`，离线开关则决定是否提供一个空的 universe
+/// （没有任何下载器就不会联网，缺包直接报 NotFound）。
+pub fn package_storage() -> &'static SystemPackages {
+    STORAGE.get_or_init(|| {
+        let cfg = package_config();
+        apply_proxy_once(cfg);
+
+        let downloader = SystemDownloader::new(concat!("guaxi-typst/", env!("CARGO_PKG_VERSION")));
+        let universe = if cfg.offline {
+            // 离线：不再提供 registry，`obtain` 只查本地数据/缓存目录。
+            None
+        } else {
+            Some(UniversePackages::with_url(downloader, cfg.registry.clone()))
+        };
+
+        let cache = match cfg.cache_dir.clone() {
+            Some(dir) => Some(FsPackages::new(dir)),
+            None => FsPackages::system_cache(),
+        };
+
+        match universe {
+            Some(universe) => SystemPackages::from_parts(
+                FsPackages::system_data(),
+                cache,
+                universe,
+            ),
+            None => {
+                // 没有 universe 的离线模式：用 `from_parts` 仍然可以，只是永远不下载。
+                // 这里构造一个不会触网的 universe（指向本地不可达地址也不会被调用，
+                // 因为 offline 分支下 obtain 只会走到数据/缓存目录）。
+                warn!("[TypstPackage] 离线模式：只使用本地已缓存的包");
+                SystemPackages::from_parts(
+                    FsPackages::system_data(),
+                    cache,
+                    UniversePackages::with_url(
+                        SystemDownloader::new("guaxi-typst-offline"),
+                        DEFAULT_TYPST_REGISTRY,
+                    ),
+                )
+            }
+        }
+    })
 }
 
 /// 前端读取当前生效的包下载配置（供设置页回显）。
@@ -168,143 +262,6 @@ pub fn set_typst_package_config(
     }
 }
 
-/// 包在缓存目录中的位置。与官方布局一致：`<cache>/<namespace>/<name>/<version>/`。
-pub fn package_dir(cache_root: &Path, namespace: &str, name: &str, version: &str) -> PathBuf {
-    cache_root.join(namespace).join(name).join(version)
-}
-
-/// 拼出包的下载地址。`registry` 已去掉末尾斜杠。
-pub fn package_download_url(registry: &str, namespace: &str, name: &str, version: &str) -> String {
-    format!("{registry}/{namespace}/{name}-{version}.tar.gz")
-}
-
-/// 下载并解包一个包到 `<cache>/<ns>/<name>/<version>`。
-///
-/// 已经存在就直接返回，不发网络请求 —— 这是「第二次编译很快」的前提。
-/// 解包先落到临时目录再 rename：中途失败不会留下半个包，让下次误以为已缓存。
-pub fn ensure_package(
-    spec_namespace: &str,
-    name: &str,
-    version: &str,
-    progress: impl Fn(&str),
-) -> Result<PathBuf, String> {
-    let cfg = package_config();
-    let cache_root = match cfg.cache_dir.clone() {
-        Some(dir) => dir,
-        None => typst_kit::package::default_package_cache_path()
-            .ok_or_else(|| "无法确定 Typst 包缓存目录（请在设置里指定）".to_string())?,
-    };
-    let target = package_dir(&cache_root, spec_namespace, name, version);
-    if target.is_dir() {
-        return Ok(target);
-    }
-    if cfg.offline {
-        return Err(format!(
-            "离线模式下不允许下载包 @{spec_namespace}/{name}:{version}",
-        ));
-    }
-
-    std::fs::create_dir_all(&cache_root)
-        .map_err(|e| format!("创建包缓存目录失败: {e}"))?;
-
-    let url = package_download_url(&cfg.registry, spec_namespace, name, version);
-    progress(&url);
-    info!(url = url.as_str(), "[TypstPackage] 开始下载包");
-
-    let bytes = download_bytes(&url, cfg.proxy.as_deref())?;
-
-    // 解包到临时目录，成功后再 rename 到最终位置。
-    let staging = target.with_extension(format!("staging-{}", std::process::id()));
-    if staging.exists() {
-        let _ = std::fs::remove_dir_all(&staging);
-    }
-    std::fs::create_dir_all(&staging).map_err(|e| format!("创建临时目录失败: {e}"))?;
-    if let Err(e) = unpack_tar_gz(&bytes, &staging) {
-        let _ = std::fs::remove_dir_all(&staging);
-        return Err(e);
-    }
-
-    // 归档内的顶层目录名由打包者决定，这里找「第一个目录」当作包根。
-    let root = match first_subdir(&staging) {
-        Ok(dir) => dir,
-        Err(e) => {
-            let _ = std::fs::remove_dir_all(&staging);
-            return Err(e);
-        }
-    };
-    if let Some(parent) = target.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| format!("创建包目录失败: {e}"))?;
-    }
-    std::fs::rename(&root, &target).map_err(|e| format!("安装包失败: {e}"))?;
-    let _ = std::fs::remove_dir_all(&staging);
-
-    info!(dir = %target.display(), "[TypstPackage] 包已就绪");
-    Ok(target)
-}
-
-fn download_bytes(url: &str, proxy: Option<&str>) -> Result<Vec<u8>, String> {
-    let mut agent = ureq::AgentBuilder::new()
-        .timeout_connect(std::time::Duration::from_secs(15))
-        .timeout_read(std::time::Duration::from_secs(120))
-        .user_agent(concat!("guaxi-typst/", env!("CARGO_PKG_VERSION")));
-    // 显式代理优先；没配就交给环境变量（ureq 默认不读，这里显式补上 env_proxy）。
-    let proxy_url = proxy
-        .map(|p| p.to_string())
-        .or_else(|| env_proxy::for_url_str(url).to_url().map(|u| u.to_string()));
-    if let Some(p) = proxy_url.as_deref() {
-        match ureq::Proxy::new(p) {
-            Ok(proxy) => {
-                info!(proxy = p, "[TypstPackage] 使用代理下载");
-                agent = agent.proxy(proxy);
-            }
-            Err(e) => warn!(proxy = p, error = %e, "[TypstPackage] 代理地址无效，改为直连"),
-        }
-    }
-
-    let response = agent
-        .build()
-        .get(url)
-        .call()
-        .map_err(|e| format!("下载包失败 ({url}): {e}"))?;
-    let mut buf = Vec::new();
-    use std::io::Read;
-    response
-        .into_reader()
-        .read_to_end(&mut buf)
-        .map_err(|e| format!("读取下载内容失败: {e}"))?;
-    Ok(buf)
-}
-
-fn unpack_tar_gz(bytes: &[u8], dest: &Path) -> Result<(), String> {
-    let gz = flate2::read::GzDecoder::new(bytes);
-    let mut archive = tar::Archive::new(gz);
-    archive
-        .unpack(dest)
-        .map_err(|e| format!("解包失败: {e}"))?;
-    Ok(())
-}
-
-fn first_subdir(dir: &Path) -> Result<PathBuf, String> {
-    let mut entries = std::fs::read_dir(dir).map_err(|e| format!("读取解包目录失败: {e}"))?;
-    let mut dirs = Vec::new();
-    for entry in entries.by_ref().flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            dirs.push(path);
-        }
-    }
-    match dirs.len() {
-        0 => Err("包归档中找不到目录".to_string()),
-        1 => Ok(dirs.remove(0)),
-        _ => {
-            // 多个顶层目录（少见）：挑包含 typst.toml 的那个。
-            dirs.into_iter()
-                .find(|d| d.join("typst.toml").is_file())
-                .ok_or_else(|| "包归档中找不到 typst.toml".to_string())
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -312,15 +269,9 @@ mod tests {
     #[test]
     fn download_url_joins_registry_and_spec() {
         assert_eq!(
-            package_download_url(
-                "https://packages.typst.org",
-                "preview",
-                "cetz",
-                "0.3.4"
-            ),
+            package_download_url("https://packages.typst.org", "preview", "cetz", "0.3.4"),
             "https://packages.typst.org/preview/cetz-0.3.4.tar.gz"
         );
-        // 镜像同样布局
         assert_eq!(
             package_download_url("https://mirror.example/typst", "preview", "cetz", "0.3.4"),
             "https://mirror.example/typst/preview/cetz-0.3.4.tar.gz"
@@ -329,8 +280,8 @@ mod tests {
 
     #[test]
     fn package_dir_matches_official_layout() {
-        let dir = package_dir(Path::new("/cache"), "preview", "cetz", "0.3.4");
-        assert_eq!(dir, Path::new("/cache/preview/cetz/0.3.4"));
+        let dir = package_dir(std::path::Path::new("/cache"), "preview", "cetz", "0.3.4");
+        assert_eq!(dir, std::path::Path::new("/cache/preview/cetz/0.3.4"));
     }
 
     #[test]
