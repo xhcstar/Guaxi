@@ -95,12 +95,13 @@ export const pageChaptersA = [
       {
         id: 'home-editor',
         title: '编辑器能力',
-        keywords: ['Monaco', '编辑', '预览', '分屏', '表格', '格式化', '右键', 'Python'],
+        keywords: ['Monaco', '编辑', '预览', '分屏', '表格', '格式化', '右键', 'Python', 'LaTeX', 'Typst'],
         blocks: [
           {
             type: 'list',
             items: [
               '支持 Markdown 编辑、预览、分屏预览和实时预览；<kbd>Ctrl</kbd>+<kbd>S</kbd> 保存，<kbd>Ctrl</kbd>+<kbd>F</kbd> 搜索，<kbd>Ctrl</kbd>+<kbd>1</kbd>/<kbd>2</kbd>/<kbd>3</kbd>/<kbd>4</kbd> 切换模式。',
+              '<code>.tex</code> / <code>.typ</code> 走同一套预览下拉：预览为编译后的 PDF，分屏为源码 + PDF，详见「LaTeX 与 Typst 文档」。',
               '选中文本后出现浮动工具条：加粗、斜体、删除线、链接、行内代码、引用。',
               '光标在 Markdown 表格内时出现表格工具条：增删行列、设置对齐、格式化。',
               '右键菜单包含剪切 / 复制 / 粘贴、文件内搜索、Markdown 全文或选区格式化、编辑位置跳转、插入模板和命令面板。',
@@ -134,9 +135,50 @@ export const pageChaptersA = [
         ],
       },
       {
+        id: 'home-tex-typ',
+        title: 'LaTeX 与 Typst 文档',
+        keywords: ['LaTeX', 'TeX', 'tex', 'Typst', 'typ', 'tectonic', 'tinymist', 'texlab', 'PDF', '编译', '预览', '双向定位', '语法手册'],
+        blocks: [
+          {
+            type: 'p',
+            text: '<code>.tex</code> / <code>.typ</code> 是文本文件，和 Markdown 一样在编辑器里打开、编辑、<b>Ctrl</b>+<b>S</b> 保存，按扩展名自动切换语法高亮、补全与诊断。两者都不走 Markdown 渲染器，而是<b>编译成 PDF 后预览</b>。',
+          },
+          {
+            type: 'table',
+            head: ['引擎', '负责什么'],
+            rows: [
+              ['tectonic', '<code>.tex</code> 的编译与导出；随应用分发，首次用到未缓存的宏包 / 字体时会联网补下载，状态栏会显示进度'],
+              ['typst', '<code>.typ</code> 的编译与导出；只使用系统中文字体，机器上没有中文字体时中文会缺字'],
+              ['texlab / tinymist', 'LSP：补全、诊断、跳转。在「设置 → 编辑器 → LSP 配置」里安装对应扩展后生效，未安装时仍可编辑与编译'],
+            ],
+          },
+          {
+            type: 'steps',
+            items: [
+              { title: '打开文件', text: '在左栏文件树里打开 <code>.tex</code> 或 <code>.typ</code>，主显示区进入编辑器。' },
+              { title: '编译预览', text: '用顶栏的渲染下拉切换「预览 / 分屏」：<kbd>Ctrl</kbd>+<kbd>2</kbd> 全屏看 PDF，<kbd>Ctrl</kbd>+<kbd>3</kbd> 左侧源码 + 右侧 PDF。编辑停顿后自动重建，失败原因显示在预览面板里。' },
+              { title: '双向定位', text: '点大纲跳到对应源码行，PDF 会同步滚到那一页；在 PDF 上点一下正文，编辑器跳到对应的源码位置（需首次编译成功生成定位数据）。' },
+              { title: '导出', text: '渲染下拉里的导出，或 <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>E</kbd>；<code>.tex</code> / <code>.typ</code> 只支持导出 PDF，其它格式仅对 Markdown 提供。' },
+            ],
+          },
+          {
+            type: 'callout',
+            tone: 'tip',
+            title: '语法手册跟着当前文件走',
+            text: '顶栏的书本图标会按当前文件类型打开对应手册：打开 <code>.tex</code> 是 LaTeX 语法查询、<code>.typ</code> 是 Typst 语法查询，其余文件打开 Markdown 语法手册。',
+          },
+          {
+            type: 'callout',
+            tone: 'warn',
+            title: '首次编译可能较慢',
+            text: 'tectonic 按需下载宏包，第一次用某个宏包时预览会等几秒到几十秒；之后命中本地缓存。Typst 不下载任何宏包，但中文排版依赖系统已安装的中文字体。',
+          },
+        ],
+      },
+      {
         id: 'home-open',
         title: '打开文件：按真实类型分流',
-        keywords: ['打开文件', 'PDF', 'Word', 'EPUB', 'Excel', 'PPT', '图片', '音视频', 'HTML', '二进制'],
+        keywords: ['打开文件', 'PDF', 'Word', 'EPUB', 'Excel', 'PPT', '图片', '音视频', 'HTML', '二进制', 'LaTeX', 'Typst'],
         blocks: [
           {
             type: 'p',
@@ -147,6 +189,7 @@ export const pageChaptersA = [
             head: ['类型', '行为'],
             rows: [
               ['文本类（md / txt / 代码 / 配置 / csv / svg …）', '在主显示区用编辑器打开，可编辑可保存'],
+              ['LaTeX / Typst（tex / typ）', '编辑器打开，编译成 PDF 预览：支持分屏、双向定位与导出 PDF（见下文「LaTeX 与 Typst 文档」）'],
               ['PDF', '内嵌 PDF 阅读器：连续滚动、搜索、分页、目录、文字高亮批注'],
               ['Word', '.docx 版式还原预览；.doc / .rtf / .odt 转为只读 Markdown'],
               ['电子书', 'epub / mobi / azw3 / azw / kfx / fb2 / lit / cbz，带目录与上一节 / 下一节'],

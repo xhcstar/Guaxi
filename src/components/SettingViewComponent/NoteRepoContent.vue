@@ -1,6 +1,6 @@
 <template>
-  <div class="preference-wrapper">
-    <n-card title="笔记库与资源库">
+  <div class="preference-wrapper setting-page">
+    <n-card class="setting-page-card" title="笔记库与资源库">
       <n-space vertical size="large" style="width: 100%">
 
         <div>
@@ -1729,7 +1729,7 @@ const handleResourceRepoSyncNow = async () => {
 <style scoped>
 .preference-wrapper {
   width: 100%;
-  font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', 'Noto Sans CJK SC', Consolas, 'Courier New', monospace;
+  font-family: var(--guaxi-editor-font-family, 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', 'Noto Sans CJK SC', Consolas, 'Courier New', monospace);
 }
 
 .section-header {
@@ -1747,6 +1747,8 @@ const handleResourceRepoSyncNow = async () => {
   margin-top: 4px;
   color: var(--guaxi-text-secondary);
   font-size: 13px;
+  line-height: 1.7;
+  max-width: 88ch;
 }
 
 .copy-field {

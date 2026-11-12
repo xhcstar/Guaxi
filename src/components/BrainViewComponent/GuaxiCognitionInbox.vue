@@ -2203,7 +2203,7 @@ onUnmounted(() => {
   --cog-brass: #8f7226;
   --cog-alert: #a63d40;
   --cog-wash: color-mix(in srgb, var(--guaxi-text-primary) 4%, transparent);
-  --cog-display: 'Noto Serif SC', 'Source Han Serif SC', 'Songti SC', 'SimSun', Georgia, 'Times New Roman', serif;
+  --cog-display: var(--cog-mono);
   --cog-mono: var(--guaxi-editor-font-family);
   padding: 12px 16px;
 }

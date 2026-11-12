@@ -1,7 +1,18 @@
 /* 设置页拆分后的共用排版。类名统一带 setting-page 前缀，避免影响其他界面。 */
+
+/*
+ * 层级约定（所有设置子页共用，不再各写一套字号）：
+ *   页面标题（n-card title）  19px / 700
+ *   小节标题（h3）            15px / 700 + 左侧 3px 色条
+ *   正文说明                  13px / 1.7，次要色
+ *   控件与行标签              13.5px
+ * 之前页面标题 18px、小节标题走浏览器默认 h3（≈16.4px），两级只差 1.6px，
+ * 看起来像同一级；这里把差距拉到 4px 以上，并给小节加视觉锚点。
+ */
 .setting-page {
   width: 100%;
-  font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', 'Noto Sans CJK SC', Consolas, 'Courier New', monospace;
+  font-family: var(--guaxi-editor-font-family, 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', 'Noto Sans CJK SC', Consolas, 'Courier New', monospace);
+  color: var(--guaxi-text-primary);
 }
 
 .setting-page-card {
@@ -16,24 +27,91 @@
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.07);
 }
 
-.setting-page-card .n-card-header__main {
-  font-weight: 600;
-  letter-spacing: 0.3px;
+/* 页面标题：整页最大的一级。 */
+.setting-card .n-card-header,
+.setting-page-card .n-card-header {
+  padding: 15px 18px 8px;
 }
 
+.setting-card .n-card-header__main,
+.setting-page-card .n-card-header__main {
+  font-size: 19px;
+  font-weight: 700;
+  letter-spacing: 0.2px;
+  line-height: 1.35;
+}
+
+/* 内容区：上下留白比 naive 默认略收，标题与首个小节之间不留空档。 */
+.setting-card .n-card__content,
+.setting-page-card .n-card__content {
+  padding: 6px 18px 18px;
+}
+
+/* 小节标题：左侧一道色条作为锚点，比“整行加粗”更省注意力。 */
+.setting-card h3,
 .setting-page h3 {
-  margin: 0 0 2px;
-  font-size: 14px;
+  position: relative;
+  margin: 18px 0 6px;
+  padding-left: 10px;
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 0.2px;
+  line-height: 1.5;
+  color: var(--guaxi-text-primary);
+}
+
+.setting-card h3::before,
+.setting-page h3::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 3px;
+  bottom: 3px;
+  width: 3px;
+  border-radius: 2px;
+  background: var(--guaxi-settings-accent, #0d9488);
+}
+
+.setting-card h3:first-child,
+.setting-page h3:first-child {
+  margin-top: 2px;
+}
+
+.setting-card h4,
+.setting-page h4 {
+  margin: 14px 0 4px;
+  font-size: 13.5px;
   font-weight: 600;
   color: var(--guaxi-text-primary);
 }
 
 .setting-page-desc {
-  margin-top: 4px;
+  margin-top: 2px;
   color: var(--guaxi-text-secondary);
   font-size: 13px;
+  line-height: 1.7;
+  max-width: 88ch;
 }
 
 .setting-page-tip {
-  margin-top: 8px;
+  margin-top: 10px;
+}
+
+.setting-page .n-form-item-label {
+  font-size: 13.5px;
+}
+
+.setting-page .n-form-item {
+  margin-top: 2px;
+}
+
+/* 侧栏拖窄后表单标签仍要成列，避免标签与控件挤成一团。 */
+.setting-page .n-form-item .n-form-item-blank {
+  min-width: 0;
+}
+
+/* 深色下主题色提亮一档：0d9488 压在 #21252b 上会暗成一道灰。 */
+:global(:root[data-guaxi-theme='dark']) .setting-card h3::before,
+:global(:root[data-guaxi-theme='dark']) .setting-page h3::before {
+  background: var(--guaxi-settings-accent-dark, #2dd4bf);
 }

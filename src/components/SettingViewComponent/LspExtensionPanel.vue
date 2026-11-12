@@ -741,11 +741,10 @@ onUnmounted(() => {
   gap: 8px;
 }
 
+/* 标题层级交给设置页共用规则（.setting-page h3），这里只管内边距与颜色变量。 */
 .lsp-extension-panel__title {
   margin: 0;
   color: var(--lsp-panel-title);
-  font-size: 24px;
-  font-weight: 700;
 }
 
 .lsp-extension-panel__description {

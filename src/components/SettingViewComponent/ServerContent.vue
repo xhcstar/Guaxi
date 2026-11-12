@@ -162,7 +162,9 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  padding: 4px 2px 12px;
+  padding: 4px 2px 16px;
+  font-size: 13.5px;
+  line-height: 1.7;
 }
 
 .srv-head {
@@ -170,41 +172,54 @@ onBeforeUnmount(() => {
   align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
-  padding: 4px 0 14px;
+  padding: 2px 0 12px;
   border-bottom: 1px solid var(--guaxi-border);
 }
 
 .srv-title {
-  font-size: 15px;
-  font-weight: 600;
+  font-size: 19px;
+  font-weight: 700;
+  letter-spacing: 0.2px;
   color: var(--guaxi-text-primary);
 }
 
 .srv-sub {
-  margin-top: 6px;
-  max-width: 720px;
-  font-size: 12px;
-  line-height: 1.6;
+  margin-top: 5px;
+  max-width: 760px;
+  font-size: 13px;
+  line-height: 1.7;
   color: var(--guaxi-text-secondary);
 }
 
 .srv-poll {
-  font-size: 11px;
+  font-size: 12px;
   white-space: nowrap;
 }
 
 .srv-empty {
   padding: 18px 2px;
-  font-size: 12px;
+  font-size: 13px;
   color: var(--guaxi-text-secondary);
 }
 
+/* 分组标题：一行小字 + 细线，把「系统服务 / 会话服务」这类分组分开，
+   比加粗大写更安静，也不会和每行服务名抢层级。 */
 .srv-group {
-  margin: 14px 0 2px;
-  font-size: 11px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 16px 0 2px;
+  font-size: 11.5px;
   font-weight: 600;
   letter-spacing: 0.06em;
   color: var(--guaxi-text-secondary);
+}
+
+.srv-group::after {
+  content: '';
+  flex: 1 1 auto;
+  height: 1px;
+  background: var(--guaxi-border-weak);
 }
 
 .srv-row {
@@ -252,14 +267,14 @@ onBeforeUnmount(() => {
 }
 
 .srv-name {
-  font-size: 13px;
+  font-size: 13.5px;
   font-weight: 600;
   color: var(--guaxi-text-primary);
 }
 
 .srv-addr {
-  font-size: 11px;
-  font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', monospace;
+  font-size: 12px;
+  font-family: var(--guaxi-editor-font-family, 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', monospace);
   color: var(--guaxi-text-secondary);
   font-variant-numeric: tabular-nums;
   overflow: hidden;
@@ -272,7 +287,7 @@ onBeforeUnmount(() => {
   flex: 0 0 auto;
   padding: 1px 7px;
   border-radius: 999px;
-  font-size: 11px;
+  font-size: 12px;
   color: var(--guaxi-text-secondary);
   background: var(--guaxi-header-bg);
   font-variant-numeric: tabular-nums;
@@ -281,8 +296,8 @@ onBeforeUnmount(() => {
 
 .srv-desc {
   margin-top: 5px;
-  font-size: 12px;
-  line-height: 1.6;
+  font-size: 12.5px;
+  line-height: 1.7;
   color: var(--guaxi-text-secondary);
 }
 

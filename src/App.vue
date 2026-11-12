@@ -364,6 +364,11 @@ body {
   overflow: hidden;
   background: var(--guaxi-app-bg);
   color: var(--guaxi-text-primary);
+  /* 全局默认字体：与主界面 / 编辑器同一份。
+     此前只有 naive-ui 组件经 config-provider 拿到字体，普通 div / 表格行会落回
+     WebView 默认的衬线字体，于是设置页、大脑、语言学习这些页面看起来像另一个软件。
+     放在 body 上让所有未显式声明字体的节点统一继承。 */
+  font-family: var(--guaxi-editor-font-family, 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei', 'Courier New');
 }
 
 #app {
@@ -371,6 +376,14 @@ body {
   height: 100%;
   min-height: 0;
   overflow: hidden;
+}
+
+/* WebView 的表单控件不继承页面字体，会固定走系统 UI 字体，这里显式跟随全局。 */
+button,
+input,
+select,
+textarea {
+  font-family: inherit;
 }
 
 /* 统一浮层字体：naive-ui 的下拉菜单 / 抽屉 / 弹窗 / 气泡会 teleport 到 <body>，

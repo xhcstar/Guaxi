@@ -1444,8 +1444,8 @@ onMounted(async () => {
 .cog-set {
   padding: 14px 18px 36px;
   font-family: var(--guaxi-editor-font-family);
-  font-size: 14px;
-  line-height: 1.7;
+  font-size: 13.5px;
+  line-height: 1.75;
   color: var(--guaxi-text-primary);
 }
 .cog-set-head {
@@ -1459,8 +1459,9 @@ onMounted(async () => {
   display: flex;
   align-items: center;
   gap: 7px;
-  font-size: 17px;
-  font-weight: 600;
+  font-size: 19px;
+  font-weight: 700;
+  letter-spacing: 0.2px;
 }
 .cog-set-title :deep(.n-icon) {
   font-size: 20px;
@@ -1492,7 +1493,12 @@ onMounted(async () => {
   color: rgba(217, 138, 43, 1);
 }
 
-/* 折叠区标题：图标 + 文字。图标压在次要色，标题文字仍是主色。 */
+/* 折叠区标题：图标 + 文字。图标压在次要色，标题文字仍是主色。
+   字号抬到 14.5px/600，和下方 14px 的行标签拉开，避免「每一层都一样大」。 */
+.cog-set :deep(.n-collapse-item__header-main) {
+  font-size: 14.5px;
+  font-weight: 600;
+}
 .cog-sec {
   display: inline-flex;
   align-items: center;
@@ -1539,7 +1545,8 @@ onMounted(async () => {
   display: flex;
   align-items: center;
   gap: 7px;
-  font-size: 14px;
+  font-size: 13.5px;
+  font-weight: 500;
   line-height: 1.6;
 }
 .cog-row-label :deep(.n-icon) {
@@ -1550,7 +1557,7 @@ onMounted(async () => {
 .cog-row-hint {
   font-size: 12.5px;
   color: var(--guaxi-text-secondary);
-  line-height: 1.8;
+  line-height: 1.75;
   margin-top: 3px;
 }
 .cog-row-hint code,

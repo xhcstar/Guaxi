@@ -414,6 +414,8 @@ onMounted(reload)
 <style scoped>
 .feeds-set {
   padding: 4px 2px 24px;
+  font-size: 13.5px;
+  line-height: 1.7;
 }
 
 .feeds-set-head {
@@ -421,23 +423,30 @@ onMounted(reload)
   align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
-  margin-bottom: 14px;
+  margin-bottom: 10px;
 }
 
 .feeds-set-title {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 15px;
-  font-weight: 600;
+  font-size: 19px;
+  font-weight: 700;
+  letter-spacing: 0.2px;
   color: var(--guaxi-text-primary);
 }
 
 .feeds-set-sub {
   margin-top: 4px;
-  font-size: 12px;
+  font-size: 13px;
   color: var(--guaxi-text-secondary);
-  line-height: 1.6;
+  line-height: 1.7;
+}
+
+/* 折叠项标题是这一页的二级层级，比行标签大、比页面标题小。 */
+.feeds-set :deep(.n-collapse-item__header-main) {
+  font-size: 14.5px;
+  font-weight: 600;
 }
 
 .feeds-sec {
@@ -448,11 +457,11 @@ onMounted(reload)
 }
 
 .feeds-note {
-  margin: 4px 0 10px;
-  padding: 8px 10px;
+  margin: 6px 0 12px;
+  padding: 9px 12px;
   border-left: 2px solid var(--guaxi-border);
-  font-size: 12px;
-  line-height: 1.65;
+  font-size: 13px;
+  line-height: 1.75;
   color: var(--guaxi-text-secondary);
   background: var(--guaxi-content-bg);
   border-radius: 0 6px 6px 0;
@@ -483,14 +492,15 @@ onMounted(reload)
 }
 
 .feeds-row-label {
-  font-size: 13px;
+  font-size: 13.5px;
+  font-weight: 500;
   color: var(--guaxi-text-primary);
 }
 
 .feeds-row-hint {
-  margin-top: 2px;
-  font-size: 11.5px;
-  line-height: 1.55;
+  margin-top: 3px;
+  font-size: 12.5px;
+  line-height: 1.65;
   color: var(--guaxi-text-secondary);
 }
 
@@ -506,8 +516,8 @@ onMounted(reload)
   margin-top: 10px;
   padding-top: 8px;
   border-top: 1px solid var(--guaxi-border);
-  font-size: 12px;
-  line-height: 1.7;
+  font-size: 12.5px;
+  line-height: 1.75;
   color: var(--guaxi-text-secondary);
 }
 
@@ -544,7 +554,7 @@ onMounted(reload)
 }
 
 .feeds-trash-title {
-  font-size: 12.5px;
+  font-size: 13px;
   color: var(--guaxi-text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -553,7 +563,7 @@ onMounted(reload)
 
 .feeds-trash-meta {
   margin-top: 2px;
-  font-size: 11px;
+  font-size: 12px;
   color: var(--guaxi-text-secondary);
 }
 
@@ -565,7 +575,7 @@ onMounted(reload)
 }
 
 .feeds-hint {
-  font-size: 11.5px;
+  font-size: 12.5px;
   color: var(--guaxi-text-secondary);
 }
 
@@ -573,6 +583,6 @@ code {
   padding: 1px 4px;
   border-radius: 4px;
   background: var(--guaxi-content-bg);
-  font-size: 11.5px;
+  font-size: 12.5px;
 }
 </style>

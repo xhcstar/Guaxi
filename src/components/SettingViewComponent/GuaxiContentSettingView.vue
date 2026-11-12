@@ -34,7 +34,7 @@ import GuaxiRightContentSettingView from "./GuaxiRightContentSettingView.vue"
 
 const logger = createLogger('GuaxiContentSettingView')
 
-const leftSiderbarWidth = ref(350); // 默认宽度
+const leftSiderbarWidth = ref(248); // 默认宽度
 const leftSidebarresizing = ref(false);
 const leftSidebarStartX = ref(0);
 const leftSidebarStartWidth = ref(0);
@@ -108,7 +108,7 @@ const onMouseDownLeftSidebar = (event) => {
 const onMouseMoveLeftSidebar = (event) => {
   if (!leftSidebarresizing.value) return;
   const delta = event.clientX - leftSidebarStartX.value;
-  leftSiderbarWidth.value = Math.max(250, leftSidebarStartWidth.value + delta); // 设置最小宽度为200px
+  leftSiderbarWidth.value = Math.max(210, leftSidebarStartWidth.value + delta); // 设置最小宽度为210px
 };
 
 const onMouseUpLeftSidebar = () => {

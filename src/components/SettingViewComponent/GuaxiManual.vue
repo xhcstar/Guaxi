@@ -843,8 +843,8 @@ onBeforeUnmount(() => {
   --m-blue-soft: color-mix(in srgb, var(--m-blue) 11%, transparent);
   --m-code-bg: color-mix(in srgb, var(--guaxi-panel-bg) 84%, var(--guaxi-text-primary) 8%);
   --m-shadow: 0 12px 28px rgba(0, 0, 0, 0.14);
-  --m-body-font: 'Noto Sans SC', 'Source Han Sans SC', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
-  --m-display: 'Iowan Old Style', 'Palatino Linotype', 'Source Han Serif SC', 'Noto Serif SC', 'Songti SC', serif;
+  --m-body-font: var(--guaxi-editor-font-family, 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei', 'Courier New');
+  --m-display: var(--m-body-font);
   --m-mono: var(--guaxi-editor-font-family, 'Maple Mono NF CN', Consolas, monospace);
 
   position: relative;

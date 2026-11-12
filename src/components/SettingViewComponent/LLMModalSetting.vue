@@ -1,6 +1,6 @@
 <template>
-  <div class="llm-setting">
-    <n-card title="大模型" size="small">
+  <div class="llm-setting setting-page">
+    <n-card class="setting-page-card" title="大模型" size="small">
       <n-space vertical size="large" style="width: 100%">
         <n-alert type="info" :show-icon="true">
           大模型配置分两类：直接填服务商 API Key，或启用 cc-switch 本地代理。
@@ -1371,16 +1371,20 @@ onMounted(loadConfig)
 .llm-setting {
   width: 100%;
   box-sizing: border-box;
-  font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei', system-ui;
+  font-family: var(--guaxi-editor-font-family, 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei', system-ui);
+  font-size: 13.5px;
+  line-height: 1.7;
 }
 
+/* 顶部状态区的小标题成组出现，字号比小节标题再小半档，靠字重区分。 */
 .status-header {
   margin-bottom: 8px;
 }
 
 .status-title {
+  font-size: 13.5px;
   font-weight: 600;
-  margin-bottom: 2px;
+  margin-bottom: 3px;
 }
 
 .status-subtitle {
@@ -1500,8 +1504,8 @@ onMounted(loadConfig)
 }
 
 .status-tip-desc {
-  font-size: 12px;
-  line-height: 1.3;
+  font-size: 12.5px;
+  line-height: 1.5;
   opacity: 0.92;
 }
 </style>

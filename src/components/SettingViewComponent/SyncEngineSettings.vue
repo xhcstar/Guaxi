@@ -700,39 +700,39 @@ onUnmounted(() => {
 .sync-engine { width: 100%; }
 .se-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 10px; }
 .se-head h3 { margin: 0 0 4px; font-size: 15px; }
-.se-head.is-connections { margin-top: 22px; }
-.description { margin: 0; color: var(--n-text-color-3); font-size: 12px; line-height: 1.7; }
+.se-head.is-connections { margin-top: 24px; }
+.description { margin: 0; color: var(--n-text-color-3); font-size: 13px; line-height: 1.7; }
 .se-notice { margin: 8px 0 12px; max-width: 95%; }
 .se-empty { padding: 18px 0; }
 .se-targets { border: 1px solid var(--n-border-color); border-radius: 8px; }
 .se-target { display: flex; align-items: center; justify-content: space-between; gap: 16px; width: 100%; }
 .se-target-main { min-width: 0; flex: 1; }
-.se-target-title { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 13px; }
-.se-target-meta { margin-top: 4px; color: var(--n-text-color-3); font-size: 11px; word-break: break-all; }
+.se-target-title { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 13.5px; }
+.se-target-meta { margin-top: 4px; color: var(--n-text-color-3); font-size: 12px; word-break: break-all; }
 .se-dot { margin: 0 6px; opacity: .5; }
 .se-progress { margin-top: 8px; display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; align-items: center; }
 .se-progress :deep(.n-progress) { grid-column: 1; }
-.se-progress-text { grid-column: 1 / -1; color: var(--n-text-color-3); font-size: 11px; font-variant-numeric: tabular-nums; }
-.se-progress-file { grid-column: 1 / -1; color: var(--n-text-color-3); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.se-last { margin-top: 6px; color: var(--n-text-color-3); font-size: 11px; }
+.se-progress-text { grid-column: 1 / -1; color: var(--n-text-color-3); font-size: 12px; font-variant-numeric: tabular-nums; }
+.se-progress-file { grid-column: 1 / -1; color: var(--n-text-color-3); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.se-last { margin-top: 6px; color: var(--n-text-color-3); font-size: 12px; }
 .se-last.is-error { color: #d03050; }
 .se-target-actions { flex: 0 0 auto; }
 .se-connections { display: flex; flex-direction: column; border: 1px solid var(--n-border-color); border-radius: 8px; }
 .se-connection { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 9px 12px; border-bottom: 1px solid var(--n-border-color); }
 .se-connection:last-child { border-bottom: 0; }
-.se-connection-main { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 12px; }
+.se-connection-main { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 13px; }
 .se-connection-addr { color: var(--n-text-color-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.se-empty-line { color: var(--n-text-color-3); font-size: 12px; padding: 8px 0; }
+.se-empty-line { color: var(--n-text-color-3); font-size: 13px; padding: 8px 0; }
 .se-modal { width: min(560px, 92vw); }
 .se-form { display: flex; flex-direction: column; gap: 12px; }
-.se-form label { display: flex; flex-direction: column; gap: 5px; font-size: 12px; color: var(--n-text-color-2); }
+.se-form label { display: flex; flex-direction: column; gap: 5px; font-size: 13px; color: var(--n-text-color-2); }
 .se-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .se-check { flex-direction: row !important; align-items: center; gap: 8px !important; }
-.se-input { height: 30px; padding: 0 9px; border-radius: 5px; border: 1px solid var(--n-border-color); background: var(--n-color); color: var(--n-text-color); font-size: 12px; outline: none; }
+.se-input { height: 30px; padding: 0 9px; border-radius: 5px; border: 1px solid var(--n-border-color); background: var(--n-color); color: var(--n-text-color); font-size: 13px; outline: none; }
 .se-input:focus { border-color: var(--n-primary-color); }
 .se-pick { display: flex; gap: 8px; }
 .se-pick .se-input { flex: 1; }
-.se-hint { margin: 0; color: var(--n-text-color-3); font-size: 11px; line-height: 1.6; }
+.se-hint { margin: 0; color: var(--n-text-color-3); font-size: 12px; line-height: 1.65; }
 .se-modal-actions { display: flex; align-items: center; gap: 8px; }
 .se-spacer { flex: 1; }
 </style>

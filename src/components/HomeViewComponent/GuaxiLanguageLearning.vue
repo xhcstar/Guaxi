@@ -5994,7 +5994,7 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .lang-learn-page {
-  --ll-serif: 'Iowan Old Style', 'Palatino Linotype', 'Book Antiqua', Georgia, 'Songti SC', 'SimSun', serif;
+  --ll-serif: var(--guaxi-editor-font-family, 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei', 'Courier New');
   --ll-bg: var(--guaxi-app-bg);
   --ll-panel: var(--guaxi-panel-bg);
   --ll-border: var(--guaxi-border);
@@ -6015,7 +6015,7 @@ onBeforeUnmount(() => {
   color: var(--ll-text);
   display: flex;
   flex-direction: column;
-  font-family: var(--editor-font-family, 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei');
+  font-family: var(--guaxi-editor-font-family, 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei', 'Courier New');
   overflow: hidden;
 }
 
@@ -6543,8 +6543,8 @@ onBeforeUnmount(() => {
 }
 
 .ledger-row {
-  min-height: 58px;
-  padding: 7px 0;
+  min-height: 64px;
+  padding: 8px 0;
   border-bottom: 1px solid var(--ll-border-soft);
   cursor: pointer;
   transition: background 0.13s ease, box-shadow 0.13s ease;
@@ -6595,7 +6595,7 @@ onBeforeUnmount(() => {
 }
 
 .row-title {
-  font-size: 15.5px;
+  font-size: 16.5px;
   line-height: 1.35;
   color: var(--ll-text);
   white-space: nowrap;
@@ -6605,9 +6605,9 @@ onBeforeUnmount(() => {
 
 .row-translation,
 .row-sub {
-  margin-top: 2px;
-  font-size: 11.5px;
-  line-height: 1.4;
+  margin-top: 3px;
+  font-size: 13.5px;
+  line-height: 1.45;
   color: var(--ll-muted);
   white-space: nowrap;
   overflow: hidden;
@@ -6634,7 +6634,7 @@ onBeforeUnmount(() => {
 }
 
 .col-phon {
-  font-size: 11px;
+  font-size: 12.5px;
   color: var(--ll-muted);
   white-space: nowrap;
   overflow: hidden;
@@ -6992,9 +6992,9 @@ onBeforeUnmount(() => {
 
 .meaning-list li {
   position: relative;
-  padding: 3px 0 3px 24px;
-  font-size: 12.5px;
-  line-height: 1.65;
+  padding: 3px 0 3px 26px;
+  font-size: 14.5px;
+  line-height: 1.7;
   counter-increment: meaning;
 }
 
@@ -7016,15 +7016,15 @@ onBeforeUnmount(() => {
 
 .example-src {
   font-family: var(--ll-serif);
-  font-size: 13px;
-  line-height: 1.5;
+  font-size: 15px;
+  line-height: 1.55;
   color: var(--ll-text);
 }
 
 .example-target {
-  margin-top: 2px;
-  font-size: 11px;
-  line-height: 1.55;
+  margin-top: 3px;
+  font-size: 13px;
+  line-height: 1.6;
   color: var(--ll-muted);
 }
 
@@ -7053,7 +7053,7 @@ onBeforeUnmount(() => {
   padding: 2px 7px;
   border: 1px solid var(--ll-border-soft);
   border-radius: 5px;
-  font-size: 10.5px;
+  font-size: 12px;
   color: var(--ll-text);
   background: color-mix(in srgb, var(--ll-panel) 72%, transparent);
 }
@@ -7088,8 +7088,8 @@ onBeforeUnmount(() => {
 }
 
 .entry-translation {
-  font-size: 13px;
-  line-height: 1.75;
+  font-size: 15px;
+  line-height: 1.8;
   color: var(--ll-muted);
   padding-left: 18px;
 }
@@ -7158,20 +7158,20 @@ onBeforeUnmount(() => {
 
 .preview-transcript-line .transcript-source {
   font-family: var(--ll-serif);
-  font-size: 13px;
-  line-height: 1.45;
+  font-size: 15px;
+  line-height: 1.5;
 }
 
 .preview-transcript-line .transcript-target {
-  font-size: 11px;
-  line-height: 1.5;
+  font-size: 13px;
+  line-height: 1.55;
   color: var(--ll-muted);
-  margin-top: 1px;
+  margin-top: 2px;
 }
 
 .detail-content {
-  font-size: 12px;
-  line-height: 1.7;
+  font-size: 14px;
+  line-height: 1.75;
   color: var(--ll-muted);
   white-space: pre-wrap;
 }
@@ -7536,8 +7536,8 @@ onBeforeUnmount(() => {
 
 .transcript-source {
   font-family: var(--ll-serif);
-  font-size: calc(15px * var(--transcript-font-scale, 1.1));
-  line-height: 1.55;
+  font-size: calc(16px * var(--transcript-font-scale, 1.1));
+  line-height: 1.6;
   color: var(--ll-text);
 }
 
@@ -7546,9 +7546,9 @@ onBeforeUnmount(() => {
 }
 
 .transcript-target {
-  margin-top: 2px;
-  font-size: calc(12px * var(--transcript-font-scale, 1.1));
-  line-height: 1.55;
+  margin-top: 3px;
+  font-size: calc(13.5px * var(--transcript-font-scale, 1.1));
+  line-height: 1.6;
   color: var(--ll-muted);
 }
 
@@ -7928,8 +7928,8 @@ kbd {
 .answer-meaning {
   display: flex;
   gap: 8px;
-  font-size: 14px;
-  line-height: 1.7;
+  font-size: 15px;
+  line-height: 1.75;
 }
 
 .answer-meaning-index {
@@ -7950,8 +7950,8 @@ kbd {
 
 .answer-source-text {
   margin-top: 6px;
-  font-size: 13.5px;
-  line-height: 1.85;
+  font-size: 15px;
+  line-height: 1.9;
   color: var(--ll-text);
   white-space: pre-wrap;
   word-break: break-word;
@@ -7963,8 +7963,8 @@ kbd {
 
 .answer-text {
   margin-top: 8px;
-  font-size: 13.5px;
-  line-height: 1.75;
+  font-size: 15px;
+  line-height: 1.8;
 }
 
 .answer-examples {
@@ -8167,8 +8167,8 @@ kbd {
 }
 
 .random-card-text {
-  font-size: 14px;
-  line-height: 1.7;
+  font-size: 15px;
+  line-height: 1.75;
   color: color-mix(in srgb, var(--ll-text) 84%, transparent);
   white-space: pre-wrap;
   word-break: break-word;
@@ -8212,8 +8212,8 @@ kbd {
 }
 
 .random-card-content {
-  font-size: 14px;
-  line-height: 1.75;
+  font-size: 15px;
+  line-height: 1.8;
   color: color-mix(in srgb, var(--ll-text) 84%, transparent);
   white-space: pre-wrap;
   word-break: break-word;
@@ -8254,15 +8254,15 @@ kbd {
 }
 
 .random-transcript-source {
-  font-size: 14.5px;
-  line-height: 1.7;
+  font-size: 16px;
+  line-height: 1.75;
   color: color-mix(in srgb, var(--ll-text) 80%, transparent);
   word-break: break-word;
 }
 
 .random-transcript-target {
-  font-size: 13.5px;
-  line-height: 1.65;
+  font-size: 14.5px;
+  line-height: 1.7;
   color: var(--ll-muted);
   word-break: break-word;
 }
@@ -8676,8 +8676,8 @@ kbd {
 
 .dict-entry-meanings {
   margin-top: 4px;
-  font-size: 11.5px;
-  line-height: 1.6;
+  font-size: 13.5px;
+  line-height: 1.65;
 }
 
 .dict-lookup-empty {

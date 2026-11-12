@@ -1,6 +1,6 @@
 <template>
-  <div class="preference-wrapper">
-    <n-card title="任务管理">
+  <div class="preference-wrapper setting-page">
+    <n-card class="setting-page-card" title="任务管理">
       <n-space vertical size="large" style="width: 100%">
         <div>
           <div class="section-header">
@@ -316,7 +316,7 @@ onMounted(loadConfig)
 .description {
   color: var(--guaxi-text-secondary);
   font-size: 13px;
-  line-height: 1.6;
+  line-height: 1.7;
   margin: 6px 0 10px;
 }
 </style>

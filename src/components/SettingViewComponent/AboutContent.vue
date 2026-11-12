@@ -366,8 +366,8 @@ onMounted(async () => {
   --a-accent-soft: color-mix(in srgb, var(--a-accent) 14%, transparent);
   --a-blue: var(--a-accent);
   --a-blue-soft: color-mix(in srgb, var(--a-blue) 11%, transparent);
-  --a-body-font: 'Noto Sans SC', 'Source Han Sans SC', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
-  --a-display: 'Iowan Old Style', 'Palatino Linotype', 'Source Han Serif SC', 'Noto Serif SC', 'Songti SC', serif;
+  --a-body-font: var(--guaxi-editor-font-family, 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei', 'Courier New');
+  --a-display: var(--a-body-font);
   --a-mono: var(--guaxi-editor-font-family, 'Maple Mono NF CN', Consolas, monospace);
   --a-shadow: 0 12px 28px rgba(0, 0, 0, 0.14);
 
