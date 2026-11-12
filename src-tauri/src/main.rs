@@ -557,6 +557,7 @@ async fn app_main() {
             commands::preview_render_cache::preview_render_cache_get,
             commands::preview_render_cache::preview_render_cache_put,
             commands::preview_render_cache::preview_render_cache_stats,
+            commands::render_cache_epoch::render_cache_epoch,
             commands::preview_render_cache::preview_render_cache_clear,
             guaxiservices::markdown_browser::remember_browser_preview_path,
             commands::service_control::service_list,

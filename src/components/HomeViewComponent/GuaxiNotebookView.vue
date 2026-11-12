@@ -857,6 +857,7 @@ import { openUrl } from '@tauri-apps/plugin-opener'
 import { useMessage } from 'naive-ui'
 import { convertFileSrc, invoke } from '@tauri-apps/api/core'
 import { confirm as confirmDialog, open, save } from '@tauri-apps/plugin-dialog'
+import { refreshRenderCacheEpoch, renderCacheEpochPrefix } from '../../utils/renderCacheEpoch'
 import mermaid from 'mermaid'
 import MarkdownIt from 'markdown-it'
 import { debounce } from 'lodash-es'
@@ -2935,7 +2936,11 @@ const buildNotebookMarkdownCacheKey = (content, options = {}) => {
   const theme = String(options.theme || props.theme || '')
   const filePath = normalizeNotebookFsPath(options.filePath || props.filePath || '')
   const basePath = normalizeNotebookFsPath(options.basePath || getNotebookBasePath())
-  return `${theme}::${filePath}::${basePath}::${markdownText}`
+  // 带上「图片授权代次」：后端登记表被清空（满额 / 进程重启）后渲染缓存必须失效，
+  // 否则这里会一直返回旧 HTML，而其中的图片 URL 已经不再被放行（集体 403）。
+  // 见 utils/renderCacheEpoch.js。代次为空时 key 与改造前一致。
+  const epoch = renderCacheEpochPrefix()
+  return `${epoch}${theme}::${filePath}::${basePath}::${markdownText}`
 }
 
 const escapeNotebookHtml = (value) => String(value ?? '')
@@ -5575,6 +5580,9 @@ const hasVisibleOutput = (cell) => {
 const renderMarkdownHtml = async (content, reason = 'unknown') => {
   const markdownText = preprocessNotebookObsidianWikilinks(String(content || ''))
   if (!markdownText.trim()) return ''
+  // 单 cell 渲染有独立入口（实时预览、目录分块），不保证会经过 syncRenderedMarkdownHtml，
+  // 所以这里也问一次代次，保证缓存 key 用的始终是当前值。重复调用已去重，代价可忽略。
+  await refreshRenderCacheEpoch()
   const cacheKey = buildNotebookMarkdownCacheKey(markdownText, {
     theme: props.theme,
     filePath: props.filePath,
@@ -5649,6 +5657,10 @@ const renderMarkdownHtml = async (content, reason = 'unknown') => {
 const syncRenderedMarkdownHtml = async (cells, reason = 'unknown') => {
   const renderVersion = markdownRenderVersion.value + 1
   markdownRenderVersion.value = renderVersion
+
+  // 先问一次后端的图片授权代次再拼缓存 key：登记表被清空过的话，这里会让整批缓存失效，
+  // 后续渲染重新走预处理、图片重新登记。查询是纯内存读取，代价可以忽略。
+  await refreshRenderCacheEpoch()
 
   logger.info('[Notebook] sync rendered markdown start', {
     reason,

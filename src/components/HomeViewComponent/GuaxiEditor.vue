@@ -1491,6 +1491,7 @@
 
 <script setup>
 import { createLogger } from '../../utils/logger'
+import { refreshRenderCacheEpoch, renderCacheEpochPrefix } from '../../utils/renderCacheEpoch'
 import { ref, computed, watch, onMounted, onUnmounted, onActivated, onDeactivated, nextTick, provide, h } from 'vue'
 import { useFileTreeStore } from '../../stores/fileTreeStore'
 import { useEditorStore } from '../../stores/editorStore'
@@ -20721,14 +20722,16 @@ const buildPreviewSegmentCacheKey = (segment, options = {}) => {
   const basePath = String(options.basePath || '')
   const filePath = String(options.filePath || '')
   const content = String(segment?.content || '')
-  return `${theme}::${basePath}::${filePath}::${content}`
+  // 带上「图片授权代次」：后端图片登记表被清空后，缓存里的图片 URL 已不再被放行，
+  // 必须让缓存失效以重新走预处理登记。见 utils/renderCacheEpoch.js。
+  return `${renderCacheEpochPrefix()}${theme}::${basePath}::${filePath}::${content}`
 }
 
 const buildPreviewDocumentCacheKey = (content, options = {}) => {
   const theme = String(options.theme || '')
   const basePath = String(options.basePath || '')
   const filePath = String(options.filePath || '')
-  return `${theme}::${basePath}::${filePath}::${String(content || '')}`
+  return `${renderCacheEpochPrefix()}${theme}::${basePath}::${filePath}::${String(content || '')}`
 }
 
 // 设计说明：
@@ -21430,6 +21433,10 @@ const performPreviewRender = async (content, requestId = 0, reason = 'scheduled'
     lastPreviewRenderedPath.value = renderFilePath
     return
   }
+
+  // 拼缓存 key 之前先问一次后端的图片授权代次（纯内存读取，代价可忽略）。
+  // 登记表被清空过的话，这里会让分段/全文缓存整体失效，后续渲染重新走预处理、图片重新登记。
+  await refreshRenderCacheEpoch()
 
   try {
     const basePath = renderFilePath ? await dirname(renderFilePath) : '';

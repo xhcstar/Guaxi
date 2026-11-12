@@ -29,6 +29,14 @@ use urlencoding::{decode, encode};
 struct ResolvedImageRegistry {
     files: HashSet<PathBuf>,
     dirs: HashSet<PathBuf>,
+    /// 第几次"整表清空"。每清一次加一，前端据此判断手里的渲染缓存是否已经过期。
+    ///
+    /// 为什么要这个：`serve_image` 的放行依据有两层 —— 三个根目录，以及这张表。
+    /// 笔记放在三个根之外时全靠后者。而表会在两种情况下丢掉已有登记：达到上限整体清空、
+    /// 进程重启。此时前端**已经渲染并缓存**的 HTML 里还留着旧 URL，缓存命中就不会再请求
+    /// 预处理接口，于是图片集体 403，要等用户手动重试或改一次文档才恢复。
+    /// 把代次带出去，前端把它并进渲染缓存的 key，表一清空缓存就自然失效、自动重新预处理。
+    epoch: u64,
 }
 
 fn resolved_image_registry() -> &'static Mutex<ResolvedImageRegistry> {
@@ -37,25 +45,39 @@ fn resolved_image_registry() -> &'static Mutex<ResolvedImageRegistry> {
         Mutex::new(ResolvedImageRegistry {
             files: HashSet::new(),
             dirs: HashSet::new(),
+            epoch: 0,
         })
     })
 }
 
 /// 单次会话里登记的条目上限。超过就整体清空重来：已渲染页面最多触发一次重新预处理，
 /// 不会让集合无上限地涨下去。
+///
+/// 可用环境变量 `GUAXI_IMAGE_REGISTRY_LIMIT` 调小，仅用于验证「清空后渲染缓存是否跟着
+/// 失效」这条链路 —— 正常运行时走 20000。
+fn registry_limit() -> usize {
+    std::env::var("GUAXI_IMAGE_REGISTRY_LIMIT")
+        .ok()
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .filter(|limit| *limit > 0)
+        .unwrap_or(RESOLVED_IMAGE_REGISTRY_LIMIT)
+}
+
 const RESOLVED_IMAGE_REGISTRY_LIMIT: usize = 20_000;
 
 fn remember_resolved_image(path: &Path) {
     let Ok(mut registry) = resolved_image_registry().lock() else {
         return;
     };
-    if registry.files.len() >= RESOLVED_IMAGE_REGISTRY_LIMIT {
+    let limit = registry_limit();
+    if registry.files.len() >= limit {
         warn!(
-            limit = RESOLVED_IMAGE_REGISTRY_LIMIT,
+            limit,
             "resolved image registry is full, clearing"
         );
         registry.files.clear();
         registry.dirs.clear();
+        registry.epoch = registry.epoch.wrapping_add(1);
     }
     if let Some(dir) = path.parent() {
         registry.dirs.insert(dir.to_path_buf());
@@ -421,7 +443,10 @@ async fn process_markdown(req: web::Json<MarkdownRequest>) -> HttpResponse {
 
     HttpResponse::Ok().json(serde_json::json!({
         "processed_content": processed,
-        "mappings": mappings
+        "mappings": mappings,
+        // 前端把它并进渲染缓存的 key：注册表被清空（达到上限 / 进程重启）后这个值变化，
+        // 缓存自动失效并重新走一次预处理，图片重新登记，不必等用户手动重试。
+        "registry_epoch": current_registry_epoch(),
     }))
 }
 
@@ -433,8 +458,22 @@ async fn process_chat_markdown(req: web::Json<MarkdownRequest>) -> HttpResponse 
 
     HttpResponse::Ok().json(serde_json::json!({
         "processed_content": processed,
-        "mappings": mappings
+        "mappings": mappings,
+        "registry_epoch": current_registry_epoch(),
     }))
+}
+
+/// 当前登记表代次。前端据此判断渲染缓存是否还认这张表。
+fn current_registry_epoch() -> u64 {
+    resolved_image_registry()
+        .lock()
+        .map(|registry| registry.epoch)
+        .unwrap_or(0)
+}
+
+/// 给 Tauri 命令用的公开版本（前端在「决定要不要复用渲染缓存」时问一次）。
+pub fn registry_epoch() -> u64 {
+    current_registry_epoch()
 }
 
 #[derive(Debug, Deserialize)]
