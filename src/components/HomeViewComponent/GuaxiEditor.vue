@@ -24506,12 +24506,27 @@ const prerenderDisplayMathForPandoc = async (markdown) => {
 }
 
 const prerenderMermaidForPandoc = async (markdown, format = '') => {
-  const text = String(markdown || '')
+  const raw = String(markdown || '')
+  // 围栏匹配按行边界做：编辑器/剪贴板/外部工具写进来的 CRLF 会让收尾围栏那行的 \r
+  // 挡在行尾断言（(?=\n|$)）前，整篇一个块都扫不到 —— 表现就是「导出成 Word 后图表还是源码」。
+  // 先归一成 LF 再扫；没有替换成功时返回原文，保持既有行为。
+  const text = raw.replace(/\r\n/g, '\n')
 
   // 收集所有 mermaid 代码块（支持 ``` 和 ~~~ 两种围栏）。
   // 围栏必须从行首开始，理由见 collectFenceBlocks：正文/标题里的字面量会吞掉后面的代码块。
   const blocks = collectFenceBlocks(text, ['mermaid']).map((block) => ({ ...block, code: block.body }))
-  if (!blocks.length) return text
+  if (!blocks.length) {
+    // 有 mermaid 字样却一块都没扫到：把上下文写进日志，便于定位围栏写法/换行符问题。
+    if (/mermaid/i.test(text)) {
+      const at = text.search(/mermaid/i)
+      logger.warn('[Export] mermaid text present but no fenced block matched', {
+        length: text.length,
+        hadCrlf: raw.includes('\r\n'),
+        around: text.slice(Math.max(0, at - 40), at + 40).replace(/\n/g, '\\n'),
+      })
+    }
+    return raw
+  }
 
   let tempDir
   let join
@@ -24646,7 +24661,8 @@ const prerenderMermaidForPandoc = async (markdown, format = '') => {
     })
     message.warning(`Mermaid 图表导出渲染失败（${firstError || '未知错误'}），成品中将保留源码`)
   }
-  return result
+  // 一张都没替换成功时返回原文：保持「未改动就不传 sourceMarkdown」的既有契约。
+  return rendered > 0 ? result : raw
 }
 
 /**
@@ -24685,12 +24701,22 @@ const svgToPngBlobBytes = async (svgText) => {
  * 尽力而为：单块失败保留源码并记录，绝不阻断导出。
  */
 const prerenderChartEmbedsForPandoc = async (markdown, baseDocPath, format = '') => {
-  const text = String(markdown || '')
+  const raw = String(markdown || '')
+  // 与 mermaid 同理：先归一换行，否则 CRLF 下收尾围栏匹配不上，图表整块漏掉。
+  const text = raw.replace(/\r\n/g, '\n')
 
   // 围栏必须从行首开始：正文/标题里出现的「```chart」「```excalidraw」字面量
   // 不应被当成代码块开头，否则会吞掉后面第一个真正的围栏，那块图表就漏掉预渲染。
   const blocks = collectFenceBlocks(text, ['chart', 'excalidraw'])
-  if (!blocks.length) return text
+  if (!blocks.length) {
+    if (/(^|\n)[ \t]*(`{3,}|~{3,})[ \t]*(chart|excalidraw)/i.test(text)) {
+      logger.warn('[Export] chart fences present but no block matched', {
+        length: text.length,
+        hadCrlf: raw.includes('\r\n'),
+      })
+    }
+    return raw
+  }
 
   let join
   let writeFile
@@ -24756,7 +24782,8 @@ const prerenderChartEmbedsForPandoc = async (markdown, baseDocPath, format = '')
   if (blocks.length > 0 && rendered === 0) {
     message.warning(`图表导出渲染失败（${firstError || '未知错误'}），成品中将保留源码`)
   }
-  return result
+  // 与 mermaid 同契约：没替换成功就返回原文。
+  return rendered > 0 ? result : raw
 }
 
 /**

@@ -677,8 +677,132 @@ fn collect_headings_for_static_toc(markdown: &str) -> Vec<StaticHeading> {
     headings
 }
 
+/// 去掉行首的引用标记（`>` 链），返回剩下的内容。
+fn strip_quote_markers(line: &str) -> &str {
+    let mut rest = line.trim_start();
+    while let Some(after) = rest.strip_prefix('>') {
+        rest = after.trim_start();
+    }
+    rest
+}
+
+/// 这一行是否为 ATX 标题（`#` ~ `######` + 空白）。缩进 4 格以上视为代码块。
+fn is_atx_heading_line(line: &str) -> bool {
+    let without_indent = line.trim_start_matches([' ', '\t']);
+    if line.len() - without_indent.len() > 3 {
+        return false;
+    }
+    let hashes = without_indent.chars().take_while(|ch| *ch == '#').count();
+    if hashes == 0 || hashes > 6 {
+        return false;
+    }
+    let rest = &without_indent[hashes..];
+    rest.is_empty() || rest.starts_with(' ') || rest.starts_with('\t')
+}
+
+/// 管道表格的数据行（`| a | b |`，也接受引用块里的 `> | a | b |`）。
+fn is_pipe_table_row(line: &str) -> bool {
+    let trimmed = strip_quote_markers(line).trim_end();
+    trimmed.starts_with('|') && trimmed.ends_with('|') && trimmed.matches('|').count() >= 2
+}
+
+/// 管道表格的分隔行（`| --- | :---: |`）。
+fn is_pipe_table_delimiter(line: &str) -> bool {
+    let trimmed = strip_quote_markers(line).trim();
+    if !(trimmed.starts_with('|') && trimmed.ends_with('|')) {
+        return false;
+    }
+    let inner = &trimmed[1..trimmed.len().saturating_sub(1)];
+    if inner.trim().is_empty() {
+        return false;
+    }
+    inner
+        .chars()
+        .all(|ch| matches!(ch, '-' | ':' | '|' | ' ' | '\t'))
+        && inner.contains('-')
+}
+
+/// 补上 Pandoc 块解析所需的空行。
+///
+/// Pandoc 的块解析比预览端（markdown-it / CommonMark）严格：ATX 标题和管道表格
+/// 都要求前面有空行，表格还要靠空行来**结束**。用户写的 Markdown 常常省略这些空行
+/// （软件内预览完全正常），但 pandoc 会把后续内容一路吞进表格、把标题退化成正文
+/// —— 表现就是「导出的 Word 里第 N 节之后正文挤成窄栏、代码全没了」。
+///
+/// 这里只在必要位置插入空行，不改动任何内容；代码围栏与 YAML frontmatter 内一律不动。
+fn ensure_block_boundaries(markdown: &str) -> String {
+    let lines: Vec<&str> = markdown.split('\n').collect();
+    let mut out: Vec<String> = Vec::with_capacity(lines.len() + 64);
+    let mut fence: Option<String> = None;
+    // frontmatter：首个非空行是 `---` 时，到下一个 `---`（含）为止都不碰。
+    let mut frontmatter_end: Option<usize> = None;
+    if let Some(first) = lines.iter().position(|line| !line.trim().is_empty()) {
+        if lines[first].trim() == "---" {
+            if let Some(close) = lines[first + 1..]
+                .iter()
+                .position(|line| line.trim() == "---")
+            {
+                frontmatter_end = Some(first + 1 + close);
+            }
+        }
+    }
+
+    for (index, line) in lines.iter().enumerate() {
+        let trimmed = line.trim_start();
+
+        if matches!(frontmatter_end, Some(end) if index <= end) {
+            out.push((*line).to_string());
+            continue;
+        }
+
+        if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
+            let marker_char = trimmed.chars().next().unwrap_or('`');
+            let count = trimmed.chars().take_while(|ch| *ch == marker_char).count();
+            let marker = marker_char.to_string().repeat(count.max(3));
+            match &fence {
+                None => fence = Some(marker),
+                Some(open) if trimmed.starts_with(open.as_str()) => fence = None,
+                _ => {}
+            }
+            out.push((*line).to_string());
+            continue;
+        }
+        if fence.is_some() {
+            out.push((*line).to_string());
+            continue;
+        }
+
+        let current_blank = trimmed.trim_end().is_empty();
+        let current_quoted = trimmed.starts_with('>');
+        let prev_non_blank = out.last().map(|prev| !prev.trim().is_empty()).unwrap_or(false);
+        let prev_is_table_row = out.last().map(|prev| is_pipe_table_row(prev)).unwrap_or(false);
+        let prev_is_heading = out.last().map(|prev| is_atx_heading_line(prev)).unwrap_or(false);
+        let current_is_table_row = is_pipe_table_row(line);
+        let next_is_delimiter = lines
+            .get(index + 1)
+            .map(|next| is_pipe_table_delimiter(next))
+            .unwrap_or(false);
+
+        let needs_blank = prev_non_blank
+            && !current_blank
+            && ((is_atx_heading_line(line) && !prev_is_heading)
+                // 表格开头不能被当成上一段落的续行（引用块里的表格不在此列：
+                // 补空行会把引用块截断）。
+                || (current_is_table_row && !current_quoted && !prev_is_table_row && next_is_delimiter)
+                // 表格结束：下一行不是表格行、也不是引用块的续行。
+                || (prev_is_table_row && !current_is_table_row && !current_quoted));
+        if needs_blank {
+            out.push(String::new());
+        }
+        out.push((*line).to_string());
+    }
+
+    out.join("\n")
+}
+
 pub fn preprocess_markdown_for_static_render(markdown: &str) -> String {
     let normalized = normalize_markdown_text(markdown);
+    let normalized = ensure_block_boundaries(&normalized);
     let without_outputs = strip_output_blocks(&normalized);
     let without_python_cells = strip_python_cell_blocks(&without_outputs);
     let without_math_cells = strip_math_cell_blocks(&without_python_cells);
@@ -1328,5 +1452,52 @@ a^2 + b^2 = c^2
         // 用户正在编辑、尚未补上结束标记时，不能把后续内容吞进 cell。
         assert!(parse_python_cell_blocks("<!--py-->\nprint('x')\n").is_empty());
         assert!(parse_math_cell_blocks("<!--math-->\nx^2\n").is_empty());
+    }
+
+    #[test]
+    fn inserts_blank_line_after_quoted_table_before_heading() {
+        // 实测事故：引用块里的表格后紧跟标题，pandoc 会把第 8 节之后整篇吞进
+        // 一个 5.5% 宽的单列表格，Word 里代码全部消失。
+        let input = "> | a | b |\n> | --- | --- |\n> | 1 | 2 |\n## 8. next\ntext\n";
+        let out = ensure_block_boundaries(input);
+        assert!(
+            out.contains("> | 1 | 2 |\n\n## 8. next"),
+            "table must be terminated before the heading, got: {out}"
+        );
+        // 引用块内部不能被空行截断。
+        assert!(
+            out.contains("> | a | b |\n> | --- | --- |\n> | 1 | 2 |"),
+            "blockquote table must stay intact, got: {out}"
+        );
+    }
+
+    #[test]
+    fn inserts_blank_line_before_heading_after_paragraph() {
+        assert_eq!(
+            ensure_block_boundaries("some text\n## 5. code\n"),
+            "some text\n\n## 5. code\n"
+        );
+        // 相邻标题之间不需要额外空行。
+        assert_eq!(
+            ensure_block_boundaries("## A\n### B\n"),
+            "## A\n### B\n"
+        );
+    }
+
+    #[test]
+    fn inserts_blank_line_before_pipe_table_after_paragraph() {
+        let input = "text\n| a | b |\n| --- | --- |\n| 1 | 2 |\n";
+        let out = ensure_block_boundaries(input);
+        assert!(out.starts_with("text\n\n| a | b |"), "got: {out}");
+    }
+
+    #[test]
+    fn leaves_code_fences_untouched() {
+        let input = "```mermaid\ngraph TD\n## not a heading\n```\n## H\n";
+        let out = ensure_block_boundaries(input);
+        assert!(
+            out.contains("```mermaid\ngraph TD\n## not a heading\n```"),
+            "fence content must not be modified, got: {out}"
+        );
     }
 }
