@@ -1721,8 +1721,17 @@ import {
   readPositionKey,
   planReadPositionRestore,
   resolveScrollTarget,
+  resolveAnchorTarget,
+  isPixelTrustworthy,
+  isRestoreSettled,
+  makeContentAnchor,
   READ_POSITION_CACHE_LIMIT,
 } from './readPositionCore.js'
+import { createReadPositionPersistence } from './readPositionStore.js'
+import {
+  restoreScrollTopWithGrowthRetry as restoreScrollTopWithGrowthRetryCore,
+  keepAnchorStableAfterRestore,
+} from './readPositionRestore.js'
 
 // 设计说明：自定义 neovim 图标使用 Vue 组件而非 @iconify/vue 的 body 对象，
 // 避免 release 构建下 tree-shaking / 压缩导致 Icon 组件无法解析自定义数据，退化为终端图标。
@@ -2942,11 +2951,159 @@ let suppressPreviewLineSyncDepth = 0;
 const PREVIEW_READ_POSITION_CACHE_LIMIT = READ_POSITION_CACHE_LIMIT;
 const previewReadPositionCache = new Map();
 let markdownPreviewScrollSaveTimer = null;
-let pendingPreviewReadPositionRestoreKey = '';
-let suppressPreviewReadPositionSave = false;
+// 待恢复的预览位置队列（多个 key）。
+// 原来这里是一个字符串槽位，同一时刻只能记一个「该滚到哪里」。但切文件的一瞬间会连续排队
+// 好几个请求（分屏时编辑器侧+预览侧、切模式前后的两轮补落位、PDF 构建完成后的一次回填），
+// 后来的请求会把前一个覆盖掉——表现就是「这一次切回来没落位」。队列按 key 去重、按入队顺序消费，
+// 每个渲染完成事件只消费属于自己的那一条，多余的请求不会互相踩踏。
+let pendingPreviewReadPositionRestoreKeys = [];
+const PENDING_PREVIEW_RESTORE_LIMIT = 12;
+// 落位过程本身会产生 scroll 事件，必须静音保存，否则中间态会被当成「用户读到这里」写回缓存。
+// 用计数而不是布尔：前后两次落位可能重叠（切文件的同时预览还在按帧重锚），
+// 布尔会被先结束的那次提前关掉，剩下的那次于是把自己滚出来的中间位置存了下来。
+let suppressPreviewReadPositionSaveDepth = 0;
+const isPreviewReadPositionSaveSuppressed = () => suppressPreviewReadPositionSaveDepth > 0;
 // 从 KeepAlive 缓存中被重新激活的那一小段时间里，DOM 刚回到布局、滚动条已被重置为 0，
 // 此时任何保存都会把 onDeactivated 存好的正确位置覆盖成开头，所以整条保存链路需要临时静音。
 let suppressReadPositionSaveDepth = 0;
+
+// ───── 阅读位置落盘：让「关掉软件再打开」也能回到原处 ─────
+// 上面所有缓存都是组件内存里的 Map，进程退出即消失。这里把五类载体与「每文件模式记忆」
+// 一起序列化到 localStorage，启动后再灌回各自的 Map。
+// 写盘走防抖（滚动事件每帧都来），任何写盘失败都静默——最坏只是这一次记不住。
+// 具体字段与版本号由 readPositionCore 决定，所以序列化规则有 Node 测试覆盖。
+//
+// 之所以能在这里直接引用后面才声明的缓存/文档模式表：本段只定义函数，真正执行发生在
+// onMounted / 用户滚动之后，那时全部 const 已完成初始化。
+let restorePersistedReadPositions = () => 0;
+const collectPersistedReadPositions = () => {
+  const positions = new Map();
+  for (const key of previewReadPositionCache.keys()) positions.set(key, previewReadPositionCache.get(key));
+  for (const [path, entry] of editorReadPositionCache) {
+    const key = getPreviewReadPositionKey(path, 'editor');
+    if (key) positions.set(key, { ...entry, kind: 'editor' });
+  }
+  for (const [path, entry] of explorerReadPositionCache) {
+    const key = getPreviewReadPositionKey(path, 'explorer');
+    if (key) positions.set(key, { ...entry, kind: 'explorer' });
+  }
+  for (const [path, entry] of realtimeReadPositionCache) {
+    const key = getPreviewReadPositionKey(path, 'realtime');
+    if (key) positions.set(key, { ...entry, kind: 'realtime' });
+  }
+  return positions;
+};
+
+// 回灌落盘数据。只填缓存，不触发任何落位——真正的位置恢复仍走各模式原有的恢复链路，
+// 这样「开机恢复」和「切回该文件」用的是同一条经过测试的路径，不会出现两套行为。
+restorePersistedReadPositions = (parsed) => {
+  let restored = 0;
+  for (const item of parsed.positions || []) {
+    const kind = item.kind || String(item.key || '').split(':')[0];
+    const path = normalizePreviewReadPath(item.path);
+    if (!path || !kind) continue;
+    const entry = {
+      path,
+      kind,
+      scrollTop: Number(item.scrollTop) || 0,
+      scrollRatio: Number(item.scrollRatio) || 0,
+      anchorLine: Number(item.anchorLine) || 0,
+      anchorOffset: Number(item.anchorOffset) || 0,
+      page: Number(item.page) || 0,
+      pageYPt: Number(item.pageYPt) || 0,
+      cellKey: item.cellKey ? String(item.cellKey) : '',
+      lineNumber: Number(item.lineNumber) || 0,
+      scrollHeight: Number(item.scrollHeight) || 0,
+      clientHeight: Number(item.clientHeight) || 0,
+    };
+    if (kind === 'editor') {
+      // Monaco 的 viewState 不能序列化，开机后只能靠 scrollTop/光标行近似落位；
+      // 不伪造空 viewState（那会让 restoreViewState 把光标甩回第 1 行）。
+      rememberEditorReadPosition({ ...entry, viewState: null, scrollLeft: 0 });
+      restored += 1;
+    } else if (kind === 'explorer') {
+      explorerReadPositionCache.set(path, { ...entry, savedAt: Number(item.savedAt) || Date.now() });
+      restored += 1;
+    } else if (kind === 'realtime') {
+      realtimeReadPositionCache.set(path, { ...entry, savedAt: Number(item.savedAt) || Date.now() });
+      restored += 1;
+    } else {
+      rememberPreviewReadPosition(entry);
+      restored += 1;
+    }
+  }
+  // 每文件模式记忆：这是「重启后打开同一文档仍是上次的阅读模式」的依据。
+  for (const [path, modeKey] of Object.entries(parsed.modes || {})) {
+    const normalized = normalizePreviewReadPath(path);
+    if (!normalized) continue;
+    docPreviewModeKeyByPath.set(normalized, normalizeHomePreviewModeKey(modeKey));
+    restored += 1;
+  }
+  if (restored > 0) {
+    logger.info('[ReadPosition] restored persisted read positions', { count: restored });
+  }
+  return restored;
+};
+
+const readPositionPersistence = createReadPositionPersistence({
+  readSources: () => ({
+    positions: collectPersistedReadPositions(),
+    modes: docPreviewModeKeyByPath,
+    // 只记「最后看的那个文件」：重启后重开它，才有位置可恢复。
+    // 不记整排标签页——标签是用户对工作集的管理动作，由 fileTreeStore 自己决定。
+    lastPath: normalizePreviewReadPath(selectedFile.value?.path || fileTreeStore.activeTab || ''),
+  }),
+  onRestore: (parsed) => {
+    restorePersistedReadPositions(parsed);
+  },
+});
+const scheduleReadPositionPersist = (reason = 'scheduled') => {
+  readPositionPersistence.schedule(reason);
+};
+const flushReadPositionPersist = (reason = 'flush') => {
+  readPositionPersistence.flush(reason);
+};
+
+// 重开上次的文档。
+//
+// 这是「重启后记不住阅读位置」的另一半：位置确实存下来了，但启动时根本没有打开任何文档，
+// 自然无从恢复。这里只在「启动后仍没有任何标签页」且「不是从外部（文件关联/命令行）打开」
+// 的情况下补一次，避免和用户的手动操作抢。
+// 打开后由既有的 selectedFile watcher 完成模式恢复与落位，这里不重复实现那套逻辑。
+const maybeReopenLastDocument = async (lastPath, reason = 'mounted') => {
+  const normalized = normalizePreviewReadPath(lastPath);
+  if (!normalized) return false;
+  // 用户/外部来源已经在启动时打开了文件：不要覆盖。
+  await nextTick();
+  if (selectedFile.value?.path || fileTreeStore.activeTab || fileTreeStore.openTabs.length > 0) {
+    logger.debug('[ReadPosition] skip reopening last document because a file is already open', {
+      reason,
+      lastPath: normalized,
+    });
+    return false;
+  }
+  try {
+    const res = await fileTreeStore.fetchFileContent(normalized);
+    if (!res?.ok) {
+      logger.info('[ReadPosition] last document is no longer readable, skip reopen', {
+        reason,
+        lastPath: normalized,
+        code: res?.code || '',
+      });
+      return false;
+    }
+    await fileTreeStore.openFileInTab(normalized, res.content, { unsupported: !!res.unsupported });
+    logger.info('[ReadPosition] reopened last document', { reason, lastPath: normalized });
+    return true;
+  } catch (error) {
+    logger.warn('[ReadPosition] reopen last document failed', {
+      reason,
+      lastPath: normalized,
+      error: String(error?.message || error || ''),
+    });
+    return false;
+  }
+};
 const pendingRealtimeScrollRestore = ref(false);
 const realtimeVditorId = 'realtime-vditor';
 const realtimeVditorReady = ref(false);
@@ -3023,6 +3180,9 @@ const captureMarkdownPreviewReadPosition = (path, reason = 'unknown') => {
   const scrollableHeight = Math.max(0, container.scrollHeight - container.clientHeight);
   const scrollTop = Math.max(0, container.scrollTop || 0);
   const loc = getCurrentPreviewLocation?.() || null;
+  // 内容锚点：视口顶部所在块的源码行号 + 块内偏移。切文件、改窗口宽度、图片加载完成
+  // 之后，行号仍指向同一段文字，因此它是恢复精度的最终依据（像素/比例只是兜底）。
+  const anchor = getMarkdownPreviewAnchor(container);
 
   // 设计说明：
   // 1. scrollTop 用于同一渲染高度下精确恢复，scrollRatio 用于窗口大小/图片加载后高度变化时兜底。
@@ -3033,6 +3193,8 @@ const captureMarkdownPreviewReadPosition = (path, reason = 'unknown') => {
     scrollTop,
     scrollRatio: scrollableHeight > 0 ? scrollTop / scrollableHeight : 0,
     lineNumber: Number(loc?.lineNumber || 1),
+    anchorLine: anchor?.anchorLine || 0,
+    anchorOffset: anchor?.anchorOffset || 0,
     scrollHeight: container.scrollHeight,
     clientHeight: container.clientHeight,
   });
@@ -3042,7 +3204,9 @@ const captureMarkdownPreviewReadPosition = (path, reason = 'unknown') => {
     path: normalizedPath,
     scrollTop: Math.round(scrollTop),
     ratio: scrollableHeight > 0 ? +(scrollTop / scrollableHeight).toFixed(4) : 0,
+    anchorLine: anchor?.anchorLine || 0,
   });
+  scheduleReadPositionPersist('markdown-capture');
   return true;
 };
 
@@ -3077,6 +3241,7 @@ const captureOrgPreviewReadPosition = (path, reason = 'unknown') => {
     path: normalizedPath,
     ...position,
   });
+  scheduleReadPositionPersist('org-capture');
 
   logger.debug('[PreviewReadPosition] saved org position', {
     reason,
@@ -3102,22 +3267,29 @@ const capturePdfPreviewReadPosition = (path, reason = 'unknown') => {
     return false;
   }
 
+  // 「页号 + 页内偏移」是唯一跨缩放稳定的坐标：同一份 PDF 换缩放档位、换窗口宽度，
+  // 比例会漂，页号不会。量不到（面板还没加载完）时退回只有比例，恢复时仍可用。
+  const position = typeof viewer.readPosition === 'function' ? viewer.readPosition() : null;
   rememberPreviewReadPosition({
     kind: 'pdf',
     path: normalizedPath,
     scrollRatio: ratio,
+    page: Number(position?.page) || 0,
+    pageYPt: Number(position?.yPt) || 0,
   });
+  scheduleReadPositionPersist('pdf-capture');
 
   logger.debug('[PreviewReadPosition] saved pdf position', {
     reason,
     path: normalizedPath,
     ratio: +ratio.toFixed(4),
+    page: Number(position?.page) || 0,
   });
   return true;
 };
 
 const saveActivePreviewReadPosition = (reason = 'unknown', pathOverride = '') => {
-  if (suppressPreviewReadPositionSave || suppressReadPositionSaveDepth > 0) return false;
+  if (isPreviewReadPositionSaveSuppressed() || suppressReadPositionSaveDepth > 0) return false;
   const path = normalizePreviewReadPath(pathOverride || selectedFile.value?.path || fileTreeStore.activeTab || lastSelectedFilePath.value);
   const kind = getPreviewReadKindForPath(path);
   if (kind === 'markdown') return captureMarkdownPreviewReadPosition(path, reason);
@@ -3129,9 +3301,27 @@ const saveActivePreviewReadPosition = (reason = 'unknown', pathOverride = '') =>
 const queuePreviewReadPositionRestore = (path, kind = getPreviewReadKindForPath(path), reason = 'unknown') => {
   const key = getPreviewReadPositionKey(path, kind);
   if (!key || !previewReadPositionCache.has(key)) return false;
-  pendingPreviewReadPositionRestoreKey = key;
+  // 同一个 key 只保留一条：重复排队没有意义，且会让队列无谓增长。
+  if (pendingPreviewReadPositionRestoreKeys.includes(key)) {
+    logger.debug('[PreviewReadPosition] restore already queued', { reason, key });
+    return true;
+  }
+  pendingPreviewReadPositionRestoreKeys.push(key);
+  while (pendingPreviewReadPositionRestoreKeys.length > PENDING_PREVIEW_RESTORE_LIMIT) {
+    pendingPreviewReadPositionRestoreKeys.shift();
+  }
   logger.debug('[PreviewReadPosition] queued restore', { reason, key });
   return true;
+};
+
+/** 丢弃待恢复队列（切到完全不同的文件时用，避免把上一条请求消费到新文档上）。 */
+const clearPendingPreviewReadPositionRestores = (reason = 'unknown') => {
+  if (!pendingPreviewReadPositionRestoreKeys.length) return;
+  logger.debug('[PreviewReadPosition] cleared queued restores', {
+    reason,
+    keys: pendingPreviewReadPositionRestoreKeys.slice(),
+  });
+  pendingPreviewReadPositionRestoreKeys = [];
 };
 
 const queueCurrentPreviewReadPositionRestore = (kind = '', reason = 'unknown') => {
@@ -3144,60 +3334,114 @@ const queueCurrentPreviewReadPositionRestore = (kind = '', reason = 'unknown') =
 // 2. 只写一次 scrollTop 会被当时还偏小的 scrollHeight 夹断，表现为“只恢复了一点点”甚至回到开头。
 // 3. 因此按帧重试：目标可达就落位收工；文档高度连续多帧不再变化说明已是最终高度，按比例兜底后收工。
 //    这样既不会在文档撑高期间提前放弃，也不会在高度稳定后继续跟用户抢滚动条。
-const RESTORE_SCROLL_MAX_ATTEMPTS = 14;
-const RESTORE_SCROLL_RETRY_DELAY_MS = 40;
-const RESTORE_SCROLL_STABLE_FRAMES = 2;
+// 4. 目标值按「内容锚点 > 像素 > 比例」的顺序算：锚点（行号）在窗口宽度、字体、图片加载
+//    都变化后仍指向同一段文字，是唯一真正精确的坐标；像素只在文档高度与当初一致时可信。
+// 逐帧落位引擎已抽到 readPositionRestore.js：它需要「元素 + 目标 + 锚点解析」，
+// 不依赖 Monaco / 预览渲染，因此能对真实滚动容器直接验证（见 .readpos-preview）。
+const restoreScrollTopWithGrowthRetry = (getElement, entry, options = {}) => (
+  restoreScrollTopWithGrowthRetryCore(getElement, entry, {
+    ...options,
+    logger,
+    // 组件里元素一定还在布局中才可写；引擎只要求 isConnected。
+    nextFrame: () => new Promise((resolve) => window.requestAnimationFrame(resolve)),
+    wait: (ms) => new Promise((resolve) => window.setTimeout(resolve, ms)),
+  })
+);
 
-const restoreScrollTopWithGrowthRetry = async (getElement, entry, { reason = 'unknown', label = 'scroll' } = {}) => {
-  const storedTop = Number(entry?.scrollTop);
-  let lastMaxTop = -1;
-  let stableCount = 0;
-  let applied = 0;
-  let reached = false;
-  let attempts = 0;
-  // 目标值与「像素还是比例」的判断交给 readPositionCore，组件只负责逐帧落位。
-  // 这样同一套换算规则能被 Node 测试覆盖（tests/editorReadPosition.test.mjs）。
-  let targetTop = Math.max(0, Number.isFinite(storedTop) ? storedTop : 0);
+// 落位后的短暂锚点看护（见 readPositionRestore.keepAnchorStableAfterRestore）。
+// 同一时刻只保留一个：连续切文件时新的看护会停掉旧的，避免两个循环互相拉扯滚动条。
+let stopMarkdownAnchorGuard = null;
+const startMarkdownAnchorGuard = (path, entry, reason = 'unknown') => {
+  stopMarkdownAnchorGuard?.();
+  stopMarkdownAnchorGuard = null;
+  if (!(Number(entry?.anchorLine) > 0)) return;
+  const normalizedPath = normalizePreviewReadPath(path);
+  stopMarkdownAnchorGuard = keepAnchorStableAfterRestore(
+    () => previewContainer.value,
+    entry,
+    {
+      resolveBlockTop: resolveMarkdownPreviewBlockTop,
+      // 容器被切走/重建后锚点解析会返回 null，看护自然跳过，不需要额外的归属判断。
+      nextFrame: () => new Promise((resolve) => window.requestAnimationFrame(resolve)),
+    },
+  );
+  logger.debug('[PreviewReadPosition] anchor guard started', {
+    reason,
+    path: normalizedPath,
+    anchorLine: Number(entry.anchorLine),
+  });
+};
 
-  for (let attempt = 1; attempt <= RESTORE_SCROLL_MAX_ATTEMPTS; attempt += 1) {
-    attempts = attempt;
-    await new Promise((resolve) => window.requestAnimationFrame(resolve));
-    const el = getElement();
-    if (!(el instanceof HTMLElement) || !el.isConnected) break;
+// 视口顶部所在的 Markdown 块行号 + 块内偏移。
+// 预览容器里的每个块都带 data-md-start-line（由渲染器写入），行号在排版变化后仍稳定。
+const getMarkdownPreviewAnchor = (container = previewContainer.value) => {
+  if (!(container instanceof HTMLElement)) return null;
+  const elements = getPreviewLineAnchors();
+  if (!elements.length) return null;
+  const containerTop = container.getBoundingClientRect().top + (container.clientTop || 0);
+  let best = null;
+  let bestTop = -Infinity;
+  for (const el of elements) {
+    const rect = el.getBoundingClientRect();
+    // 取「顶边已经在视口顶部之上、且最靠近顶部」的那一块：它就是用户视线起始处的内容。
+    if (rect.bottom <= containerTop + 1) continue;
+    const top = rect.top;
+    if (top <= containerTop + 1 && top > bestTop) {
+      bestTop = top;
+      best = el;
+    }
+  }
+  if (!best) {
+    // 视口还在第一个块的上方（例如位置就是 0）：用第一块。此时块顶在视口下方，
+    // 「视口顶部相对块顶」的偏移是负值，恢复时算出的 scrollTop 会被夹到 0，正好回到顶部。
+    best = elements[0];
+    const rect = best.getBoundingClientRect();
+    bestTop = rect.top;
+  }
+  const line = Number(best?.dataset?.mdStartLine || 0);
+  if (!line) return null;
+  // 偏移的符号约定（贯穿 core / 引擎 / PDF 侧）：
+  // anchorOffset = 视口顶部 - 块顶，即「块被视口截掉了多少」。
+  // 恢复时 scrollTop = 块在文档中的顶部 + anchorOffset，两者必须一致，
+  // 否则会把视口按块自身的滚动偏移量再整体挪一段（差一个块的高度）。
+  return makeContentAnchor({
+    anchorLine: line,
+    anchorOffset: Math.round(containerTop - bestTop),
+  });
+};
 
-    const maxTop = Math.max(0, el.scrollHeight - el.clientHeight);
-    stableCount = maxTop === lastMaxTop ? stableCount + 1 : 0;
-    lastMaxTop = maxTop;
-
-    // 每帧重新换算：文档在渐进渲染中长高时，像素目标会从"越界"变成"可达"。
-    const target = resolveScrollTarget(entry, {
-      scrollHeight: el.scrollHeight,
-      clientHeight: el.clientHeight,
-    });
-    targetTop = target.top;
-    const reachable = target.source === 'pixels';
-    const nextTop = Math.min(Math.max(0, target.top), maxTop);
-    el.scrollTop = nextTop;
-    applied = el.scrollTop;
-
-    if (reachable || targetTop <= 0) {
-      reached = true;
+// 行号 → 该块当前在滚动内容坐标系里的顶部像素。渲染出来的块里没有这一行时返回 null，
+// 让调用方退回比例/像素，而不是把「找不到」当成「在顶部」。
+const resolveMarkdownPreviewBlockTop = (line) => {
+  const container = previewContainer.value;
+  if (!(container instanceof HTMLElement)) return null;
+  const target = Number(line);
+  if (!Number.isFinite(target) || target <= 0) return null;
+  const elements = getPreviewLineAnchors();
+  if (!elements.length) return null;
+  // 精确命中优先；没有完全相同的行号时取「起始行 <= 目标行」的最后一块（块起始行不一定连续）。
+  let exact = null;
+  let floor = null;
+  let floorLine = -Infinity;
+  for (const el of elements) {
+    const elLine = Number(el?.dataset?.mdStartLine || 0);
+    if (!elLine) continue;
+    if (elLine === target) {
+      exact = el;
       break;
     }
-    if (stableCount >= RESTORE_SCROLL_STABLE_FRAMES) break;
-    await new Promise((resolve) => window.setTimeout(resolve, RESTORE_SCROLL_RETRY_DELAY_MS));
+    if (elLine < target && elLine > floorLine) {
+      floorLine = elLine;
+      floor = el;
+    }
   }
-
-  logger.debug('[ReadPosition] scroll restore settled', {
-    reason,
-    label,
-    attempts,
-    targetTop: Math.round(targetTop),
-    applied: Math.round(applied),
-    reached,
-  });
-  return { applied, reached };
+  const hit = exact || floor;
+  if (!hit) return null;
+  const containerTop = container.getBoundingClientRect().top + (container.clientTop || 0);
+  const rect = hit.getBoundingClientRect();
+  return rect.top - containerTop + container.scrollTop;
 };
+
 
 const restoreMarkdownPreviewReadPosition = async (path, reason = 'unknown') => {
   const key = getPreviewReadPositionKey(path, 'markdown');
@@ -3205,13 +3449,18 @@ const restoreMarkdownPreviewReadPosition = async (path, reason = 'unknown') => {
   const container = previewContainer.value;
   if (!entry || !(container instanceof HTMLElement)) return false;
 
-  suppressPreviewReadPositionSave = true;
+  suppressPreviewReadPositionSaveDepth += 1;
   try {
     await nextTick();
-    const { applied, reached } = await restoreScrollTopWithGrowthRetry(
+    const { applied, reached, source } = await restoreScrollTopWithGrowthRetry(
       () => previewContainer.value,
       entry,
-      { reason, label: 'markdown-preview' },
+      {
+        reason,
+        label: 'markdown-preview',
+        // 渲染出来的块里能找到该行就用锚点精确定位；找不到时函数内部自动退回像素/比例。
+        resolveBlockTop: resolveMarkdownPreviewBlockTop,
+      },
     );
 
     logger.info('[PreviewReadPosition] restored markdown position', {
@@ -3219,12 +3468,17 @@ const restoreMarkdownPreviewReadPosition = async (path, reason = 'unknown') => {
       path: normalizePreviewReadPath(path),
       scrollTop: Math.round(applied),
       reached,
+      source,
+      anchorLine: Number(entry.anchorLine) || 0,
       ratio: Number.isFinite(Number(entry.scrollRatio)) ? +Number(entry.scrollRatio).toFixed(4) : 0,
     });
+    // 落位收工时图片可能还在解码 / Mermaid 还没出图：只要它们出现在视口上方，
+    // 内容就整体下移，用户看到的那一段被推走。这里短暂看护锚点，用户一滚动就放手。
+    startMarkdownAnchorGuard(path, entry, reason);
     return true;
   } finally {
     window.setTimeout(() => {
-      suppressPreviewReadPositionSave = false;
+      suppressPreviewReadPositionSaveDepth = Math.max(0, suppressPreviewReadPositionSaveDepth - 1);
     }, 0);
   }
 };
@@ -3235,7 +3489,7 @@ const restorePdfPreviewReadPosition = async (path, reason = 'unknown') => {
   const viewer = latexPreviewRef.value;
   if (!entry || !(viewer?.restoreScrollStable || viewer?.restoreScroll)) return false;
 
-  suppressPreviewReadPositionSave = true;
+  suppressPreviewReadPositionSaveDepth += 1;
   try {
     await nextTick();
     await new Promise((resolve) => window.requestAnimationFrame(resolve));
@@ -3244,17 +3498,30 @@ const restorePdfPreviewReadPosition = async (path, reason = 'unknown') => {
     // 优先用"跨帧重试到布局稳定"的落位：文档刚打开时容器可能还没有可滚动高度，
     // 只落一帧会被 clamp 到顶部，表现就是"切回来还停在开头"。
     // 整个落位过程保持保存静音，避免把中间的过渡滚动位置当成该文件的阅读位置存下来。
-    if (viewer.restoreScrollStable) await viewer.restoreScrollStable(safeRatio);
-    else viewer.restoreScroll(safeRatio);
+    const page = Number(entry.page);
+    let restored = false;
+    if (page > 0 && typeof viewer.restorePositionStable === 'function') {
+      // 页号 + 页内偏移优先：它不受缩放档位和「文档刚加载时页高还是占位值」的影响。
+      restored = await viewer.restorePositionStable({
+        page,
+        yPt: Number(entry.pageYPt) || 0,
+      });
+    }
+    if (!restored) {
+      if (viewer.restoreScrollStable) await viewer.restoreScrollStable(safeRatio);
+      else viewer.restoreScroll(safeRatio);
+    }
     logger.info('[PreviewReadPosition] restored pdf position', {
       reason,
       path: normalizePreviewReadPath(path),
       ratio: Number.isFinite(ratio) ? +ratio.toFixed(4) : 0,
+      page: page > 0 ? Math.round(page) : 0,
+      byPage: page > 0 && restored,
     });
     return true;
   } finally {
     window.setTimeout(() => {
-      suppressPreviewReadPositionSave = false;
+      suppressPreviewReadPositionSaveDepth = Math.max(0, suppressPreviewReadPositionSaveDepth - 1);
     }, 0);
   }
 };
@@ -3265,7 +3532,7 @@ const restoreOrgPreviewReadPosition = async (path, reason = 'unknown') => {
   const viewer = orgPreviewRef.value;
   if (!entry || !viewer?.restoreScroll) return false;
 
-  suppressPreviewReadPositionSave = true;
+  suppressPreviewReadPositionSaveDepth += 1;
   try {
     await nextTick();
     await new Promise((resolve) => window.requestAnimationFrame(resolve));
@@ -3282,15 +3549,16 @@ const restoreOrgPreviewReadPosition = async (path, reason = 'unknown') => {
     return true;
   } finally {
     window.setTimeout(() => {
-      suppressPreviewReadPositionSave = false;
+      suppressPreviewReadPositionSaveDepth = Math.max(0, suppressPreviewReadPositionSaveDepth - 1);
     }, 0);
   }
 };
 
 const restoreQueuedPreviewReadPosition = async (kind, path, reason = 'unknown') => {
   const key = getPreviewReadPositionKey(path, kind);
-  if (!key || pendingPreviewReadPositionRestoreKey !== key) return false;
-  pendingPreviewReadPositionRestoreKey = '';
+  const index = key ? pendingPreviewReadPositionRestoreKeys.indexOf(key) : -1;
+  if (index < 0) return false;
+  pendingPreviewReadPositionRestoreKeys.splice(index, 1);
   if (kind === 'markdown') return restoreMarkdownPreviewReadPosition(path, reason);
   if (kind === 'pdf') return restorePdfPreviewReadPosition(path, reason);
   if (kind === 'org') return restoreOrgPreviewReadPosition(path, reason);
@@ -3363,6 +3631,7 @@ const captureExplorerReadPosition = (path, reason = 'unknown') => {
     if (!oldestKey) break;
     explorerReadPositionCache.delete(oldestKey);
   }
+  scheduleReadPositionPersist('explorer-capture');
 
   logger.debug('[ExplorerReadPosition] saved explorer position', {
     reason,
@@ -3456,6 +3725,7 @@ const captureRealtimeReadPosition = (path, reason = 'unknown') => {
     if (!oldestKey) break;
     realtimeReadPositionCache.delete(oldestKey);
   }
+  scheduleReadPositionPersist('realtime-capture');
 
   logger.debug('[RealtimeReadPosition] saved realtime position', {
     reason,
@@ -3589,7 +3859,7 @@ const restoreReadPositionAfterFileSwitch = async (path, reason = 'file-switch') 
 };
 
 const handleMarkdownPreviewScroll = () => {
-  if (suppressPreviewReadPositionSave) return;
+  if (isPreviewReadPositionSaveSuppressed()) return;
   const pathSnapshot = normalizePreviewReadPath(selectedFile.value?.path || fileTreeStore.activeTab || lastPreviewRenderedPath.value);
   cancelMarkdownPreviewScrollSaveTimer('markdown-scroll-rescheduled');
   markdownPreviewScrollSaveTimer = window.setTimeout(() => {
@@ -3625,14 +3895,14 @@ const cancelPreviewPaneScrollSaveTimer = (reason = 'unknown') => {
 };
 
 const schedulePreviewPaneScrollSave = (capture, reason) => {
-  if (suppressPreviewReadPositionSave) return;
+  if (isPreviewReadPositionSaveSuppressed()) return;
   const pathSnapshot = normalizePreviewReadPath(selectedFile.value?.path || fileTreeStore.activeTab || '');
   if (!pathSnapshot) return;
 
   cancelPreviewPaneScrollSaveTimer(`${reason}:rescheduled`);
   previewPaneScrollSaveTimer = window.setTimeout(() => {
     previewPaneScrollSaveTimer = null;
-    if (suppressPreviewReadPositionSave || suppressReadPositionSaveDepth > 0) return;
+    if (isPreviewReadPositionSaveSuppressed() || suppressReadPositionSaveDepth > 0) return;
     const currentPath = normalizePreviewReadPath(selectedFile.value?.path || fileTreeStore.activeTab || '');
     if (currentPath !== pathSnapshot) {
       logger.debug('[PreviewReadPosition] skip delayed pane save because active file changed', {
@@ -3722,6 +3992,7 @@ const captureEditorReadPosition = (path, targetEditor = getActiveEditor?.(), rea
     scrollTop: Math.round(Number(targetEditor.getScrollTop?.() || 0)),
     lineNumber: Number(position?.lineNumber || 0),
   });
+  scheduleReadPositionPersist('editor-capture');
   return true;
 };
 
@@ -16686,6 +16957,12 @@ const captureScrollPosition = () => {
 };
 
 const restoreRealtimeScroll = () => {
+  // 与 restoreScrollPosition 同理：有按文件精确记录时，这份不分文件的全局比例只会把
+  // 刚恢复好的位置再拖偏。精确恢复由 restoreRealtimeReadPosition 负责。
+  if (hasPerFileReadPositionForCurrentMode()) {
+    pendingRealtimeScrollRestore.value = false;
+    return;
+  }
   const el = getRealtimeScrollElement();
   if (!el) {
     pendingRealtimeScrollRestore.value = true;
@@ -16696,7 +16973,36 @@ const restoreRealtimeScroll = () => {
   pendingRealtimeScrollRestore.value = false;
 };
 
+// 「当前模式 + 当前文件」是否已有按文件记录的阅读位置。
+// 全局 scrollRatio 是不分文件的旧兜底，只应在没有精确记录时使用；
+// 有记录却仍让兜底参与，就会把刚恢复好的位置再拖偏一截（表现为「只是大概对」）。
+const hasPerFileReadPositionForCurrentMode = () => {
+  const path = normalizePreviewReadPath(selectedFile.value?.path || fileTreeStore.activeTab || '');
+  if (!path) return false;
+  const modeKey = getHomePreviewModeKeyFromState();
+  if (modeKey === 'edit' || modeKey === 'split') {
+    if (editorReadPositionCache.has(path)) return true;
+  }
+  if (modeKey === 'explorer') {
+    if (explorerReadPositionCache.has(path)) return true;
+  }
+  if (modeKey === 'realtime') {
+    if (realtimeReadPositionCache.has(path)) return true;
+  }
+  if (modeKey === 'preview' || modeKey === 'split') {
+    if (previewReadPositionCache.has(getPreviewReadPositionKey(path, getPreviewReadKindForPath(path) || 'markdown'))) return true;
+  }
+  return false;
+};
+
 const restoreScrollPosition = () => {
+  // 这里用的是「不区分文件」的全局 scrollRatio，只在没有按文件记录时才当兜底。
+  // 有按文件记录时必须以它为准：否则这份全局比例会在异步的精确落位之前/之后
+  // 把视口拖到「上一个文件的大致比例处」——这正是「位置只是大概正确」的直接来源之一。
+  if (hasPerFileReadPositionForCurrentMode()) {
+    pendingPreviewScrollRestore.value = false;
+    return;
+  }
   if (previewMode.value === 'realtime') {
     restoreRealtimeScroll();
     return;
@@ -22285,6 +22591,11 @@ watch(selectedFile, async (newFile, oldFile) => {
       renderedHtml.value = ''
       lastPreviewRenderedSource.value = ''
       lastPreviewRenderedPath.value = ''
+      // 上一条文档遗留的落位请求必须丢掉：队列是跨文件共用的，留着它会在新文档
+      // 渲染完成时被消费，把「A 该滚到哪」当成「B 该滚到哪」，表现为切回来位置乱跳。
+      clearPendingPreviewReadPositionRestores('selected-file-changed')
+      stopMarkdownAnchorGuard?.()
+      stopMarkdownAnchorGuard = null
       logger.info('[Preview] cleared stale preview state after file switch', {
         from: prevPath,
         to: nextPath,
@@ -22733,7 +23044,10 @@ const setHomePreviewModeKeySafe = (key, { registerDoc = true } = {}) => {
   // 归属不明确，写进新文档名下会污染它自己的模式记忆。
   if (registerDoc && layoutMode.value === 'single') {
     const ownerPath = docModeKeyOf(selectedFile.value?.path || fileTreeStore.activeTab || '');
-    if (ownerPath) docPreviewModeKeyByPath.set(ownerPath, next);
+    if (ownerPath) {
+      docPreviewModeKeyByPath.set(ownerPath, next);
+      scheduleReadPositionPersist('doc-mode-registered');
+    }
   }
 
   const setter = editorStore?.setHomePreviewModeKey;
@@ -22984,7 +23298,10 @@ const restoreDocPreviewMode = async (path, reason = 'tab-switch') => {
   if (targetKey === currentKey) {
     // 模式已经一致：无需切换，但补登记一次，保证新文档也拥有自己的记录。
     // 能力兜底降级不算用户选择，不能写回：否则一次瞬时不可用就把该文档的记忆永久变成 edit。
-    if (!downgradedByCapability) docPreviewModeKeyByPath.set(key, currentKey);
+    if (!downgradedByCapability) {
+      docPreviewModeKeyByPath.set(key, currentKey);
+      scheduleReadPositionPersist('doc-mode-synced');
+    }
     return false;
   }
 
@@ -25658,7 +25975,12 @@ onMounted(() => {
   initGitService()
   void refreshLspEnabledSetting()
 
+  // 先灌回落盘的阅读位置与「每文件模式」，再恢复全局模式：
+  // restoreHomePreviewMode 会按文件决定切到哪个模式，模式记忆必须在它之前就位，
+  // 否则开机后第一份文档会按默认模式（编辑）打开，而不是上次停下的那一种。
+  const persistedReadPositions = readPositionPersistence.load()
   restoreHomePreviewMode('mounted')
+  void maybeReopenLastDocument(persistedReadPositions?.lastPath, 'mounted')
   void (async () => {
     await refreshPythonRuntimeStatus('mounted')
     await ensurePythonRuntimeInitialized('mounted', { silent: true, notify: false })
@@ -25763,6 +26085,12 @@ onDeactivated(() => {
   cancelMarkdownPreviewScrollSaveTimer('home-page-deactivated');
   cancelExplorerScrollSaveTimer('home-page-deactivated');
   cancelPreviewPaneScrollSaveTimer('home-page-deactivated');
+  // 离开主页时看护已无意义（容器即将脱离布局），先停掉，避免它对着 0 高度反复写 scrollTop。
+  stopMarkdownAnchorGuard?.();
+  stopMarkdownAnchorGuard = null;
+  // 离开主页是「用户即将关窗/切页」的高概率时刻之一：把防抖中的写入立刻刷盘，
+  // 而不是等 400ms 后再写——那之前进程可能已经退出。
+  flushReadPositionPersist('home-page-deactivated');
   logger.info('[ReadPosition] captured on home page deactivate', {
     path: normalizePreviewReadPath(path),
     modeKey: getHomePreviewModeKeyFromState(),
@@ -25775,6 +26103,7 @@ onUnmounted(() => {
   pathMutationGuardDisposable = null
   saveActivePreviewReadPosition('editor-unmount')
   captureEditorReadPosition(selectedFile.value?.path || fileTreeStore.activeTab || '', getActiveEditor(), 'editor-unmount')
+  flushReadPositionPersist('editor-unmount')
   if (previewRenderTimer) {
     window.clearTimeout(previewRenderTimer)
     previewRenderTimer = null
@@ -25782,6 +26111,8 @@ onUnmounted(() => {
   cancelMarkdownPreviewScrollSaveTimer('editor-unmount')
   cancelExplorerScrollSaveTimer('editor-unmount')
   cancelPreviewPaneScrollSaveTimer('editor-unmount')
+  stopMarkdownAnchorGuard?.()
+  stopMarkdownAnchorGuard = null
   if (latexBuildDebounceTimer) {
     clearTimeout(latexBuildDebounceTimer)
     latexBuildDebounceTimer = null

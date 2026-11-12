@@ -22,7 +22,18 @@ import {
   shouldRestoreEntry,
   resolveScrollTarget,
   READ_POSITION_CACHE_LIMIT,
+  makeContentAnchor,
+  resolveAnchorTarget,
+  isRestoreSettled,
+  isPixelTrustworthy,
+  buildPersistPayload,
+  parsePersistPayload,
+  READ_POSITION_STORE_VERSION,
 } from '../src/components/HomeViewComponent/readPositionCore.js'
+import {
+  createReadPositionPersistence,
+  READ_POSITION_STORAGE_KEY,
+} from '../src/components/HomeViewComponent/readPositionStore.js'
 
 // ───────────────────────────── 路径与 key
 

@@ -297,8 +297,11 @@ const restoreScroll = (ratio) => viewerRef.value?.restoreScroll?.(ratio)
 // 跨帧重试到布局稳定的落位：切换文件后恢复阅读位置时用，避免文档刚打开、容器还没有
 // 可滚动高度时只落一帧被 clamp 到顶部。
 const restoreScrollStable = (ratio) => viewerRef.value?.restoreScrollStable?.(ratio)
+// 「页号 + 页内 pt」是 PDF 唯一跨缩放稳定的坐标；宿主持久化与切文件恢复都优先用它。
+const readPosition = () => viewerRef.value?.readPosition?.() ?? null
+const restorePositionStable = (position, options) => viewerRef.value?.restorePositionStable?.(position, options)
 
-defineExpose({ forwardSync, goToPage, scrollRatio, restoreScroll, restoreScrollStable })
+defineExpose({ forwardSync, goToPage, scrollRatio, restoreScroll, restoreScrollStable, readPosition, restorePositionStable })
 </script>
 
 <style scoped>

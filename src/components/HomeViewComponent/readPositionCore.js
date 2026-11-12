@@ -195,3 +195,179 @@ export const resolveScrollTarget = (entry, { scrollHeight, clientHeight }) => {
   }
   return { top: 0, source: 'none' }
 }
+
+// ───────────────────────────── 内容锚点（解决「像素/比例只能恢复个大概」）
+
+/**
+ * 由「视口顶部所在的内容块行号 + 块内像素偏移」组成的锚点。
+ *
+ * 为什么需要它：像素只在文档高度完全不变时精确；比例在图片、公式、Mermaid
+ * 图表加载前后会把同一比例换算到不同位置。而 Markdown 渲染结果里每个块都带
+ * `data-md-start-line`，行号在任何窗口宽度/字体/图片加载状态下都会指回同一段文字，
+ * 所以「行号 + 块内偏移」是唯一真正稳定的坐标。
+ *
+ * @param {object} opts
+ * @param {number} opts.anchorLine    视口顶部所在块的起始行（<=0 表示量不到）
+ * @param {number} [opts.anchorOffset] 视口顶部相对该块顶部的像素偏移
+ */
+export const makeContentAnchor = ({ anchorLine, anchorOffset = 0 } = {}) => {
+  const line = Number(anchorLine)
+  if (!Number.isFinite(line) || line <= 0) return null
+  const offset = Number(anchorOffset)
+  return {
+    anchorLine: Math.round(line),
+    anchorOffset: Number.isFinite(offset) ? Math.round(offset) : 0,
+  }
+}
+
+/**
+ * 恢复时用锚点换算目标 scrollTop。
+ *
+ * resolveBlockTop(anchorLine) 由调用方提供：它负责把行号定位到当前 DOM 里的像素位置
+ * （块尚未渲染出来时返回 null）。量不到就返回 null，让调用方退回像素/比例，
+ * 而不是把 0 当成目标（那正好就是「回到开头」）。
+ *
+ * @param {object} entry     位置条目（含 anchorLine / anchorOffset）
+ * @param {(line:number)=>number|null} resolveBlockTop
+ * @returns {{top:number, source:'anchor'}|null}
+ */
+export const resolveAnchorTarget = (entry, resolveBlockTop) => {
+  const line = Number(entry?.anchorLine)
+  if (!Number.isFinite(line) || line <= 0) return null
+  if (typeof resolveBlockTop !== 'function') return null
+  const blockTop = resolveBlockTop(line)
+  if (!Number.isFinite(blockTop)) return null
+  const offset = Number(entry?.anchorOffset)
+  const top = blockTop + (Number.isFinite(offset) ? offset : 0)
+  return { top: Math.max(0, Math.round(top)), source: 'anchor' }
+}
+
+/**
+ * 决定一次「渐进渲染中的逐帧落位」何时算收敛。
+ *
+ * 预览/PDF/探索者都是先出骨架、再被图片和图表撑高。每帧算出的目标像素会随文档变高
+ * 而变化，所以「写进去的 scrollTop 和目标相等」并不代表稳定；真正稳定只有一个判据：
+ * 可滚动高度连续 stableFrames 帧不再变化。
+ *
+ * 抽成纯函数是为了让「到底哪一帧收工」这件事能被测试锁住——它错了的表现就是
+ * 「恢复了一部分」或「和用户抢滚动条」，这两种只在真实渲染节奏下才看得见。
+ */
+export const isRestoreSettled = ({
+  reachable,
+  targetTop,
+  heightStableFrames,
+  stableFrames = 2,
+  awaitingTarget = false,
+}) => {
+  if (!Number.isFinite(targetTop)) return true
+  // 「记录里有位置，但这一帧还算不出来」（块未渲染 / 文档还没撑高）不能当成已收敛：
+  // 那会在第一帧就把滚动条停在 0，正是「切回来回到开头」的成因之一。
+  if (awaitingTarget) return false
+  if (targetTop <= 0) return true
+  // 目标可达与否都看「文档高度是否已经稳定」：可达但还在长高时提前收工，
+  // 图片/图表撑高后就会再次错位；不可达且高度已定，说明目标确实超出文档，只能保留 clamp 后的结果。
+  void reachable
+  return heightStableFrames >= stableFrames
+}
+
+// ───────────────────────────── 持久化（解决「重启软件记不住」）
+
+/** 落盘版本号。结构不兼容时整体丢弃，绝不尝试迁移脏数据。 */
+export const READ_POSITION_STORE_VERSION = 1
+
+/**
+ * 生成落盘用的紧凑快照。
+ *
+ * 只保留恢复真正需要的字段：路径写法、像素、比例、内容锚点、文档时间戳。
+ * 视口尺寸（clientHeight / scrollHeight）是用来判断「当时的像素在现在还有没有意义」的，
+ * 所以要一起存——换了窗口大小后像素不再可信，必须走比例或锚点。
+ *
+ * 每类载体各自有上限，超出按「最久未访问」淘汰（Map 插入序已在缓存层保证）。
+ */
+export const buildPersistPayload = ({
+  positions = new Map(),
+  modes = new Map(),
+  extra = {},
+  limit = READ_POSITION_CACHE_LIMIT,
+} = {}) => {
+  const entries = []
+  for (const [key, entry] of positions) {
+    if (!entry) continue
+    entries.push({
+      key,
+      path: normalizeReadPath(entry.path),
+      scrollTop: Number.isFinite(Number(entry.scrollTop)) ? Math.round(Number(entry.scrollTop)) : null,
+      scrollRatio: Number.isFinite(Number(entry.scrollRatio)) ? +Number(entry.scrollRatio).toFixed(4) : null,
+      anchorLine: Number(entry.anchorLine) > 0 ? Math.round(Number(entry.anchorLine)) : null,
+      anchorOffset: Number(entry.anchorOffset) > 0 ? Math.round(Number(entry.anchorOffset)) : null,
+      page: Number(entry.page) > 0 ? Math.round(Number(entry.page)) : null,
+      pageYPt: Number(entry.pageYPt) > 0 ? +Number(entry.pageYPt).toFixed(2) : null,
+      lineNumber: Number(entry.lineNumber) > 0 ? Math.round(Number(entry.lineNumber)) : null,
+      cellKey: entry.cellKey ? String(entry.cellKey) : null,
+      scrollHeight: Number(entry.scrollHeight) > 0 ? Math.round(Number(entry.scrollHeight)) : null,
+      clientHeight: Number(entry.clientHeight) > 0 ? Math.round(Number(entry.clientHeight)) : null,
+      savedAt: Number(entry.savedAt) || 0,
+    })
+    if (entries.length >= limit) break
+  }
+  const modeEntries = {}
+  for (const [path, modeKey] of modes) {
+    const p = normalizeReadPath(path)
+    if (p) modeEntries[p] = normalizeModeKey(modeKey)
+  }
+  return {
+    version: READ_POSITION_STORE_VERSION,
+    savedAt: Date.now(),
+    positions: entries,
+    modes: modeEntries,
+    ...extra,
+  }
+}
+
+/**
+ * 解析落盘数据，任何不符预期的输入都返回空结果（当作没存过），绝不抛错。
+ *
+ * 位置条目要重建缓存 key：key 由 path + kind 推导，落盘里的 key 只能作为校验，
+ * 以免旧版本写出的 key 与现在的规则不一致时把位置写到错误的载体上。
+ */
+export const parsePersistPayload = (raw) => {
+  const empty = { positions: [], modes: {} }
+  if (!raw || typeof raw !== 'object') return empty
+  if (Number(raw.version) !== READ_POSITION_STORE_VERSION) return empty
+  const positions = []
+  if (Array.isArray(raw.positions)) {
+    for (const item of raw.positions) {
+      if (!item || typeof item !== 'object') continue
+      const path = normalizeReadPath(item.path)
+      if (!path) continue
+      const kind = String(item.key || '').includes(':')
+        ? String(item.key).slice(0, String(item.key).indexOf(':')).trim()
+        : ''
+      if (!kind) continue
+      const key = readPositionKey(path, kind)
+      if (!key) continue
+      positions.push({ ...item, kind, path, key })
+    }
+  }
+  const modes = {}
+  if (raw.modes && typeof raw.modes === 'object' && !Array.isArray(raw.modes)) {
+    for (const [path, modeKey] of Object.entries(raw.modes)) {
+      const p = normalizeReadPath(path)
+      if (p) modes[p] = normalizeModeKey(modeKey)
+    }
+  }
+  return { positions, modes }
+}
+
+/** 每个载体「当前窗口尺寸下，存下的像素是否还可信」。不可信时改用比例/锚点。 */
+export const isPixelTrustworthy = (entry, { scrollHeight, clientHeight }) => {
+  const savedScrollHeight = Number(entry?.scrollHeight)
+  const savedClientHeight = Number(entry?.clientHeight)
+  // 没存尺寸（旧记录）时只按当前可滚动范围判断，交给 resolveScrollTarget 兜底。
+  if (!(savedScrollHeight > 0) || !(savedClientHeight > 0)) return true
+  const heightDrift = Math.abs(savedScrollHeight - Number(scrollHeight || 0))
+  const viewportDrift = Math.abs(savedClientHeight - Number(clientHeight || 0))
+  // 文档换了内容/窗口缩放会让这两个值明显变化；留一点余量给滚动条与取整误差。
+  return heightDrift <= Math.max(24, savedScrollHeight * 0.01)
+    && viewportDrift <= Math.max(8, savedClientHeight * 0.02)
+}

@@ -1057,6 +1057,45 @@ const restoreScrollStable = async (ratio) => {
   return lastMaxTop > 0
 }
 
+// 按「页号 + 页内 pt」落位，并跨帧重试到页面几何稳定。
+// 比例落位在文档刚加载、页高还在从占位尺寸切换成真实尺寸时会算到错误位置；
+// 页号 + yPt 不受缩放和滚动总高度影响，是持久化恢复的第一选择。
+const restorePositionStable = async (position, { attempts = RESTORE_SCROLL_MAX_ATTEMPTS } = {}) => {
+  const page = Number(position?.page)
+  if (!Number.isFinite(page) || page <= 0) return false
+  const yPt = Math.max(0, Number(position?.yPt) || 0)
+  let lastHeight = -1
+  let stableCount = 0
+  const maxAttempts = Math.max(1, Math.min(60, Number(attempts) || RESTORE_SCROLL_MAX_ATTEMPTS))
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    await new Promise((resolve) => window.requestAnimationFrame(resolve))
+    const el = bodyRef.value
+    const geo = pageGeometry.value
+    if (!el || !el.isConnected || !geo.length) return false
+    const idx = Math.min(Math.max(1, Math.round(page)), geo.length) - 1
+    const item = geo[idx]
+    if (!item) return false
+    el.scrollTop = Math.max(0, item.top + yPt * (zoom.value || 1))
+    currentPage.value = item.num
+    const height = el.scrollHeight
+    stableCount = height === lastHeight ? stableCount + 1 : 0
+    lastHeight = height
+    if (stableCount >= RESTORE_SCROLL_STABLE_FRAMES) {
+      recomputeWindow()
+      updateVisible()
+      scheduleRenderVisible()
+      syncPageInput()
+      return true
+    }
+    await new Promise((resolve) => window.setTimeout(resolve, RESTORE_SCROLL_RETRY_DELAY_MS))
+  }
+  recomputeWindow()
+  updateVisible()
+  scheduleRenderVisible()
+  syncPageInput()
+  return lastHeight > 0
+}
+
 // ─────────────────── 虚拟化：渲染可见页 ───────────────────
 // 滚动分两条路：
 //  · 每帧（rAF）只做廉价的 DOM 测算，更新 currentPage / 派发 page-change，保证页码跟手；
@@ -1184,6 +1223,22 @@ const applyReadingPosition = (position) => {
   recomputeWindow()
   updateVisible()
   scheduleRenderVisible()
+}
+
+// 「页号 + 页内 pt 偏移」跨缩放档位稳定，是 PDF 侧唯一精确的阅读坐标；
+// 上面基于整篇滚动的比例只在本轮缩放/页面几何不变时才有意义。
+// 宿主（GuaxiEditor）切换文件、重启后恢复位置时优先用它。
+const readPosition = () => {
+  const el = bodyRef.value
+  if (!el || !el.isConnected || el.clientHeight <= 0) return null
+  if (!hasPdf.value || !pageGeometry.value.length) return null
+  const position = readingPositionNow()
+  if (!position) return null
+  return {
+    ...position,
+    currentPage: currentPage.value,
+    ratio: scrollRatio(),
+  }
 }
 
 const readingHistory = useReadingHistory({
@@ -2191,6 +2246,8 @@ defineExpose({
   scrollRatio,
   restoreScroll,
   restoreScrollStable,
+  readPosition,
+  restorePositionStable,
   goPreviousPage,
   goNextPage,
   commitPageInput,
