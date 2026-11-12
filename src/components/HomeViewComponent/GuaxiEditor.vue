@@ -24476,7 +24476,9 @@ const prerenderDisplayMathForPandoc = async (markdown) => {
       await writeFile(filePath, bytes)
       // 显示宽度按逻辑像素@96dpi 换算成英寸并封顶，避免长公式溢出页面。
       const displayWidthIn = Math.min(6, Math.max(0.4, width / 96))
-      const ref = `![math](${filePath.replace(/\\/g, '/')}){width=${displayWidthIn.toFixed(2)}in}`
+      // 空 alt：pandoc 的 implicit_figures 会把 alt 当图注，成品里每道公式下面
+      // 都会多出一行「math」。与 mermaid / chart 的处理一致。
+      const ref = `![](${filePath.replace(/\\/g, '/')}){width=${displayWidthIn.toFixed(2)}in}`
       result = result.replace(blocks[i].full, () => ref)
       rendered += 1
     } catch (error) {

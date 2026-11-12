@@ -1034,7 +1034,11 @@ const buildFrameDoc = () => {
     mark.gx-annot { color: inherit; padding: 0; border-radius: 2px; }
     ${p.layoutMode === 'paginated' ? `
       html, body { height: 100%; overflow: hidden; }
-      body { height: 100vh; box-sizing: border-box; overflow-y: auto; column-width: ${p.maxWidth}px; }
+      /* 分页模式只把正文限制在一屏高度内滚动。
+         不要给 body 加 column-width：它会开启多列布局，而列宽（maxWidth）比正文
+         可用宽度（maxWidth − 左右内边距）还大，Chromium 会把超宽列甩到容器外，
+         表格/公式被挤成竖条并互相重叠（实测整章正文糊成一列）。 */
+      body { height: 100vh; box-sizing: border-box; overflow-y: auto; }
     ` : ''}
   `
 
