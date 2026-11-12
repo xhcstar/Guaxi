@@ -87,6 +87,32 @@ test('确认弹窗组件自包含，不依赖 useDialog（应用没有 dialog-pr
   assert.ok(code.includes('maskClosable: false'), '危险操作不应点遮罩就关闭')
 })
 
+test('确认弹窗：正文与副文案一起走默认插槽，不能被 hint 顶掉 content', () => {
+  // 实测抓到的 bug：preset="dialog" 下 content 属性渲染的就是默认插槽，
+  // 一旦给默认插槽传了 hint，正文「确定删除「xxx」吗？」就整个消失了。
+  const js = read('src/components/HomeViewComponent/GuaxiConfirmDialog.js')
+  const code = js
+    .split('\n')
+    .filter((line) => !line.trim().startsWith('//'))
+    .join('\n')
+  assert.ok(
+    !/\bcontent:\s*props\.content\b/.test(code),
+    '不能再用 content 属性渲染正文，它会被默认插槽覆盖',
+  )
+  assert.ok(code.includes('guaxi-confirm-dialog__text'), '正文应作为独立节点渲染')
+  assert.ok(code.includes('guaxi-confirm-dialog__hint'), '副文案应作为独立节点渲染')
+})
+
+test('确认弹窗外观走主题，不写死颜色', () => {
+  const js = read('src/components/HomeViewComponent/GuaxiConfirmDialog.js')
+  const styleBlock = js.slice(js.indexOf('style.textContent'), js.indexOf('document.head.appendChild'))
+  // 只允许尺寸/圆角/间距类声明；出现任何具体色值就说明主题切换会失效。
+  assert.ok(
+    !/#[0-9a-fA-F]{3,8}\b|\brgba?\(/.test(styleBlock),
+    '弹窗样式里不应出现写死的颜色，否则明暗主题切换会失配',
+  )
+})
+
 // ───────────────────────────── LaTeX 构建竞态
 
 test('LaTeX 预览构建有串行锁，且临时源文件只在「仍是自己」时才删除', () => {
