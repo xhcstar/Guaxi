@@ -104,49 +104,49 @@
             </n-tooltip>
           </n-dropdown>
 
-          <n-tooltip placement="top" trigger="hover">
+          <n-tooltip v-if="toolbarSupports('bold')" placement="top" trigger="hover">
             <template #trigger>
-              <n-button v-if="toolbarSupports('bold')" text size="tiny" @click="toggleBold">
+              <n-button text size="tiny" @click="toggleBold">
                 <Icon :icon="boldIcon" width="16" height="16" />
               </n-button>
             </template>
             加粗 (Ctrl+B)
           </n-tooltip>
-          <n-tooltip placement="top" trigger="hover">
+          <n-tooltip v-if="toolbarSupports('italic')" placement="top" trigger="hover">
             <template #trigger>
-              <n-button v-if="toolbarSupports('italic')" text size="tiny" @click="toggleItalic">
+              <n-button text size="tiny" @click="toggleItalic">
                 <Icon :icon="italicIcon" width="16" height="16" />
               </n-button>
             </template>
             斜体 (Ctrl+I)
           </n-tooltip>
-          <n-tooltip placement="top" trigger="hover">
+          <n-tooltip v-if="toolbarSupports('strikethrough')" placement="top" trigger="hover">
             <template #trigger>
-              <n-button v-if="toolbarSupports('strikethrough')" text size="tiny" @click="toggleStrikethrough">
+              <n-button text size="tiny" @click="toggleStrikethrough">
                 <Icon :icon="strikethroughIcon" width="16" height="16" />
               </n-button>
             </template>
             删除线 (Ctrl+Shift+X)
           </n-tooltip>
-          <n-tooltip placement="top" trigger="hover">
+          <n-tooltip v-if="toolbarSupports('link')" placement="top" trigger="hover">
             <template #trigger>
-              <n-button v-if="toolbarSupports('link')" text size="tiny" @click="insertLink">
+              <n-button text size="tiny" @click="insertLink">
                 <Icon :icon="linkIcon" width="16" height="16" />
               </n-button>
             </template>
             链接 (Ctrl+K)
           </n-tooltip>
-          <n-tooltip placement="top" trigger="hover">
+          <n-tooltip v-if="toolbarSupports('blockquote')" placement="top" trigger="hover">
             <template #trigger>
-              <n-button v-if="toolbarSupports('blockquote')" text size="tiny" @click="toggleBlockquote">
+              <n-button text size="tiny" @click="toggleBlockquote">
                 <Icon :icon="quoteIcon" width="16" height="16" />
               </n-button>
             </template>
             引用
           </n-tooltip>
-          <n-tooltip placement="top" trigger="hover">
+          <n-tooltip v-if="toolbarSupports('inlineCode')" placement="top" trigger="hover">
             <template #trigger>
-              <n-button v-if="toolbarSupports('inlineCode')" text size="tiny" @click="toggleInlineCode">
+              <n-button text size="tiny" @click="toggleInlineCode">
                 <Icon :icon="codeIcon" width="16" height="16" />
               </n-button>
             </template>
@@ -194,34 +194,34 @@
               代码块
             </n-tooltip>
           </n-dropdown>
-          <n-tooltip placement="top" trigger="hover">
+          <n-tooltip v-if="toolbarSupports('pythonCell')" placement="top" trigger="hover">
             <template #trigger>
-              <n-button v-if="toolbarSupports('pythonCell')" text size="tiny" @click="insertPythonCellBlock">
+              <n-button text size="tiny" @click="insertPythonCellBlock">
                 <Icon :icon="fileCode2Icon" width="16" height="16" />
               </n-button>
             </template>
             插入 Python Cell
           </n-tooltip>
 
-          <n-tooltip placement="top" trigger="hover">
+          <n-tooltip v-if="toolbarSupports('bulletList')" placement="top" trigger="hover">
             <template #trigger>
-              <n-button v-if="toolbarSupports('bulletList')" text size="tiny" @click="toggleUnorderedList">
+              <n-button text size="tiny" @click="toggleUnorderedList">
                 <Icon :icon="listIcon" width="16" height="16" />
               </n-button>
             </template>
             无序列表
           </n-tooltip>
-          <n-tooltip placement="top" trigger="hover">
+          <n-tooltip v-if="toolbarSupports('orderedList')" placement="top" trigger="hover">
             <template #trigger>
-              <n-button v-if="toolbarSupports('orderedList')" text size="tiny" @click="toggleOrderedList">
+              <n-button text size="tiny" @click="toggleOrderedList">
                 <Icon :icon="listOrderedIcon" width="16" height="16" />
               </n-button>
             </template>
             有序列表
           </n-tooltip>
-          <n-tooltip placement="top" trigger="hover">
+          <n-tooltip v-if="toolbarSupports('taskList')" placement="top" trigger="hover">
             <template #trigger>
-              <n-button v-if="toolbarSupports('taskList')" text size="tiny" @click="toggleTaskList">
+              <n-button text size="tiny" @click="toggleTaskList">
                 <Icon :icon="listChecksIcon" width="16" height="16" />
               </n-button>
             </template>
@@ -264,25 +264,25 @@
               </div>
             </div>
           </n-popover>
-          <n-tooltip placement="top" trigger="hover">
+          <n-tooltip v-if="toolbarSupports('image')" placement="top" trigger="hover">
             <template #trigger>
-              <n-button v-if="toolbarSupports('image')" text size="tiny" @click="insertImage">
+              <n-button text size="tiny" @click="insertImage">
                 <Icon :icon="imageIcon" width="16" height="16" />
               </n-button>
             </template>
             图片
           </n-tooltip>
-          <n-tooltip placement="top" trigger="hover">
+          <n-tooltip v-if="toolbarSupports('chart')" placement="top" trigger="hover">
             <template #trigger>
-              <n-button v-if="toolbarSupports('chart')" text size="tiny" @click="insertChartWithDataFile">
+              <n-button text size="tiny" @click="insertChartWithDataFile">
                 <Icon :icon="chartIcon" width="16" height="16" />
               </n-button>
             </template>
             图表（数据入资源库）
           </n-tooltip>
-          <n-tooltip placement="top" trigger="hover">
+          <n-tooltip v-if="toolbarSupports('horizontalRule')" placement="top" trigger="hover">
             <template #trigger>
-              <n-button v-if="toolbarSupports('horizontalRule')" text size="tiny" @click="insertHorizontalRule">
+              <n-button text size="tiny" @click="insertHorizontalRule">
                 <Icon :icon="minusIcon" width="16" height="16" />
               </n-button>
             </template>
