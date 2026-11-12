@@ -84,8 +84,21 @@ const upgradeBlock = async (codeEl) => {
   }
   // 等待期间这段代码可能已经被重渲染（流式输出场景），内容一变就放弃这次结果。
   if (codeEl.isConnected && codeEl.textContent === code) {
+    // 设计说明（关键 · 对应「预览搜索 circle 有时 18 个有时 2 个」）：
+    // 搜索会在代码块里插入 `<span class="guaxi-search-hit">` 包住命中词，而这些 span
+    // 让 `textContent` 保持不变、DOM 结构却变了。这里直接 `innerHTML = html` 会把这些
+    // 高亮整块抹掉——用户看到的命中数于是取决于「这次异步上色有没有跑过」。
+    // 因此：先看有没有高亮，有就撤销、重写后再通知宿主要不要重新搜一遍。
+    const hadSearchHits = !!codeEl.querySelector('.guaxi-search-hit, .guaxi-search-hit-active')
     codeEl.innerHTML = html
     codeEl.dataset.guaxiTokens = '1'
+    if (hadSearchHits) {
+      // 高亮没了，但命中数据还留在宿主那里对不上 DOM。抛一个事件让宿主重跑搜索，
+      // 把计数与高亮恢复成一致的。用事件而不是直接 import 宿主，避免依赖方向反转。
+      try {
+        window.dispatchEvent(new CustomEvent('guaxi:preview-search-invalidated'))
+      } catch { /* 非浏览器环境忽略 */ }
+    }
   } else {
     delete codeEl.dataset.guaxiTokens
   }

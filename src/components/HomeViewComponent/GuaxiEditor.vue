@@ -14800,6 +14800,23 @@ const applyPreviewSearchHighlights = () => {
   }
 }
 
+
+// 代码块的 tree-sitter 二次上色会在搜索之后异步重写 DOM（`innerHTML = ...`），
+// 把搜索高亮整块抹掉。这里收到通知后重跑一次搜索，让「命中计数」与「DOM 上的高亮」
+// 重新一致——否则用户会看到「明明搜到 18 个，代码块里的高亮却没了」。
+const handlePreviewSearchInvalidated = () => {
+  if (!previewSearchVisible.value) return
+  if (!String(previewSearchKeyword.value || '').trim()) return
+  // 保留当前激活项的下标，重跑后尽量停在同一个命中上。
+  const keepIndex = previewSearchActiveIndex.value
+  nextTick(() => {
+    applyPreviewSearchHighlights()
+    if (keepIndex > 0 && previewSearchMatches.value.length) {
+      focusPreviewSearchMatchAt(Math.min(keepIndex, previewSearchMatches.value.length - 1), { scroll: false })
+    }
+  })
+}
+
 // 设计说明（对应“选中文本后 Ctrl+F 直接带入搜索框”）：
 // Monaco 的行为是用当前选区作为初始关键词。这里优先读实时的 window 选区
 // （Ctrl+F 那一刻最准），拿不到再退回鼠标松开时记下的选区文本。
@@ -26106,6 +26123,7 @@ onMounted(() => {
 
   window.addEventListener('keydown', handleKeyDown);
   window.addEventListener('guaxi:lsp-setting-changed', handleLspSettingChanged);
+  window.addEventListener('guaxi:preview-search-invalidated', handlePreviewSearchInvalidated);
   document.addEventListener('selectionchange', handleGlobalSelectionChange, true)
   document.addEventListener('mousedown', handleGlobalMouseDownForPreviewToolbar, true)
   document.addEventListener('mousedown', handlePythonRuntimeWorkbenchPointerDown, true)
@@ -26282,6 +26300,7 @@ onUnmounted(() => {
   endTabRailDrag()   // 卸载时正拖着的话，window 上那三个监听得摘掉
   window.removeEventListener('keydown', handleKeyDown);
   window.removeEventListener('guaxi:lsp-setting-changed', handleLspSettingChanged);
+  window.removeEventListener('guaxi:preview-search-invalidated', handlePreviewSearchInvalidated);
   document.removeEventListener('selectionchange', handleGlobalSelectionChange, true)
   document.removeEventListener('mousedown', handleGlobalMouseDownForPreviewToolbar, true)
   document.removeEventListener('mousedown', handlePythonRuntimeWorkbenchPointerDown, true)
