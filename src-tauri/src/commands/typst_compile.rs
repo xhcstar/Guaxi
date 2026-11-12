@@ -91,19 +91,23 @@ impl GuaxiTypstWorld {
     /// 所以这里直接用上游的 `SystemPackages::obtain`，行为和官方 CLI 完全一致：
     /// 先查数据目录、再查缓存目录，都没有才按配置的 registry 下载并缓存。
     fn id_to_path(&self, id: FileId) -> FileResult<PathBuf> {
-        let root = if let Some(spec) = id.package() {
-            let storage = crate::commands::typst_package::package_storage();
-            storage
-                .obtain(spec)
-                .map_err(FileError::Package)?
-                .path()
-                .to_path_buf()
-        } else {
-            self.root.clone()
+        // 0.15：`RootedPath::package()` 已弃用，改看 `root()`；它直接给出
+        // Project / Package(spec) 两种根，比「取 spec 再判断」更直白。
+        let root = match id.root() {
+            VirtualRoot::Package(spec) => {
+                let storage = crate::commands::typst_package::package_storage();
+                storage
+                    .obtain(spec)
+                    .map_err(FileError::Package)?
+                    .path()
+                    .to_path_buf()
+            }
+            VirtualRoot::Project => self.root.clone(),
         };
-        id.vpath()
-            .resolve(&root)
-            .ok_or_else(|| FileError::NotFound(id.vpath().as_rootless_path().to_path_buf()))
+        // 0.15：`VirtualPath::resolve` → `realize`。失败时保留真实的 RealizeError
+        // （FileError 有专门的 `Realize` 变体，诊断里能看出是转义出根目录还是路径非法），
+        // 比一律折叠成 NotFound 更有助于排查。
+        id.vpath().realize(&root).map_err(FileError::from)
     }
 }
 
