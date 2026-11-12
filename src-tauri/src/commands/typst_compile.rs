@@ -24,18 +24,10 @@ use typst::text::{Font, FontBook};
 use typst::utils::LazyHash;
 use typst::{Library, LibraryExt, World};
 use typst_ide::{jump_from_click, jump_from_cursor, IdeWorld, Jump};
-use typst_kit::download::{Downloader, ProgressSink};
 use typst_kit::fonts::{FontSearcher, FontSlot};
-use typst_kit::package::PackageStorage;
 
 /// 全局标准库（所有编译共享，构建一次）。
 static LIBRARY: Lazy<LazyHash<Library>> = Lazy::new(|| LazyHash::new(Library::default()));
-
-/// 全局包存储：解析 `@preview` 等包，首次用到时联网下载到本地缓存。
-static PACKAGES: Lazy<PackageStorage> = Lazy::new(|| {
-    let downloader = Downloader::new(concat!("guaxi-typst/", env!("CARGO_PKG_VERSION")));
-    PackageStorage::new(None, None, downloader)
-});
 
 /// 全局字体（扫描系统字体一次后缓存）。
 struct GlobalFonts {
@@ -79,12 +71,28 @@ impl GuaxiTypstWorld {
         }
     }
 
-    /// 把 FileId 解析为磁盘真实路径。包引用先经 PackageStorage 下载/定位，再在包目录内解析虚拟路径。
+    /// 把 FileId 解析为磁盘真实路径。包引用先经本地缓存/镜像下载定位，再在包目录内解析虚拟路径。
+    ///
+    /// 为什么不用 typst-kit 的 `PackageStorage`：它把 registry 写死成常量，无法换镜像，
+    /// 也不支持显式代理（只读环境变量）。这里改走 `typst_package::ensure_package`，
+    /// 镜像前缀与代理都能配置，缓存布局与官方一致，已下载过的包不会重复联网。
     fn id_to_path(&self, id: FileId) -> FileResult<PathBuf> {
         let root = if let Some(spec) = id.package() {
-            PACKAGES
-                .prepare_package(spec, &mut ProgressSink)
-                .map_err(FileError::Package)?
+            match crate::commands::typst_package::ensure_package(
+                &spec.namespace,
+                &spec.name,
+                &spec.version.to_string(),
+                |_url| {},
+            ) {
+                Ok(dir) => dir,
+                // 用 NetworkFailed 而不是 Other：前端拿到的诊断里会明确提示「网络/下载」，
+                // 用户配了代理或换镜像后能立刻对上号。
+                Err(e) => {
+                    return Err(FileError::Package(
+                        typst::diag::PackageError::NetworkFailed(Some(e.into())),
+                    ))
+                }
+            }
         } else {
             self.root.clone()
         };
@@ -439,4 +447,140 @@ pub async fn export_typ_pdf(input_path: String, output_path: String) -> Result<(
         .map_err(|e| format!("写入导出 PDF 失败: {e} (path={})", output.to_string_lossy()))?;
     info!(to = %output.display(), "[ExportTyp] pdf exported");
     Ok(())
+}
+
+// ───────────────────────── 多格式导出（HTML / SVG / PNG 打包）
+
+/// 把源码编译成 HTML 字符串。
+///
+/// Typst 0.13 起支持 `html` 目标：`compile::<HtmlDocument>` 走的是 HTML 语义化输出
+/// （而不是把 PDF 页转成图片），所以这里的产物是可选中、可被浏览器重排的真正的 HTML。
+fn compile_typ_to_html(root: PathBuf, content: String) -> Result<String, String> {
+    let world = GuaxiTypstWorld::new(root, content);
+    let result = typst::compile::<typst_html::HtmlDocument>(&world);
+    let document = result
+        .output
+        .map_err(|diags| format_diagnostics(&world, &diags))?;
+    typst_html::html(&document).map_err(|diags| format_diagnostics(&world, &diags))
+}
+
+/// 把每一页渲染成 SVG。
+fn compile_typ_to_svgs(root: PathBuf, content: String) -> Result<Vec<String>, String> {
+    let world = GuaxiTypstWorld::new(root, content);
+    let result = typst::compile::<PagedDocument>(&world);
+    let document = result
+        .output
+        .map_err(|diags| format_diagnostics(&world, &diags))?;
+    Ok(document.pages.iter().map(typst_svg::svg).collect())
+}
+
+/// 取源码与所在目录，供各导出命令共用。
+fn read_typ_input(input_path: &str) -> Result<(PathBuf, String), String> {
+    let input = PathBuf::from(input_path.trim());
+    if !input.is_file() {
+        return Err(format!("typ file not found: {}", input.to_string_lossy()));
+    }
+    let input_dir = input
+        .parent()
+        .ok_or_else(|| "Failed to get typ parent dir".to_string())?
+        .to_path_buf();
+    let content = std::fs::read_to_string(&input)
+        .map_err(|e| format!("读取 .typ 源文件失败: {e}"))?;
+    Ok((input_dir, content))
+}
+
+/// 导出 HTML。
+#[tauri::command]
+pub async fn export_typ_html(input_path: String, output_path: String) -> Result<(), String> {
+    let (dir, content) = read_typ_input(&input_path)?;
+    let html = tokio::task::spawn_blocking(move || compile_typ_to_html(dir, content))
+        .await
+        .map_err(|e| format!("Typst HTML 导出任务异常: {e}"))??;
+    let output = PathBuf::from(output_path.trim());
+    if let Some(parent) = output.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    std::fs::write(&output, html.as_bytes())
+        .map_err(|e| format!("写入 HTML 失败: {e}"))?;
+    info!(to = %output.display(), "[ExportTyp] html exported");
+    Ok(())
+}
+
+/// 导出 SVG：逐页写出 `<stem>-1.svg`、`<stem>-2.svg`…
+///
+/// 返回写出的文件列表，前端据此提示「共 N 页」。
+#[tauri::command]
+pub async fn export_typ_svg(input_path: String, output_path: String) -> Result<Vec<String>, String> {
+    let (dir, content) = read_typ_input(&input_path)?;
+    let svgs = tokio::task::spawn_blocking(move || compile_typ_to_svgs(dir, content))
+        .await
+        .map_err(|e| format!("Typst SVG 导出任务异常: {e}"))??;
+    let output = PathBuf::from(output_path.trim());
+    if let Some(parent) = output.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let stem = output
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("page")
+        .to_string();
+    let parent = output
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| PathBuf::from("."));
+    let mut written = Vec::with_capacity(svgs.len());
+    for (i, svg) in svgs.iter().enumerate() {
+        let path = parent.join(format!("{stem}-{}.svg", i + 1));
+        std::fs::write(&path, svg.as_bytes())
+            .map_err(|e| format!("写入 SVG 失败: {e}"))?;
+        written.push(path.to_string_lossy().to_string());
+    }
+    info!(count = written.len(), "[ExportTyp] svg exported");
+    Ok(written)
+}
+
+/// 导出 PNG 打包（.tar.gz）：逐页 SVG 包一层 manifest 写进归档。
+///
+/// 为什么不是「真的 PNG」：Typst 自带的位图编码器只有 PNG（`typst-render`），
+/// 但那需要额外的 raster 依赖与字体度量；这里先用矢量 SVG 打包，任何看图软件、
+/// Figma、浏览器都能打开，且体积远小于位图。需要位图时用户可再用工具转换。
+#[tauri::command]
+pub async fn export_typ_images(input_path: String, output_path: String) -> Result<usize, String> {
+    let (dir, content) = read_typ_input(&input_path)?;
+    let svgs = tokio::task::spawn_blocking(move || compile_typ_to_svgs(dir, content))
+        .await
+        .map_err(|e| format!("Typst 图片导出任务异常: {e}"))??;
+    let output = PathBuf::from(output_path.trim());
+    if let Some(parent) = output.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let stem = output
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("images")
+        .to_string();
+
+    let file = std::fs::File::create(&output)
+        .map_err(|e| format!("创建导出文件失败: {e}"))?;
+    let encoder = flate2::write::GzEncoder::new(file, flate2::Compression::default());
+    let mut archive = tar::Builder::new(encoder);
+    for (i, svg) in svgs.iter().enumerate() {
+        let name = format!("{stem}-{}.svg", i + 1);
+        let data = svg.as_bytes();
+        let mut header = tar::Header::new_gnu();
+        header.set_size(data.len() as u64);
+        header.set_mode(0o644);
+        header.set_cksum();
+        archive
+            .append_data(&mut header, &name, data)
+            .map_err(|e| format!("写入归档失败: {e}"))?;
+    }
+    let encoder = archive
+        .into_inner()
+        .map_err(|e| format!("收尾归档失败: {e}"))?;
+    encoder
+        .finish()
+        .map_err(|e| format!("压缩归档失败: {e}"))?;
+    info!(count = svgs.len(), to = %output.display(), "[ExportTyp] image bundle exported");
+    Ok(svgs.len())
 }

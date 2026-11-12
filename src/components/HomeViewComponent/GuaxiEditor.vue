@@ -93,7 +93,7 @@
       <!-- 格式工具栏：受 Header 上的「显示/隐藏工具栏与面包屑」开关控制（默认显示）。 -->
       <div v-show="editorChromeVisible" class="toolbar">
         <div v-if="previewMode !== 'realtime' && editorSurfaceMode !== 'notebook'" class="toolbar-editing-actions" :class="{ 'is-preview-readonly': isPreviewOnlyReadonly || isCurrentFileObserverMode }">
-          <n-dropdown trigger="click" :options="headingOptions" @select="handleHeadingSelect">
+          <n-dropdown v-if="toolbarSupports('heading')" trigger="click" :options="headingOptions" @select="handleHeadingSelect">
             <n-tooltip placement="top" trigger="hover">
               <template #trigger>
                 <n-button text size="tiny">
@@ -106,7 +106,7 @@
 
           <n-tooltip placement="top" trigger="hover">
             <template #trigger>
-              <n-button text size="tiny" @click="toggleBold">
+              <n-button v-if="toolbarSupports('bold')" text size="tiny" @click="toggleBold">
                 <Icon :icon="boldIcon" width="16" height="16" />
               </n-button>
             </template>
@@ -114,7 +114,7 @@
           </n-tooltip>
           <n-tooltip placement="top" trigger="hover">
             <template #trigger>
-              <n-button text size="tiny" @click="toggleItalic">
+              <n-button v-if="toolbarSupports('italic')" text size="tiny" @click="toggleItalic">
                 <Icon :icon="italicIcon" width="16" height="16" />
               </n-button>
             </template>
@@ -122,7 +122,7 @@
           </n-tooltip>
           <n-tooltip placement="top" trigger="hover">
             <template #trigger>
-              <n-button text size="tiny" @click="toggleStrikethrough">
+              <n-button v-if="toolbarSupports('strikethrough')" text size="tiny" @click="toggleStrikethrough">
                 <Icon :icon="strikethroughIcon" width="16" height="16" />
               </n-button>
             </template>
@@ -130,7 +130,7 @@
           </n-tooltip>
           <n-tooltip placement="top" trigger="hover">
             <template #trigger>
-              <n-button text size="tiny" @click="insertLink">
+              <n-button v-if="toolbarSupports('link')" text size="tiny" @click="insertLink">
                 <Icon :icon="linkIcon" width="16" height="16" />
               </n-button>
             </template>
@@ -138,7 +138,7 @@
           </n-tooltip>
           <n-tooltip placement="top" trigger="hover">
             <template #trigger>
-              <n-button text size="tiny" @click="toggleBlockquote">
+              <n-button v-if="toolbarSupports('blockquote')" text size="tiny" @click="toggleBlockquote">
                 <Icon :icon="quoteIcon" width="16" height="16" />
               </n-button>
             </template>
@@ -146,7 +146,7 @@
           </n-tooltip>
           <n-tooltip placement="top" trigger="hover">
             <template #trigger>
-              <n-button text size="tiny" @click="toggleInlineCode">
+              <n-button v-if="toolbarSupports('inlineCode')" text size="tiny" @click="toggleInlineCode">
                 <Icon :icon="codeIcon" width="16" height="16" />
               </n-button>
             </template>
@@ -156,7 +156,7 @@
                所以直接插内联 <span style="color:…"> 就能在预览与各阅读器里生效 ——
                不动渲染器、不引入新语法。
                弹层用 raw 自己排版，免得 naive-ui 的默认内边距/底色把色板网格撑得难看。 -->
-          <n-popover trigger="click" placement="bottom" :show-arrow="false" raw>
+          <n-popover v-if="toolbarSupports('color')" trigger="click" placement="bottom" :show-arrow="false" raw>
             <template #trigger>
               <n-tooltip placement="top" trigger="hover">
                 <template #trigger>
@@ -184,7 +184,7 @@
               </label>
             </div>
           </n-popover>
-          <n-dropdown trigger="click" :options="codeBlockOptions" @select="handleCodeBlockSelect">
+          <n-dropdown v-if="toolbarSupports('codeBlock')" trigger="click" :options="codeBlockOptions" @select="handleCodeBlockSelect">
             <n-tooltip placement="top" trigger="hover">
               <template #trigger>
                 <n-button text size="tiny">
@@ -196,7 +196,7 @@
           </n-dropdown>
           <n-tooltip placement="top" trigger="hover">
             <template #trigger>
-              <n-button text size="tiny" @click="insertPythonCellBlock">
+              <n-button v-if="toolbarSupports('pythonCell')" text size="tiny" @click="insertPythonCellBlock">
                 <Icon :icon="fileCode2Icon" width="16" height="16" />
               </n-button>
             </template>
@@ -205,7 +205,7 @@
 
           <n-tooltip placement="top" trigger="hover">
             <template #trigger>
-              <n-button text size="tiny" @click="toggleUnorderedList">
+              <n-button v-if="toolbarSupports('bulletList')" text size="tiny" @click="toggleUnorderedList">
                 <Icon :icon="listIcon" width="16" height="16" />
               </n-button>
             </template>
@@ -213,7 +213,7 @@
           </n-tooltip>
           <n-tooltip placement="top" trigger="hover">
             <template #trigger>
-              <n-button text size="tiny" @click="toggleOrderedList">
+              <n-button v-if="toolbarSupports('orderedList')" text size="tiny" @click="toggleOrderedList">
                 <Icon :icon="listOrderedIcon" width="16" height="16" />
               </n-button>
             </template>
@@ -221,14 +221,14 @@
           </n-tooltip>
           <n-tooltip placement="top" trigger="hover">
             <template #trigger>
-              <n-button text size="tiny" @click="toggleTaskList">
+              <n-button v-if="toolbarSupports('taskList')" text size="tiny" @click="toggleTaskList">
                 <Icon :icon="listChecksIcon" width="16" height="16" />
               </n-button>
             </template>
             任务列表
           </n-tooltip>
 
-          <n-popover trigger="click" placement="bottom-start" :show="tableInsertPopoverVisible"
+          <n-popover v-if="toolbarSupports('table')" trigger="click" placement="bottom-start" :show="tableInsertPopoverVisible"
             @update:show="handleTableInsertPopoverUpdateShow">
             <template #trigger>
               <n-tooltip placement="top" trigger="hover">
@@ -266,7 +266,7 @@
           </n-popover>
           <n-tooltip placement="top" trigger="hover">
             <template #trigger>
-              <n-button text size="tiny" @click="insertImage">
+              <n-button v-if="toolbarSupports('image')" text size="tiny" @click="insertImage">
                 <Icon :icon="imageIcon" width="16" height="16" />
               </n-button>
             </template>
@@ -274,7 +274,7 @@
           </n-tooltip>
           <n-tooltip placement="top" trigger="hover">
             <template #trigger>
-              <n-button text size="tiny" @click="insertChartWithDataFile">
+              <n-button v-if="toolbarSupports('chart')" text size="tiny" @click="insertChartWithDataFile">
                 <Icon :icon="chartIcon" width="16" height="16" />
               </n-button>
             </template>
@@ -282,7 +282,7 @@
           </n-tooltip>
           <n-tooltip placement="top" trigger="hover">
             <template #trigger>
-              <n-button text size="tiny" @click="insertHorizontalRule">
+              <n-button v-if="toolbarSupports('horizontalRule')" text size="tiny" @click="insertHorizontalRule">
                 <Icon :icon="minusIcon" width="16" height="16" />
               </n-button>
             </template>
@@ -1106,7 +1106,7 @@
           </n-tooltip>
           <!-- 字体颜色：与主工具栏同一个色板（说明见上面的同名块）。放在这里更顺手 ——
                浮动工具栏本来就是"选中文字"时浮出来的，套色正是选中之后的动作。 -->
-          <n-popover trigger="click" placement="bottom" :show-arrow="false" raw>
+          <n-popover v-if="toolbarSupports('color')" trigger="click" placement="bottom" :show-arrow="false" raw>
             <template #trigger>
               <n-tooltip placement="top" trigger="hover">
                 <template #trigger>
@@ -1728,6 +1728,14 @@ import {
   READ_POSITION_CACHE_LIMIT,
 } from './readPositionCore.js'
 import { createReadPositionPersistence } from './readPositionStore.js'
+import {
+  normalizeToolbarLanguage,
+  supportsToolbarAction,
+  snippetsForLanguage,
+  buildHeadingLine,
+  headingOptionsForLanguage,
+  SNIPPETS_BY_LANGUAGE,
+} from './editorToolbarLanguage.js'
 import {
   restoreScrollTopWithGrowthRetry as restoreScrollTopWithGrowthRetryCore,
   keepAnchorStableAfterRestore,
@@ -5795,15 +5803,8 @@ onUnmounted(() => {
   safeUnlistenTemplateInsert()
 })
 
-const headingOptions = [
-  { label: '正文', key: 0 },
-  { label: 'H1', key: 1 },
-  { label: 'H2', key: 2 },
-  { label: 'H3', key: 3 },
-  { label: 'H4', key: 4 },
-  { label: 'H5', key: 5 },
-  { label: 'H6', key: 6 }
-]
+// 标题菜单随语言变化：Markdown 是 H1..H6，Typst 是一~三级标题，LaTeX 是 section 系列。
+const headingOptions = computed(() => headingOptionsForLanguage(currentToolbarLanguage.value))
 
 const codeBlockOptions = [
   { label: 'Python Cell', key: 'pycell' },
@@ -5851,6 +5852,16 @@ const insertTableWithSize = (rows, cols) => {
   if (!model || !pos) return
 
   lastTableToolbarInsertAt = Date.now();
+
+  const lang = currentToolbarLanguage.value;
+  // 表格语法随语言走：markdown 用竖线表（插完交给 formatTable 对齐），
+  // typst 用 #table(...)，latex 用 tabular 环境——后两者没有「对齐」这一步，
+  // 也不该触发只在 markdown 表上工作的表格工具栏。
+  if (lang !== 'markdown') {
+    insertBlockSnippet(`${toolbarSnippets().table(Math.max(1, rows), Math.max(1, cols))}\n`)
+    editor.focus()
+    return
+  }
 
   const snippet = buildMarkdownTable(rows, cols, {
     maxRows: tableInsertMaxRows,
@@ -14003,6 +14014,16 @@ function countLines(text) {
   return text.split(/\r\n|\n|\r/).length;
 }
 
+// 当前文档语言（Monaco languageId）。工具栏按它决定显示哪些按钮、插入什么语法。
+// 别名保持 14006 那个函数原来的名字与语义，只是把「仅 markdown」放宽为「工具栏支持的语言」。
+const currentToolbarLanguage = computed(() => {
+  const model = getActiveEditor()?.getModel?.() || editor?.getModel?.()
+  return normalizeToolbarLanguage(model?.getLanguageId?.() || '')
+})
+
+// 工具栏动作是否对当前语言可用（模板里 v-if 用）。
+const toolbarSupports = (action) => supportsToolbarAction(currentToolbarLanguage.value, action)
+
 const ensureMarkdownEditor = (targetEditor = getActiveEditor()) => {
   if (!targetEditor) {
     message.warning('没有可编辑的文档');
@@ -14017,13 +14038,19 @@ const ensureMarkdownEditor = (targetEditor = getActiveEditor()) => {
   }
   const model = targetEditor.getModel();
   if (!model) return false;
-  const languageId = model.getLanguageId();
-  if (languageId !== 'markdown') {
-    message.warning('当前工具栏功能仅在 Markdown 文件中可用');
+  // 只放行工具栏真正支持的语言。其它语言（代码/纯文本/表格等）不应走到这里——
+  // 工具栏上的按钮对它们是隐藏的，这里只是兜底，避免将来误接一个入口。
+  const languageId = normalizeToolbarLanguage(model.getLanguageId());
+  if (!SNIPPETS_BY_LANGUAGE[languageId]) {
+    message.warning('当前文件的类型不支持这些编辑操作');
     return false;
   }
   return true;
 };
+
+// 当前语言的插入语法表。所有工具栏插入动作都从这里取语法，
+// 而不是各自写死 Markdown——这样同一排按钮在 .typ / .tex 里插入的就是对应语法。
+const toolbarSnippets = () => snippetsForLanguage(currentToolbarLanguage.value) || SNIPPETS_BY_LANGUAGE.markdown;
 
 const invokeMarkdownFormat = async (content) => {
   // 选项来自设置（不再写死在这里，见「设置 → 编辑器」）。
@@ -14542,10 +14569,24 @@ const FONT_COLOR_PALETTE = [
 
 const customFontColor = ref('#3b82f6');
 
-/** 把选中文字包进带颜色的 <span>；没有选区时插入占位文字并选中它，直接打字即可覆盖。 */
+/** 把选中文字按当前语言的着色语法包起来；没有选区时插入占位文字并选中它。 */
 const applyFontColor = (color) => {
   const value = String(color || '').trim().toLowerCase();
   if (!/^#[0-9a-f]{6}$/.test(value)) return;
+  const snippets = toolbarSnippets();
+  if (typeof snippets.color?.wrap === 'function') {
+    const targetEditor = getActiveEditor();
+    if (!ensureMarkdownEditor(targetEditor)) return;
+    const model = targetEditor.getModel();
+    const selection = targetEditor.getSelection();
+    const selectedText = model.getValueInRange(selection) || '文字';
+    const text = snippets.color.wrap(selectedText, value);
+    targetEditor.executeEdits('markdown-toolbar', [
+      { range: selection, text, forceMoveMarkers: true },
+    ]);
+    targetEditor.focus();
+    return;
+  }
   wrapSelection(`<span style="color:${value}">`, '</span>', '文字');
 };
 
@@ -14573,23 +14614,21 @@ const insertBlockSnippet = (snippet) => {
 
 const toggleHeading = (level) => {
   if (!ensureMarkdownEditor()) return;
-  const model = editor.getModel();
-  const selection = editor.getSelection();
+  const targetEditor = getActiveEditor() || editor;
+  const model = targetEditor.getModel();
+  const selection = targetEditor.getSelection();
   if (!model || !selection) return;
 
+  const lang = currentToolbarLanguage.value;
   const startLine = selection.startLineNumber;
   const endLine = selection.endLineNumber;
   const edits = [];
 
   for (let lineNumber = startLine; lineNumber <= endLine; lineNumber += 1) {
     const text = model.getLineContent(lineNumber);
-    const content = text.replace(/^#{1,6}\s+/, '');
-
-    let next = content;
-    if (level > 0) {
-      const sameLevel = new RegExp(`^#{${level}}\\s+`).test(text);
-      next = sameLevel ? content : `${'#'.repeat(level)} ${content || '标题'}`;
-    }
+    // 三种语言的标题语法不同（# / = / \section{}），统一交给 buildHeadingLine，
+    // 它负责剥掉原有前缀再按目标级别重写，避免叠加出 `======== 标题`。
+    const next = buildHeadingLine(lang, { lineText: text, level });
 
     edits.push({
       range: new monaco.Range(lineNumber, 1, lineNumber, model.getLineMaxColumn(lineNumber)),
@@ -14598,8 +14637,8 @@ const toggleHeading = (level) => {
     });
   }
 
-  editor.executeEdits('markdown-toolbar', edits);
-  editor.focus();
+  targetEditor.executeEdits('markdown-toolbar', edits);
+  targetEditor.focus();
 };
 
 const handleHeadingSelect = (key) => {
@@ -14609,29 +14648,36 @@ const handleHeadingSelect = (key) => {
 };
 
 const toggleBold = () => {
-  wrapSelection('**', '**', '粗体文本');
+  const s = toolbarSnippets().bold;
+  wrapSelection(s.prefix, s.suffix, s.placeholder);
 };
 
 const toggleItalic = () => {
-  wrapSelection('*', '*', '斜体文本');
+  const s = toolbarSnippets().italic;
+  wrapSelection(s.prefix, s.suffix, s.placeholder);
 };
 
 const toggleStrikethrough = () => {
-  wrapSelection('~~', '~~', '删除线');
+  const s = toolbarSnippets().strikethrough;
+  if (!s) return;
+  wrapSelection(s.prefix, s.suffix, s.placeholder);
 };
 
 const toggleInlineCode = () => {
-  wrapSelection('`', '`', 'code');
+  const s = toolbarSnippets().inlineCode;
+  wrapSelection(s.prefix, s.suffix, s.placeholder);
 };
 
 const insertLink = () => {
-  wrapSelection('[', '](https://)', '链接文字');
+  const s = toolbarSnippets().link;
+  wrapSelection(s.prefix, s.suffix, s.placeholder);
 };
 
 const toggleLinePrefix = (prefix, pattern, buildLine) => {
   if (!ensureMarkdownEditor()) return;
-  const model = editor.getModel();
-  const selection = editor.getSelection();
+  const targetEditor = getActiveEditor() || editor;
+  const model = targetEditor.getModel();
+  const selection = targetEditor.getSelection();
   if (!model || !selection) return;
 
   const startLine = selection.startLineNumber;
@@ -14660,20 +14706,21 @@ const toggleLinePrefix = (prefix, pattern, buildLine) => {
     };
   });
 
-  editor.executeEdits('markdown-toolbar', edits);
+  targetEditor.executeEdits('markdown-toolbar', edits);
 
   if (shouldMoveCursor && !allMatch) {
     const nextLine = model.getLineContent(startLine);
     const m = nextLine.match(pattern);
     const nextColumn = m ? Math.max(1, m[0].length + 1) : 1;
-    editor.setPosition(new monaco.Position(startLine, nextColumn));
+    targetEditor.setPosition(new monaco.Position(startLine, nextColumn));
   }
 
-  editor.focus();
+  targetEditor.focus();
 };
 
 const toggleBlockquote = () => {
-  toggleLinePrefix('> ', /^>\s+/, null);
+  const s = toolbarSnippets();
+  toggleLinePrefix(s.blockquotePrefix, /^>\s+/, null);
 };
 
 const isWordSelection = (raw) => {
@@ -15219,10 +15266,26 @@ const copySelectionTranslateResult = async (payload) => {
 };
 
 const toggleUnorderedList = () => {
-  toggleLinePrefix('- ', /^-\s+/, null);
+  const s = toolbarSnippets();
+  // 标记符跟着语言走（markdown `-` / typst `-`），识别模式按标记符构造，
+  // 避免在 typst 里把 `+ ` 前缀当成未命中而重复叠加。
+  const marker = s.bulletListPrefix.trim();
+  const pattern = new RegExp(`^${marker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s+`);
+  toggleLinePrefix(s.bulletListPrefix, pattern, null);
 };
 
 const toggleOrderedList = () => {
+  const s = toolbarSnippets();
+  const lang = currentToolbarLanguage.value;
+  // typst 用 `+ ` 做有序列表且不带序号；markdown 用 `1. ` 递增。
+  if (lang === 'typst') {
+    toggleLinePrefix('+ ', /^\+\s+/, null);
+    return;
+  }
+  if (lang === 'latex') {
+    toggleLinePrefix('\\item ', /^\\item\s+/, null);
+    return;
+  }
   toggleLinePrefix(
     '1. ',
     /^\d+\.\s+/,
@@ -15915,11 +15978,17 @@ const insertImage = async () => {
     }
 
     const imported = await importMarkdownImageToResourceRepo(sourcePath);
-    const markdown = buildMarkdownImageSyntax(imported);
+    // 图片语法随语言走：markdown `![](path)` / typst `#image("path")` / latex `\includegraphics{path}`。
+    // 资源库导入逻辑保持不变（仍把图片固化进资源库），只是最终插入的文字不同。
+    const lang = currentToolbarLanguage.value;
+    const markdown = lang === 'markdown'
+      ? buildMarkdownImageSyntax(imported)
+      : toolbarSnippets().image('图片', imported.relativePath || imported.path || '');
     const inserted = insertMarkdownTextAtCursor(markdown, 'markdown-image-insert');
-    if (!inserted) throw new Error('插入失败：Markdown 编辑器未就绪');
+    if (!inserted) throw new Error('插入失败：编辑器未就绪');
     message.success('图片已导入资源库并插入');
-    logger.info('[MarkdownImage] markdown inserted', {
+    logger.info('[MarkdownImage] image syntax inserted', {
+      language: lang,
       relativePath: imported.relativePath,
       markdownLength: markdown.length
     });
@@ -15996,9 +16065,19 @@ const insertChartWithDataFile = async () => {
   }
 };
 
-const insertCodeBlock = (lang) => {  const v = String(lang || '').trim();
-  const prefix = v ? `\`\`\`${v}\n` : '```\n';
-  wrapSelection(prefix, '\n```\n', '代码');
+const insertCodeBlock = (lang) => {
+  const v = String(lang || '').trim();
+  const snippets = toolbarSnippets();
+  // 代码块语法随语言走：markdown/typst 用三反引号，LaTeX 用 verbatim 环境（不需要额外宏包）。
+  if (currentToolbarLanguage.value === 'latex') {
+    wrapSelection('\\begin{verbatim}\n', '\n\\end{verbatim}\n', '代码');
+    return;
+  }
+  const block = snippets.codeBlock(v, '代码');
+  // codeBlock 生成的是整块文本，这里按前缀/后缀拆开以便复用 wrapSelection 的选中行为。
+  const firstNewline = block.indexOf('\n');
+  const lastNewline = block.lastIndexOf('\n');
+  wrapSelection(block.slice(0, firstNewline + 1), block.slice(lastNewline), '代码');
 };
 
 const insertPythonCellBlock = () => {
@@ -16048,7 +16127,9 @@ const insertCodeBlockFromToolbar = () => {
 };
 
 const insertHorizontalRule = () => {
-  insertBlockSnippet('---\n');
+  const s = toolbarSnippets();
+  const rule = typeof s.horizontalRule === 'function' ? s.horizontalRule() : '---';
+  insertBlockSnippet(`${rule}\n`);
 };
 
 const undo = () => {
@@ -23686,7 +23767,33 @@ const BASE_EXPORT_OPTIONS = [
   { label: '导出为 纯文本 (.txt)', key: 'txt' }
 ]
 
-const exportOptions = computed(() => BASE_EXPORT_OPTIONS.map((option) => {
+// Typst 专有导出：HTML（语义化）、逐页 SVG、逐页矢量图打包。
+// 它们只对 .typ 有意义，所以单独一组、由文件类型决定是否出现在菜单里。
+const TYPST_EXPORT_OPTIONS = [
+  { label: '导出为 HTML (.html)', key: 'typ_html' },
+  { label: '导出为 SVG（逐页）', key: 'typ_svg' },
+  { label: '导出为图片包 (.tar.gz)', key: 'typ_images' },
+]
+
+// 当前文件支持哪些导出格式。菜单、快捷键提示、实际执行三处共用这一份，
+// 避免出现「菜单里没有但快捷键还能触发」的错位。
+const exportOptionsForActiveFile = computed(() => {
+  const path = String(selectedFile.value?.path || '')
+  const ext = path.split('.').pop()?.toLowerCase() || ''
+  if (ext === 'typ') {
+    // Typst 直接编译，不经过 Markdown/pandoc 管线，只保留它自己能产出的格式。
+    return [
+      BASE_EXPORT_OPTIONS.find((o) => o.key === 'pdf'),
+      ...TYPST_EXPORT_OPTIONS,
+    ].filter(Boolean)
+  }
+  if (ext === 'tex') {
+    return BASE_EXPORT_OPTIONS.filter((o) => o.key === 'pdf')
+  }
+  return BASE_EXPORT_OPTIONS
+})
+
+const exportOptions = computed(() => exportOptionsForActiveFile.value.map((option) => {
   const shortcut = shortcutText(EXPORT_SHORTCUTS[option.key])
   return {
     ...option,
@@ -23695,7 +23802,7 @@ const exportOptions = computed(() => BASE_EXPORT_OPTIONS.map((option) => {
 }))
 
 const editorExportShortcutTooltip = computed(() => {
-  const shortcuts = BASE_EXPORT_OPTIONS
+  const shortcuts = exportOptionsForActiveFile.value
     .map((option) => {
       const shortcut = shortcutText(EXPORT_SHORTCUTS[option.key])
       return shortcut ? `${option.key.toUpperCase()}: ${shortcut}` : ''
@@ -23723,6 +23830,9 @@ const EXPORT_FORMAT_CONFIG = {
   epub: { ext: 'epub', filterName: 'EPUB 文件' },
   odt: { ext: 'odt', filterName: 'ODT 文件' },
   txt: { ext: 'txt', filterName: '文本文件' },
+  typ_html: { ext: 'html', filterName: 'HTML 文件' },
+  typ_svg: { ext: 'svg', filterName: 'SVG 文件' },
+  typ_images: { ext: 'tar.gz', filterName: '图片包' },
 }
 
 const prepareExportContext = async (format) => {
@@ -23738,11 +23848,16 @@ const prepareExportContext = async (format) => {
   const isMarkdownFile = ext === 'md' || ext === 'markdown'
   const config = EXPORT_FORMAT_CONFIG[format] || { ext: String(format || 'txt'), filterName: '导出文件' }
 
-  if (!isMarkdownFile && !((isTexFile || isTypFileExport) && format === 'pdf')) {
+  // 允许的「文件类型 × 导出格式」组合，与菜单里的 exportOptionsForActiveFile 一致。
+  const isTypstNativeFormat = format === 'typ_html' || format === 'typ_svg' || format === 'typ_images'
+  const allowed = isMarkdownFile
+    || isTexFile && format === 'pdf'
+    || isTypFileExport && (format === 'pdf' || isTypstNativeFormat)
+  if (!allowed) {
     if (isTexFile) {
       message.warning('当前为 .tex 文件，仅支持导出为 PDF')
     } else if (isTypFileExport) {
-      message.warning('当前为 .typ 文件，仅支持导出为 PDF')
+      message.warning('当前为 .typ 文件，支持导出为 PDF / HTML / SVG / 图片包')
     } else {
       message.warning('仅支持对 Markdown(.md/.markdown) 文件进行导出')
     }
@@ -24694,6 +24809,24 @@ const exportTypPdf = async (context, outputPath) => {
   })
 }
 
+const exportTypHtml = async (context, outputPath) => {
+  logger.info('[Export] export typ html via typst', { inputPath: context.inputPath, outputPath })
+  await invoke('export_typ_html', { inputPath: context.inputPath, outputPath })
+}
+
+const exportTypSvg = async (context, outputPath) => {
+  logger.info('[Export] export typ svg via typst', { inputPath: context.inputPath, outputPath })
+  const files = await invoke('export_typ_svg', { inputPath: context.inputPath, outputPath })
+  const count = Array.isArray(files) ? files.length : 0
+  if (count > 1) message.info(`已导出 ${count} 页 SVG（同名 -1 ~ -${count}）`)
+}
+
+const exportTypImages = async (context, outputPath) => {
+  logger.info('[Export] export typ image bundle via typst', { inputPath: context.inputPath, outputPath })
+  const count = await invoke('export_typ_images', { inputPath: context.inputPath, outputPath })
+  message.info(`已导出 ${Number(count) || 0} 页矢量图（.tar.gz）`)
+}
+
 const handleExportSelect = async (format) => {
   try {
     const context = await prepareExportContext(format)
@@ -24717,6 +24850,12 @@ const handleExportSelect = async (format) => {
       await exportTexPdf(context, outputPath)
     } else if (context.isTypFile && format === 'pdf') {
       await exportTypPdf(context, outputPath)
+    } else if (format === 'typ_html') {
+      await exportTypHtml(context, outputPath)
+    } else if (format === 'typ_svg') {
+      await exportTypSvg(context, outputPath)
+    } else if (format === 'typ_images') {
+      await exportTypImages(context, outputPath)
     } else if (format === 'pdf') {
       await exportMarkdownRenderedPdf(context, outputPath)
     } else if (format === 'html') {

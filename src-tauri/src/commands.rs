@@ -140,6 +140,7 @@ pub mod web_import;
 pub mod tts_book;
 pub mod syntax_highlight;
 pub mod typst_compile;
+pub mod typst_package;
 pub mod pdf_reader;
 pub mod preview_render_cache;
 // 后端服务的登记表与启停控制（「设置 → 服务器」页面的后端）。

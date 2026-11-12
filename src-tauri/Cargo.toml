@@ -204,6 +204,13 @@ chromiumoxide = { version = "0.9.1", features = ["fetcher", "native-tls", "zip8"
 # packages=支持 @preview 包（首次用到时联网下载并缓存）。Windows 上 downloads 走 native-tls(schannel)，无需 openssl。
 typst = "=0.14.2"
 typst-pdf = "=0.14.2"
+# HTML 导出（Typst 0.13+ 的 html 目标）。编译成 HtmlDocument 后再编码成字符串。
+typst-html = "=0.14.2"
+# SVG 导出：逐页导出为矢量图，用于「导出图片」。
+typst-svg = "=0.14.2"
+# Typst 包下载：自行实现（支持镜像前缀与显式代理），版本与 typst-kit 保持同一条依赖链。
+ureq = "2"
+env_proxy = "0.4"
 typst-kit = { version = "=0.14.2", default-features = false, features = ["fonts", "embed-fonts", "packages"] }
 # typst-ide：源码 <-> 渲染文档的双向跳转（jump_from_click / jump_from_cursor），供内嵌阅读器双向定位。
 typst-ide = "=0.14.2"

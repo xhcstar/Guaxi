@@ -223,7 +223,13 @@
       @mousedown="onBodyMouseDown"
     >
       <div v-if="errorText" class="gpv__error">
-        <div class="gpv__error-title">构建失败</div>
+        <div class="gpv__error-head">
+          <div class="gpv__error-title">构建失败</div>
+          <button type="button" class="gpv__error-copy" :title="copyHint" @click="copyErrorLog">
+            <Icon :icon="copyIcon" width="14" height="14" />
+            <span>{{ copyStateText }}</span>
+          </button>
+        </div>
         <pre class="gpv__error-log">{{ errorText }}</pre>
       </div>
       <div v-else-if="!hasPdf && !building" class="gpv__empty">
@@ -351,6 +357,8 @@ import { Icon } from '@iconify/vue'
 import RotateCcwIcon from '@iconify-icons/lucide/rotate-ccw'
 import RotateCwIcon from '@iconify-icons/lucide/rotate-cw'
 import { createLogger } from '../../utils/logger'
+import { writeClipboardText } from '../../utils/clipboard'
+import CopyIcon from '@iconify-icons/lucide/copy'
 import { useReadingHistory } from '../../composables/useReadingHistory'
 import { markReaderScrollbarActive } from '../ReaderComponent/readerScrollbar'
 import usePdfiumDocument from './usePdfiumDocument'
@@ -385,6 +393,22 @@ const props = defineProps({
     default: () => ({ search: true, reverseJump: true, outline: false, export: false, rebuild: false }),
   },
 })
+// 构建失败日志的复制：诊断信息通常很长（tectonic/typst 的 stderr 原文），
+// 用户要贴到 issue 或群里求助，手选容易漏行。这里给一键复制，并在按钮上回显结果。
+const copyIcon = CopyIcon
+const copyState = ref('idle') // idle | copied | failed
+const copyStateText = computed(() => (
+  copyState.value === 'copied' ? '已复制' : copyState.value === 'failed' ? '复制失败' : '复制日志'
+))
+const copyHint = computed(() => '复制完整构建日志，便于粘贴排查')
+let copyStateTimer = null
+const copyErrorLog = async () => {
+  const ok = await writeClipboardText(props.errorText || '')
+  copyState.value = ok ? 'copied' : 'failed'
+  if (copyStateTimer) clearTimeout(copyStateTimer)
+  copyStateTimer = setTimeout(() => { copyState.value = 'idle' }, 1800)
+}
+
 
 const emit = defineEmits([
   'reverse-jump',
@@ -2885,7 +2909,31 @@ onBeforeUnmount(() => {
   padding: 24px;
 }
 .gpv__error { text-align: left; width: 100%; }
-.gpv__error-title { color: #cf222e; font-weight: 600; margin-bottom: 8px; }
+.gpv__error-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+.gpv__error-title { color: #cf222e; font-weight: 600; }
+/* 复制按钮：与错误标题同排，弱化处理，不抢标题的红色警示。 */
+.gpv__error-copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--gpv-border, rgba(0, 0, 0, 0.14));
+  background: transparent;
+  color: var(--gpv-text);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background-color .15s ease, border-color .15s ease;
+}
+.gpv__error-copy:hover {
+  background: var(--gpv-hover-bg, rgba(0, 0, 0, 0.05));
+}
 .gpv.theme-dark .gpv__error-title { color: #e06c75; }
 .gpv__error-log {
   white-space: pre-wrap;

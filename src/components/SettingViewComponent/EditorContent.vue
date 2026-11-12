@@ -171,6 +171,61 @@
         每套主题自带亮色与暗色两套配色，随外观主题自动切换。
       </p>
 
+      <n-divider />
+
+      <h3>Typst 包下载</h3>
+      <p class="setting-page-desc">
+        在 .typ 文档里 <code>#import "@preview/..."</code> 引用包时，首次编译会联网下载。
+        官方源在境外，不配代理时可能很慢。这里可以指定镜像地址与代理，
+        已下载的包会缓存到本地，之后不再联网。留空表示使用默认值。
+      </p>
+      <n-form label-placement="left" label-width="auto" :show-require-mark="false">
+        <n-form-item label="下载地址">
+          <n-input
+            v-model:value="typstPackage.registry"
+            placeholder="https://packages.typst.org"
+            :disabled="loading || typstPackageSaving"
+            style="max-width: 420px"
+          />
+        </n-form-item>
+        <n-form-item label="缓存目录">
+          <n-input
+            v-model:value="typstPackage.cache_dir"
+            placeholder="留空使用系统默认缓存目录"
+            :disabled="loading || typstPackageSaving"
+            style="max-width: 420px"
+          />
+        </n-form-item>
+        <n-form-item label="代理">
+          <n-input
+            v-model:value="typstPackage.proxy"
+            placeholder="例如 http://127.0.0.1:7890"
+            :disabled="loading || typstPackageSaving"
+            style="max-width: 420px"
+          />
+        </n-form-item>
+        <n-form-item label="离线模式">
+          <n-space align="center" :size="8">
+            <n-switch
+              v-model:value="typstPackage.offline"
+              :disabled="loading || typstPackageSaving"
+              @update:value="saveTypstPackage"
+            />
+            <span class="setting-page-desc">打开后只用本地已缓存的包，缺包会直接报错而不是联网下载。</span>
+          </n-space>
+        </n-form-item>
+        <n-form-item label=" ">
+          <n-space align="center" :size="12">
+            <n-button size="small" type="primary" :loading="typstPackageSaving" @click="saveTypstPackage">
+              保存
+            </n-button>
+            <span class="setting-page-desc">{{ typstPackageHint }}</span>
+          </n-space>
+        </n-form-item>
+      </n-form>
+
+      <n-divider />
+
       <h3>Markdown 格式化</h3>
       <p class="setting-page-desc">
         右键菜单里「Markdown 格式化（全文 / 选中）」使用的参数。这组值以前写死在编辑器代码里，
@@ -266,7 +321,7 @@
 <script setup>
 import { createLogger } from '../../utils/logger'
 import { ref, computed, onMounted } from 'vue'
-import { NCard, NSpace, NDivider, NForm, NFormItem, NInputNumber, NSwitch, NSelect } from 'naive-ui'
+import { NCard, NSpace, NDivider, NForm, NFormItem, NInput, NInputNumber, NSwitch, NSelect, NButton } from 'naive-ui'
 import { GUAXI_CODE_THEMES } from '../../monaco/codeThemes'
 import { invoke } from '@tauri-apps/api/core'
 import {
@@ -394,6 +449,54 @@ const previewImageSampleStyle = computed(() => {
   }
 })
 
+// Typst 包下载配置。默认值留空：后端对空串的解释就是「用默认」，
+// 所以界面不需要知道默认的 registry 常量是什么，也不会把默认值写进配置。
+const typstPackage = ref({ registry: '', cache_dir: '', proxy: '', offline: false })
+const typstPackageSaving = ref(false)
+const typstPackageHint = ref('')
+
+const loadTypstPackageConfig = async () => {
+  try {
+    const cfg = await invoke('get_typst_package_config')
+    typstPackage.value = {
+      registry: cfg?.registry || '',
+      cache_dir: cfg?.cache_dir || '',
+      proxy: cfg?.proxy || '',
+      offline: !!cfg?.offline,
+    }
+  } catch (error) {
+    logger.warn('加载 Typst 包下载配置失败:', error)
+  }
+}
+
+const saveTypstPackage = async () => {
+  try {
+    typstPackageSaving.value = true
+    const res = await invoke('set_typst_package_config', {
+      registry: typstPackage.value.registry || '',
+      cacheDir: typstPackage.value.cache_dir || '',
+      proxy: typstPackage.value.proxy || '',
+      offline: !!typstPackage.value.offline,
+    })
+    // applied=false 表示本进程已经初始化过配置，需要重启应用才生效——
+    // 这一点必须如实告诉用户，否则他会以为保存了却没作用。
+    typstPackageHint.value = res?.applied ? '已保存' : '已保存，重启应用后生效'
+    if (res?.current) {
+      typstPackage.value = {
+        registry: res.current.registry || '',
+        cache_dir: res.current.cache_dir || '',
+        proxy: res.current.proxy || '',
+        offline: !!res.current.offline,
+      }
+    }
+  } catch (error) {
+    logger.error('保存 Typst 包下载配置失败:', error)
+    typstPackageHint.value = `保存失败：${String(error?.message || error || '')}`
+  } finally {
+    typstPackageSaving.value = false
+  }
+}
+
 onMounted(async () => {
   try {
     loading.value = true
@@ -403,6 +506,7 @@ onMounted(async () => {
       settingsStore.loadEditorDisplayConfig(),
       settingsStore.loadCodeThemeConfig(),
       settingsStore.loadMarkdownFormatConfig(),
+      loadTypstPackageConfig(),
     ])
     lspHighlightEnabled.value = !!enabled
     pythonCodegenAssistEnabled.value = !!codegenAssist
