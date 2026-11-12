@@ -71,20 +71,28 @@
     <!-- 小地图:俯视投影 + 当前焦点(可点击定位) -->
     <canvas ref="minimap" class="kg3d-minimap" width="180" height="140" @click="onMinimapClick"></canvas>
 
-    <!-- 时间轴:拖动按修改时间过滤,回放知识增长 -->
-    <div class="kg3d-timeline">
-      <button class="tl-play" @click="toggleTimelinePlay">{{ timelinePlaying ? "⏸" : "▶" }}</button>
-      <span class="tl-edge" :title="timelineRangeLabel.min">{{ shortDate(timelineRangeLabel.min) }}</span>
-      <input
-        type="range"
-        min="0"
-        max="100"
-        v-model.number="timelineValue"
-        class="tl-range"
-        @input="applyTimeline"
-      />
-      <span class="tl-edge" :title="timelineRangeLabel.max">{{ shortDate(timelineRangeLabel.max) }}</span>
-      <span class="tl-label">{{ timelineLabel }}</span>
+    <!-- 底部 HUD:状态行 + 时间轴。
+         两者原来都锚在 bottom:10px 左右,状态行贴左、时间轴居中,宽度互不相让 ——
+         状态文案一长(如「节点 6000 · 边 6592 · 760 ms(已截断)」)就会压到
+         时间轴左端的起始日期上。改成纵向排布后,无论窗口多窄、文案多长都不会叠字。 -->
+    <div class="kg3d-bottom">
+      <div v-if="statusText" class="kg3d-status" :title="statusText">{{ statusText }}</div>
+
+      <!-- 时间轴:拖动按修改时间过滤,回放知识增长 -->
+      <div class="kg3d-timeline">
+        <button class="tl-play" @click="toggleTimelinePlay">{{ timelinePlaying ? "⏸" : "▶" }}</button>
+        <span class="tl-edge" :title="timelineRangeLabel.min">{{ shortDate(timelineRangeLabel.min) }}</span>
+        <input
+          type="range"
+          min="0"
+          max="100"
+          v-model.number="timelineValue"
+          class="tl-range"
+          @input="applyTimeline"
+        />
+        <span class="tl-edge" :title="timelineRangeLabel.max">{{ shortDate(timelineRangeLabel.max) }}</span>
+        <span class="tl-label">{{ timelineLabel }}</span>
+      </div>
     </div>
 
     <!-- 选中信息 / 建议面板 -->
@@ -140,8 +148,6 @@
         </div>
       </div>
     </div>
-
-    <div v-if="statusText" class="kg3d-status">{{ statusText }}</div>
   </div>
 </template>
 
@@ -2731,11 +2737,31 @@ defineExpose({ reload: loadGraph });
 .pn-link:hover { color: #58a6ff; text-decoration: underline; }
 .pn-sscore { font-size: 11px; opacity: 0.6; }
 .pn-srow button { width: 22px; border-radius: 4px; background: #1f6feb; color: #fff; border: none; cursor: pointer; }
-.kg3d-status {
+/* 底部 HUD 容器:状态行在上、时间轴在下,纵向排布,两者不会再抢同一块横条。
+   容器本身不接收指针事件,空白处仍能拖动/缩放画布;两个子元素各自恢复。 */
+.kg3d-bottom {
   position: absolute;
+  left: 0;
+  right: 0;
   bottom: 10px;
-  left: 12px;
   z-index: 5;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 0 12px;
+  pointer-events: none;
+}
+.kg3d-bottom > * { pointer-events: auto; }
+
+.kg3d-status {
+  align-self: flex-start;
+  /* 状态文案可能很长(节点/边/耗时/操作提示)。右侧是小地图(宽 180px),
+     这里相应留出空间,超宽只省略显示,完整内容看 title。 */
+  max-width: calc(100% - 200px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: 12px;
   opacity: 0.8;
   background: rgba(13, 17, 23, 0.6);
@@ -2753,11 +2779,6 @@ defineExpose({ reload: loadGraph });
   cursor: pointer;
 }
 .kg3d-timeline {
-  position: absolute;
-  left: 50%;
-  transform: translateX(-50%);
-  bottom: 10px;
-  z-index: 5;
   display: flex;
   align-items: center;
   gap: 8px;
