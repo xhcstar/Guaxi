@@ -12,7 +12,9 @@ use actix_cors::Cors;
 use actix_web::web::{Data, JsonConfig, PayloadConfig};
 use actix_web::dev::ServerHandle;
 use actix_web::{dev::Server, web, App, HttpResponse, HttpServer};
-use std::sync::{Mutex, OnceLock};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tauri::{Emitter, Manager};
@@ -196,48 +198,139 @@ async fn notebook_data_lab_rpc_http(
 /// actix 的 `ServerHandle` 可以在服务运行期间要求它退出。存下来之后「设置 → 服务器」才能
 /// 停掉/重启这两个服务 —— 在此之前它们只是 fire-and-forget 的 spawn，句柄没被任何人持有，
 /// 除了杀进程没有任何办法停。
-static LOCAL_BACKEND_HANDLE: OnceLock<Mutex<Option<ServerHandle>>> = OnceLock::new();
-static CAPTURE_IMPORT_HANDLE: OnceLock<Mutex<Option<ServerHandle>>> = OnceLock::new();
+static LOCAL_BACKEND_HANDLE: OnceLock<Mutex<Option<RunningActix>>> = OnceLock::new();
+static CAPTURE_IMPORT_HANDLE: OnceLock<Mutex<Option<RunningActix>>> = OnceLock::new();
 
-fn local_backend_handle_slot() -> &'static Mutex<Option<ServerHandle>> {
+/// 一个正在跑的 actix 服务：停止句柄 + 「它还活着吗」的标记。
+///
+/// 光有句柄不够：服务自己崩了（worker panic、内部错误退出）时没人会去清句柄，
+/// 于是状态页会一直报「运行中」。`alive` 由跑服务的那个后台任务在退出时置 false。
+/// 它是**每个实例自己的一份**（`Arc`），所以旧实例退出时不会把新实例的标记带下来。
+struct RunningActix {
+    handle: ServerHandle,
+    alive: Arc<AtomicBool>,
+}
+
+impl RunningActix {
+    fn is_alive(&self) -> bool {
+        self.alive.load(Ordering::SeqCst)
+    }
+}
+
+fn local_backend_handle_slot() -> &'static Mutex<Option<RunningActix>> {
     LOCAL_BACKEND_HANDLE.get_or_init(|| Mutex::new(None))
 }
 
-fn capture_import_handle_slot() -> &'static Mutex<Option<ServerHandle>> {
+fn capture_import_handle_slot() -> &'static Mutex<Option<RunningActix>> {
     CAPTURE_IMPORT_HANDLE.get_or_init(|| Mutex::new(None))
+}
+
+/// 本进程是否正在跑 8888 后端（服务已退出则视为没在跑）。
+///
+/// 为什么需要这个：端口探测只能看出「有人在监听」，看不出「监听的是不是我这个进程」。
+/// 用调试版和安装版同时开、或上一个实例没退干净时，8888 会被**别人**占着，端口探测照样
+/// 报「运行中」，而请求其实被另一个实例（另一份配置、另一套图床根目录）接走了 ——
+/// 表现就是「服务显示运行中，但图床接口 404」。拿句柄判断才能区分这两种情况。
+pub fn local_backend_owned() -> bool {
+    local_backend_handle_slot()
+        .lock()
+        .map(|mut guard| match guard.as_ref() {
+            Some(running) if running.is_alive() => true,
+            Some(_) => {
+                guard.take();
+                false
+            }
+            None => false,
+        })
+        .unwrap_or(false)
+}
+
+/// 本进程是否正在跑 14219 局域网导入接收。
+pub fn capture_import_owned() -> bool {
+    capture_import_handle_slot()
+        .lock()
+        .map(|mut guard| match guard.as_ref() {
+            Some(running) if running.is_alive() => true,
+            Some(_) => {
+                guard.take();
+                false
+            }
+            None => false,
+        })
+        .unwrap_or(false)
+}
+
+/// 优雅停机的等待上限。
+///
+/// 8888 上挂着 LSP websocket、浏览器预览这类**长连接**，而 actix 的优雅停机要等所有连接
+/// 自行结束，默认上限 30 秒 —— 设置页点「重启」就会转圈半分钟。3 秒足够让在途的取图请求
+/// 收尾；超过就强制断开，由前端各自的重连逻辑接管。
+const SHUTDOWN_TIMEOUT_SECS: u64 = 3;
+
+/// 等 `stop(true)` 返回的兜底上限：比 actix 自己的 shutdown_timeout 宽一点，
+/// 只在 actix 内部状态异常时才会触发。
+const STOP_WAIT: Duration = Duration::from_secs(8);
+
+/// 停掉一个 actix 服务。
+///
+/// actix 的优雅停机要等所有连接自行结束，默认上限 30 秒；8888 上挂着 LSP websocket、
+/// 浏览器预览这类长连接，所以点「重启」会转圈半分钟。现在两个服务在建的时候就设了
+/// `shutdown_timeout(SHUTDOWN_TIMEOUT_SECS)`，actix 到点会强制丢弃残余连接；这里的
+/// 超时只是最后一道兜底（正常情况下永远不该触发）。
+async fn stop_actix(handle: ServerHandle, label: &str) {
+    if tokio::time::timeout(STOP_WAIT, handle.stop(true))
+        .await
+        .is_err()
+    {
+        warn!(
+            service = label,
+            wait_secs = STOP_WAIT.as_secs(),
+            "[backend] stop did not complete in time; leaving it to actix force shutdown"
+        );
+    }
 }
 
 /// 停止 8888 本地后端。未在运行时空操作。
 pub async fn stop_local_backend() {
-    let handle = local_backend_handle_slot()
+    let running = local_backend_handle_slot()
         .lock()
         .ok()
         .and_then(|mut guard| guard.take());
-    if let Some(handle) = handle {
-        // graceful=true：等在途请求收尾，别打断正在进行的取图请求。
-        handle.stop(true).await;
+    if let Some(running) = running {
+        stop_actix(running.handle, "local-backend").await;
         info!("[backend] local service stopped");
     }
 }
 
 /// 停止 14219 局域网导入接收。未在运行时空操作。
 pub async fn stop_capture_import() {
-    let handle = capture_import_handle_slot()
+    let running = capture_import_handle_slot()
         .lock()
         .ok()
         .and_then(|mut guard| guard.take());
-    if let Some(handle) = handle {
-        handle.stop(true).await;
+    if let Some(running) = running {
+        stop_actix(running.handle, "capture-import").await;
         info!("[capture_import] LAN import service stopped");
     }
 }
 
 /// 启动 8888 本地后端。**bind 失败立刻返回 Err**（上层据此退避重试）；
-/// 成功后一直运行到被 `stop_local_backend` 停掉。
+/// 绑定成功后立刻返回 Ok，服务本体在自己的后台任务里一直跑到被 `stop_local_backend` 停掉。
+///
+/// 为什么不在调用方里 `await` 服务本体：`Server` 是一个「服务退出才完成」的 future。
+/// 之前直接 `await` 它，会让 `service_start` / `service_restart` 这个 Tauri 命令一直挂到
+/// 服务被停为止 —— 前端表现为「重启」无限转圈，且该命令永远拿不到结果再回读状态。
+/// 现在把「等结果」的责任交给后台任务，命令只负责「确认已经绑上端口」。
 ///
 /// 这里刻意拆掉了原来的「一次把两个服务都起来并 try_join」的写法：8888 与 14219
 /// 现在是两个可各自启停的服务（14219 绑在 0.0.0.0，严格网络管控下用户可能想单独关掉它）。
 pub async fn run_local_backend(state: SharedState) -> Result<(), String> {
+    // 已经由本进程在跑就不要再建一个：否则第二个实例绑不上 8888，会把「本来就好着」当成失败。
+    if local_backend_owned() {
+        info!("[backend] local service already owned by this process; skip");
+        return Ok(());
+    }
+
     let server = HttpServer::new(move || {
         let cors = Cors::default()
             .allow_any_origin()
@@ -268,21 +361,61 @@ pub async fn run_local_backend(state: SharedState) -> Result<(), String> {
             .app_data(JsonConfig::default().limit(10 * 1024 * 1024))
             .app_data(PayloadConfig::default().limit(10 * 1024 * 1024))
     })
+    .shutdown_timeout(SHUTDOWN_TIMEOUT_SECS)
     .bind("127.0.0.1:8888")
-    .map_err(|error| format!("绑定 127.0.0.1:8888 失败: {error}"))?;
+    .map_err(|error| {
+        // 10048（地址已被占用）几乎总是「另一个 Guaxi 实例还开着」：两个实例抢同一个
+        // loopback 端口，后起的那个绑不上。把这句话直接写进错误里，用户才知道该关谁。
+        format!(
+            "绑定 127.0.0.1:8888 失败: {error}。该端口可能被另一个 Guaxi 实例或别的程序占用"
+        )
+    })?;
 
     info!("[backend] local service listening on http://127.0.0.1:8888");
 
     let running = server.run();
+    let server_handle = running.handle();
+    let alive = spawn_until_stopped(running, "local-backend");
     // 存下停止句柄：「设置 → 服务器」据此停掉/重启本地后端。
-    *local_backend_handle_slot().lock().unwrap() = Some(running.handle());
-    running.await.map_err(|error| error.to_string())
+    *local_backend_handle_slot().lock().unwrap() = Some(RunningActix {
+        handle: server_handle,
+        alive,
+    });
+    Ok(())
 }
 
-/// 启动 14219 局域网导入接收。bind 失败立刻返回 Err。
+/// 启动 14219 局域网导入接收。bind 失败立刻返回 Err；绑定成功后立刻返回 Ok，
+/// 服务本体在后台任务里运行（理由同 `run_local_backend`）。
 pub async fn run_capture_import(state: SharedState) -> Result<(), String> {
+    if capture_import_owned() {
+        info!("[capture_import] LAN import service already owned by this process; skip");
+        return Ok(());
+    }
     let running = start_capture_import_lan_service(state)?;
-    running.await.map_err(|error| error.to_string())
+    let server_handle = running.handle();
+    let alive = spawn_until_stopped(running, "capture-import");
+    *capture_import_handle_slot().lock().unwrap() = Some(RunningActix {
+        handle: server_handle,
+        alive,
+    });
+    Ok(())
+}
+
+/// 把 actix 服务丢进后台任务，直到它自己退出（被 stop 或出错）。
+/// 返回的标记会在任务结束时置 false，状态页据此识别「服务其实已经不在了」。
+fn spawn_until_stopped(running: Server, label: &'static str) -> Arc<AtomicBool> {
+    let alive = Arc::new(AtomicBool::new(true));
+    let flag = alive.clone();
+    tauri::async_runtime::spawn(async move {
+        if let Err(error) = running.await {
+            warn!(service = label, %error, "[backend] service exited with error");
+        } else {
+            info!(service = label, "[backend] service exited");
+        }
+        // 服务不再运行时清掉标记，避免后续 stop 对着一个已死的 handle 白等超时。
+        flag.store(false, Ordering::SeqCst);
+    });
+    alive
 }
 
 fn capture_import_bind_addr() -> String {
@@ -291,6 +424,14 @@ fn capture_import_bind_addr() -> String {
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| "0.0.0.0:14219".to_string())
+}
+
+/// 局域网导入接收实际监听的端口（可能被 `GUAXI_CAPTURE_BIND` 改写）。
+pub fn capture_import_port() -> Option<u16> {
+    capture_import_bind_addr()
+        .rsplit(':')
+        .next()
+        .and_then(|port| port.parse().ok())
 }
 
 fn start_capture_import_lan_service(state: SharedState) -> Result<Server, String> {
@@ -315,6 +456,7 @@ fn start_capture_import_lan_service(state: SharedState) -> Result<Server, String
             .app_data(JsonConfig::default().limit(20 * 1024 * 1024))
             .app_data(PayloadConfig::default().limit(20 * 1024 * 1024))
     })
+    .shutdown_timeout(SHUTDOWN_TIMEOUT_SECS)
     .bind(&bind_addr)
     .map_err(|error| {
         warn!(
@@ -328,7 +470,5 @@ fn start_capture_import_lan_service(state: SharedState) -> Result<Server, String
         "[capture_import] LAN import service listening on http://{}",
         bind_addr
     );
-    let running = server.run();
-    *capture_import_handle_slot().lock().unwrap() = Some(running.handle());
-    Ok(running)
+    Ok(server.run())
 }

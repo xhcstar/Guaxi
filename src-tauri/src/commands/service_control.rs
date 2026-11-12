@@ -11,12 +11,15 @@
 //! - 状态探测**优先用 TCP connect**：比"句柄还在不在"更真实 —— 能发现"进程活着但没在监听"
 //!   （端口被别的程序抢走时就是这个表现，正是本页要暴露的那类问题）。没有固定端口的
 //!   （P2P 走 QUIC、局域网文件接收端口由用户指定）交给各自的模块自己判断。
+//!   例外是 8888 / 14219 这两个**由本进程托管**的 actix 服务：它们的状态看本进程是否
+//!   真的持有服务句柄（见 `server::local_backend_owned`），否则另一个 Guaxi 实例占着端口
+//!   时会被误报成"运行中"，而实际接走请求的是别人。
 //! - 会话池（终端/SSH/调试/…）没有"启停"一说，只有"当前几个 + 一键全关"，所以它们用
 //!   `count` 提供计数，状态由"有没有活跃会话"推导。
 //! - 用户的「停用」写进 `AppConfig.disabled_services` **持久化**：严格管控环境里关掉的端口，
 //!   重启应用后不该自己又开起来。
-//! - 重启统一走「停 → 等 1 秒放端口 → 起」，沿用 `rsshub_server::restart` 的既有范式；
-//!   否则会和自己刚停掉的服务抢同一个端口，反倒制造 `os error 10048`。
+//! - 重启统一走「停 → 等端口真正释放 → 起 → 确认已在监听」，沿用 `rsshub_server::restart`
+//!   的既有范式；否则会和自己刚停掉的服务抢同一个端口，反倒制造 `os error 10048`。
 
 use futures_util::future::BoxFuture;
 use serde::Serialize;
@@ -87,6 +90,11 @@ struct ServiceDef {
 const GROUP_BOOT: &str = "常驻服务";
 const GROUP_ONDEMAND: &str = "按需服务";
 const GROUP_SESSION: &str = "会话与临时任务";
+
+/// 重启时等端口释放 / 等它开始监听的上限。
+const PORT_WAIT_TIMEOUT: Duration = Duration::from_secs(10);
+/// 重启成功后等端口开始监听的上限（RSSHub / uvicorn 这类要起进程，比释放慢）。
+const START_LISTEN_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// 服务登记表。加服务 = 加一行。
 static SERVICE_DEFS: &[ServiceDef] = &[
@@ -551,11 +559,48 @@ fn tcp_listening(port: u16) -> bool {
     TcpStream::connect_timeout(&addr, Duration::from_millis(150)).is_ok()
 }
 
+/// 等端口空出来（`want_listening = false`）或等它开始监听（`true`）。
+///
+/// 每 100ms 探一次，满足即返回，所以正常情况下几乎不花时间 —— 比写死 `sleep(1s)` 既快
+/// 又更可靠：慢机器上 1 秒可能不够，快机器上白等。
+async fn wait_for_port(port: u16, want_listening: bool) -> bool {
+    let timeout = if want_listening {
+        START_LISTEN_TIMEOUT
+    } else {
+        PORT_WAIT_TIMEOUT
+    };
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        let listening = tcp_listening(port);
+        if listening == want_listening {
+            return true;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
 async fn is_running(def: &ServiceDef) -> bool {
     // 会话池：有活跃会话就算在跑。
     if let Some(count) = def.count {
         return count() > 0;
     }
+
+    // 这两个服务由本进程托管，状态直接看「我们自己还有没有在跑」。
+    //
+    // 为什么不用端口探测：端口能连上不代表监听的是**本实例**。调试版 + 安装版同时开、
+    // 或上个实例没退干净时，8888 会被另一个进程占着 —— 端口探测报「运行中」，
+    // 但实际接走请求的是另一份配置（另一套图床根目录），于是本地图片/图床 404。
+    // 这种情况必须显示成「未启动」，用户才知道该重启的是眼前这个实例。
+    if def.id == "local-backend" {
+        return crate::guaxiservices::server::local_backend_owned();
+    }
+    if def.id == "capture-import" {
+        return crate::guaxiservices::server::capture_import_owned();
+    }
+
     if let Some(port) = def.port {
         return tcp_listening(port);
     }
@@ -570,6 +615,16 @@ fn find_def(id: &str) -> Result<&'static ServiceDef, String> {
         .iter()
         .find(|def| def.id == id)
         .ok_or_else(|| format!("未知的服务: {id}"))
+}
+
+/// 实际监听的端口。局域网导入接收允许用 `GUAXI_CAPTURE_BIND` 改写地址，登记表里那个
+/// 只是默认值；拿它去等端口会等错对象。
+fn effective_port(def: &ServiceDef) -> Option<u16> {
+    if def.id == "capture-import" {
+        crate::guaxiservices::server::capture_import_port().or(def.port)
+    } else {
+        def.port
+    }
 }
 
 // ─────────────────────────── 停用偏好（持久化） ───────────────────────────
@@ -662,6 +717,12 @@ fn futures_lite_blocking(def: &ServiceDef) -> bool {
     if let Some(count) = def.count {
         return count() > 0;
     }
+    if def.id == "local-backend" {
+        return crate::guaxiservices::server::local_backend_owned();
+    }
+    if def.id == "capture-import" {
+        return crate::guaxiservices::server::capture_import_owned();
+    }
     if let Some(port) = def.port {
         return tcp_listening(port);
     }
@@ -748,7 +809,20 @@ pub async fn service_start(id: String) -> Result<(), String> {
         .ok_or_else(|| format!("{} 不支持手动启动", def.label))?;
     set_autostart_flag(&id, true)?;
     info!(service = id, "[ServiceControl] 手动启动");
-    start().await
+    start().await?;
+
+    // 和重启一样把关：命令返回成功 = 端口上真的有人监听。否则报告「已启动」、
+    // 用户随后发现接口不工作，比直接报错难排查得多。
+    if let Some(port) = effective_port(def) {
+        if !wait_for_port(port, true).await {
+            return Err(format!(
+                "{} 启动后 {} 秒内没有在端口 {port} 上监听，可能已被别的进程占用",
+                def.label,
+                START_LISTEN_TIMEOUT.as_secs()
+            ));
+        }
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -761,8 +835,15 @@ pub async fn service_stop(id: String) -> Result<(), String> {
     stop().await
 }
 
-/// 重启 = 停 → 等端口释放 → 起。中间那一秒是必须的：actix/子进程释放监听端口不是瞬时的，
-/// 立刻重绑会撞上 `os error 10048`（这正是用户最初报的那个错）。
+/// 重启 = 停 → 等端口释放 → 起 → 等它真的在监听。
+///
+/// 三步都不能省：
+/// - 中间那次等待：actix/子进程释放监听端口不是瞬时的，立刻重绑会撞上 `os error 10048`。
+/// - 停止本身有上限：8888 上挂着 LSP / 浏览器预览这类长连接，actix 的优雅停机默认要等
+///   30 秒，前端会一直转圈。上限由 `server::stop_*` 自己兜住。
+/// - 启动后确认监听：`start()` 有的服务（actix）在「绑上端口」时就返回，有的（RSSHub、
+///   uvicorn）是等健康检查通过才返回。这里是最后的把关 —— 没在监听就报错，
+///   而不是给前端一个「已重启」的假成功（用户随后发现图床接口 404 正是这种假成功）。
 #[tauri::command]
 pub async fn service_restart(id: String) -> Result<(), String> {
     let def = find_def(&id)?;
@@ -775,14 +856,41 @@ pub async fn service_restart(id: String) -> Result<(), String> {
 
     info!(service = id, "[ServiceControl] 重启：先停");
     stop().await?;
-    tokio::time::sleep(Duration::from_secs(1)).await;
-    info!(service = id, "[ServiceControl] 重启：再起");
-    let result = start().await;
-    if result.is_ok() {
-        // 重启成功说明这个服务现在是用户要的，顺手清掉停用标记。
-        let _ = set_autostart_flag(&id, true);
+
+    // 等端口释放：最多 10 秒，一旦空出来就立刻继续，不必傻等固定时长。
+    //
+    // 没空出来通常意味着端口被**别的进程**占着（另一个实例、或别的软件）。这时继续
+    // start 必然 10048 失败，报错信息也难懂；直接说清楚「谁占着」，用户才知道下一步做什么。
+    if let Some(port) = effective_port(def) {
+        if !wait_for_port(port, false).await {
+            return Err(format!(
+                "端口 {port} 在 {} 秒内没有释放，可能被其他进程占用（例如另一个 Guaxi 实例）。\
+                 关掉占用它的程序后再重启 {}。",
+                PORT_WAIT_TIMEOUT.as_secs(),
+                def.label
+            ));
+        }
+    } else {
+        tokio::time::sleep(Duration::from_millis(600)).await;
     }
-    result
+
+    info!(service = id, "[ServiceControl] 重启：再起");
+    start().await?;
+
+    // 有端口的服务：确认它真的在监听，否则把「假成功」变成一条可读的错误。
+    if let Some(port) = effective_port(def) {
+        if !wait_for_port(port, true).await {
+            return Err(format!(
+                "{} 已启动但 {} 秒内没有在端口 {port} 上监听，可能已被别的进程占用",
+                def.label,
+                START_LISTEN_TIMEOUT.as_secs()
+            ));
+        }
+    }
+
+    // 重启成功说明这个服务现在是用户要的，顺手清掉停用标记。
+    let _ = set_autostart_flag(&id, true);
+    Ok(())
 }
 
 /// 设置"是否随应用自启"。停用是持久化的：重启应用后不会自己再起来。
