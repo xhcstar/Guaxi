@@ -550,6 +550,18 @@
         </n-space>
       </template>
     </n-modal>
+
+    <!-- 删除确认：应用内弹窗（系统原生 confirm 无法跟随深色主题）。 -->
+    <GuaxiConfirmDialog
+      v-model:show="deleteConfirm.show"
+      title="移到回收站"
+      :content="deleteConfirm.content"
+      hint="删除后可在系统回收站中还原。"
+      positive-text="移到回收站"
+      type="warning"
+      @positive="settleDeleteConfirm(true)"
+      @negative="settleDeleteConfirm(false)"
+    />
   </div>
 </template>
 
@@ -558,7 +570,7 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref, nextTick, watch, h
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { openUrl } from '@tauri-apps/plugin-opener'
-import { confirm as confirmDialog, save as saveDialog } from '@tauri-apps/plugin-dialog'
+import { save as saveDialog } from '@tauri-apps/plugin-dialog'
 import {
   useMessage,
   NLayout,
@@ -625,9 +637,25 @@ import columns2Icon from '@iconify-icons/lucide/columns'
 import GuaxiSlidevLiteEditor from './GuaxiSlidevLiteEditor.vue'
 import GuaxiSlidevTreeView from './GuaxiSlidevTreeView.vue'
 import GuaxiOutline from './GuaxiOutline.vue'
+import GuaxiConfirmDialog from './GuaxiConfirmDialog.js'
 
 const logger = createLogger('GuaxiSlidevManager')
 const message = useMessage()
+
+// 删除确认（应用内弹窗）。删除走系统回收站，所以措辞是「移到回收站」而不是「删除」。
+const deleteConfirm = ref({ show: false, content: '' })
+let deleteConfirmResolve = null
+const settleDeleteConfirm = (ok) => {
+  deleteConfirm.value.show = false
+  const resolve = deleteConfirmResolve
+  deleteConfirmResolve = null
+  if (resolve) resolve(ok)
+}
+const askDeleteConfirm = (name) => new Promise((resolve) => {
+  if (deleteConfirmResolve) settleDeleteConfirm(false)
+  deleteConfirmResolve = resolve
+  deleteConfirm.value = { show: true, content: `确定删除「${name || '该项'}」吗？` }
+})
 
 let lastCenterLayoutLogAt = 0
 const logCenterLayout = (stage, extra = {}) => {
@@ -1671,14 +1699,14 @@ const deleteSelected = async () => {
     return
   }
 
-  const ok = await confirmDialog(`确定要删除「${sel.label}」吗？`, { title: '删除', kind: 'warning' })
+  const ok = await askDeleteConfirm(sel.label)
   if (!ok) return
 
   try {
     await invoke('delete_path', { path: sel.key })
     closeEditorTabsUnderPath(sel.key)
     await refreshSlidevRoot()
-    message.success('删除成功')
+    message.success('已移到回收站')
   } catch (e) {
     logger.error('[Slidev] delete failed', e)
     message.error('删除失败')

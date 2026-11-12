@@ -480,6 +480,18 @@
         </n-space>
       </div>
     </n-modal>
+
+    <!-- 删除确认：应用内弹窗（系统原生 confirm 无法跟随深色主题）。 -->
+    <GuaxiConfirmDialog
+      v-model:show="deleteConfirm.show"
+      title="移到回收站"
+      :content="deleteConfirm.content"
+      hint="删除后可在系统回收站中还原。"
+      positive-text="移到回收站"
+      type="warning"
+      @positive="settleDeleteConfirm(true)"
+      @negative="settleDeleteConfirm(false)"
+    />
   </div>
 </template>
 
@@ -495,7 +507,7 @@ import GuaxiVirtualFileTree from './GuaxiVirtualFileTree.vue';
 import { useSettingsStore } from '../../stores/settingsStore'
 import { h, ref, reactive, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
-import { open, confirm as confirmDialog } from '@tauri-apps/plugin-dialog'
+import { open } from '@tauri-apps/plugin-dialog'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { listen } from '@tauri-apps/api/event'
 import { NList, NListItem, NText, NTooltip, NIconWrapper } from 'naive-ui'
@@ -507,9 +519,31 @@ import { useDiffCompareStore, diffPathBaseName } from '../../stores/diffCompareS
 import { GUAXI_SHORTCUTS, shortcutTooltip, useGuaxiHotkeys } from '../../composables/useGuaxiHotkeys'
 import { updateMarkdownLinksAfterRename } from '../../utils/markdownLinkRename'
 import { runFilePathMutationGuards } from '../../utils/filePathMutation'
+import GuaxiConfirmDialog from './GuaxiConfirmDialog.js'
 
 const logger = createLogger('GuaxiFileTree')
 const message = useMessage();
+
+// 删除确认（应用内弹窗）。三个模式的树共用同一套：任何删除入口都走 askDeleteConfirm，
+// Promise 语义与原来的系统 confirm 一致，调用处只需 await。
+const deleteConfirm = ref({ show: false, content: '' })
+let deleteConfirmResolve = null
+const settleDeleteConfirm = (ok) => {
+  deleteConfirm.value.show = false
+  const resolve = deleteConfirmResolve
+  deleteConfirmResolve = null
+  if (resolve) resolve(ok)
+}
+const askDeleteConfirm = (nodeName) => new Promise((resolve) => {
+  // 上一个确认还没返回时先按取消结算，避免 Promise 悬挂。
+  if (deleteConfirmResolve) settleDeleteConfirm(false)
+  deleteConfirmResolve = resolve
+  deleteConfirm.value = {
+    show: true,
+    content: `确定删除「${nodeName || '该项'}」吗？`,
+  }
+})
+
 const fileTreeShortcutTooltip = (label, shortcutKey) => shortcutTooltip(label, GUAXI_SHORTCUTS[shortcutKey])
 
 // 编辑器面包屑联动：用于从编辑器定位到文件树节点
@@ -1541,15 +1575,7 @@ const handleDeleteKnowledgeBase = async (repoPath) => {
   const kbName = getRepoName(repoPath)
   if (!kbName) return
 
-  const ok = await confirmDialog(
-    `确定将知识库 “${kbName}” 移入回收站吗？\n\n将把该知识库目录（以及对应元数据）移动到回收站目录，避免误删后无法找回。`,
-    {
-      title: '移入回收站',
-      kind: 'warning',
-      okLabel: '移入回收站',
-      cancelLabel: '取消'
-    }
-  )
+  const ok = await askDeleteConfirm(kbName)
 
   if (!ok) return
 
@@ -2753,7 +2779,7 @@ const commitInlineRename = async () => {
 }
 
 const genDelete = async (mode, node) => {
-  const yes = await confirmDialog(`确定删除「${node.name}」吗？此操作不可撤销。`, { title: '删除确认', kind: 'warning', okLabel: '删除', cancelLabel: '取消' })
+  const yes = await askDeleteConfirm(node?.name)
   if (!yes) return false
   const deletedPath = normalizePath(node.id)
   await runPathMutation({ type: 'delete', oldPath: deletedPath }, async () => {
@@ -2763,7 +2789,7 @@ const genDelete = async (mode, node) => {
   })
   // 三种模式的树都要立刻摘掉该节点，否则切到其它模式还能看到已删除的文件。
   await handleFileRemoved(deletedPath)
-  message.success('已删除')
+  message.success('已移到回收站')
   return true
 }
 
@@ -3576,10 +3602,7 @@ const deleteNode = async (nodeId) => {
   const node = findNodeById(fileTree.value, normalizedId)
   if (!node) return
 
-  const ok = await confirmDialog(`确定要删除 ${node.name} 吗？`, {
-    title: '删除',
-    kind: 'warning'
-  })
+  const ok = await askDeleteConfirm(node.name)
   if (!ok) return
 
   try {

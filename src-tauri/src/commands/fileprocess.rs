@@ -457,10 +457,29 @@ pub fn delete_path(path: String) -> Result<(), String> {
     let path = normalize_path(&path);
     let is_dir = fs::metadata(&path).map_err(|e| e.to_string())?.is_dir();
 
-    if is_dir {
-        fs::remove_dir_all(&path).map_err(|e| e.to_string())?;
-    } else {
-        fs::remove_file(&path).map_err(|e| e.to_string())?;
+    // 设计说明（关键）：删除一律走**系统回收站**，与 `delete_knowledge_base` 保持一致。
+    // 直接 `remove_dir_all` / `remove_file` 是不可撤销的——用户误删一个目录就再也拿不回来。
+    // trash crate 在各平台都落到系统原生回收站（Windows 资源回收站 / macOS 废纸篓 /
+    // Linux 的 XDG Trash），用户可以在文件管理器里右键还原。
+    // 只有在回收站本身不可用（例如网络盘、部分 FAT 分区）时才回落到永久删除，
+    // 并打一条 warn 让日志里能看出「这一次是真的删掉了」。
+    match trash::delete(&path) {
+        Ok(()) => {
+            info!(path = %path.display(), is_dir, "delete_path: moved to system trash");
+        }
+        Err(e) => {
+            warn!(
+                error = %e,
+                path = %path.display(),
+                is_dir,
+                "delete_path: system trash unavailable, falling back to permanent delete"
+            );
+            if is_dir {
+                fs::remove_dir_all(&path).map_err(|e| e.to_string())?;
+            } else {
+                fs::remove_file(&path).map_err(|e| e.to_string())?;
+            }
+        }
     }
 
     if let Err(e) = kgraph::after_delete_path(&path, is_dir) {

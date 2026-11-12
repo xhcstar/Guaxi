@@ -2085,6 +2085,8 @@ pub async fn build_tex_pdf_preview(
         .ok_or_else(|| "无法定位 .tex 文件所在目录".to_string())?;
 
     // 临时源文件名：放在源目录里（让相对路径依赖可用），用固定前缀避免污染。
+    // 文件名保持稳定（不带唯一后缀）是有意为之：tectonic 用输入文件的 stem 命名产物，
+    // 前端与 clear_preview_build 都按 `.guaxi_preview_<stem>.pdf` 找文件。
     let stem = source
         .file_stem()
         .and_then(|s| s.to_str())
@@ -2093,17 +2095,30 @@ pub async fn build_tex_pdf_preview(
     let tmp_stem = format!(".guaxi_preview_{stem}");
     let tmp_tex = input_dir.join(format!("{tmp_stem}.tex"));
 
+    let key = preview_source_key(&source_path);
+
+    // 同文档的上一轮构建先杀掉：过期构建既浪费 CPU，又会在同一个固定临时源文件上踩踏。
+    // 必须在拿锁之前杀——锁被上一轮持有，等锁期间新构建永远没有机会取消它。
+    kill_previous_latex_preview(&key);
+
+    // 设计说明（关键 · 对应“LaTeX 要点几次才构建成功”）：
+    // 1. 临时源文件名是固定的，而每个构建收尾都会删掉它。没有串行锁时，
+    //    构建 A 收尾时的删除会落在构建 B 正在编译的输入文件上，
+    //    tectonic 于是报 `primary input not available` / `failed to open input file`。
+    // 2. 因此这里按 typst 那条路径的做法给同一份文档上串行锁，
+    //    锁一直持有到「清理临时文件」之后，任何人都不可能删到别人正在用的输入。
+    let build_lock = preview_build_lock(&key);
+    let _build_guard = build_lock.lock().await;
+
+    // 等锁期间可能又有一轮构建注册了进程（它先于我们通过了 kill_previous），补杀一次。
+    kill_previous_latex_preview(&key);
+
     fs::write(&tmp_tex, content.as_bytes())
         .map_err(|e| format!("写入预览临时文件失败: {e}"))?;
 
     let (tectonic_path, is_bundled) = find_tectonic_exe_for_export()?;
 
-    let key = preview_source_key(&source_path);
     let outdir = preview_build_dir("latex", &key)?;
-
-    // 同文档的上一轮构建先杀掉：过期构建既浪费 CPU，又可能在同一个稳定输出目录里
-    // 用旧内容覆盖新结果（两次写入的先后顺序不确定）。
-    kill_previous_latex_preview(&key);
 
     // 用 tokio 的进程 API 而非 std：std 的 `output()` 会把当前 tokio 工作线程阻塞整个
     // 编译期间（数秒~数十秒），期间其它 IPC 命令全部排队，整个界面跟着发卡。
@@ -2156,17 +2171,32 @@ pub async fn build_tex_pdf_preview(
     let stdout = stdout_task.await.unwrap_or_default();
     let stderr = stderr_task.await.unwrap_or_default();
 
-    // 无论成功失败都清理：登记表 + 源目录里的临时 .tex。
-    // 注意只在登记的还是自己这个 PID 时才删，否则会把下一轮（更新）的登记抹掉，
-    // 让那个构建再也无法被后续构建取消。
-    if let Some(pid) = pid {
-        if let Ok(mut guard) = latex_preview_pids().lock() {
-            if guard.get(&key).copied() == Some(pid) {
-                guard.remove(&key);
-            }
-        }
+    // 收尾：从登记表移除自己 + 决定是否删掉临时源文件。
+    //
+    // 设计说明（关键 · 对应“LaTeX 要点几次才构建成功”）：
+    // 这一轮可能已被新一轮构建 kill 并取代。此时源目录里的 .guaxi_preview_<stem>.tex
+    // 很可能已经（或即将）是新一轮写进去的输入，我们再删一次就会把它的输入删掉，
+    // tectonic 于是报 `failed to open input file`。
+    // 所以只有「登记表里仍是我这个 PID」才删——才说明没有新构建接手。
+    // 移除登记与删除判断必须在同一把锁里完成，否则先删登记就再也判断不出归属。
+    let still_owner = pid.is_some_and(|pid| {
+        latex_preview_pids()
+            .lock()
+            .map(|mut guard| {
+                if guard.get(&key).copied() == Some(pid) {
+                    guard.remove(&key);
+                    true
+                } else {
+                    false
+                }
+            })
+            .unwrap_or(false)
+    });
+    if still_owner {
+        let _ = fs::remove_file(&tmp_tex);
+    } else {
+        info!(key, "[LatexPreview] 本轮已被新构建取代，保留临时源文件交给新构建");
     }
-    let _ = fs::remove_file(&tmp_tex);
 
     let status = status.map_err(|e| format!("等待 tectonic 结束失败: {e}"))?;
 
@@ -2264,9 +2294,17 @@ pub async fn clear_preview_build(source_path: String) -> Result<(), String> {
     }
 
     // 3. 源目录里的临时源文件（正常收尾时 build_tex_pdf_preview 自己会删，被中断时靠这里兜底）。
+    //    必须拿同一把构建锁：这个文件是正在构建的输入，删掉它会让 tectonic 报
+    //    "failed to open input file"，正是「LaTeX 要点几次才成功」的成因之一。
     if !stem.is_empty() {
         if let Some(parent) = source.parent() {
-            let _ = fs::remove_file(parent.join(format!(".guaxi_preview_{stem}.tex")));
+            let build_key = preview_source_key(&raw);
+            let build_lock = preview_build_lock(&build_key);
+            if build_lock.try_lock().is_ok() {
+                let _ = fs::remove_file(parent.join(format!(".guaxi_preview_{stem}.tex")));
+            } else {
+                info!(key = %build_key, "[PreviewCleanup] 该文档正在构建，跳过临时源文件清理");
+            }
         }
     }
 

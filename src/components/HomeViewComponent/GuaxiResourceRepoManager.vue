@@ -547,7 +547,7 @@
     <n-modal v-model:show="deleteModal.show" preset="card" class="rrm-modal" title="删除资源" :bordered="false">
       <div class="rrm-modal-body">
         <p class="rrm-modal-danger">{{ deleteModal.title }}</p>
-        <p class="rrm-modal-hint">目录会连同内部资源一起删除，应用内无法撤销。</p>
+        <p class="rrm-modal-hint">目录会连同内部资源一起移到系统回收站，可在文件管理器中还原。</p>
         <p v-if="deleteModal.usedBy" class="rrm-modal-warn">
           <Icon :icon="warningIcon" width="14" height="14" />
           其中有资源仍被文档引用，删除后对应位置会显示为缺失。
@@ -556,7 +556,7 @@
       <template #footer>
         <div class="rrm-modal-actions">
           <button type="button" class="rrm-btn" @click="deleteModal.show = false">取消</button>
-          <button type="button" class="rrm-btn is-danger" :disabled="busy" @click="confirmDelete">删除</button>
+          <button type="button" class="rrm-btn is-danger" :disabled="busy" @click="confirmDelete">移到回收站</button>
         </div>
       </template>
     </n-modal>
