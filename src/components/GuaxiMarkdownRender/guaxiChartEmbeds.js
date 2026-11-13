@@ -302,6 +302,13 @@ async function renderChartBlock(el) {
   try {
     const { option, records, parsed } = await buildOptionFromFence(source, baseDocPath)
 
+    // 查看器的顶栏要显示图表真实标题。以前它只能回退成「图表预览」，
+    // 结果这条默认文案正好压在 ECharts 自己画的标题上。
+    const chartTitle = Array.isArray(option?.title)
+      ? option.title.map((t) => String(t?.text || '').trim()).filter(Boolean).join(' · ')
+      : String(option?.title?.text || '').trim()
+    if (chartTitle) el.setAttribute('data-chart-title', chartTitle)
+
     const echarts = await loadECharts()
     const instance = echarts.init(el, CHART_THEME, { renderer: 'canvas' })
     instance.setOption(option, true)

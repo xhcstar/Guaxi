@@ -280,10 +280,8 @@ html.guaxi-show-figure-caption .guaxi-media-group.is-gallery .guaxi-media-group_
   line-height: 1;
 }
 
-/* 图表查看器的标题条，同样浮在画布上。 */
+/* 图表查看器的标题：与工具栏同处面板顶栏，不再做成浮在画布上的胶囊。 */
 .guaxi-media-title {
-  background: var(--guaxi-panel-bg, #ffffff);
-  border: 1px solid var(--guaxi-border, #d0d7de);
   color: var(--guaxi-text-primary, #1f2328);
   font-size: 12px;
   font-weight: 600;

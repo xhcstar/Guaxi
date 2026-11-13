@@ -292,21 +292,28 @@ export function openChartOverlay({ title, svgText, onExportSvg, onExportPng }) {
   overlay.style.cssText =
     'position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:99999;display:flex;align-items:center;justify-content:center;'
 
+  // 面板是「标题栏 / 画布 / 提示条」三段纵向布局。此前三者全部绝对定位浮在画布上：
+  // 图表自带的标题（ECharts title 画在 SVG 里、居中偏上）正好被居中的「图表预览」
+  // 胶囊压住，右上角工具栏也盖在图上；导出尺寸一变，底部提示条又会压住刻度文字。
+  // 现在控件各占一行，画布是它们之间独立的区域，任何缩放下都不会互相遮挡。
   const panel = document.createElement('div')
   panel.className = 'guaxi-media-panel'
   panel.style.cssText =
-    'position:relative;max-width:95vw;max-height:92vh;overflow:hidden;'
+    'display:flex;flex-direction:column;width:95vw;height:92vh;max-width:95vw;max-height:92vh;overflow:hidden;box-sizing:border-box;'
+
+  const header = document.createElement('div')
+  header.style.cssText =
+    'display:flex;align-items:center;gap:12px;flex:0 0 auto;padding:8px 10px;border-bottom:1px solid var(--guaxi-border, #d0d7de);'
 
   const toolbar = document.createElement('div')
-  toolbar.style.cssText = 'position:absolute;right:8px;top:8px;display:flex;gap:6px;z-index:2;'
+  toolbar.style.cssText = 'display:flex;gap:6px;flex:0 0 auto;'
 
   const legend = document.createElement('div')
-  // 提示条贴在面板底部居中：工具栏固定在右上角，窗口窄时（三分栏视图）两者若都在顶部
-  // 就会互相挤压，提示条被截断。贴底还能避开画布主体。
+  // 提示条放在面板底部的独立一行（画布之外）。
   // 配色走 .guaxi-media-legend，暗色主题下不会留白块。
   legend.className = 'guaxi-media-legend'
   legend.style.cssText =
-    'position:absolute;left:50%;bottom:10px;transform:translateX(-50%);display:flex;flex-wrap:wrap;justify-content:center;gap:6px 12px;align-items:center;padding:6px 10px;border-radius:8px;line-height:1.3;z-index:2;max-width:calc(95vw - 24px);box-sizing:border-box;'
+    'flex:0 0 auto;align-self:center;display:flex;flex-wrap:wrap;justify-content:center;gap:6px 12px;align-items:center;margin:8px auto 10px;padding:6px 10px;border-radius:8px;line-height:1.3;max-width:calc(95vw - 24px);box-sizing:border-box;'
 
   const mkLegendItem = (iconSvg, text) => {
     const item = document.createElement('span')
@@ -368,18 +375,20 @@ export function openChartOverlay({ title, svgText, onExportSvg, onExportPng }) {
   const stage = document.createElement('div')
   stage.className = 'guaxi-media-stage'
   stage.style.cssText =
-    'width:95vw;height:92vh;max-width:95vw;max-height:92vh;display:flex;align-items:center;justify-content:center;overflow:hidden;padding:44px 24px 56px;box-sizing:border-box;cursor:grab;touch-action:none;'
+    'flex:1 1 auto;min-height:0;display:flex;align-items:center;justify-content:center;overflow:hidden;padding:16px 24px;box-sizing:border-box;cursor:grab;touch-action:none;'
 
   const contentWrap = document.createElement('div')
   contentWrap.style.cssText = 'transform-origin:center center;will-change:transform;'
   stage.appendChild(contentWrap)
 
-  // 标题不塞进提示条：窗口窄时会把三条操作提示挤掉。改为画布上方的独立一行。
+  // 标题放在顶栏左侧，与工具栏同一行。
   const titleBar = document.createElement('div')
   titleBar.className = 'guaxi-media-title'
   titleBar.style.cssText =
-    'position:absolute;left:50%;top:52px;transform:translateX(-50%);max-width:calc(95vw - 24px);padding:4px 10px;border-radius:8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;z-index:2;'
+    'flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;'
   titleBar.textContent = title || '图表预览'
+
+  header.append(titleBar, toolbar)
 
   legend.appendChild(mkLegendItem(OVERLAY_ICONS.plus, '滚轮缩放（按光标定点）'))
   legend.appendChild(mkLegendItem(OVERLAY_ICONS.view, '按住拖动查看细节'))
@@ -418,7 +427,7 @@ export function openChartOverlay({ title, svgText, onExportSvg, onExportPng }) {
     const rect = stage.getBoundingClientRect()
     const contentRect = holder.getBoundingClientRect()
     const availW = Math.max(1, rect.width - 48)
-    const availH = Math.max(1, rect.height - 64)
+    const availH = Math.max(1, rect.height - 32)
     const contentW = Math.max(1, contentRect.width / Math.max(fittedScale, 0.0001))
     const contentH = Math.max(1, contentRect.height / Math.max(fittedScale, 0.0001))
     fittedScale = Math.min(availW / contentW, availH / contentH, 4)
@@ -549,10 +558,9 @@ export function openChartOverlay({ title, svgText, onExportSvg, onExportPng }) {
 
   document.addEventListener('keydown', onKey, true)
 
-  panel.appendChild(toolbar)
-  panel.appendChild(legend)
-  panel.appendChild(titleBar)
+  panel.appendChild(header)
   panel.appendChild(stage)
+  panel.appendChild(legend)
   overlay.appendChild(panel)
   document.body.appendChild(overlay)
 
