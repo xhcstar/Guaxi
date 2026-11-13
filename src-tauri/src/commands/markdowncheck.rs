@@ -82,16 +82,188 @@ fn format_markdown_production(
     // 把 `# 注释` 当成标题（实测如此），cell 语法直接坏掉。
     let extracted = extract_opaque_cells(content);
 
+    // 双链 `[[目标|别名]]` 与目录标记 `[TOC]` 是 Guaxi 自己的语法，标准 Markdown
+    // 解析器（comrak）不认：`[` 会被当成普通文本，序列化时转义成 `\[`，于是
+    // `[[./x.md]]` 变成 `\[\[./x.md\]\]`，双链直接失效。
+    //
+    // 这里同样用占位注释保护起来，格式化后再原样放回。为什么不直接开 comrak 的
+    // wikilinks 扩展：实测它会把 `[[x]]` 补成 `[[x|x]]`（冗余），并把带空格的路径
+    // 编码成 `[[a%20b|a b]]`——写出去的源码反而不对了。
+    let protected = protect_inline_syntax(&extracted.text);
+
     if !options.format_lists {
-        let formatted = SimpleMarkdownFormatter::new(options.clone()).format(&extracted.text)?;
-        let restored = restore_opaque_cells(&formatted, &extracted.blocks);
+        let formatted = SimpleMarkdownFormatter::new(options.clone()).format(&protected.text)?;
+        let restored = restore_opaque_cells(&restore_inline_syntax(&formatted, &protected.blocks), &extracted.blocks);
         return Ok(apply_line_ending(&restored, line_ending));
     }
 
-    let formatted = format_with_comrak(&extracted.text, options)?;
+    let formatted = format_with_comrak(&protected.text, options)?;
     let normalized = postprocess_markdown(&formatted, options);
-    let restored = restore_opaque_cells(&normalized, &extracted.blocks);
+    let restored = restore_opaque_cells(&restore_inline_syntax(&normalized, &protected.blocks), &extracted.blocks);
     Ok(apply_line_ending(&restored, line_ending))
+}
+
+/// 行内自定义语法的占位结果。
+struct ProtectedInline {
+    text: String,
+    blocks: Vec<String>,
+}
+
+/// 把双链与目录标记换成占位符，交给格式化器。
+///
+/// 占位符用 HTML 注释（与不透明 cell 同一套思路）：comrak 对注释不做转义、
+/// 也不会改写内部字符，放回去就能逐字还原。
+///
+/// 只处理正文：代码围栏与行内代码里出现的 `[[...]]` 是字面量，不能动。
+fn protect_inline_syntax(content: &str) -> ProtectedInline {
+    let mut blocks: Vec<String> = Vec::new();
+    let mut out = String::with_capacity(content.len() + 64);
+
+    let mut in_fence = false;
+    let mut fence_marker = String::new();
+
+    for (line_idx, raw) in content.split('\n').enumerate() {
+        if line_idx > 0 {
+            out.push('\n');
+        }
+
+        let trimmed = raw.trim_start();
+        let is_fence = trimmed.starts_with("```") || trimmed.starts_with("~~~");
+        if is_fence {
+            if in_fence {
+                if trimmed.starts_with(fence_marker.as_str()) {
+                    in_fence = false;
+                    fence_marker.clear();
+                }
+            } else {
+                in_fence = true;
+                let ch = trimmed.chars().next().unwrap_or('`');
+                let len = trimmed.chars().take_while(|c| *c == ch).count();
+                fence_marker = std::iter::repeat(ch).take(len).collect();
+            }
+            out.push_str(raw);
+            continue;
+        }
+        if in_fence {
+            out.push_str(raw);
+            continue;
+        }
+
+        out.push_str(&protect_inline_line(raw, &mut blocks));
+    }
+
+    ProtectedInline { text: out, blocks }
+}
+
+/// 保护单行里的双链与目录标记；行内代码片段原样跳过。
+fn protect_inline_line(line: &str, blocks: &mut Vec<String>) -> String {
+    let mut out = String::with_capacity(line.len() + 16);
+    let mut rest = line;
+
+    loop {
+        // 找到下一个「可能是语法」的位置：行内代码之外的双链或目录标记。
+        let Some(next) = find_next_inline_syntax(rest) else {
+            out.push_str(rest);
+            break;
+        };
+        out.push_str(&rest[..next.start]);
+
+        let placeholder = format!("<!--guaxi:inline:{}-->", blocks.len());
+        blocks.push(next.text);
+        out.push_str(&placeholder);
+
+        rest = &rest[next.end..];
+    }
+
+    out
+}
+
+struct InlineHit {
+    start: usize,
+    end: usize,
+    text: String,
+}
+
+/// 从 `s`（以至少两个 `[` 或 `\[` 开头）里找出双链的结束位置，返回相对长度。
+///
+/// 同时接受 `[[x]]` 与已被旧版格式化转义过的 `\[\[x\]\]`。
+fn find_wikilink(s: &str) -> Option<usize> {
+    let escaped = s.starts_with("\\[");
+    let open = if escaped { "\\[\\[" } else { "[[" };
+    if !s.starts_with(open) {
+        return None;
+    }
+    let rest = &s[open.len()..];
+    let close = if escaped { "\\]\\]" } else { "]]" };
+    rest.find(close).map(|rel| open.len() + rel + close.len())
+}
+
+/// 在 `line` 里找下一个需要保护的行内语法（双链 / 目录标记），跳过行内代码。
+fn find_next_inline_syntax(line: &str) -> Option<InlineHit> {
+    let bytes = line.as_bytes();
+    let mut i = 0usize;
+
+    while i < bytes.len() {
+        // 行内代码：成对的等长反引号包住的内容整体跳过。
+        if bytes[i] == b'`' {
+            let run = bytes[i..].iter().take_while(|b| **b == b'`').count();
+            let fence = &line[i..i + run];
+            if let Some(close_rel) = line[i + run..].find(fence) {
+                i = i + run + close_rel + run;
+                continue;
+            }
+            i += run;
+            continue;
+        }
+
+        // 双链：`[[...]]`，同一行内成对出现。
+        // 也认已被旧版格式化转义过的 `\[\[...\]\]`：那是上个版本留下的坏形态，
+        // 用户重跑一次格式化应当把它修回正常双链，而不是继续转义下去。
+        if bytes[i] == b'[' || (bytes[i] == b'\\' && bytes.get(i + 1) == Some(&b'[')) {
+            if let Some(len) = find_wikilink(&line[i..]) {
+                let raw = &line[i..i + len];
+                // 把旧版留下的转义还原掉：`\[\[x\]\]` -> `[[x]]`。
+                let cleaned = raw.replace("\\[", "[").replace("\\]", "]");
+                return Some(InlineHit {
+                    start: i,
+                    end: i + len,
+                    text: cleaned,
+                });
+            }
+        }
+
+        // 目录标记：整行只有 `[TOC]` / `[目录]`，前后允许空白（含旧版转义形态）。
+        if i == line.len() - line.trim_start().len() {
+            let trimmed = line.trim();
+            let unescaped = trimmed.replace("\\[", "[").replace("\\]", "]");
+            let lower = unescaped.to_ascii_lowercase();
+            if matches!(lower.as_str(), "[toc]" | "[目录]") {
+                return Some(InlineHit {
+                    start: i,
+                    end: i + trimmed.len(),
+                    text: unescaped,
+                });
+            }
+        }
+
+        i += 1;
+    }
+
+    None
+}
+
+fn restore_inline_syntax(formatted: &str, blocks: &[String]) -> String {
+    if blocks.is_empty() {
+        return formatted.to_string();
+    }
+    let mut result = formatted.to_string();
+    for (idx, block) in blocks.iter().enumerate() {
+        let marker = format!("<!--guaxi:inline:{}-->", idx);
+        if let Some(pos) = result.find(&marker) {
+            result.replace_range(pos..pos + marker.len(), block);
+        }
+    }
+    result
 }
 
 /// 需要整块原样保留的自定义 cell 类型。
