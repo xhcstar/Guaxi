@@ -2467,7 +2467,16 @@ pub async fn export_markdown_pandoc(
         // 也变成阅读器不一定支持的 MathML）。
 
         let epub_css_path = tmp_dir.join("guaxi-epub.css");
-        let epub_css = "pre, pre code, code { white-space: pre-wrap; word-wrap: break-word; overflow-wrap: break-word; word-break: break-word; } pre { padding: 0.6em 0.8em; } img { max-width: 100%; height: auto; }";
+        // 关键：pandoc 的 `--css` 是**替换**默认样式表，不是追加。只写这几条折行规则，
+        // 书本默认的表格/正文/标题排版就全没了 —— EPUB 里表格会退化成「每列一个字的竖条」，
+        // 单元格文字互相叠在一起（实测 MuPDF/SumatraPDF 打开整块表格糊成一片）。
+        // 所以先把默认样式表原样取回来，再把自定义规则接在它后面。
+        let default_css = read_pandoc_default_epub_css(&pandoc_path);
+        let epub_css = format!(
+            "{}\n{}",
+            default_css.unwrap_or_default(),
+            "pre, pre code, code { white-space: pre-wrap; word-wrap: break-word; overflow-wrap: break-word; word-break: break-word; } pre { padding: 0.6em 0.8em; } img { max-width: 100%; height: auto; }"
+        );
         match std::fs::write(&epub_css_path, epub_css) {
             Ok(_) => {
                 cmd.arg("--css").arg(&epub_css_path);
@@ -2709,6 +2718,37 @@ fn select_pandoc_pdf_engine() -> Result<PandocPdfEngine, String> {
     Err("未找到可用的 PDF 引擎。请安装 xelatex/lualatex/pdflatex，或将 tectonic 放到 src-tauri/utils 后重试。".to_string())
 }
 
+/// 取回 pandoc 内置的 EPUB 默认样式表（`epub.css`）。
+///
+/// 为什么需要它：`--css` 在 pandoc 里是"替换"默认样式表而不是追加。导出 EPUB 时我们
+/// 只想补几条代码块折行规则，却会把整套默认排版一起顶掉 —— 表格尤其致命，列宽变成
+/// 一个字宽，单元格文字互相重叠。
+///
+/// 拿不到时返回 None，调用方退回"只有自定义规则"的老行为（至少不比现在更差）。
+fn read_pandoc_default_epub_css(pandoc_path: &Path) -> Option<String> {
+    let mut cmd = Command::new(pandoc_path);
+
+    #[cfg(windows)]
+    cmd.creation_flags(CREATE_NO_WINDOW);
+
+    let output = cmd
+        .arg("--print-default-data-file=epub.css")
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        warn!(
+            status = ?output.status.code(),
+            "[DocExport] failed to read pandoc default epub.css; custom rules will replace it"
+        );
+        return None;
+    }
+    let css = String::from_utf8_lossy(&output.stdout).to_string();
+    if css.trim().is_empty() {
+        return None;
+    }
+    Some(css)
+}
+
 fn clamp_static_toc_for_pdf(markdown: &str, max_indent_levels: usize) -> (String, bool) {
     // 设计说明：
     // 1. `preprocess_markdown_for_static_render()` 会把 `[toc]` 展开成按标题层级缩进的 Markdown 列表。
@@ -2824,62 +2864,166 @@ async fn preprocess_markdown(
 
     let re = Regex::new(r#"!\[([^\]]*)\]\((https?://[^)\s]+)(?:\s+\"[^\"]*\")?\)"#)
         .map_err(|e| e.to_string())?;
-    let client = Client::new();
+
+    // 先并发抓取所有外链图，再按原文顺序拼回。
+    // 单张失败要等满一次超时；逐个串行时，一篇里有几张失效外链就会把导出拖慢几倍。
+    let matches: Vec<_> = re.captures_iter(&static_content).collect();
+    let fetched = futures_util::future::join_all(matches.iter().map(|caps| {
+        let url = caps.get(2).map(|m| m.as_str()).unwrap_or("");
+        crate::guaxiservices::markdown_image_process::fetch_remote_image_bytes(url)
+    }))
+    .await;
 
     let mut result = String::with_capacity(static_content.len());
     let mut last_end = 0;
-    let mut idx = 0;
+    let mut downloaded = 0usize;
+    let mut failed = 0usize;
 
-    for caps in re.captures_iter(&static_content) {
-        if let Some(m) = caps.get(0) {
-            result.push_str(&static_content[last_end..m.start()]);
-            let alt = caps.get(1).map(|m| m.as_str()).unwrap_or("");
-            let url = caps.get(2).map(|m| m.as_str()).unwrap_or("");
-            idx += 1;
-            let ext = url
-                .split('?')
-                .next()
-                .and_then(|u| u.rsplit('.').next())
-                .filter(|e| !e.is_empty() && e.len() <= 5)
-                .unwrap_or("png");
-            let filename = format!("remote_img_{}.{}", idx, ext);
-            let local_path = tmp_dir.join(&filename);
+    for (caps, outcome) in matches.iter().zip(fetched.into_iter()) {
+        let Some(m) = caps.get(0) else { continue };
+        result.push_str(&static_content[last_end..m.start()]);
+        let alt = caps.get(1).map(|m| m.as_str()).unwrap_or("");
+        let url = caps.get(2).map(|m| m.as_str()).unwrap_or("");
+        last_end = m.end();
 
-            match client.get(url).send().await {
-                Ok(resp) => {
-                    if resp.status().is_success() {
-                        match resp.bytes().await {
-                            Ok(bytes) => {
-                                if let Err(e) = std::fs::write(&local_path, bytes) {
-                                    error!("保存远程图片失败: {:?}", e);
-                                }
-                            }
-                            Err(e) => {
-                                error!("读取远程图片数据失败: {:?}", e);
-                            }
-                        }
-                    } else {
-                        error!("下载远程图片失败: {:?}", resp.status());
+        // 设计说明（Word 导出远程图片全丢的根因）：
+        // 1. 原先这里用 reqwest::Client::new()，**不读系统代理**。国内网络下很多图床
+        //    直连超时，整篇图就都没了；
+        // 2. 更糟的是下载失败后仍然把本地路径（并不存在的文件）写回 Markdown，
+        //    于是 pandoc 找不到文件、只能留一个空图位 —— 用户看到的就是「图片失败」。
+        // 现在改成：复用图片代理那套「读系统代理 + 磁盘缓存」的抓取；真取不到的图换成
+        // 一句可见的「图片缺失」说明，而不是在成品里留一段没有任何线索的空白。
+        match outcome {
+            Ok((content_type, bytes)) => {
+                // 扩展名以真实类型为准：URL 里常带 ?random=1 之类，猜出来的 ext 不可靠。
+                let sniffed = content_type
+                    .split(';')
+                    .next()
+                    .unwrap_or("")
+                    .trim()
+                    .to_ascii_lowercase()
+                    .rsplit('/')
+                    .next()
+                    .filter(|e| matches!(*e, "png" | "jpg" | "jpeg" | "gif" | "webp" | "svg" | "bmp" | "avif"))
+                    .map(|e| e.to_string());
+                let ext = sniffed
+                    .or_else(|| {
+                        url.split('?')
+                            .next()
+                            .and_then(|u| u.rsplit('.').next())
+                            .filter(|e| !e.is_empty() && e.len() <= 5)
+                            .map(|e| e.to_string())
+                    })
+                    .unwrap_or_else(|| "png".to_string());
+                let local_path = tmp_dir.join(format!("remote_img_{}.{}", downloaded + 1, ext));
+
+                match std::fs::write(&local_path, &bytes) {
+                    Ok(_) => {
+                        downloaded += 1;
+                        let path_str = local_path.to_string_lossy().replace('\\', "/");
+                        result.push_str(&format!("![{}]({})", alt, path_str));
+                    }
+                    Err(e) => {
+                        failed += 1;
+                        error!(error = ?e, url, "[DocExport] 写入远程图片失败，成品中改为可见的缺失说明");
+                        result.push_str(
+                            &crate::guaxiservices::markdown_image_process::missing_image_placeholder(alt, url),
+                        );
                     }
                 }
-                Err(e) => {
-                    error!("请求远程图片失败: {:?}", e);
-                }
             }
-
-            let path_str = local_path.to_string_lossy().replace('\\', "/");
-            result.push_str(&format!("![{}]({})", alt, path_str));
-            last_end = m.end();
+            Err(e) => {
+                failed += 1;
+                warn!(url, error = %e, "[DocExport] 下载远程图片失败，成品中改为可见的缺失说明");
+                // 不保留原始外链：pandoc 自己取图不读系统代理，失败时只会默默留一个空图位，
+                // 成品里就成了一段没有任何线索的空白（用户看到的正是「部分图片失败」）。
+                result.push_str(
+                    &crate::guaxiservices::markdown_image_process::missing_image_placeholder(alt, url),
+                );
+            }
         }
     }
 
+    if downloaded > 0 || failed > 0 {
+        info!(
+            downloaded,
+            failed,
+            "[DocExport] remote images fetched for pandoc export"
+        );
+    }
+
     result.push_str(&static_content[last_end..]);
+
+    // 本地图片（相对/绝对路径）若文件已不在，pandoc 只会默默留一个空图位（Word/EPUB 里
+    // 就只剩 alt 文字）。这里统一换成一句明确的「图片缺失」说明，让成品里能看出是哪张图、
+    // 原路径写的是什么，而不是一片没有任何线索的空白。
+    let input_dir_path = Path::new(input_path)
+        .parent()
+        .unwrap_or_else(|| Path::new("."));
+    let (result, missing_local) = replace_missing_local_images(&result, input_dir_path);
 
     let processed_md_path = tmp_dir.join("processed.md");
     std::fs::write(&processed_md_path, &result)
         .map_err(|e| format!("写入临时 Markdown 失败: {}", e))?;
 
+    if missing_local > 0 {
+        warn!(
+            missing_local,
+            base_dir = %input_dir_path.display(),
+            "[DocExport] local images not found; replaced with visible placeholders"
+        );
+    }
+
     Ok((processed_md_path, tmp_dir))
+}
+
+/// 把 Markdown 里指向不存在本地文件的图片换成可见的「图片缺失」说明。
+///
+/// 只动本地路径：外链（http/https）、内联数据（data:）、file URL 一律原样保留，
+/// 分别由前面的远程下载步骤与 pandoc 自己处理。
+fn replace_missing_local_images(markdown: &str, base_dir: &Path) -> (String, usize) {
+    let re = match Regex::new(r#"!\[([^\]]*)\]\(([^)\s]+)((?:\s+"[^"]*")?)\)"#) {
+        Ok(re) => re,
+        Err(_) => return (markdown.to_string(), 0),
+    };
+
+    let mut missing = 0usize;
+    let out = re
+        .replace_all(markdown, |caps: &regex::Captures| {
+            let alt = caps.get(1).map(|m| m.as_str()).unwrap_or("");
+            let raw_path = caps.get(2).map(|m| m.as_str()).unwrap_or("");
+            let keep = || caps.get(0).map(|m| m.as_str().to_string()).unwrap_or_default();
+
+            let lower = raw_path.to_ascii_lowercase();
+            if lower.starts_with("http://")
+                || lower.starts_with("https://")
+                || lower.starts_with("data:")
+                || lower.starts_with("file:")
+            {
+                return keep();
+            }
+            // 带协议的其它写法（asset: 等）也交给 pandoc，不去猜。
+            if raw_path.contains("://") {
+                return keep();
+            }
+
+            let normalized = raw_path.replace('\\', "/");
+            let candidate = PathBuf::from(&normalized);
+            let full = if candidate.is_absolute() {
+                candidate
+            } else {
+                base_dir.join(&normalized)
+            };
+            if full.is_file() {
+                return keep();
+            }
+
+            missing += 1;
+            crate::guaxiservices::markdown_image_process::missing_image_placeholder(alt, raw_path)
+        })
+        .to_string();
+
+    (out, missing)
 }
 
 fn initialize_python() -> Result<(), String> {

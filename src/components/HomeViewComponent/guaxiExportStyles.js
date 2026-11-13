@@ -176,6 +176,19 @@ export const EXPORT_SHELL_CSS = `
     height: auto;
   }
 
+  /* 交互 UI 一律不进成品。
+   * 正常路径上这些节点已经由 stripInteractiveExportArtifacts 从 DOM 里删掉（代码块右上角的
+   * 复制按钮、图片悬浮工具栏、破图占位块上的「重新加载 / 复制路径」）。这里再兜一层：
+   * 将来渲染链换了实现、或者某条支路漏删，成品里也不至于出现点不动的图标。 */
+  .export-content .copy-button,
+  .export-content .guaxi-code-block-anchor > .copy-button,
+  .export-content .media-viewer-button,
+  .export-content .media-save-button,
+  .export-content .media-ocr-button,
+  .export-content .guaxi-broken-image__actions {
+    display: none !important;
+  }
+
   @media print {
     body {
       -webkit-print-color-adjust: exact;

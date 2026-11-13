@@ -20757,6 +20757,8 @@ const buildPreviewMarkdownRenderOptions = (options = {}) => ({
   mermaid: true,
   math: true,
   codeHighlight: true,
+  // 导出走同一条渲染链时不需要代码块上的「复制」按钮：成品里它只会是一个点不动的图标。
+  buttons: options.buttons !== false,
   theme: options.theme || getMarkdownPreviewThemeName(),
 })
 
@@ -23962,7 +23964,10 @@ const chooseExportOutputPath = async (context) => {
 // 设计说明：
 // 1. 预览渲染器会给 Python/代码单元加上“运行 / 运行并写回 / 显示结果”工具条和隐藏的输出占位符，
 //    这些都是软件内交互用的，导出成 PDF/HTML 后既无法点击、也不该出现在最终文档里。
-// 2. 这里在导出前把这些交互节点从渲染后的 DOM 中剔除，只保留代码本身和已有正文内容。
+// 2. 代码块右上角的「复制」按钮、破图占位块上的「重新加载 / 复制路径」同属交互 UI，
+//    它们由渲染器在**预览 DOM**上挂载，导出 HTML 走的是同一条渲染链，于是会一并被打进
+//    PDF —— 成品里每段代码都顶着一枚点不动的复制图标。
+// 3. 这里在导出前把这些交互节点从渲染后的 DOM 中剔除，只保留代码/图片本身和已有正文内容。
 const stripInteractiveExportArtifacts = (bodyHtml) => {
   const html = String(bodyHtml || '')
   if (!html.trim()) return html
@@ -23975,6 +23980,8 @@ const stripInteractiveExportArtifacts = (bodyHtml) => {
       '.guaxi-codecell-toolbar',
       '.guaxi-pycell-output',
       '.guaxi-codecell-output',
+      '.copy-button',
+      '.media-viewer-btn',
     ]
     let removed = 0
     template.content
@@ -23984,8 +23991,40 @@ const stripInteractiveExportArtifacts = (bodyHtml) => {
         removed += 1
       })
 
+    // 破图占位块保留「哪张图没加载出来」，但去掉两个只能在本软件里点的按钮。
+    template.content
+      .querySelectorAll('.guaxi-broken-image__actions')
+      .forEach((node) => {
+        node.remove()
+        removed += 1
+      })
+
+    // 图片上的悬浮工具栏：预览 / 保存 / OCR 按钮，以及包着它们的定位壳。
+    template.content
+      .querySelectorAll('.media-viewer-button, .media-save-button, .media-ocr-button')
+      .forEach((node) => {
+        node.remove()
+        removed += 1
+      })
+    // 按钮摘掉后，只装按钮的定位壳会剩下一个空占位（它带 relative/尺寸），一并解开。
+    template.content.querySelectorAll('.media-viewer-wrap').forEach((wrap) => {
+      if (wrap.querySelector('img, video, audio, figure, picture, iframe')) return
+      if (String(wrap.textContent || '').trim()) return
+      wrap.remove()
+    })
+
+    // 复制按钮的外壳是渲染器插入的定位锚点（position:relative）。按钮拿掉后它只剩一层
+    // 空 div，不影响排版，但会让代码块的 margin 折叠行为与纯 <pre> 不同，顺手解开。
+    template.content.querySelectorAll('.guaxi-code-block-anchor').forEach((anchor) => {
+      if (anchor.querySelector('.copy-button')) return
+      const pre = anchor.firstElementChild
+      if (pre && anchor.children.length === 1) {
+        anchor.replaceWith(pre)
+      }
+    })
+
     if (!removed) return html
-    logger.info('[Export] stripped interactive cell artifacts', { removed })
+    logger.info('[Export] stripped interactive artifacts', { removed })
     return template.innerHTML
   } catch (error) {
     logger.warn('[Export] strip interactive artifacts failed, keep original html', {
@@ -24060,6 +24099,8 @@ const renderMarkdownForExportHtml = async (context) => {
       mermaid: true,
       codeHighlight: true,
       basePath: exportBasePath,
+      // 导出的成品里不该出现只能在本软件里点的按钮（代码块复制图标、图片悬浮工具栏）。
+      buttons: false,
     },
     'export-rendered-html',
   )

@@ -1024,6 +1024,33 @@ fn read_cached_remote(url: &str) -> Option<(String, Vec<u8>)> {
     None
 }
 
+/// 把一张远程图片取成本地字节，供需要"必须拿到图"的调用方直接使用。
+///
+/// 与代理接口共用同一套实现：同样走系统代理、同样有磁盘缓存（同一 URL 第二次是纯本地读）。
+/// 导出 Word/EPUB 时图片必须真的落到磁盘才能被 pandoc 打进包里，而 WebView 里取到的字节
+/// 又没法直接交给后端，所以让后端自己再取一次是最短的一条路。
+pub async fn fetch_remote_image_bytes(url: &str) -> Result<(String, Vec<u8>), String> {
+    fetch_remote_image(url.trim()).await
+}
+
+/// 一次调用里已经取不到的图片地址（下载失败/404/超时）。
+///
+/// 导出 Word/EPUB 前会把正文里的本地图片先"落地"到临时目录。图片一旦取不到，
+/// **绝不能**把临时目录里并不存在的路径写回 Markdown —— pandoc 会照着这个路径去找，
+/// 找不到就只留一个空图位，成品里既没有图、也看不出原因。这里把这类图片统一换成一个
+/// 明确的占位说明，让成品里"这里本该有张图、但它没取到"是看得见的。
+pub fn missing_image_placeholder(alt: &str, original: &str) -> String {
+    let label = if alt.trim().is_empty() {
+        "图片缺失"
+    } else {
+        alt.trim()
+    };
+    // 这里是**纯文本**（不是 HTML），只把能破坏 Markdown 行内语法的方括号换掉：
+    // `]` 会提前结束后面的中括号，`[` 会在某些解析器里被当成嵌套链接起点。
+    let clean = |value: &str| value.replace('[', "［").replace(']', "］");
+    format!("[图片缺失：{}（{}）]", clean(label), clean(original))
+}
+
 async fn fetch_remote_image(url_str: &str) -> Result<(String, Vec<u8>), String> {
     if let Some(cached) = read_cached_remote(url_str) {
         return Ok(cached);
