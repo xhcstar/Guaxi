@@ -2531,6 +2531,19 @@ pub async fn export_markdown_pandoc(
             error!("Failed to remove temp directory: {:?}", e);
         }
         info!("Pandoc export succeeded: {}", output_path);
+        // pandoc 交出来的 docx/epub 有两处与软件内预览对不上，在产物上补：
+        //   1. 表格只有表头一条底边线（pandoc 的 Table 样式就是这么定义的），没有全边框；
+        //   2. 正文字体是 Word/阅读器的默认字体，不是预览用的那套。
+        // 两者都只能改产物本身：pandoc 没有对应的命令行开关。
+        let postprocess = match format.as_str() {
+            "docx" => rewrite_docx_for_export(&output_path),
+            "epub" => rewrite_epub_for_export(&output_path),
+            _ => Ok(()),
+        };
+        if let Err(e) = postprocess {
+            // 后处理失败不影响已经生成的文件，只是少了这两项美化。
+            warn!(error = %e, format, "[DocExport] post-process failed, keep pandoc output as is");
+        }
         Ok(())
     } else {
         error!(
@@ -2763,6 +2776,371 @@ fn read_pandoc_default_epub_css(pandoc_path: &Path) -> Option<String> {
         return None;
     }
     Some(css)
+}
+
+// ───────────────────────── 导出产物后处理（docx / epub） ─────────────────────────
+
+/// 导出用的正文与代码字体。
+///
+/// docx 的 `<w:rFonts>` 只接受**单个**字体名（不像 CSS 能写字体栈），所以这里按
+/// 「预览字体栈里第一个在本机装了的」挑一个：装了就与预览一致，没装就落到下一个。
+/// epub 走 CSS，可以直接用整条字体栈。
+const EXPORT_BODY_FONT_CANDIDATES: &[&str] = &[
+    "Maple Mono NF CN",
+    "JetBrainsMono Nerd Font Mono",
+    "Microsoft YaHei",
+    "PingFang SC",
+    "Noto Sans CJK SC",
+];
+const EXPORT_CODE_FONT_CANDIDATES: &[&str] = &[
+    "Maple Mono NF CN",
+    "JetBrainsMono Nerd Font Mono",
+    "Consolas",
+    "Courier New",
+];
+
+/// 本机已安装字体名（小写比较用）。取不到时返回空集合，调用方各自兜底。
+fn installed_font_names() -> std::collections::HashSet<String> {
+    let mut names = std::collections::HashSet::new();
+    let dirs = [
+        std::env::var("WINDIR").ok().map(|w| PathBuf::from(w).join("Fonts")),
+        std::env::var("LOCALAPPDATA")
+            .ok()
+            .map(|l| PathBuf::from(l).join("Microsoft").join("Windows").join("Fonts")),
+    ];
+    for dir in dirs.into_iter().flatten() {
+        let Ok(entries) = fs::read_dir(&dir) else { continue };
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
+                names.insert(stem.to_lowercase().replace(' ', ""));
+            }
+        }
+    }
+    names
+}
+
+/// 在候选里挑第一个「看起来已安装」的字体名。
+///
+/// 字体文件的基本名与内部家族名不完全一致（例如 `msyh.ttc` 对应「微软雅黑」），
+/// 所以除了文件名，也把常见的中文别名纳入匹配，命中任意一个就算可用。
+fn pick_export_font(candidates: &[&str], installed: &std::collections::HashSet<String>) -> String {
+    const ALIASES: &[(&str, &[&str])] = &[
+        ("Maple Mono NF CN", &["maplemononfcn"]),
+        ("Microsoft YaHei", &["msyh", "msyhbd"]),
+        ("PingFang SC", &["pingfang"]),
+        ("Noto Sans CJK SC", &["notosanscjksc", "notosanscjk"]),
+        ("Consolas", &["consola"]),
+        ("Courier New", &["cour"]),
+        ("JetBrainsMono Nerd Font Mono", &["jetbrainsmononfmono", "jetbrainsmono"]),
+    ];
+
+    if !installed.is_empty() {
+        for candidate in candidates {
+            let key = candidate.to_lowercase().replace(' ', "");
+            let aliased = ALIASES
+                .iter()
+                .find(|(name, _)| name.eq_ignore_ascii_case(candidate))
+                .map(|(_, alias)| alias.iter().any(|a| installed.contains(*a)))
+                .unwrap_or(false);
+            if installed.contains(&key) || aliased {
+                return (*candidate).to_string();
+            }
+        }
+    }
+    // 一个都没匹配上：用候选里的第一个。Word/阅读器找不到会自行回退，
+    // 比什么都不写（主题字体）更接近预览。
+    candidates.first().copied().unwrap_or("Microsoft YaHei").to_string()
+}
+
+/// docx 表格的完整边框（单位：eighths of a point，6 = 0.75pt）。
+const DOCX_TABLE_BORDER: &str = r#"<w:tblBorders>
+      <w:top w:val="single" w:sz="6" w:space="0" w:color="BCD0E0" />
+      <w:left w:val="single" w:sz="6" w:space="0" w:color="BCD0E0" />
+      <w:bottom w:val="single" w:sz="6" w:space="0" w:color="BCD0E0" />
+      <w:right w:val="single" w:sz="6" w:space="0" w:color="BCD0E0" />
+      <w:insideH w:val="single" w:sz="6" w:space="0" w:color="BCD0E0" />
+      <w:insideV w:val="single" w:sz="6" w:space="0" w:color="BCD0E0" />
+    </w:tblBorders>"#;
+
+/// 把 pandoc 产出的 docx 改得更接近预览：表格补全边框、正文换成预览的字体。
+///
+/// 为什么必须改产物：pandoc 的 docx 表格样式（`Table`）只给首行加一条下边线，
+/// 没有任何命令行开关能补全边框；字体同理，只有在 reference-doc 或产物里才能指定。
+fn rewrite_docx_for_export(path: &str) -> Result<(), String> {
+    let file = fs::File::open(path).map_err(|e| format!("打开 docx 失败: {e}"))?;
+    let mut archive = zip::ZipArchive::new(file).map_err(|e| format!("读取 docx 失败: {e}"))?;
+
+    let mut entries: Vec<(String, Vec<u8>)> = Vec::new();
+    for i in 0..archive.len() {
+        let mut entry = archive
+            .by_index(i)
+            .map_err(|e| format!("读取 docx 条目失败: {e}"))?;
+        let name = entry.name().to_string();
+        let mut bytes = Vec::new();
+        std::io::Read::read_to_end(&mut entry, &mut bytes)
+            .map_err(|e| format!("解压 docx 条目失败: {e}"))?;
+        entries.push((name, bytes));
+    }
+
+    let mut tables_patched = 0usize;
+    let mut styles_patched = false;
+    let mut settings_patched = false;
+
+    for (name, bytes) in entries.iter_mut() {
+        let is_document = name == "word/document.xml";
+        let is_styles = name == "word/styles.xml";
+        let is_settings = name == "word/settings.xml";
+        if !is_document && !is_styles && !is_settings {
+            continue;
+        }
+        let Ok(text) = String::from_utf8(bytes.clone()) else {
+            continue;
+        };
+        let mut next = text;
+
+        if is_document {
+            // 每张表都在 <w:tblPr> 里补一份边框。已有 tblBorders 的（极少）跳过，避免重复插入。
+            next = patch_docx_tables(&next, &mut tables_patched);
+        } else if is_styles {
+            next = inject_docx_fonts(&next);
+            styles_patched = true;
+        } else if is_settings {
+            // 让 Word 一打开就更新域（目录是 TOC 域，不更新就是一片空白）。
+            if !next.contains("updateFields") {
+                next = next.replace(
+                    "</w:settings>",
+                    "  <w:updateFields w:val=\"true\" />\n</w:settings>",
+                );
+            }
+            settings_patched = true;
+        }
+
+        *bytes = next.into_bytes();
+    }
+
+    let out = fs::File::create(path).map_err(|e| format!("写回 docx 失败: {e}"))?;
+    let mut writer = zip::ZipWriter::new(out);
+    for (name, bytes) in entries.iter() {
+        let options: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+        writer
+            .start_file(name.as_str(), options)
+            .map_err(|e| format!("重打包 docx 条目失败: {e}"))?;
+        std::io::Write::write_all(&mut writer, bytes)
+            .map_err(|e| format!("写入 docx 条目失败: {e}"))?;
+    }
+    writer.finish().map_err(|e| format!("收尾 docx 失败: {e}"))?;
+
+    info!(
+        tables = tables_patched,
+        styles = styles_patched,
+        settings = settings_patched,
+        "[DocExport] docx post-processed (table borders + fonts)"
+    );
+    Ok(())
+}
+
+/// 给每个 `<w:tblPr>` 插入边框定义。返回新文本与补丁数量。
+///
+/// 插入位置必须遵守 OOXML 的子元素顺序（`w:tblStyle` → `w:tblW` → `w:jc` →
+/// `w:tblInd` → `w:tblBorders` → `w:tblLayout` → `w:tblCellMar` → `w:tblLook`）。
+/// Word 对这个顺序是严格校验的：放错位置的 `tblBorders` 会被直接忽略，
+/// 表现就是「文件里明明写了边框，打开却没有」。
+fn patch_docx_tables(xml: &str, patched: &mut usize) -> String {
+    let mut out = String::with_capacity(xml.len() + 1024);
+    let mut rest = xml;
+    while let Some(pos) = rest.find("<w:tblPr>") {
+        let (head, tail) = rest.split_at(pos);
+        out.push_str(head);
+
+        // 取出这一段 <w:tblPr>...</w:tblPr>，在其中判断是否已有边框。
+        let Some(end) = tail.find("</w:tblPr>") else {
+            out.push_str(tail);
+            return out;
+        };
+        let (block, after) = tail.split_at(end + "</w:tblPr>".len());
+
+        if block.contains("<w:tblBorders") {
+            out.push_str(block);
+        } else if is_layout_table(&block) {
+            // 题注/图片用的布局表（`FigureTable` 等）不画边框：它们只是排版容器，
+            // 加了边框会在每张图下面多出一个方框。
+            out.push_str(block);
+        } else {
+            // 优先插在 tblLook 之前；没有 tblLook 时插在 tblGrid 之前的位置已在块外，
+            // 那就退回「紧贴 </w:tblPr> 之前」——这在没有后续兄弟元素时同样是合法顺序。
+            let patched_block = if let Some(look_at) = block.find("<w:tblLook") {
+                format!("{}{}{}", &block[..look_at], DOCX_TABLE_BORDER, &block[look_at..])
+            } else {
+                block.replacen("</w:tblPr>", &format!("{DOCX_TABLE_BORDER}</w:tblPr>"), 1)
+            };
+            out.push_str(&patched_block);
+            *patched += 1;
+        }
+        rest = after;
+    }
+    out.push_str(rest);
+    out
+}
+
+/// pandoc 用表格来做「带题注的图片」排版，这类表不该画边框。
+fn is_layout_table(tbl_pr: &str) -> bool {
+    ["FigureTable", "ImageCaption", "Figure"]
+        .iter()
+        .any(|name| tbl_pr.contains(&format!("w:val=\"{name}\"")))
+}
+
+/// 把所有引用主题字体的 `<w:rFonts ...Theme="...">` 换成显式字体名。
+///
+/// 主题字体（`minorHAnsi` / `majorHAnsi` / `minorEastAsia` …）由 theme1.xml 决定，
+/// 不跟着文档走：换台机器、换个 Word 模板，字体就变回默认值。写死字体名既更接近预览，
+/// 也让导出稿在别人的机器上看起来一致。
+fn replace_theme_fonts(styles_xml: &str, font: &str) -> String {
+    let replacement = format!(
+        "<w:rFonts w:ascii=\"{0}\" w:hAnsi=\"{0}\" w:eastAsia=\"{0}\" w:cs=\"{0}\" />",
+        font
+    );
+    let mut out = String::with_capacity(styles_xml.len() + 512);
+    let mut rest = styles_xml;
+
+    while let Some(pos) = rest.find("<w:rFonts") {
+        let (head, tail) = rest.split_at(pos);
+        out.push_str(head);
+
+        let Some(end) = tail.find("/>") else {
+            out.push_str(tail);
+            return out;
+        };
+        let (tag, after) = tail.split_at(end + 2);
+
+        // 只动「引用了主题字体」的那些；纯显式字体名的保持原样。
+        if tag.contains("Theme=\"") {
+            out.push_str(&replacement);
+        } else {
+            out.push_str(tag);
+        }
+        rest = after;
+    }
+    out.push_str(rest);
+    out
+}
+
+/// 在 docx 的默认样式里写入正文字体与代码字体。
+///
+/// 两处都要写：`docDefaults` 管普通正文；`VerbatimChar`（代码片段字符样式）若存在则
+/// 单独覆盖成等宽字体，否则行内代码会跟着正文字体一起变。
+fn inject_docx_fonts(styles_xml: &str) -> String {
+    let installed = installed_font_names();
+    let body_font = pick_export_font(EXPORT_BODY_FONT_CANDIDATES, &installed);
+    let code_font = pick_export_font(EXPORT_CODE_FONT_CANDIDATES, &installed);
+    let mut next = styles_xml.to_string();
+
+    // 1) 默认正文：把主题字体（minorHAnsi 等）换成显式字体名。
+    //    主题字体只能通过 theme1.xml 改，直接写 rFonts 更直接、也不依赖 Word 主题。
+    //
+    //    标题用的是另一套主题字体（majorHAnsi），因此这里扫的是整份 styles.xml 里
+    //    所有「引用了主题字体」的 rFonts，逐个换成显式字体名——只改 docDefaults
+    //    的话正文变了、标题还是 Word 默认字体，成品看起来仍不像预览。
+    next = replace_theme_fonts(&next, &body_font);
+
+    // 2) 代码字符样式：VerbatimChar / SourceCode 一类都改成等宽字体。
+    for style_id in ["VerbatimChar", "SourceCode", "HTMLCode"] {
+        let needle = format!("w:styleId=\"{style_id}\"");
+        let Some(pos) = next.find(&needle) else { continue };
+        let Some(style_end_rel) = next[pos..].find("</w:style>") else { continue };
+        let style_end = pos + style_end_rel;
+        let style_block = next[pos..style_end].to_string();
+        if style_block.contains("w:ascii=") {
+            continue;
+        }
+        let fonts = format!(
+            "<w:rFonts w:ascii=\"{0}\" w:hAnsi=\"{0}\" w:eastAsia=\"{0}\" w:cs=\"{0}\" />",
+            code_font
+        );
+        let patched = if style_block.contains("<w:rPr>") {
+            style_block.replacen("<w:rPr>", &format!("<w:rPr>{fonts}"), 1)
+        } else {
+            style_block.replacen("</w:style>", &format!("<w:rPr>{fonts}</w:rPr></w:style>"), 1)
+        };
+        next.replace_range(pos..style_end, &patched);
+    }
+
+    next
+}
+
+/// 给 EPUB 补两份样式：表格全边框 + 正文字体。
+///
+/// EPUB 是带 CSS 的 HTML，所以不需要重打包解包流程，只要在 stylesheet 末尾追加规则。
+/// 但 pandoc 的 `--css` 是替换语义（见 export_markdown_pandoc），这里直接改产物更稳：
+/// 无论样式表叫什么名字、有几份，都能命中。
+fn rewrite_epub_for_export(path: &str) -> Result<(), String> {
+    let file = fs::File::open(path).map_err(|e| format!("打开 epub 失败: {e}"))?;
+    let mut archive = zip::ZipArchive::new(file).map_err(|e| format!("读取 epub 失败: {e}"))?;
+
+    let mut entries: Vec<(String, Vec<u8>)> = Vec::new();
+    for i in 0..archive.len() {
+        let mut entry = archive
+            .by_index(i)
+            .map_err(|e| format!("读取 epub 条目失败: {e}"))?;
+        let name = entry.name().to_string();
+        let mut bytes = Vec::new();
+        std::io::Read::read_to_end(&mut entry, &mut bytes)
+            .map_err(|e| format!("解压 epub 条目失败: {e}"))?;
+        entries.push((name, bytes));
+    }
+
+    // EPUB 走 CSS，字体可以写整条栈：阅读器会按顺序挑第一个可用的。
+    //
+    // `display: table` 必须再写一遍：pandoc 默认样式表里的 `display: block` 会让
+    // MuPDF 一类引擎把单元格竖着堆（详见上面 export_markdown_pandoc 里的说明），
+    // 而这里新增的表格规则会参与同一层叠，重述一次最稳妥。
+    let extra_css = format!(
+        "\n/* guaxi export: 表格全边框 + 与预览一致的字体 */\n\
+table {{ display: table; border-collapse: collapse; }}\n\
+table th, table td {{ border: 1px solid #bcd0e0; padding: 0.25em 0.6em; }}\n\
+body, p, li, td, th {{ font-family: {body}; }}\n\
+code, pre, kbd, samp {{ font-family: {code}; }}\n",
+        body = EXPORT_BODY_FONT_CANDIDATES.join(", "),
+        code = EXPORT_CODE_FONT_CANDIDATES.join(", ")
+    );
+
+    let mut patched = 0usize;
+    for (name, bytes) in entries.iter_mut() {
+        if !name.ends_with(".css") {
+            continue;
+        }
+        let Ok(mut text) = String::from_utf8(bytes.clone()) else {
+            continue;
+        };
+        if text.contains("guaxi export: 表格全边框") {
+            continue;
+        }
+        text.push_str(&extra_css);
+        *bytes = text.into_bytes();
+        patched += 1;
+    }
+
+    if patched == 0 {
+        warn!("[DocExport] epub has no stylesheet to patch; skip border/font overrides");
+        return Ok(());
+    }
+
+    let out = fs::File::create(path).map_err(|e| format!("写回 epub 失败: {e}"))?;
+    let mut writer = zip::ZipWriter::new(out);
+    for (name, bytes) in entries.iter() {
+        let options: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+        writer
+            .start_file(name.as_str(), options)
+            .map_err(|e| format!("重打包 epub 条目失败: {e}"))?;
+        std::io::Write::write_all(&mut writer, bytes)
+            .map_err(|e| format!("写入 epub 条目失败: {e}"))?;
+    }
+    writer.finish().map_err(|e| format!("收尾 epub 失败: {e}"))?;
+
+    info!(stylesheets = patched, "[DocExport] epub post-processed (borders + fonts)");
+    Ok(())
 }
 
 fn clamp_static_toc_for_pdf(markdown: &str, max_indent_levels: usize) -> (String, bool) {

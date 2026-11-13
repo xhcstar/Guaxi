@@ -525,8 +525,11 @@ pub fn strip_python_cell_blocks(markdown: &str) -> String {
 }
 
 fn is_toc_marker_line(line: &str) -> bool {
+    // 编辑器里目录标记经常写成转义形式 `\[TOC\]`（避免被当成普通中括号链接渲染），
+    // 导出时两者都要认，否则用户写了目录却拿不到目录。
+    let normalized = line.trim().replace("\\[", "[").replace("\\]", "]").replace("\\\\", "\\");
     matches!(
-        line.trim().to_ascii_lowercase().as_str(),
+        normalized.to_ascii_lowercase().as_str(),
         "[toc]" | "[目录]" | "[[toc]]" | "[[目录]]"
     )
 }

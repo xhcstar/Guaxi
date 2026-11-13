@@ -176,6 +176,61 @@ export const EXPORT_SHELL_CSS = `
     height: auto;
   }
 
+  /* 关联文档卡片。
+   * 预览里这些卡片是「一整个可点的区域」，导出稿必须自带样式：
+   * 导出页读不到应用里的 CSS 变量，不写这份的话就只剩几行裸文字。 */
+  .export-content .guaxi-preview-file-card {
+    display: block;
+    margin: 10px 0;
+    padding: 10px 12px;
+    border: 1px solid #d6e2ee;
+    border-left: 3px solid #0891b2;
+    border-radius: 10px;
+    background: #f8fbfd;
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  .export-content .guaxi-preview-file-card__link {
+    display: block;
+    color: inherit;
+    text-decoration: none;
+  }
+
+  .export-content .guaxi-preview-file-card__eyebrow {
+    display: inline-block;
+    margin-bottom: 4px;
+    padding: 1px 8px;
+    border-radius: 999px;
+    background: rgba(8, 145, 178, 0.12);
+    color: #0f766e;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+  }
+
+  .export-content .guaxi-preview-file-card__title {
+    display: block;
+    margin: 2px 0;
+    color: #0f172a;
+    font-size: 14px;
+    font-weight: 700;
+  }
+
+  .export-content .guaxi-preview-file-card__excerpt {
+    display: block;
+    margin: 2px 0;
+    color: #475569;
+    font-size: 12px;
+    line-height: 1.5;
+  }
+
+  .export-content .guaxi-preview-file-card__meta {
+    display: block;
+    color: #94a3b8;
+    font-size: 11px;
+  }
+
   /* 交互 UI 一律不进成品。
    * 正常路径上这些节点已经由 stripInteractiveExportArtifacts 从 DOM 里删掉（代码块右上角的
    * 复制按钮、图片悬浮工具栏、破图占位块上的「重新加载 / 复制路径」）。这里再兜一层：

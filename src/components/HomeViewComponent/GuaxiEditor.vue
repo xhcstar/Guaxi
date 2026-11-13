@@ -23730,6 +23730,8 @@ const buildPrintHtml = (bodyHtml, title, options = {}) => {
     radius: settingsStore.previewImage?.radius,
     showCaption: settingsStore.previewImage?.show_caption,
   })
+  // 只有 HTML 导出才会带 live 图表脚本；PDF 走静态 SVG，打印时不需要 JS。
+  const chartScript = String(options?.chartScript || '')
 
   return `<!DOCTYPE html>
 <html lang="zh-CN">
@@ -23745,6 +23747,7 @@ ${baseTag}
   <div class="export-root">
     <div class="export-content">${bodyHtml}</div>
   </div>
+${chartScript ? `<scr` + `ipt>${chartScript}</scr` + `ipt>` : ''}
 </body>
 </html>`;
 };
@@ -24044,7 +24047,7 @@ const stripInteractiveExportArtifacts = (bodyHtml) => {
  *
  * 失败时的行为：单块失败只让该块显示错误提示，绝不影响整篇导出。
  */
-const materializeChartEmbedsInHtml = async (bodyHtml, context) => {
+const materializeChartEmbedsInHtml = async (bodyHtml, context, { live = false } = {}) => {
   const html = String(bodyHtml || '')
   if (!html.trim()) return html
   if (!html.includes('data-chart-pending') && !html.includes('data-excalidraw-pending')) {
@@ -24054,9 +24057,10 @@ const materializeChartEmbedsInHtml = async (bodyHtml, context) => {
   try {
     const host = document.createElement('div')
     host.innerHTML = html
-    await materializeChartEmbedsForExport(host)
+    await materializeChartEmbedsForExport(host, { live })
     logger.info('[Export] chart embeds materialized', {
       inputPath: context?.inputPath,
+      live,
       hasChart: html.includes('data-chart-pending'),
       hasBoard: html.includes('data-excalidraw-pending'),
     })
@@ -24069,7 +24073,60 @@ const materializeChartEmbedsInHtml = async (bodyHtml, context) => {
   }
 }
 
-const renderMarkdownForExportHtml = async (context) => {
+/**
+ * 生成 HTML 导出页里用来「现场画图表」的脚本。
+ *
+ * 为什么这么做：静态 SVG 导出的图表只能看不能动，而 HTML 本来就是能跑脚本的格式，
+ * 把 ECharts 一并打进导出稿，图表就保住悬停提示、图例切换、缩放这些能力。
+ *
+ * 代价是导出文件会大一兆多（ECharts 全量包）。只有文档里真的有动态图表时才注入，
+ * 没有图表时返回空串，导出稿一个字节都不会多。
+ */
+let exportChartLibPromise = null
+const loadExportChartLib = async () => {
+  if (!exportChartLibPromise) {
+    // 直接取自依赖里的发行版，不在仓库里另存一份 —— 否则 echarts 升级后
+    // 导出用的还是那个旧副本，画出来的图会和预览不一致。
+    exportChartLibPromise = import('echarts/dist/echarts.min.js?raw')
+      .then((mod) => String(mod.default || ''))
+      .catch((error) => {
+        logger.warn('[Export] failed to load bundled echarts for html export', {
+          error: String(error?.message || error),
+        })
+        return ''
+      })
+  }
+  return exportChartLibPromise
+}
+
+const buildExportChartScript = async (bodyHtml) => {
+  if (!String(bodyHtml || '').includes('data-guaxi-chart-option')) return ''
+  const lib = await loadExportChartLib()
+  if (!lib.trim()) return ''
+
+  // 内联到 script 标签里时必须避免出现它的结束标记：ECharts 源码里没有这个字面量，
+  // 但将来升级版本可能会有，这里统一打断一下最稳妥（也免得 SFC 解析器把它当成真的结束）。
+  const safeLib = lib.replace(/<\/script/gi, '<\\/script')
+  const runner = `
+(function () {
+  var nodes = document.querySelectorAll('[data-guaxi-chart-option]');
+  if (!nodes.length || !window.echarts) return;
+  Array.prototype.forEach.call(nodes, function (el) {
+    var raw = el.getAttribute('data-guaxi-chart-option');
+    if (!raw) return;
+    var option;
+    try { option = JSON.parse(raw); } catch (e) { return; }
+    el.innerHTML = '';
+    var chart = window.echarts.init(el, null, { renderer: 'canvas' });
+    chart.setOption(option, true);
+    window.addEventListener('resize', function () { chart.resize(); });
+  });
+})();
+`
+  return `${safeLib}\n${runner}`
+}
+
+const renderMarkdownForExportHtml = async (context, options = {}) => {
   const rawMarkdown = String(context?.markdown || '')
   // 设计说明：
   // 探索者模式下数学块 / Python Cell 的真实存储是 <!--math--> / <!--py--> 哨兵块（源码或表达式），
@@ -24107,11 +24164,17 @@ const renderMarkdownForExportHtml = async (context) => {
   const bodyHtml = enhancePreviewHtmlWithMediaGroups(
     await upgradeHtmlCodeBlocks(
       stripInteractiveExportArtifacts(
-        await materializeChartEmbedsInHtml(rawBodyHtml, context),
+        // HTML 导出把图表做成「动态」的：占位块里带 option JSON，导出页用内嵌
+        // ECharts 现场绘制。PDF 仍用静态 SVG —— 打印时不需要也不会执行脚本。
+        await materializeChartEmbedsInHtml(rawBodyHtml, context, { live: !!options?.liveCharts }),
       ),
     ),
   )
-  const html = buildPrintHtml(bodyHtml, context.title, { baseHref: context.baseHref })
+  const chartScript = options?.liveCharts ? await buildExportChartScript(bodyHtml) : ''
+  const html = buildPrintHtml(bodyHtml, context.title, {
+    baseHref: context.baseHref,
+    chartScript,
+  })
 
   logger.info('[Export] render markdown to export html complete', {
     inputPath: context.inputPath,
@@ -24225,13 +24288,182 @@ const restoreLocalImageProxyUrls = (html, baseDir) => {
   )
 }
 
+/**
+ * 把被复制的文档里、指向同目录资源的相对路径，改成「从 `_assets` 出发」的相对路径。
+ *
+ * 文档换了个目录，里面的 `![](./img/a.png)` 就会指向不存在的位置。这里只改路径、
+ * 不动其它内容；解析不到的（跨盘符等）原样保留，至少在原机器上还能打开。
+ */
+const rebaseMarkdownRelativeAssets = (text, fromDir, assetsDirAbs) => {
+  const from = String(fromDir || '').replace(/\\/g, '/')
+  const to = String(assetsDirAbs || '').replace(/\\/g, '/')
+  if (!from || !to || from === to) return text
+
+  return String(text || '').replace(
+    /(!?\[[^\]]*\]\()([^)\s]+)((?:\s+"[^"]*")?\))/g,
+    (whole, prefix, target, suffix) => {
+      if (/^([a-zA-Z]:|[a-z]+:|\/|#)/i.test(target)) return whole
+      const abs = `${from}/${target.replace(/^\.\//, '')}`.replace(/\/+/g, '/')
+      const rel = buildRelativePathForExport(to, abs)
+      return rel ? `${prefix}${rel}${suffix}` : whole
+    },
+  )
+}
+
+/**
+ * 收集导出稿里「关联文档」指向的文件，并把它们复制到导出文件旁的 `_assets` 目录。
+ *
+ * 为什么要复制：HTML 导出稿经常被发到别的机器上打开，卡片上的链接如果还指向
+ * 作者本机的绝对路径（`D:/notes/xxx.md`），在别人那里就是打不开的死链。
+ * 把被链接的文档一起带过去，卡片才在哪儿都能点开。
+ *
+ * 返回 Map<原绝对路径, 相对导出文件的链接>，交给 rewriteExportDocumentLinks 改写卡片。
+ */
+const collectExportLinkedDocuments = async (context, outputPath) => {
+  const assets = new Map()
+  const markdown = String(context?.markdown || '')
+  if (!markdown.trim()) return assets
+
+  // 只处理「独占一段的链接」——与预览里提升成卡片的判定一致，
+  // 正文里顺带提到的一个链接不复制文件。
+  const linkRe = /^[ \t]*(?:\[[^\]]*\]\(([^)\s]+)(?:\s+"[^"]*")?\)|\[\[([^\]]+)\]\])[ \t]*$/gm
+  const candidates = []
+  let match
+  while ((match = linkRe.exec(markdown)) !== null) {
+    const target = String(match[1] || match[2] || '').trim()
+    if (target) candidates.push(target)
+  }
+  if (!candidates.length) return assets
+
+  const { mkdir, copyFile, readTextFile, writeTextFile } = await import('@tauri-apps/plugin-fs')
+  const outDir = getParentDirectoryPath(outputPath)
+  if (!outDir) {
+    logger.warn('[Export] cannot resolve export directory; skip linked document bundling')
+    return assets
+  }
+  const assetsDirAbs = `${outDir}/_assets`
+  let assetsDir = ''
+  try {
+    assetsDir = buildRelativePathForExport(outDir, assetsDirAbs) || '_assets'
+    await mkdir(assetsDirAbs, { recursive: true })
+  } catch (error) {
+    logger.warn('[Export] prepare linked-doc assets dir failed', {
+      error: String(error?.message || error),
+    })
+    return assets
+  }
+
+  let copied = 0
+  for (const target of candidates) {
+    try {
+      const abs = await resolvePreviewCardTargetPath(target, { baseDocPath: context?.inputPath })
+      if (!abs || assets.has(abs)) continue
+
+      const fileName = String(abs).split(/[\\/]/).pop() || ''
+      if (!fileName) continue
+      const destRel = `${assetsDir.replace(/\/+$/, '')}/${fileName}`
+      const destAbs = `${assetsDirAbs}/${fileName}`
+      await copyFile(abs, destAbs)
+
+      // 文档换了目录，里面的相对图片/附件路径会失效。能按文本处理的（Markdown）
+      // 顺手把相对引用重算一遍；其它类型原样复制。
+      if (/\.(md|markdown)$/i.test(abs)) {
+        try {
+          const body = await readTextFile(destAbs)
+          const rebased = rebaseMarkdownRelativeAssets(body, getParentDirectoryPath(abs), assetsDirAbs)
+          if (rebased !== body) {
+            await writeTextFile(destAbs, rebased)
+          }
+        } catch (error) {
+          logger.debug('[Export] rebase relative assets in linked doc failed', {
+            path: abs,
+            error: String(error?.message || error),
+          })
+        }
+      }
+
+      assets.set(abs, destRel)
+      copied += 1
+    } catch (error) {
+      logger.warn('[Export] copy linked document failed', {
+        target,
+        error: String(error?.message || error),
+      })
+    }
+  }
+
+  if (copied) {
+    logger.info('[Export] linked documents bundled with export', { copied })
+  }
+  return assets
+}
+
+/**
+ * 把导出 HTML 里指向已复制文档的链接改写成相对 `_assets` 的路径。
+ *
+ * 匹配两种写法：
+ *   1. 预览提升成的卡片（`data-guaxi-preview-card-path` 带着绝对路径）；
+ *   2. 普通 Markdown 链接（href 仍是原始相对/绝对路径）。
+ */
+const rewriteExportDocumentLinks = (html, assets) => {
+  const source = String(html || '')
+  if (!assets || !assets.size) return source
+
+  try {
+    const template = document.createElement('template')
+    template.innerHTML = source
+    let rewritten = 0
+
+    template.content.querySelectorAll('[data-guaxi-preview-card-path], a[href]').forEach((node) => {
+      const abs = String(node.getAttribute('data-guaxi-preview-card-path') || '').trim()
+      const rel = abs ? assets.get(abs) : ''
+
+      if (node.tagName === 'A') {
+        const absForAnchor = abs || decodeURIComponent(String(node.getAttribute('href') || ''))
+        const anchorRel = rel || (absForAnchor ? assets.get(absForAnchor) : '')
+        if (anchorRel) {
+          node.setAttribute('href', anchorRel)
+          rewritten += 1
+        }
+        return
+      }
+
+      // 卡片：整体包一层可点的链接，指向副本；去掉原路径属性（导出稿里没有意义）。
+      if (!rel) return
+      const link = node.querySelector('.guaxi-preview-file-card__link')
+      if (link) link.setAttribute('href', rel)
+      node.removeAttribute('data-guaxi-preview-card-path')
+      rewritten += 1
+    })
+
+    if (rewritten) {
+      logger.info('[Export] rewrote linked document hrefs', { rewritten })
+    }
+    return template.innerHTML
+  } catch (error) {
+    logger.warn('[Export] rewrite linked document hrefs failed', {
+      error: String(error?.message || error),
+    })
+    return source
+  }
+}
+
 const exportMarkdownRenderedHtml = async (context, outputPath) => {
   // 本地图片同样要还原：渲染器把它们改写成 http://localhost:8888/markdown/api/images/…
   // （后端只放行登记过的文件），导出稿一旦离开应用、或应用关掉，这些地址全是 404。
   // 这里按文档所在目录还原成相对路径；<base href> 仍指向该目录，所以相对路径照常解析。
   const exportDir = getParentDirectoryPath(context?.inputPath)
+  // 关联文档链接：导出稿可能被带到别的机器，链接指向原路径就会失效。
+  // 这里把被链接的文档复制到导出文件旁的 `_assets` 目录，链接指向相对副本。
+  const linkedAssets = await collectExportLinkedDocuments(context, outputPath)
   const html = restoreLocalImageProxyUrls(
-    restoreRemoteImageProxyUrls(await renderMarkdownForExportHtml(context)),
+    restoreRemoteImageProxyUrls(
+      rewriteExportDocumentLinks(
+        // HTML 是可执行格式：图表保持动态（内嵌 ECharts 现场绘制）。
+        await renderMarkdownForExportHtml(context, { liveCharts: true }),
+        linkedAssets,
+      ),
+    ),
     exportDir,
   )
   const { writeFile } = await import('@tauri-apps/plugin-fs')
@@ -24856,6 +25088,46 @@ const preparePandocSyntaxThemeFile = async () => {
   }
 }
 
+/**
+ * 把 Markdown 里指向已复制文档的链接改写成导出口径的链接。
+ *
+ * Word/EPUB 没有「卡片」这种排版单元，所以只做两件事：
+ *   1. 独占一段的链接保留文字，链接指向 `_assets/` 里的副本；
+ *   2. 行内链接同理 —— 观感在成品里是一行可点的文字，不硬造卡片样式。
+ *
+ * wikilink 写法（`[[x]]`）先还原成普通链接，pandoc 不认识双链语法。
+ */
+const rewriteExportLinkedMarkdown = (markdown, assets) => {
+  const source = String(markdown || '')
+  if (!assets || !assets.size) return source
+
+  let rewritten = 0
+  const text = source.replace(
+    /\[\[([^\]]+)\]\]|\[([^\]]*)\]\(([^)\s]+)(\s+"[^"]*")?\)/g,
+    (whole, wikilink, label, href, title = '') => {
+      // `[[路径|别名]]` / `[[路径]]`
+      if (wikilink) {
+        const [rawTarget, rawAlias] = String(wikilink).split('|')
+        const rel = assets.get(String(rawTarget || '').trim())
+        if (!rel) return whole
+        rewritten += 1
+        const text = String(rawAlias || rawTarget || '').trim()
+        return `[${text}](${rel})`
+      }
+
+      const rel = assets.get(String(href || '').trim())
+      if (!rel) return whole
+      rewritten += 1
+      return `[${label || rel}](${rel}${title})`
+    },
+  )
+
+  if (rewritten) {
+    logger.info('[Export] rewrote linked documents in markdown', { rewritten })
+  }
+  return text
+}
+
 const exportMarkdownPandoc = async (context, outputPath) => {
   logger.info('[Export] export markdown via pandoc', {
     inputPath: context.inputPath,
@@ -24863,9 +25135,15 @@ const exportMarkdownPandoc = async (context, outputPath) => {
     format: context.format,
   })
 
+  // 关联文档链接：pandoc 会把 Markdown 链接原样写进 Word/EPUB。
+  // 这些链接多半指向作者本机的绝对路径，换台机器就点不开。
+  // 这里把目标文档复制到导出文件旁的 `_assets`，并把链接改写成相对路径。
+  const linkedAssets = await collectExportLinkedDocuments(context, outputPath)
+
   // 只有当确实把 mermaid 替换成图片后才传 sourceMarkdown；否则保持后端从磁盘读原文的既有行为。
   const originalMarkdown = String(context?.markdown || '')
-  let processedMarkdown = await prerenderMermaidForPandoc(originalMarkdown, context.format)
+  let processedMarkdown = rewriteExportLinkedMarkdown(originalMarkdown, linkedAssets)
+  processedMarkdown = await prerenderMermaidForPandoc(processedMarkdown, context.format)
   // 图表 / 白板与 mermaid 同理：pandoc 不认识这些围栏，必须先渲染成图片。
   processedMarkdown = await prerenderChartEmbedsForPandoc(processedMarkdown, context?.inputPath, context.format)
   // 设计说明：EPUB 阅读器普遍不渲染 MathML，块级公式会退化成 LaTeX 源码，

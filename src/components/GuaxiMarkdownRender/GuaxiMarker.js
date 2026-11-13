@@ -2660,7 +2660,12 @@ export const renderMarkdown = async (content, options) => {
     };
 
     const installTocSupport = () => {
+      // \u517c\u5bb9\u8f6c\u4e49\u5199\u6cd5 `\[TOC\]`\uff1a\u7f16\u8f91\u5668\u4e2d\u4e3a\u907f\u5f00\u666e\u901a\u94fe\u63a5\u8bed\u6cd5\u5e38\u8fd9\u4e48\u5199\uff0c
+      // \u540e\u7aef\u5bfc\u51fa\u4e5f\u8ba4\u8fd9\u4e00\u79cd\uff08\u89c1 notebook.rs \u7684 is_toc_marker_line\uff09\u3002
       const tocMarkerRe = /^\s*(?:\[\[\s*(?:toc|\u76ee\u5f55)\s*\]\]|\[\s*(?:toc|\u76ee\u5f55)\s*\])\s*$/i;
+      const isTocMarker = (text) => tocMarkerRe.test(
+        String(text || "").replace(/\\\[/g, "[").replace(/\\\]/g, "]"),
+      );
 
       const slugify = (text) => {
         const raw0 = String(text || "").trim().toLowerCase();
@@ -2725,7 +2730,7 @@ export const renderMarkdown = async (content, options) => {
           if (t0.type !== "paragraph_open" || t1.type !== "inline" || t2.type !== "paragraph_close") continue;
 
           const raw = String(t1.content || "");
-          if (!tocMarkerRe.test(raw)) continue;
+          if (!isTocMarker(raw)) continue;
 
           const tok = new state.Token("html_block", "", 0);
           tok.content = buildTocHtml();

@@ -442,6 +442,26 @@ async function renderExcalidrawBlock(el) {
 }
 
 /**
+ * 把一段 chart 围栏解析成 ECharts option（供导出 HTML 内嵌动态图表使用）。
+ *
+ * 与 renderChartFenceToSvg 的区别：那个产出静态 SVG，这个交出 option 本身，
+ * 让导出的 HTML 在浏览器里用内嵌的 ECharts 实时绘制（保留动画/交互）。
+ *
+ * 失败返回 null，调用方回退到静态 SVG。
+ */
+export async function chartFenceToOption(source, baseDocPath) {
+  try {
+    const { option } = await buildOptionFromFence(String(source || ''), String(baseDocPath || ''))
+    return option
+  } catch (error) {
+    logger.warn('[ChartEmbed] export option build failed', {
+      error: String(error?.message || error),
+    })
+    return null
+  }
+}
+
+/**
  * 把一段 chart 围栏直接渲染成 SVG 字符串（**不碰 DOM、不建实例**）。
  *
  * 供导出链路使用：导出的 HTML 字符串在第 3 行就已经定型，之后不会有任何 DOM 挂载，
@@ -504,7 +524,7 @@ export async function renderExcalidrawFenceToSvg(scenePath, baseDocPath) {
  * 只处理仍带 pending 标记的块；已经由 renderChartEmbeds 画好的块保留原样 ——
  * 实时渲染的结果本来就是带按钮的合法 DOM，替换反而会丢掉交互。
  */
-export async function materializeChartEmbedsForExport(root) {
+export async function materializeChartEmbedsForExport(root, { live = false } = {}) {
   if (!(root instanceof HTMLElement)) return { charts: 0, boards: 0, failed: 0 }
   let charts = 0
   let boards = 0
@@ -516,6 +536,21 @@ export async function materializeChartEmbedsForExport(root) {
   for (const el of chartNodes) {
     const source = safeDecode(el.getAttribute('data-chart-source') || '')
     const baseDocPath = safeDecode(el.getAttribute('data-chart-base') || '')
+
+    // HTML 导出：保留图表的动态性。把 option 以 JSON 存进占位块，导出页里
+    // 用内嵌的 ECharts 现场绘制（有动画、可缩放、tooltip 可用）。
+    // 没算出 option（数据文件读不到等）就继续走下面的静态 SVG。
+    if (live) {
+      const option = await chartFenceToOption(source, baseDocPath)
+      if (option) {
+        el.setAttribute('data-guaxi-chart-option', JSON.stringify(option))
+        el.removeAttribute('data-chart-pending')
+        el.innerHTML = '<div class="guaxi-chart-block__placeholder">图表脚本加载中…</div>'
+        charts += 1
+        continue
+      }
+    }
+
     const svg = await renderChartFenceToSvg(source, baseDocPath)
     if (!svg) {
       failed += 1
