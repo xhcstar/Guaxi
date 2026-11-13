@@ -1,5 +1,5 @@
 <template>
-  <div ref="ebookRoot" class="guaxi-doc-reader" data-reader="ebook">
+  <div ref="ebookRoot" class="guaxi-doc-reader" data-reader="ebook" @keydown="onKeydown">
     <div class="guaxi-doc-reader__bar">
       <span class="guaxi-doc-reader__title" :title="path">{{ title || name }}</span>
       <span class="guaxi-doc-reader__badge">{{ kindLabel }}</span>
@@ -70,7 +70,7 @@
       <button
         class="guaxi-doc-reader__icon-btn"
         :class="{ 'is-on': panelMode === 'bookmarks' }"
-        title="书签（Ctrl+D 添加当前页）"
+        title="书签（Ctrl+Shift+B；Ctrl+D 添加当前页）"
         aria-label="书签"
         :aria-pressed="panelMode === 'bookmarks'"
         @click="togglePanel('bookmarks')"
@@ -80,7 +80,7 @@
       <button
         class="guaxi-doc-reader__icon-btn"
         :class="{ 'is-on': panelMode === 'notes' }"
-        :title="`标注与笔记${annotations.length ? `（${annotations.length} 条）` : ''}`"
+        :title="`标注与笔记（Ctrl+Shift+N）${annotations.length ? `（${annotations.length} 条）` : ''}`"
         aria-label="标注与笔记"
         :aria-pressed="panelMode === 'notes'"
         @click="togglePanel('notes')"
@@ -90,7 +90,7 @@
       <button
         class="guaxi-doc-reader__icon-btn"
         :class="{ 'is-on': panelMode === 'display' }"
-        title="阅读设置：字号、字体、主题"
+        title="阅读设置：字号、字体、主题（Ctrl+Shift+D）"
         aria-label="阅读设置"
         :aria-pressed="panelMode === 'display'"
         @click="togglePanel('display')"
@@ -202,10 +202,10 @@
       <button
         class="guaxi-doc-reader__icon-btn"
         :class="{ 'is-on': tocVisible }"
-        title="目录"
+        title="目录（Ctrl+B）"
         aria-label="目录"
         :aria-pressed="tocVisible"
-        @click="tocVisible = !tocVisible"
+        @click="toggleToc"
       >
         <Icon :icon="tocIcon" width="15" height="15" />
       </button>
@@ -232,7 +232,7 @@
       <button
         class="guaxi-doc-reader__icon-btn"
         :class="{ 'is-on': assistantOpen }"
-        :title="assistantOpen ? '隐藏智能助手' : '显示智能助手'"
+        :title="assistantOpen ? '隐藏智能助手（Ctrl+Shift+A）' : '显示智能助手（Ctrl+Shift+A）'"
         aria-label="智能助手"
         :aria-pressed="assistantOpen"
         @click="emit('toggle-assistant')"
@@ -392,7 +392,15 @@
       </div>
     </div>
     <div v-else class="guaxi-doc-reader__body gdr-ebook">
-      <aside v-if="tocVisible" class="gdr-ebook__toc guaxi-reader-scrollbar" :style="{ width: `${tocWidth}px` }">
+      <aside
+        v-if="tocVisible"
+        ref="tocEl"
+        class="gdr-ebook__toc guaxi-reader-scrollbar"
+        :style="{ width: `${tocWidth}px` }"
+        tabindex="0"
+        aria-label="目录，方向键切换条目"
+        @keydown="onTocKeydown"
+      >
         <button
           v-for="(item, idx) in toc"
           :key="`${idx}-${item.href}`"
@@ -614,6 +622,7 @@ const props = defineProps({
 const emit = defineEmits(['toggle-assistant', 'ask-assistant'])
 
 const frameRef = ref(null)
+const tocEl = ref(null)
 const loading = ref(true)
 const errorText = ref('')
 const title = ref('')
@@ -1284,13 +1293,11 @@ const onFrameLoad = () => {
   try {
     const doc = frameRef.value?.contentDocument
     if (!doc) return
-    // iframe 内的按键不会冒泡到宿主窗口，Esc 收起操作条要在这里单独听一次。
-    doc.addEventListener('keydown', (event) => {
-      if (event.key === 'Escape' && selectionVisible.value) {
-        event.preventDefault()
-        hideSelectionBar()
-      }
-    })
+    // iframe 内的按键不会冒泡到宿主：Esc、Ctrl+F、PageUp/PageDown、面板快捷键都在这里转发；
+    // 方向键/空格留在正文自己的滚动与选字上（见 onKeydown 的 inFrame 分支）。
+    doc.addEventListener('keydown', onFrameKeydown)
+    // Ctrl/⌘ + 滚轮缩放：必须非 passive 才能吃掉浏览器默认的整页缩放。
+    doc.addEventListener('wheel', onWheelZoom, { passive: false })
     doc.addEventListener('click', (event) => {
       const anchor = event.target?.closest?.('a')
       if (!anchor) return
@@ -1863,49 +1870,184 @@ const loadReaderSettings = async () => {
   }
 }
 
-const onKeydown = (event) => {
-  if (event.target && /input|textarea/i.test(event.target.tagName || '')) return
-  // Ctrl/Cmd+F：全文搜索
-  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'f') {
+// 判据一律走鸭子类型，不用 `instanceof HTMLElement`：正文在 iframe 里，
+// 它的节点来自另一个 realm，`instanceof` 在宿主这边一律为 false。
+const isEditableTarget = (target) => {
+  if (!target || typeof target !== 'object') return false
+  const tag = String(target.tagName || '').toUpperCase()
+  return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || target.isContentEditable === true
+}
+
+const isButtonTarget = (target) => {
+  if (!target || typeof target.closest !== 'function') return false
+  return Boolean(target.closest('button, a, [role="button"], [role="tab"]'))
+}
+
+/** 目录开关：打开时把焦点交给目录，方向键可以立刻接着用。 */
+const toggleToc = () => {
+  tocVisible.value = !tocVisible.value
+  if (!tocVisible.value) return
+  nextTick(() => tocEl.value?.focus?.({ preventScroll: true }))
+}
+
+/**
+ * 目录里的方向键：↑/↓ 换条目、Home/End 跳首尾，移动即切换（等同点击）。
+ *
+ * 只挂在目录容器上：正文里的方向键仍归滚动与选字 —— 快捷键不能和阅读手势抢同一个键。
+ */
+const onTocKeydown = (event) => {
+  if (event.altKey || event.ctrlKey || event.metaKey) return
+  const key = event.key
+  if (key !== 'ArrowDown' && key !== 'ArrowUp' && key !== 'Home' && key !== 'End') return
+  const items = Array.from(tocEl.value?.querySelectorAll?.('.gdr-ebook__toc-item') || [])
+  if (!items.length) return
+  event.preventDefault()
+  event.stopPropagation()
+  const current = items.indexOf(document.activeElement)
+  let next
+  if (current < 0) next = Math.max(0, tocActiveIdx.value)
+  else if (key === 'ArrowDown') next = Math.min(items.length - 1, current + 1)
+  else if (key === 'ArrowUp') next = Math.max(0, current - 1)
+  else if (key === 'Home') next = 0
+  else next = items.length - 1
+  const node = items[next]
+  if (!node) return
+  node.focus?.({ preventScroll: true })
+  node.scrollIntoView?.({ block: 'nearest' })
+  const item = toc.value[next]
+  if (item) jumpToHref(item.href)
+}
+
+/** Ctrl/⌘ + 滚轮缩放：电子书里等同改字号。 */
+const onWheelZoom = (event) => {
+  if (!(event.ctrlKey || event.metaKey)) return
+  event.preventDefault()
+  const step = Math.min(0.5, 0.0015 * Math.abs(event.deltaY) + 0.05)
+  if (event.deltaY < 0) zoomBy(1 + step)
+  else if (event.deltaY > 0) zoomBy(1 - step)
+}
+
+/**
+ * 阅读器快捷键。
+ *
+ * 挂在根节点（`.guaxi-doc-reader`）而不是 window：宿主 ReaderPane 的根节点带
+ * `@keydown.stop`，window 上的监听收不到事件 —— 这正是 Ctrl+F 之类完全失效的原因。
+ * 正文在 iframe 里、按键不冒泡到宿主，由 onFrameKeydown 转发同一个处理函数。
+ */
+const onKeydown = (event, { inFrame = false } = {}) => {
+  if (event.defaultPrevented || event.isComposing) return
+  // 阅读器被宿主隐藏（别的标签在前台）时不要再抢全局快捷键。
+  if ((ebookRoot.value?.clientHeight || 0) <= 0) return
+  if (isEditableTarget(event.target)) return
+  const key = event.key
+  const lowerKey = String(key || '').toLowerCase()
+  const ctrlOrMeta = event.ctrlKey || event.metaKey
+  const handled = () => {
     event.preventDefault()
-    if (!searchOpen.value) toggleSearch()
-    else searchInputRef.value?.focus()
+    event.stopPropagation()
+  }
+
+  // Ctrl/Cmd+F：全文搜索（已展开时只把焦点给输入框）
+  if (ctrlOrMeta && lowerKey === 'f') {
+    handled()
+    if (searchOpen.value) searchInputRef.value?.focus?.()
+    else toggleSearch()
+    return
+  }
+  // Ctrl/Cmd +/-：缩放（与工具栏按钮同一档位，滚轮缩放之外的键盘入口）
+  if (ctrlOrMeta && (lowerKey === '=' || lowerKey === '+')) {
+    handled()
+    zoomBy(1.1)
+    return
+  }
+  if (ctrlOrMeta && lowerKey === '-') {
+    handled()
+    zoomBy(0.9)
+    return
+  }
+  // 侧栏 / 面板：Ctrl+B 目录；Ctrl+Shift+B 书签；Ctrl+Shift+N 笔记；Ctrl+Shift+D 显示设置
+  if (ctrlOrMeta && !event.shiftKey && lowerKey === 'b') {
+    handled()
+    toggleToc()
+    return
+  }
+  if (ctrlOrMeta && event.shiftKey && lowerKey === 'b') {
+    handled()
+    togglePanel('bookmarks')
+    return
+  }
+  if (ctrlOrMeta && event.shiftKey && lowerKey === 'n') {
+    handled()
+    togglePanel('notes')
+    return
+  }
+  if (ctrlOrMeta && event.shiftKey && lowerKey === 'd') {
+    handled()
+    togglePanel('display')
+    return
+  }
+  // Ctrl/Cmd+Shift+A：智能助手
+  if (ctrlOrMeta && event.shiftKey && lowerKey === 'a') {
+    handled()
+    emit('toggle-assistant')
     return
   }
   // Ctrl/Cmd+D：加书签
-  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'd') {
-    event.preventDefault()
+  if (ctrlOrMeta && lowerKey === 'd') {
+    handled()
     void addBookmarkAtCurrent()
     return
   }
-  if (event.key === 'Escape') {
+  if (ctrlOrMeta || event.altKey) return
+
+  if (key === 'Escape') {
     // 操作条开着时，Esc 只负责收起它，不顺手关掉搜索/笔记面板。
     if (selectionVisible.value) {
       hideSelectionBar()
       return
     }
-    if (searchOpen.value) toggleSearch()
-    else if (panelMode.value) panelMode.value = ''
+    if (searchOpen.value) {
+      handled()
+      toggleSearch()
+    } else if (panelMode.value) {
+      handled()
+      panelMode.value = ''
+    }
     return
   }
+  // PageUp/PageDown：上一节 / 下一节（电子书里「页」就是节）
+  if (key === 'PageUp') {
+    handled()
+    goSection(activeIndex.value - 1)
+    return
+  }
+  if (key === 'PageDown') {
+    handled()
+    goSection(activeIndex.value + 1)
+    return
+  }
+  // 正文里的方向键与空格留给滚动、选字，不在这里抢。
+  if (inFrame) return
   // 空格：朗读开关。放在翻节之前 —— 阅读时按空格「开始读」比「翻到下一节」更常用。
-  if (event.key === ' ') {
-    event.preventDefault()
+  if (key === ' ') {
+    if (isButtonTarget(event.target)) return
+    handled()
     toggleReadAloud()
     return
   }
-  if (event.key === 'ArrowLeft') {
+  if (key === 'ArrowLeft') {
     // Alt+← / Alt+→ 是「上一/下一阅读位置」，由 useReadingHistory 在 window 捕获阶段处理；
-    // 这里不能再把它当成翻节，否则一次按键会做两件事。
-    if (event.altKey) return
-    event.preventDefault()
+    // 上面已经放行带 Alt 的组合，这里只处理纯方向键。
+    handled()
     goSection(activeIndex.value - 1)
-  } else if (event.key === 'ArrowRight') {
-    if (event.altKey) return
-    event.preventDefault()
+  } else if (key === 'ArrowRight') {
+    handled()
     goSection(activeIndex.value + 1)
   }
 }
+
+/** 正文 iframe 里的按键：不冒泡到宿主，转发进同一个处理函数。 */
+const onFrameKeydown = (event) => onKeydown(event, { inFrame: true })
 
 let tocResize = null
 
@@ -2005,8 +2147,14 @@ const loadBook = async () => {
 }
 
 onMounted(() => {
-  window.addEventListener('keydown', onKeydown)
   window.addEventListener('mousedown', onHostMouseDown)
+  // 键盘同时挂在根节点和 window 上：
+  // - 根节点：宿主 ReaderPane 的根带 @keydown.stop，挂在 window 上收不到组件内的按键；
+  // - window：刚打开窗口时焦点还在 body 上，任何组件根节点都不是事件目标。
+  // 组件内被处理的键会 stopPropagation，window 那份不会重复执行。
+  window.addEventListener('keydown', onKeydown)
+  // Ctrl+滚轮要吃掉浏览器默认缩放，所以显式 { passive: false }。
+  ebookRoot.value?.addEventListener('wheel', onWheelZoom, { passive: false })
   void loadBook()
 })
 
@@ -2083,6 +2231,7 @@ onBeforeUnmount(() => {
   loadToken += 1
   window.removeEventListener('keydown', onKeydown)
   window.removeEventListener('mousedown', onHostMouseDown)
+  ebookRoot.value?.removeEventListener('wheel', onWheelZoom, { passive: false })
   if (selectionSyncTimer) {
     clearTimeout(selectionSyncTimer)
     selectionSyncTimer = null
@@ -2112,6 +2261,10 @@ watch(activeIndex, () => {
 })
 
 watch(zoom, () => {
+  // 缩放等于改字号，会重建 iframe。把当前读到的位置带过去 ——
+  // 否则每滚一格都跳回章首，Ctrl+滚轮完全没法用。
+  const ratio = currentScrollRatio()
+  if (ratio > 0) pendingRestoreRatio = ratio
   buildFrameDoc()
 })
 

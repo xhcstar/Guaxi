@@ -2251,6 +2251,8 @@ defineExpose({
   findHighlightRaw,
   search: runSearch,
   runSearch,
+  // 宿主转发 Ctrl+F 用：焦点不在正文上（例如停在大纲列表）时，viewer 自己的键盘处理收不到。
+  focusSearch: () => focusSearchInput('host-shortcut'),
   setSearchQuery: (q) => { searchQuery.value = q },
   nextHit,
   prevHit,

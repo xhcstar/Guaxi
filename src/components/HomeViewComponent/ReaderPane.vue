@@ -9,7 +9,7 @@
     2. 只处理「由 openTargetKind 判定为非文本」的标签；文本标签根本不会挂载本组件。
     3. 所有后端调用都是新增命令；PDF 复用 pdfium 会话与虚拟滚动，不另起一套渲染。
   -->
-  <div v-if="target" ref="pdfRootEl" class="guaxi-doc-reader" :data-reader="target.reader" @keydown.stop>
+  <div v-if="target" ref="pdfRootEl" class="guaxi-doc-reader" :data-reader="target.reader" @keydown.stop="onRootKeydown">
     <template v-if="target.reader === 'pdf'">
       <!--
         PDF 的辅助侧栏：大纲 / 批注 二选一。
@@ -25,7 +25,7 @@
               :class="{ 'is-on': pdfAside === 'outline' }"
               role="tab"
               :aria-selected="pdfAside === 'outline'"
-              title="文档大纲"
+              title="文档大纲（Ctrl+B）"
               @click="pdfAside = 'outline'"
             >
               大纲
@@ -35,7 +35,7 @@
               :class="{ 'is-on': pdfAside === 'notes' }"
               role="tab"
               :aria-selected="pdfAside === 'notes'"
-              :title="`批注${pdfHighlights.length ? `（${pdfHighlights.length} 条）` : ''}`"
+              :title="`批注（Ctrl+Shift+B）${pdfHighlights.length ? `（${pdfHighlights.length} 条）` : ''}`"
               @click="pdfAside = 'notes'"
             >
               批注
@@ -45,7 +45,7 @@
               :class="{ 'is-on': pdfAside === 'translate' }"
               role="tab"
               :aria-selected="pdfAside === 'translate'"
-              title="本页译文"
+              title="本页译文（Ctrl+Shift+T）"
               @click="pdfAside = 'translate'"
             >
               译文
@@ -61,7 +61,14 @@
           </button>
         </div>
 
-        <div v-if="pdfAside === 'outline'" class="gdr-pdf-aside__body guaxi-reader-scrollbar">
+        <div
+          v-if="pdfAside === 'outline'"
+          ref="pdfOutlineBodyRef"
+          class="gdr-pdf-aside__body guaxi-reader-scrollbar"
+          tabindex="0"
+          aria-label="文档大纲，方向键切换条目"
+          @keydown="onPdfOutlineKeydown"
+        >
           <div v-if="!outlineItems.length" class="gdr-pdf-aside__empty">
             这份 PDF 没有内嵌目录。
           </div>
@@ -184,25 +191,25 @@
             <button
               class="guaxi-doc-reader__icon-btn"
               :disabled="!outlineItems.length"
-              :title="outlineItems.length ? '显示文档大纲' : '这份 PDF 没有内嵌目录'"
+              :title="outlineItems.length ? '显示文档大纲（Ctrl+B）' : '这份 PDF 没有内嵌目录'"
               aria-label="显示文档大纲"
-              @click="pdfAside = 'outline'"
+              @click="togglePdfAside('outline')"
             >
               <Icon :icon="outlineIcon" width="15" height="15" />
             </button>
             <button
               class="guaxi-doc-reader__icon-btn"
-              title="本页译文"
+              title="本页译文（Ctrl+Shift+T）"
               aria-label="本页译文"
-              @click="pdfAside = 'translate'"
+              @click="togglePdfAside('translate')"
             >
               <Icon :icon="translateIcon" width="15" height="15" />
             </button>
             <button
               class="guaxi-doc-reader__icon-btn"
-              title="显示批注列表"
+              title="显示批注列表（Ctrl+Shift+B）"
               aria-label="显示批注列表"
-              @click="pdfAside = 'notes'"
+              @click="togglePdfAside('notes')"
             >
               <Icon :icon="noteIcon" width="15" height="15" />
               <span v-if="pdfHighlights.length" class="gdr-pdf-switch__badge">{{ pdfHighlights.length }}</span>
@@ -218,7 +225,7 @@
           <button
             class="guaxi-doc-reader__icon-btn"
             :class="{ 'is-on': readerAssistantActive }"
-            :title="readerAssistantActive ? '隐藏智能助手' : '显示智能助手'"
+            :title="readerAssistantActive ? '隐藏智能助手（Ctrl+Shift+A）' : '显示智能助手（Ctrl+Shift+A）'"
             aria-label="智能助手"
             :aria-pressed="readerAssistantActive"
             @click="toggleReaderAssistant"
@@ -717,6 +724,16 @@ const asideWidth = ref(260)
 const outlineItems = ref([])
 const outlineActiveIdx = ref(-1)
 const pdfHighlights = ref([])
+/** 大纲列表容器：快捷键打开侧栏后把焦点交给它，方向键可立刻使用。 */
+const pdfOutlineBodyRef = ref(null)
+
+/** 侧栏开关（按钮与快捷键共用）：再按一次收起；打开大纲时顺带聚焦列表。 */
+const togglePdfAside = (mode) => {
+  pdfAside.value = pdfAside.value === mode ? '' : mode
+  if (pdfAside.value === 'outline') {
+    nextTick(() => pdfOutlineBodyRef.value?.focus?.({ preventScroll: true }))
+  }
+}
 
 /**
  * 接收 PDF 阅读器解析出的大纲。
@@ -773,6 +790,35 @@ const jumpToOutline = (item, idx) => {
       error: String(error?.message || error),
     })
   }
+}
+
+/**
+ * 大纲里的方向键：↑/↓ 换条目、Home/End 跳首尾，移动即切换（等同点击）。
+ *
+ * 只挂在列表容器上：正文里的方向键仍归 PDF 自己的滚动，快捷键不与阅读手势抢键。
+ */
+const onPdfOutlineKeydown = (event) => {
+  if (event.altKey || event.ctrlKey || event.metaKey) return
+  const key = event.key
+  if (key !== 'ArrowDown' && key !== 'ArrowUp' && key !== 'Home' && key !== 'End') return
+  const container = event.currentTarget
+  const nodes = Array.from(container?.querySelectorAll?.('.gdr-pdf-aside__item') || [])
+  if (!nodes.length) return
+  event.preventDefault()
+  event.stopPropagation()
+  const current = nodes.indexOf(document.activeElement)
+  let next
+  if (current < 0) next = Math.max(0, outlineActiveIdx.value)
+  else if (key === 'ArrowDown') next = Math.min(nodes.length - 1, current + 1)
+  else if (key === 'ArrowUp') next = Math.max(0, current - 1)
+  else if (key === 'Home') next = 0
+  else next = nodes.length - 1
+  const node = nodes[next]
+  if (!node) return
+  node.focus?.({ preventScroll: true })
+  node.scrollIntoView?.({ block: 'nearest' })
+  const item = outlineItems.value[next]
+  if (item) jumpToOutline(item, next)
 }
 
 /** [r,g,b,a] → css rgba。a 是 0..255。 */
@@ -1074,6 +1120,64 @@ const toggleReaderAssistant = () => {
   siderStore.setRightSiderCollapsed('home', false)
 }
 
+const isTypingTarget = (target) => {
+  const el = target instanceof HTMLElement ? target : null
+  if (!el) return false
+  const tag = String(el.tagName || '').toUpperCase()
+  return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el.isContentEditable
+}
+
+/**
+ * 阅读器根节点上的快捷键（PDF 与电子书共用这里的外壳）。
+ *
+ * 电子书自己会处理面板与搜索快捷键（处理完就 stopPropagation，到不了这里）；
+ * 这里补 PDF 侧栏与助手，以及「焦点不在正文上时」的翻页与搜索降级 ——
+ * GuaxiPdfViewer 自己的键盘处理只在它拿到焦点时生效，焦点落在大纲列表里就收不到。
+ *
+ * 助手快捷键只在这里处理 PDF：电子书窗口里焦点在 body 上时事件到不了它的根节点，
+ * 但它的 window 监听会处理并 emit，宿主再补一刀就会「开一次又关一次」。
+ */
+const onRootKeydown = (event) => {
+  if (event.defaultPrevented || event.isComposing) return
+  // 阅读器被隐藏（别的标签在前台）时不要再抢全局快捷键。
+  if ((pdfRootEl.value?.clientHeight || 0) <= 0) return
+  if (isTypingTarget(event.target)) return
+  if (props.target?.reader !== 'pdf') return
+  const ctrl = event.ctrlKey || event.metaKey
+  const lower = String(event.key || '').toLowerCase()
+
+  if (ctrl && event.shiftKey && lower === 'a') {
+    event.preventDefault()
+    toggleReaderAssistant()
+    return
+  }
+  if (ctrl && event.shiftKey && lower === 'b') {
+    event.preventDefault()
+    togglePdfAside('notes')
+    return
+  }
+  if (ctrl && event.shiftKey && lower === 't') {
+    event.preventDefault()
+    togglePdfAside('translate')
+    return
+  }
+  if (ctrl && !event.shiftKey && lower === 'b') {
+    event.preventDefault()
+    togglePdfAside('outline')
+    return
+  }
+  if (ctrl && lower === 'f') {
+    event.preventDefault()
+    pdfViewerRef.value?.focusSearch?.()
+    return
+  }
+  if (!event.altKey && (event.key === 'PageUp' || event.key === 'PageDown')) {
+    event.preventDefault()
+    if (event.key === 'PageUp') pdfViewerRef.value?.goPreviousPage?.()
+    else pdfViewerRef.value?.goNextPage?.()
+  }
+}
+
 const askPdfSelectionWithAssistant = () => {
   const text = String(pdfSelectionText.value || '').trim()
   if (!text) return
@@ -1243,6 +1347,9 @@ onMounted(() => {
   window.addEventListener('keyup', schedulePdfSelectionSync)
   document.addEventListener('selectionchange', schedulePdfSelectionSync)
   window.addEventListener('keydown', onPdfSelectionEscape, true)
+  // 根节点上的 @keydown 收不到「焦点还在 body 上」的按键（刚打开窗口时就是这种状态）；
+  // 组件内被根处理的键已经 stopPropagation，这份不会重复执行。
+  window.addEventListener('keydown', onRootKeydown)
   // 捕获阶段：赶在阅读器自己的 mousedown（平移/选词）之前收起，避免同一帧里又被重新浮出。
   window.addEventListener('mousedown', onPdfGlobalMouseDown, true)
 })
@@ -1258,6 +1365,7 @@ onBeforeUnmount(() => {
   window.removeEventListener('keyup', schedulePdfSelectionSync)
   document.removeEventListener('selectionchange', schedulePdfSelectionSync)
   window.removeEventListener('keydown', onPdfSelectionEscape, true)
+  window.removeEventListener('keydown', onRootKeydown)
   window.removeEventListener('mousedown', onPdfGlobalMouseDown, true)
   if (pdfSelectionSyncTimer) clearTimeout(pdfSelectionSyncTimer)
 })
