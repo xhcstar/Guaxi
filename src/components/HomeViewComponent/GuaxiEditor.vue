@@ -24117,6 +24117,9 @@ const buildExportChartScript = async (bodyHtml) => {
     var option;
     try { option = JSON.parse(raw); } catch (e) { return; }
     el.innerHTML = '';
+    // 容器没有高度时 echarts.init 会拿到 0x0，画不出东西（仪表盘/漏斗还会直接抛错）。
+    // 这里兜一层：CSS 没生效、或被别的规则覆盖时也能画出图。
+    if (!el.style.height && el.clientHeight < 120) el.style.height = '360px';
     var chart = window.echarts.init(el, null, { renderer: 'canvas' });
     chart.setOption(option, true);
     window.addEventListener('resize', function () { chart.resize(); });
@@ -24166,7 +24169,15 @@ const renderMarkdownForExportHtml = async (context, options = {}) => {
       stripInteractiveExportArtifacts(
         // HTML 导出把图表做成「动态」的：占位块里带 option JSON，导出页用内嵌
         // ECharts 现场绘制。PDF 仍用静态 SVG —— 打印时不需要也不会执行脚本。
-        await materializeChartEmbedsInHtml(rawBodyHtml, context, { live: !!options?.liveCharts }),
+        await materializeChartEmbedsInHtml(
+          // 关联文档卡片：预览里由实时渲染链把「独占一段的链接」提升成卡片，
+          // 导出走的是另一条渲染路径，此前漏了这一步，成品里只剩裸链接文字。
+          await enhancePreviewHtmlWithFileCards(rawBodyHtml, {
+            baseDocPath: context?.inputPath,
+          }),
+          context,
+          { live: !!options?.liveCharts },
+        ),
       ),
     ),
   )
@@ -24485,13 +24496,20 @@ const exportMarkdownRenderedPdf = async (context, outputPath) => {
     htmlLength: html.length,
   })
 
+  // 关联文档：PDF 也把被链接的文档带到导出文件旁，并把卡片/链接指向副本，
+  // 这样换台机器打开时卡片仍然点得开（PDF 内部的链接是 file: 相对地址）。
+  const linkedAssets = await collectExportLinkedDocuments(context, outputPath)
+  const pdfHtml = linkedAssets.size
+    ? rewriteExportDocumentLinks(html, linkedAssets)
+    : html
+
   // 设计说明：
   // 1. PDF 的目标是“预览同源高保真导出”，因此只走浏览器 HTML -> PDF 链路。
   // 2. 之前浏览器失败后自动回退 Pandoc，会把问题转移到 LaTeX 字体/公式解析上，
   //    例如数学字符 𝜃 会触发 Missing character / Missing $ inserted，反而让用户看到错误引擎的报错。
   // 3. 这里保留清晰日志，不再隐式兜底；如果浏览器导出失败，就直接暴露真实的静默浏览器导出错误。
   await invoke('export_rendered_html_pdf', {
-    html,
+    html: pdfHtml,
     inputPath: context.inputPath,
     outputPath,
   })
@@ -25102,23 +25120,25 @@ const rewriteExportLinkedMarkdown = (markdown, assets) => {
   if (!assets || !assets.size) return source
 
   let rewritten = 0
-  const text = source.replace(
-    /\[\[([^\]]+)\]\]|\[([^\]]*)\]\(([^)\s]+)(\s+"[^"]*")?\)/g,
-    (whole, wikilink, label, href, title = '') => {
-      // `[[路径|别名]]` / `[[路径]]`
-      if (wikilink) {
-        const [rawTarget, rawAlias] = String(wikilink).split('|')
-        const rel = assets.get(String(rawTarget || '').trim())
-        if (!rel) return whole
-        rewritten += 1
-        const text = String(rawAlias || rawTarget || '').trim()
-        return `[${text}](${rel})`
-      }
+  // 双链 `[[目标|别名]]` 先单独处理：pandoc 不认识这种语法，会原样当普通文本，
+  // 成品里就只剩「./x.md」几个字、既不可点也不像卡片。
+  const withWikilinks = source.replace(/\[\[([^\]]+)\]\]/g, (whole, inner) => {
+    const [rawTarget, rawAlias] = String(inner).split('|')
+    const target = String(rawTarget || '').trim()
+    const rel = assets.get(target)
+    if (!rel) return whole
+    rewritten += 1
+    const text = String(rawAlias || target || '').trim()
+    return `[${text}](${encodeURI(rel)})`
+  })
 
+  const text = withWikilinks.replace(
+    /\[([^\]]*)\]\(([^)\s]+)(\s+"[^"]*")?\)/g,
+    (whole, label, href, title = '') => {
       const rel = assets.get(String(href || '').trim())
       if (!rel) return whole
       rewritten += 1
-      return `[${label || rel}](${rel}${title})`
+      return `[${label || rel}](${encodeURI(rel)}${title})`
     },
   )
 

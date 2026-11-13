@@ -69,10 +69,15 @@ export const EXPORT_SHELL_CSS = `
     page-break-inside: avoid;
   }
 
+  /* 图表容器。
+   * 打印/静态 SVG 时代这里写的是 min-height: 0 —— SVG 自带宽高，不需要容器撑开。
+   * 但 HTML 导出现在走动态 ECharts：初始化时会读容器当前尺寸，
+   * 高度为 0 的容器画不出任何东西（仪表盘/漏斗这类还会直接抛错，
+   * 表现就是「一部分图表正常、另一部分仍是占位」）。这里给回一个真实高度。 */
   .export-content .guaxi-chart-block__canvas,
   .export-content .guaxi-excalidraw-embed__stage {
     width: 100%;
-    min-height: 0;
+    min-height: 360px;
   }
 
   .export-content .guaxi-chart-block svg,

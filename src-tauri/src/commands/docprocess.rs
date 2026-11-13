@@ -3143,6 +3143,103 @@ code, pre, kbd, samp {{ font-family: {code}; }}\n",
     Ok(())
 }
 
+/// 把被旧版格式化器折成两行的表格行重新拼回一行。
+///
+/// 旧版格式化器会按 `max_line_width` 折行，对表格的处理是直接按字符数截断：
+///
+/// ```text
+/// | 趋势 | `line` | 折线。`smooth` 平滑、`step` 阶梯、`areaStyle` |
+/// 面积填充 |
+/// ```
+///
+/// 第二行没有前导 `|`，Markdown 解析器会把它当成表格之后的普通段落，于是成品里
+/// 「一半是表格、一半是原始 Markdown 文本」（用户报告的截断现象）。
+///
+/// 判据只有一个：**上一行没闭合最后一格**（不以 `|` 结尾），而本行自带那个闭合的
+/// `|`。这正是折行留下的形态，不会误伤 `| 背景条 |  |  |` 这类原本完整的行。
+/// 代码围栏内一律不处理。
+fn repair_wrapped_table_rows(markdown: &str) -> String {
+    let lines: Vec<&str> = markdown.split('\n').collect();
+    let mut out: Vec<String> = Vec::with_capacity(lines.len());
+    let mut in_fence = false;
+    let mut fence_marker = String::new();
+    let mut repaired = 0usize;
+
+    for raw in lines {
+        let trimmed = raw.trim_start();
+
+        // 代码围栏整段原样保留。
+        if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
+            let ch = trimmed.chars().next().unwrap_or('`');
+            let len = trimmed.chars().take_while(|c| *c == ch).count();
+            let marker: String = std::iter::repeat(ch).take(len).collect();
+            if in_fence {
+                if trimmed.starts_with(marker.as_str()) {
+                    in_fence = false;
+                    fence_marker.clear();
+                }
+            } else {
+                in_fence = true;
+                fence_marker = marker;
+            }
+            out.push(raw.to_string());
+            continue;
+        }
+        if in_fence {
+            out.push(raw.to_string());
+            continue;
+        }
+
+        let is_table_row = trimmed.starts_with('|');
+        let is_blank = trimmed.is_empty();
+        let starts_new_block = is_blank
+            || trimmed.starts_with('#')
+            || trimmed.starts_with('>')
+            || trimmed.starts_with("- ")
+            || trimmed.starts_with("* ")
+            || trimmed.starts_with("+ ")
+            || trimmed.starts_with("<!--")
+            || trimmed.chars().next().map_or(false, |c| c.is_ascii_digit())
+                && (trimmed.contains(". ") || trimmed.contains(") "));
+
+        if is_table_row || is_blank || starts_new_block {
+            out.push(raw.to_string());
+            continue;
+        }
+
+        // 上一行是表格行、本行不是表格行也不是新块 → 检查是不是被折断的续行。
+        let prev_is_table_row = out
+            .last()
+            .map(|l| l.trim_start().starts_with('|'))
+            .unwrap_or(false);
+
+        if prev_is_table_row {
+            if let Some(prev) = out.last() {
+                let prev_open = !prev.trim_end().ends_with('|');
+                let tail_closes = trimmed.trim_end().ends_with('|');
+                if prev_open && tail_closes {
+                    let needs_space = !prev.ends_with(' ') && !trimmed.starts_with(' ');
+                    if let Some(prev_mut) = out.last_mut() {
+                        if needs_space {
+                            prev_mut.push(' ');
+                        }
+                        prev_mut.push_str(trimmed.trim_end());
+                        repaired += 1;
+                        continue;
+                    }
+                }
+            }
+        }
+
+        out.push(raw.to_string());
+    }
+
+    if repaired > 0 {
+        info!(repaired, "[DocExport] repaired wrapped table rows");
+    }
+    out.join("\n")
+}
+
 fn clamp_static_toc_for_pdf(markdown: &str, max_indent_levels: usize) -> (String, bool) {
     // 设计说明：
     // 1. `preprocess_markdown_for_static_render()` 会把 `[toc]` 展开成按标题层级缩进的 Markdown 列表。
@@ -3236,6 +3333,10 @@ async fn preprocess_markdown(
             .map_err(|e| format!("读取 Markdown 失败: {}", e))?,
     };
     let static_content = preprocess_markdown_for_static_render(&content);
+    // 旧版格式化器曾按行宽把表格行折成两行，折出来的「续行」没有前导 `|`，
+    // pandoc 会把它当成表格后面的普通段落 —— 成品里就是「表格只渲染一半、
+    // 另一半变成原始 Markdown 文本」。这里把这类续行并回上一行再交给 pandoc。
+    let static_content = repair_wrapped_table_rows(&static_content);
     let (static_content, toc_clamped) = clamp_static_toc_for_pdf(&static_content, 3);
     info!(
         input_path = input_path,

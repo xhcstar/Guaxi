@@ -269,7 +269,8 @@ const installTocSupport = (md) => {
       let html = '<nav class="md-toc" data-md-toc="1"><ul class="md-toc-list">'
       for (const heading of headings) {
         const lvl = Math.max(1, (heading.level - minLevel) + 1)
-        html += `<li class="md-toc-item md-toc-level-${lvl}"><a class="md-toc-link" href="#${encodeURIComponent(String(heading.id))}"${heading.startLine ? ` data-md-start-line="${heading.startLine}"` : ''}>${md.utils.escapeHtml(String(heading.text))}</a></li>`
+        // 与 GuaxiMarker 一致：id 是原始 Unicode，href 不能再百分号编码，否则找不到锚点。
+        html += `<li class="md-toc-item md-toc-level-${lvl}"><a class="md-toc-link" href="#${md.utils.escapeHtml(String(heading.id))}"${heading.startLine ? ` data-md-start-line="${heading.startLine}"` : ''}>${md.utils.escapeHtml(String(heading.text))}</a></li>`
       }
       html += '</ul></nav>'
       return html

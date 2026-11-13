@@ -2715,7 +2715,10 @@ export const renderMarkdown = async (content, options) => {
 
           for (const h of headings) {
             const lvl = Math.max(1, (h.level - minLevel) + 1);
-            html += `<li class="md-toc-item md-toc-level-${lvl}"><a class="md-toc-link" href="#${encodeURIComponent(String(h.id))}"${h.startLine ? ` data-md-start-line="${h.startLine}"` : ""}>${md.utils.escapeHtml(String(h.text))}</a></li>`;
+            // id 本身是原始 Unicode（`<h2 id="一级标题">`），这里不能再做百分号编码：
+            // 浏览器按片段标识符匹配时不做解码，`#%E4%B8%80...` 找不到 `一级标题`，
+            // 目录点击就毫无反应。只转义 HTML 特殊字符，保证属性合法即可。
+            html += `<li class="md-toc-item md-toc-level-${lvl}"><a class="md-toc-link" href="#${md.utils.escapeHtml(String(h.id))}"${h.startLine ? ` data-md-start-line="${h.startLine}"` : ""}>${md.utils.escapeHtml(String(h.text))}</a></li>`;
           }
 
           html += "</ul></nav>";
