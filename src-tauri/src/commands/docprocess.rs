@@ -2467,15 +2467,31 @@ pub async fn export_markdown_pandoc(
         // 也变成阅读器不一定支持的 MathML）。
 
         let epub_css_path = tmp_dir.join("guaxi-epub.css");
-        // 关键：pandoc 的 `--css` 是**替换**默认样式表，不是追加。只写这几条折行规则，
-        // 书本默认的表格/正文/标题排版就全没了 —— EPUB 里表格会退化成「每列一个字的竖条」，
-        // 单元格文字互相叠在一起（实测 MuPDF/SumatraPDF 打开整块表格糊成一片）。
+        // 关键（一）：pandoc 的 `--css` 是**替换**默认样式表，不是追加。只写自定义规则，
+        // 书本默认的表格/正文/标题排版就全没了 —— EPUB 里表格会退化成一堆竖排的碎字。
         // 所以先把默认样式表原样取回来，再把自定义规则接在它后面。
+        //
+        // 关键（二）：默认样式表里有一条 `table { display: block; overflow-x: auto; }`，
+        // 本意是让超宽表格在屏幕上横向滚动。但 `display:block` 的表格依赖浏览器把单元格
+        // 重新「匿名为表格盒」这一实现细节，SumatraPDF（MuPDF 1.24）等严格按规范的阅读器
+        // 不认：它们会把每个单元格当成普通块元素，于是表头竖向堆成一条、内容散落在表格下方
+        // （用户报告「阅读器没问题、SumatraPDF 全乱」正是这个差异）。
+        // 这里覆盖回 `display: table`，让所有阅读器都按标准表格布局渲染。
         let default_css = read_pandoc_default_epub_css(&pandoc_path);
         let epub_css = format!(
             "{}\n{}",
             default_css.unwrap_or_default(),
-            "pre, pre code, code { white-space: pre-wrap; word-wrap: break-word; overflow-wrap: break-word; word-break: break-word; } pre { padding: 0.6em 0.8em; } img { max-width: 100%; height: auto; }"
+            concat!(
+                "pre, pre code, code { white-space: pre-wrap; word-wrap: break-word; ",
+                "overflow-wrap: break-word; word-break: break-word; }\n",
+                "pre { padding: 0.6em 0.8em; }\n",
+                "img { max-width: 100%; height: auto; }\n",
+                // 表格：只把 display 退回标准表格布局（见上面「关键（二）」）。
+                // 其余（列宽、边框、间距）全部沿用 pandoc 默认值 —— 实测任何 width /
+                // table-layout 覆盖都会让 MuPDF 把列宽压窄、单元格文字提前折行，
+                // 而只覆盖 display 时列宽又回到按内容自然分配，是所有阅读器下最稳的一档。
+                "table { display: table; }\n"
+            )
         );
         match std::fs::write(&epub_css_path, epub_css) {
             Ok(_) => {

@@ -919,6 +919,13 @@ import {
   addMediaViewerButtons,
   bindBrokenImagePlaceholders,
 } from '../GuaxiMarkdownRender/GuaxiMarker'
+// ```chart / ```excalidraw 围栏只产出占位 div，真正绘制在 DOM 挂载后由这里接管。
+// 探索者模式用的就是这个 Notebook 视图，漏掉这一步图表会永远停在「正在渲染图表…」。
+import {
+  renderChartEmbeds,
+  disposeChartInstances,
+  bindExcalidrawOpenButtons,
+} from '../GuaxiMarkdownRender/guaxiChartEmbeds'
 import {
   createPythonCellId,
   createPythonSessionId,
@@ -9289,11 +9296,41 @@ const injectNotebookContentButtons = (reason = 'unknown') => {
   })
 }
 
+/**
+ * 接管 Notebook 里 ```chart / ```excalidraw 围栏的绘制。
+ *
+ * 渲染器只输出占位 div（「正在渲染图表…」），真正画图必须由宿主在 DOM 挂载后调用
+ * renderChartEmbeds —— 主编辑器的预览区是这么做的，Notebook 这条链路此前漏了，
+ * 于是探索者模式（它用的就是 Notebook 视图）里每个图表都停在占位文字上。
+ *
+ * 幂等：renderChartEmbeds 内部按 pending 标记与 processed 集合跳过已画好的块，
+ * 可以安全地在每次渲染后重复调用。
+ */
+const renderNotebookChartEmbeds = (reason = 'unknown') => {
+  const root = notebookRootRef.value
+  if (!(root instanceof HTMLElement)) return
+  try {
+    renderChartEmbeds(root)
+    bindExcalidrawOpenButtons(root, {
+      onOpen: (ref) => {
+        message.info(`已切换到白板；场景文件：${ref || '未指定'}`)
+        try { window.location.hash = '/excalidraw' } catch { /* 忽略 */ }
+      },
+    })
+  } catch (error) {
+    logger.warn('[Notebook] chart embeds render failed', {
+      reason,
+      error: String(error?.message || error),
+    })
+  }
+}
+
 watch(
   [renderedMarkdownHtmlMap, renderedOutputMarkdownHtmlMap],
   () => {
     nextTick(() => {
       injectNotebookContentButtons('rendered-html-watch')
+      renderNotebookChartEmbeds('rendered-html-watch')
       if (notebookSearchVisible.value && String(notebookSearchKeyword.value || '').trim()) {
         applyNotebookSearchDomHighlights('rendered-html-watch')
       }
@@ -9358,6 +9395,11 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   clearNotebookTopToolbarHideTimer()
+  // 图表实例绑在 DOM 上：组件销毁前统一 dispose，否则 ECharts 实例与它的
+  // ResizeObserver 会一直挂在已脱离文档的容器上。
+  if (notebookRootRef.value instanceof HTMLElement) {
+    disposeChartInstances(notebookRootRef.value)
+  }
   window.removeEventListener('guaxi:python-codegen-setting-changed', handleCodegenSettingChanged)
   // 落地防抖中的 cell 内容编辑，避免关闭/切换时丢失最后一段输入
   if (pendingCellContentEdits.size) {
