@@ -446,6 +446,141 @@ fn flatten_nav(points: &[ebook_rs::NavPoint], depth: usize, out: &mut Vec<EbookT
     }
 }
 
+/// ebook-rs 为「空 navLabel」写的占位词。
+///
+/// pandoc 生成的封面/书名页在 NCX 里就是空 `<navLabel>`，库会统一填 "Untitled"；
+/// 直接展示就是目录第一条永远是一个看不懂的 "Untitled"。
+fn is_placeholder_toc_label(label: &str) -> bool {
+    matches!(
+        label.to_ascii_lowercase().as_str(),
+        "untitled" | "untitled chapter" | "untitled container" | "no title"
+    )
+}
+
+/// 归一化书内链接：去掉 `#fragment`/查询串，解开 `..` 与 `./`。
+fn normalize_ebook_href(raw: &str) -> String {
+    let base = raw.split(['#', '?']).next().unwrap_or("").replace('\\', "/");
+    let mut parts: Vec<&str> = Vec::new();
+    for seg in base.split('/') {
+        match seg {
+            "" | "." => {}
+            ".." => {
+                parts.pop();
+            }
+            s => parts.push(s),
+        }
+    }
+    parts.join("/")
+}
+
+/// 按目录项链接找到目标章节。匹配从严到松：整串 → 互相结尾 → 只比文件名，
+/// 与前端 `resolveSectionIndex` 的三层规则一致（同一份书，两端不能各认一套路径）。
+fn find_section_by_href<'a>(href: &str, sections: &'a [EbookSection]) -> Option<&'a EbookSection> {
+    let target = normalize_ebook_href(href);
+    if target.is_empty() {
+        return None;
+    }
+    let normalized: Vec<(usize, String)> = sections
+        .iter()
+        .enumerate()
+        .map(|(i, s)| (i, normalize_ebook_href(&s.href)))
+        .collect();
+    if let Some((i, _)) = normalized.iter().find(|(_, h)| *h == target) {
+        return sections.get(*i);
+    }
+    if let Some((i, _)) = normalized.iter().find(|(_, h)| {
+        h.ends_with(&format!("/{target}")) || target.ends_with(&format!("/{h}"))
+    }) {
+        return sections.get(*i);
+    }
+    let file = target.rsplit('/').next()?;
+    normalized
+        .iter()
+        .find(|(_, h)| h.rsplit('/').next() == Some(file))
+        .and_then(|(i, _)| sections.get(*i))
+}
+
+fn truncate_chars(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
+        return text.to_string();
+    }
+    let mut out: String = text.chars().take(max).collect();
+    out.push('…');
+    out
+}
+
+/// 章节里第一个标题的文字。标签兜底优先用它：标题本来就是作者给这一节起的名字。
+fn first_heading_text(html: &str) -> Option<String> {
+    let lower = html.to_ascii_lowercase();
+    for tag in ["h1", "h2", "h3", "h4", "h5", "h6"] {
+        let open = format!("<{tag}");
+        let close = format!("</{tag}>");
+        let mut from = 0usize;
+        while let Some(rel) = lower[from..].find(&open) {
+            let start = from + rel;
+            let next_ok = match lower[start + open.len()..].chars().next() {
+                Some('>') => true,
+                Some(c) if c.is_ascii_whitespace() => true,
+                _ => false,
+            };
+            if next_ok {
+                if let Some(gt) = lower[start..].find('>') {
+                    let content_start = start + gt + 1;
+                    if let Some(end) = lower[content_start..].find(&close) {
+                        let text = decode_entities(&html_text_without_tags(
+                            &html[content_start..content_start + end],
+                        ));
+                        let cleaned = text.split_whitespace().collect::<Vec<_>>().join(" ");
+                        if !cleaned.is_empty() {
+                            return Some(truncate_chars(&cleaned, 60));
+                        }
+                    }
+                }
+            }
+            from = start + open.len();
+        }
+    }
+    None
+}
+
+/// 章节正文（`<body>` 之内）的纯文本。
+///
+/// 不能拿整段 HTML 去取文本：扉页/封面只有 `<head><title>` 里有字，正文是空的，
+/// 整段取文本会把它当成「有内容的一页」。
+fn html_body_text(html: &str) -> String {
+    let lower = html.to_ascii_lowercase();
+    let start = lower
+        .find("<body")
+        .and_then(|i| lower[i..].find('>').map(|gt| i + gt + 1));
+    let end = lower.rfind("</body>");
+    match (start, end) {
+        (Some(s), Some(e)) if e > s => html_text_without_tags(&html[s..e]),
+        _ => html_text_without_tags(html),
+    }
+}
+
+/// 占位标签的兜底文字：目标章节的首个标题 → 正文开头 → 书名页/封面。
+fn toc_label_fallback(href: &str, sections: &[EbookSection]) -> String {
+    let Some(section) = find_section_by_href(href, sections) else {
+        return "未命名章节".to_string();
+    };
+    if let Some(heading) = first_heading_text(&section.html) {
+        return heading;
+    }
+    let body = decode_entities(&html_body_text(&section.html));
+    let text = body.split_whitespace().collect::<Vec<_>>().join(" ");
+    if !text.is_empty() {
+        return truncate_chars(&text, 24);
+    }
+    // 正文为空：这就是 pandoc 的扉页（封面占位在正文里什么都没有，只有 head 里的书名）。
+    let lower = section.html.to_ascii_lowercase();
+    if lower.contains("epub:type=\"titlepage\"") || lower.contains("epub:type='titlepage'") {
+        "书名页".to_string()
+    } else {
+        "封面".to_string()
+    }
+}
+
 /// MOBI 家族（MOBI/AZW/AZW3/KFX）在 ebook-rs 内部用 OEBPS 拍平结构，图片路径需要按该布局解析。
 fn is_mobi_family(kind: &str) -> bool {
     matches!(kind, "mobi" | "azw" | "azw3" | "kfx")
@@ -1828,6 +1963,12 @@ fn read_ebook_blocking(path: &Path, kind: &str) -> Result<EbookPayload, String> 
     // 目录标题同样可能乱码（它常直接取自文件里的书名/章节名）。
     for item in toc.iter_mut() {
         item.label = repair_plain_text(&item.label);
+        // 空 navLabel 会被 ebook-rs 填成 "Untitled"（pandoc 的扉页就是这种），
+        // 按目标章节兜底成一个读得懂的名字；否则目录第一条永远是一条没有信息量的 "Untitled"。
+        let trimmed = item.label.trim();
+        if trimmed.is_empty() || is_placeholder_toc_label(trimmed) {
+            item.label = toc_label_fallback(&item.href, &sections);
+        }
     }
 
     let title = repair_plain_text(
