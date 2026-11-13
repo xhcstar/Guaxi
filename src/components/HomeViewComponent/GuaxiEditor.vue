@@ -24135,7 +24135,13 @@ const renderMarkdownForExportHtml = async (context, options = {}) => {
   // 探索者模式下数学块 / Python Cell 的真实存储是 <!--math--> / <!--py--> 哨兵块（源码或表达式），
   // 它们只是“可执行单元”的源，不应出现在导出成品里。这里复用与软件内预览同款的遮罩，
   // 把 Cell 区域整体替换成空行（保留行号），保证导出与预览同源、且不会把数学源码 / $$ 渲染进 PDF/HTML。
-  const markdown = maskMathCellBlocksForMarkdown(maskPythonCellBlocksForMarkdown(rawMarkdown))
+  // 关联文档卡片：实时预览会先把 [[双链]] 预处理成内部链接，渲染后再由
+  // enhancePreviewHtmlWithFileCards 提升成卡片；导出 HTML/PDF 走同一个渲染器，
+  // 但此前漏了这一步，[[x]] 一直以字面文本落进成品（PDF 里带方括号，HTML 里
+  // 也没有可供提升的 <a>）。这里与预览保持同源，卡片才会出现在导出稿里。
+  const markdown = preprocessObsidianWikilinks(
+    maskMathCellBlocksForMarkdown(maskPythonCellBlocksForMarkdown(rawMarkdown)),
+  )
   logger.info('[Export] render markdown to export html start', {
     inputPath: context.inputPath,
     markdownLength: markdown.length,
@@ -24321,6 +24327,23 @@ const rebaseMarkdownRelativeAssets = (text, fromDir, assetsDirAbs) => {
   )
 }
 
+const decodeBase64Utf8 = (base64) => {
+  const binary = atob(String(base64 || ''))
+  const bytes = new Uint8Array(binary.length)
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i)
+  return new TextDecoder().decode(bytes)
+}
+
+const encodeUtf8Base64 = (text) => {
+  const bytes = new TextEncoder().encode(String(text || ''))
+  let binary = ''
+  const CHUNK = 0x8000
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK))
+  }
+  return btoa(binary)
+}
+
 /**
  * 收集导出稿里「关联文档」指向的文件，并把它们复制到导出文件旁的 `_assets` 目录。
  *
@@ -24346,44 +24369,52 @@ const collectExportLinkedDocuments = async (context, outputPath) => {
   }
   if (!candidates.length) return assets
 
-  const { mkdir, copyFile, readTextFile, writeTextFile } = await import('@tauri-apps/plugin-fs')
   const outDir = getParentDirectoryPath(outputPath)
   if (!outDir) {
     logger.warn('[Export] cannot resolve export directory; skip linked document bundling')
     return assets
   }
   const assetsDirAbs = `${outDir}/_assets`
-  let assetsDir = ''
-  try {
-    assetsDir = buildRelativePathForExport(outDir, assetsDirAbs) || '_assets'
-    await mkdir(assetsDirAbs, { recursive: true })
-  } catch (error) {
-    logger.warn('[Export] prepare linked-doc assets dir failed', {
-      error: String(error?.message || error),
-    })
-    return assets
-  }
+  const assetsDir = buildRelativePathForExport(outDir, assetsDirAbs) || '_assets'
 
   let copied = 0
   for (const target of candidates) {
     try {
       const abs = await resolvePreviewCardTargetPath(target, { baseDocPath: context?.inputPath })
-      if (!abs || assets.has(abs)) continue
+      if (!abs) continue
 
       const fileName = String(abs).split(/[\\/]/).pop() || ''
       if (!fileName) continue
       const destRel = `${assetsDir.replace(/\/+$/, '')}/${fileName}`
       const destAbs = `${assetsDirAbs}/${fileName}`
-      await copyFile(abs, destAbs)
+
+      // 同一个文件可能被多种写法引用（[[./x.md]] 与 [x](x.md)、绝对路径等）：
+      // 表里同时记「绝对路径」和「原始链接文本」两种键——卡片改写按前者查，
+      // Markdown 链接改写按后者查，缺一种就会漏改写。
+      const existingRel = assets.get(abs)
+      if (existingRel) {
+        assets.set(target, existingRel)
+        continue
+      }
+
+      // 为什么走后端命令而不是 fs 插件：capabilities 里的 allow-mkdir /
+      // allow-write-file 只放行 $TEMP，而导出目录是用户刚在对话框里选的路径，
+      // 不在插件 scope 内，mkdir 直接报 "forbidden path"，整条关联文档打包链
+      // 会在这里被放弃——成品里于是既没有 _assets，也没有可点的链接。
+      // read_file_bytes_base64 / write_file_bytes_base64 是 app 自己的命令，
+      // 不受插件 scope 限制；后者还会自动创建缺失的父目录，正好替代 mkdir + copy。
+      const payload = await invoke('read_file_bytes_base64', { path: abs })
+      await invoke('write_file_bytes_base64', { path: destAbs, base64: payload })
 
       // 文档换了目录，里面的相对图片/附件路径会失效。能按文本处理的（Markdown）
       // 顺手把相对引用重算一遍；其它类型原样复制。
       if (/\.(md|markdown)$/i.test(abs)) {
         try {
-          const body = await readTextFile(destAbs)
+          const copiedPayload = await invoke('read_file_bytes_base64', { path: destAbs })
+          const body = decodeBase64Utf8(copiedPayload)
           const rebased = rebaseMarkdownRelativeAssets(body, getParentDirectoryPath(abs), assetsDirAbs)
           if (rebased !== body) {
-            await writeTextFile(destAbs, rebased)
+            await invoke('write_file_bytes_base64', { path: destAbs, base64: encodeUtf8Base64(rebased) })
           }
         } catch (error) {
           logger.debug('[Export] rebase relative assets in linked doc failed', {
@@ -24394,6 +24425,7 @@ const collectExportLinkedDocuments = async (context, outputPath) => {
       }
 
       assets.set(abs, destRel)
+      assets.set(target, destRel)
       copied += 1
     } catch (error) {
       logger.warn('[Export] copy linked document failed', {
