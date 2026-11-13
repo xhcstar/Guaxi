@@ -7,7 +7,7 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import React from 'react'
-import ReactDOM from 'react-dom'
+import { createRoot } from 'react-dom/client'
 // 使用 Excalidraw 的 dev 构建，避免其生产包内联一份 React，导致 release 版本出现双 React (#168)
 import { Excalidraw } from 'excalidraw-dev'
 import 'excalidraw-dev-css'
@@ -29,6 +29,7 @@ const excalidrawApi = ref(null)
 const renderVersion = ref(0)
 const isUnmounted = ref(false)
 const pendingApiFrame = ref(null)
+let reactRoot = null
 
 const theme = computed(() => (settingsStore.appearanceTheme === 'dark' ? 'dark' : 'light'))
 const FORCED_LANG_CODE = 'zh-CN'
@@ -305,7 +306,11 @@ function renderReactApp(initialData) {
     logger.debug('[excalidraw] initialData.appState.collaborators normalized to Map')
   }
 
-  ReactDOM.render(
+  if (!reactRoot) {
+    reactRoot = createRoot(mountEl.value)
+  }
+
+  reactRoot.render(
     React.createElement(
       'div',
       { style: { height: '100%', width: '100%' } },
@@ -318,7 +323,6 @@ function renderReactApp(initialData) {
         onChange,
       }),
     ),
-    mountEl.value,
   )
 }
 
@@ -372,8 +376,9 @@ onBeforeUnmount(() => {
       clearTimeout(autosaveTimer.value)
       autosaveTimer.value = null
     }
-    if (mountEl.value) {
-      ReactDOM.unmountComponentAtNode(mountEl.value)
+    if (reactRoot) {
+      reactRoot.unmount()
+      reactRoot = null
     }
     excalidrawApi.value = null
   } catch (e) {
