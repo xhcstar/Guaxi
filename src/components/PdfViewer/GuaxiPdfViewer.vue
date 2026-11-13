@@ -1989,7 +1989,7 @@ const flashAnchor = ({ page, rects } = {}) => {
  * 正确做法是先算出目标页的理论位置直接滚过去，滚动事件里会自动重算窗口、
  * 把目标页挂载出来 —— 两者的数据源是同一份几何，位置天然一致。
  */
-const goToPage = (n, { align = 'top' } = {}) => {
+const goToPage = (n, { align = 'top', yPt = 0 } = {}) => {
   const num = Math.min(Math.max(1, Math.round(Number(n) || 1)), totalPages.value || 1)
   const el = bodyRef.value
   if (!el) {
@@ -2009,9 +2009,12 @@ const goToPage = (n, { align = 'top' } = {}) => {
   }
 
   const offset = align === 'center' ? el.clientHeight * 0.3 : 8
-  // 首页顶边就是容器的 padding（12px），减去 offset 会得到 4px 这种「没滚到底」的值，
-  // 视觉上留一截空白。直接贴顶更符合「跳到第一页」的预期。
-  const top = num === 1 ? 0 : Math.max(0, item.top - offset)
+  // 书签目标带页内 y 时落到那一行，而不是页顶：目录项指向的常常是页面中段的小节标题，
+  // 只跳到页顶会让读者先看到上一节的内容。首页贴顶的判断只对「纯页码」跳转成立。
+  const yOffset = Math.max(0, Number(yPt) || 0) * cssScale.value
+  const top = yOffset > 0
+    ? Math.max(0, item.top + yOffset - offset)
+    : (num === 1 ? 0 : Math.max(0, item.top - offset))
 
   // 翻页 / 页码输入 / 目录跳转都从这里发出：先把离开的位置记进历史再跳。
   readingHistory.markJump()
@@ -2392,6 +2395,10 @@ onBeforeUnmount(() => {
   min-height: 0;
   background: var(--gpv-bg);
   color: var(--gpv-text);
+  /* 正文画布在任何主题下都是亮色（见下方 --gpv-canvas-area），
+     所以画布上的滚动条固定用落在亮色台面上的中性色，不跟随窗口主题翻转。 */
+  --gpv-canvas-scrollbar: rgba(15, 23, 42, 0.26);
+  --gpv-canvas-scrollbar-hover: rgba(15, 23, 42, 0.42);
 }
 .gpv:focus {
   outline: none;
@@ -2404,29 +2411,30 @@ onBeforeUnmount(() => {
  * 配色取向（对齐 PDF Expert 一类「内容优先」的阅读器）：
  * 画布不是主角，纸面才是。所以画布用**中性的暖灰**而不是蓝灰，饱和度压到最低；
  * 页面本身不加描边、不加圆角，只用两层阴影把它从画布上托起来。
- * 深色主题同理：画布比工具栏更深，纸面（PDF 本身是白底）自然成为画面里最亮的东西。
  *
- * 之前最刺眼的是 #4a4d52 / #eef0f3 这类偏冷的灰，配上每页一圈 1px 描边和 2px 圆角，
- * 看起来像「一堆堆在灰色桌面上的卡片」，而不是正在读的一份文档。
+ * 【阅读区在任何主题下都保持亮色】深色只留给工具栏与侧栏，正文区（画布与纸面）始终是
+ * 白纸 + 暖灰台面，与电子书阅读器的正文区一致。原先深色主题把画布压到 #16181a，
+ * 白纸被一圈近黑围住，两个阅读器并排看是两种观感。
  */
 .gpv.theme-dark {
   --gpv-bg: #1a1c1f;
   --gpv-text: #dfe3e8;
   --gpv-toolbar-bg: #202326;
   --gpv-border: #303438;
-  --gpv-canvas-area: #16181a;
+  /* 正文区的取值与 theme-light 相同：纸面区域不跟随暗色。 */
+  --gpv-canvas-area: #e8e7e3;
+  --gpv-canvas-text: #1f2328;
+  --gpv-canvas-sheen: radial-gradient(120% 70% at 50% 0%, rgba(255, 255, 255, 0.7), rgba(255, 255, 255, 0) 70%);
+  --gpv-paper-shadow: 0 1px 2px rgba(28, 25, 23, 0.08), 0 12px 28px -10px rgba(28, 25, 23, 0.32);
   --gpv-btn-text: #c9ced4;
   --gpv-hover-bg: rgba(255, 255, 255, 0.07);
-  --gpv-error-bg: rgba(0, 0, 0, 0.35);
-  --gpv-overlay-bg: rgba(22, 24, 26, 0.72);
-  --gpv-overlay-text: #e6e9ec;
-  --gpv-canvas-sheen: radial-gradient(120% 70% at 50% 0%, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0) 70%);
-  /* 深色画布上，纸面靠「一圈极淡的亮边 + 一片大范围黑影」离开背景，
-     不要再用 1px 的实描边（那会在白纸边缘画出一条脏线）。 */
-  --gpv-paper-shadow: 0 0 0 1px rgba(255, 255, 255, 0.05), 0 2px 6px rgba(0, 0, 0, 0.45), 0 18px 40px -12px rgba(0, 0, 0, 0.75);
-  --gpv-skeleton-bg: #23262a;
-  --gpv-skeleton-sheen: rgba(255, 255, 255, 0.05);
-  --gpv-skeleton-text: #4a4f56;
+  --gpv-error-bg: rgba(0, 0, 0, 0.04);
+  /* 构建中的遮罩盖在亮色画布上，所以底色/文字也要按亮色给，否则亮底上浮一层浅色字。 */
+  --gpv-overlay-bg: rgba(232, 231, 227, 0.78);
+  --gpv-overlay-text: #1f2328;
+  --gpv-skeleton-bg: #f2f1ed;
+  --gpv-skeleton-sheen: rgba(255, 255, 255, 0.9);
+  --gpv-skeleton-text: #b9b7b1;
   --gpv-cluster-bg: rgba(255, 255, 255, 0.05);
   --gpv-cluster-border: rgba(255, 255, 255, 0.07);
   --gpv-menu-bg: #26292d;
@@ -2438,6 +2446,7 @@ onBeforeUnmount(() => {
   --gpv-toolbar-bg: #fbfbfa;
   --gpv-border: #e2e2df;
   --gpv-canvas-area: #e8e7e3;
+  --gpv-canvas-text: #1f2328;
   --gpv-btn-text: #3b4148;
   --gpv-hover-bg: rgba(15, 23, 42, 0.06);
   --gpv-error-bg: rgba(0, 0, 0, 0.04);
@@ -2666,12 +2675,15 @@ onBeforeUnmount(() => {
 }
 
 /*
- * 滚动条：跟随明暗主题，静止时透明，悬停 / 滚动时显色。
+ * 滚动条：静止时透明，悬停 / 滚动时显色。
  *
  * 不能只依赖全局的 .guaxi-reader-scrollbar（App.vue）：独立阅读器窗口走
  * reader-main.js，不加载 App.vue 的全局样式，滚动条会退回系统默认的亮色长条，
- * 在深色主题下非常突兀。这里自带一份，颜色取 guaxiBase.css 的主题变量；
- * 同时保留标准属性与 -webkit- 伪元素，兼容新旧 WebView2 内核。
+ * 在深色主题下非常突兀。这里自带一份；同时保留标准属性与 -webkit- 伪元素，兼容新旧 WebView2 内核。
+ *
+ * 颜色不能用 --sr-scrollbar-thumb：那个变量按窗口主题翻转，而这条滚动条压在
+ * **始终是亮色**的正文画布上，深色主题下用浅色滑块等于看不见。所以单独取一组
+ * 落在亮色台面上的中性色。
  */
 .gpv__body {
   scrollbar-width: thin;
@@ -2680,7 +2692,7 @@ onBeforeUnmount(() => {
 .gpv__body:hover,
 .gpv__body:focus-within,
 .gpv__body.is-reader-scrolling {
-  scrollbar-color: var(--sr-scrollbar-thumb, rgba(0, 0, 0, 0.32)) transparent;
+  scrollbar-color: var(--gpv-canvas-scrollbar, rgba(15, 23, 42, 0.26)) transparent;
 }
 .gpv__body::-webkit-scrollbar {
   width: 8px;
@@ -2696,7 +2708,10 @@ onBeforeUnmount(() => {
 .gpv__body:hover::-webkit-scrollbar-thumb,
 .gpv__body:focus-within::-webkit-scrollbar-thumb,
 .gpv__body.is-reader-scrolling::-webkit-scrollbar-thumb {
-  background-color: var(--sr-scrollbar-thumb, rgba(0, 0, 0, 0.32));
+  background-color: var(--gpv-canvas-scrollbar, rgba(15, 23, 42, 0.26));
+}
+.gpv__body:hover::-webkit-scrollbar-thumb:hover {
+  background-color: var(--gpv-canvas-scrollbar-hover, rgba(15, 23, 42, 0.42));
 }
 /* 纸外的画布与纸面：静止时一律是普通箭头。
    抓手只在「真的在拖」的瞬间出现 —— 常驻手型会让人以为随时在拖拽模式，
@@ -2905,7 +2920,8 @@ onBeforeUnmount(() => {
   margin: auto;
   max-width: 90%;
   text-align: center;
-  color: var(--gpv-text);
+  /* 空态/错误态落在亮色画布上，文字颜色不能跟着暗色工具栏走。 */
+  color: var(--gpv-canvas-text, var(--gpv-text));
   padding: 24px;
 }
 .gpv__error { text-align: left; width: 100%; }
@@ -2917,22 +2933,23 @@ onBeforeUnmount(() => {
   margin-bottom: 8px;
 }
 .gpv__error-title { color: #cf222e; font-weight: 600; }
-/* 复制按钮：与错误标题同排，弱化处理，不抢标题的红色警示。 */
+/* 复制按钮：与错误标题同排，弱化处理，不抢标题的红色警示。
+   配色按亮色画布给（`--gpv-border`/`--gpv-hover-bg` 在暗色主题下是深色工具栏的值）。 */
 .gpv__error-copy {
   display: inline-flex;
   align-items: center;
   gap: 5px;
   padding: 4px 10px;
   border-radius: 6px;
-  border: 1px solid var(--gpv-border, rgba(0, 0, 0, 0.14));
+  border: 1px solid rgba(28, 25, 23, 0.16);
   background: transparent;
-  color: var(--gpv-text);
+  color: var(--gpv-canvas-text, var(--gpv-text));
   font-size: 12px;
   cursor: pointer;
   transition: background-color .15s ease, border-color .15s ease;
 }
 .gpv__error-copy:hover {
-  background: var(--gpv-hover-bg, rgba(0, 0, 0, 0.05));
+  background: rgba(15, 23, 42, 0.06);
 }
 .gpv.theme-dark .gpv__error-title { color: #e06c75; }
 .gpv__error-log {
@@ -2946,7 +2963,7 @@ onBeforeUnmount(() => {
   padding: 10px;
   max-height: 100%;
   overflow: auto;
-  color: var(--gpv-text);
+  color: var(--gpv-canvas-text, var(--gpv-text));
   font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace;
 }
 

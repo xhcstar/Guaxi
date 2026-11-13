@@ -1187,17 +1187,24 @@ const scheduleLoadMarkdownPage = (pageNum) => {
 // 宿主再存一份只会和它各走一路（此前栈几乎永远是空的，按钮与快捷键都没反应）。
 // 本组件只保留工具栏按钮的转发（见 viewerReadBack / viewerReadForward）。
 const onViewerOutline = (list) => {
-  // 后端 pdf_outline 返回 {title, page, level}，而 GuaxiOutline 的 n-tree 用 text 作标签、
+  // 后端 pdf_outline 返回 {title, page, level, y_pt}，而 GuaxiOutline 的 n-tree 用 text 作标签、
   // 用 line 做跳转键。这里做字段映射，否则大纲有树形和图标却没有文字。
   const mapped = (Array.isArray(list) ? list : []).map((it) => ({
     level: Number(it.level) || 1,
     text: it.title ?? it.text ?? '',
     line: Number(it.page ?? it.line) || 1,
+    // 书签的页内 y（pt，左上原点）。缺失时退回 0 = 只跳页。
+    yPt: Math.max(0, Number(it.y_pt ?? it.yPt) || 0),
   }))
   outlineStore.setOutline(mapped)
-  outlineStore.setJumpToLine((p) => {
+  outlineStore.setJumpToLine((p, option) => {
     const n = Number(p)
-    if (Number.isFinite(n)) goToPage(n)
+    if (!Number.isFinite(n)) return
+    if (useNewPdfViewer.value) {
+      pdfViewer.value?.goToPage?.(n, { yPt: Math.max(0, Number(option?.yPt) || 0) })
+    } else {
+      goToPage(n)
+    }
   })
 }
 // 新版 viewer 内选中 PDF 文本 -> 复用划词工具栏（翻译/查询/问AI/AI翻译/插入笔记）。

@@ -37,7 +37,7 @@
       </button>
     </div>
 
-    <div class="rsp__body">
+    <div class="rsp__body guaxi-reader-scrollbar">
       <slot :name="active" :tab="active" />
     </div>
 

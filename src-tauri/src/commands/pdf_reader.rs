@@ -617,32 +617,64 @@ pub struct PdfOutlineItem {
     pub title: String,
     /// 目标 1-based 页码；解析不到则为 0。
     pub page: usize,
-    /// 目标 y（pt，左上原点）；当前实现暂为 0（跳到页顶）。
+    /// 目标 y（pt，左上原点）；0 表示该书签只给了页、没给页内坐标（退化为跳到页顶）。
     pub y_pt: f32,
 }
 
-fn walk_bookmark(bm: &PdfBookmark, level: u32, out: &mut Vec<PdfOutlineItem>) {
+/// 解析书签的目标：页码（1-based）与页内 y（pt，左上原点）。
+///
+/// 绝大多数 PDF 的目录项用的是 XYZ / FitH 目标，本身就带「应该把页内哪一行放到视口顶部」，
+/// 只取页码会落到这一页的开头 —— 一级标题还好，小节往往在一页中间，读者点了「7.2」
+/// 却看到「7.1」的内容。
+///
+/// PDF 页面坐标以页底为原点、向上为正，而本模块对外统一左上原点，所以要用页高翻转一次；
+/// 页高走 `pages().page_size()`，不加载页面。
+fn bookmark_target(bm: &PdfBookmark, document: &PdfDocument) -> (usize, f32) {
+    let Some(dest) = bm.destination() else {
+        return (0, 0.0);
+    };
+    let Ok(index) = dest.page_index() else {
+        return (0, 0.0);
+    };
+    let page = index as usize + 1;
+    let y_pdf = match dest.view_settings() {
+        Ok(PdfDestinationViewSettings::SpecificCoordinatesAndZoom(_, Some(y), _)) => Some(y.value),
+        Ok(PdfDestinationViewSettings::FitPageHorizontallyToWindow(Some(y))) => Some(y.value),
+        Ok(PdfDestinationViewSettings::FitBoundsHorizontallyToWindow(Some(y))) => Some(y.value),
+        _ => None,
+    };
+    let Some(y) = y_pdf else {
+        return (page, 0.0);
+    };
+    let page_h = document
+        .pages()
+        .page_size(index)
+        .map(|r| r.height().value)
+        .unwrap_or(0.0);
+    if page_h <= 0.0 {
+        return (page, 0.0);
+    }
+    (page, (page_h - y).clamp(0.0, page_h))
+}
+
+fn walk_bookmark(bm: &PdfBookmark, level: u32, document: &PdfDocument, out: &mut Vec<PdfOutlineItem>) {
     if let Some(title) = bm.title() {
-        let page = bm
-            .destination()
-            .and_then(|d| d.page_index().ok())
-            .map(|i| i as usize + 1)
-            .unwrap_or(0);
+        let (page, y_pt) = bookmark_target(bm, document);
         out.push(PdfOutlineItem {
             level,
             title,
             page,
-            y_pt: 0.0,
+            y_pt,
         });
     }
     let mut child = bm.first_child();
     while let Some(c) = child {
-        walk_bookmark(&c, level + 1, out);
+        walk_bookmark(&c, level + 1, document, out);
         child = c.next_sibling();
     }
 }
 
-/// 提取书签大纲：层级 + 标题 + 目标页。无书签返回空表。
+/// 提取书签大纲：层级 + 标题 + 目标页 + 页内 y。无书签返回空表。
 #[tauri::command]
 pub async fn pdf_outline(path: String) -> Result<Vec<PdfOutlineItem>, String> {
     run_pdf(move |state| {
@@ -651,7 +683,7 @@ pub async fn pdf_outline(path: String) -> Result<Vec<PdfOutlineItem>, String> {
             // root() 返回首个顶层书签；其余顶层书签是它的 next_sibling。
             let mut node = document.bookmarks().root();
             while let Some(n) = node {
-                walk_bookmark(&n, 1, &mut out);
+                walk_bookmark(&n, 1, document, &mut out);
                 node = n.next_sibling();
             }
             Ok(out)

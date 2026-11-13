@@ -730,7 +730,13 @@ const onOutline = (raw) => {
     if (!Array.isArray(items)) return
     for (const item of items) {
       if (flat.length >= 2000) return
-      flat.push({ title: String(item?.title || item?.label || ''), page: Number(item?.page) || 0, depth })
+      flat.push({
+        title: String(item?.title || item?.label || ''),
+        page: Number(item?.page) || 0,
+        // 书签自带的页内 y（pt，左上原点）：没有它只能落到页顶，小节常常在一页中段。
+        yPt: Math.max(0, Number(item?.y_pt ?? item?.yPt) || 0),
+        depth,
+      })
       walk(item?.children || item?.subitems, depth + 1)
     }
   }
@@ -759,7 +765,8 @@ const jumpToOutline = (item, idx) => {
   const page = Number(item?.page) || 0
   if (!page) return
   try {
-    pdfViewerRef.value?.goToPage?.(page)
+    // 带上页内 y：目录项的目标就是「把这一行放到视口顶部」，只跳页会停在页首。
+    pdfViewerRef.value?.goToPage?.(page, { yPt: Math.max(0, Number(item?.yPt) || 0) })
   } catch (error) {
     logger.warn('[ReaderPane] outline jump failed', {
       page,

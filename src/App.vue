@@ -445,7 +445,9 @@ pre,
 }
 
 /* 设计说明：阅读器面板统一使用“滚动时显色、静止时隐藏”的滚动条。
-   这样鼠标滚轮、触控板和键盘触发滚动时都能看到滚动位置，同时不影响编辑器/代码块的既有滚动条。 */
+   这样鼠标滚轮、触控板和键盘触发滚动时都能看到滚动位置，同时不影响编辑器/代码块的既有滚动条。
+   颜色取 --sr-scrollbar-thumb（亮/暗两套变量），尺寸与独立阅读器窗口（readerPane.css）、
+   PDF 阅读器自带的滚动条一致 —— 左侧边栏不再一宽一窄、一亮一暗。 */
 .guaxi-reader-scrollbar {
   scrollbar-width: thin;
   scrollbar-color: transparent transparent;
@@ -454,15 +456,19 @@ pre,
 .guaxi-reader-scrollbar:hover,
 .guaxi-reader-scrollbar:focus-within,
 .guaxi-reader-scrollbar.is-reader-scrolling {
-  scrollbar-color: rgba(0, 0, 0, 0.32) transparent;
+  scrollbar-color: var(--sr-scrollbar-thumb, rgba(0, 0, 0, 0.32)) transparent;
 }
 
 pre::-webkit-scrollbar,
 .hljs::-webkit-scrollbar,
-.code-segment::-webkit-scrollbar,
-.guaxi-reader-scrollbar::-webkit-scrollbar {
+.code-segment::-webkit-scrollbar {
   width: 6px;
   height: 6px;
+}
+
+.guaxi-reader-scrollbar::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
 }
 
 pre::-webkit-scrollbar-thumb,
@@ -479,11 +485,18 @@ pre::-webkit-scrollbar-thumb,
 
 pre::-webkit-scrollbar-thumb:hover,
 .hljs::-webkit-scrollbar-thumb:hover,
-.code-segment::-webkit-scrollbar-thumb:hover,
+.code-segment::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(0, 0, 0, 0.34);
+}
+
 .guaxi-reader-scrollbar:hover::-webkit-scrollbar-thumb,
 .guaxi-reader-scrollbar:focus-within::-webkit-scrollbar-thumb,
 .guaxi-reader-scrollbar.is-reader-scrolling::-webkit-scrollbar-thumb {
-  background-color: rgba(0, 0, 0, 0.34);
+  background-color: var(--sr-scrollbar-thumb, rgba(0, 0, 0, 0.32));
+}
+
+.guaxi-reader-scrollbar:hover::-webkit-scrollbar-thumb:hover {
+  background-color: var(--sr-scrollbar-thumb-hover, rgba(0, 0, 0, 0.42));
 }
 
 pre::-webkit-scrollbar-track,
@@ -499,12 +512,6 @@ pre::-webkit-scrollbar-track,
   scrollbar-color: rgba(255, 255, 255, 0.18) transparent;
 }
 
-:root[data-guaxi-theme='dark'] .guaxi-reader-scrollbar:hover,
-:root[data-guaxi-theme='dark'] .guaxi-reader-scrollbar:focus-within,
-:root[data-guaxi-theme='dark'] .guaxi-reader-scrollbar.is-reader-scrolling {
-  scrollbar-color: rgba(255, 255, 255, 0.28) transparent;
-}
-
 :root[data-guaxi-theme='dark'] pre::-webkit-scrollbar-thumb,
 :root[data-guaxi-theme='dark'] .hljs::-webkit-scrollbar-thumb,
 :root[data-guaxi-theme='dark'] .code-segment::-webkit-scrollbar-thumb {
@@ -513,10 +520,7 @@ pre::-webkit-scrollbar-track,
 
 :root[data-guaxi-theme='dark'] pre::-webkit-scrollbar-thumb:hover,
 :root[data-guaxi-theme='dark'] .hljs::-webkit-scrollbar-thumb:hover,
-:root[data-guaxi-theme='dark'] .code-segment::-webkit-scrollbar-thumb:hover,
-:root[data-guaxi-theme='dark'] .guaxi-reader-scrollbar:hover::-webkit-scrollbar-thumb,
-:root[data-guaxi-theme='dark'] .guaxi-reader-scrollbar:focus-within::-webkit-scrollbar-thumb,
-:root[data-guaxi-theme='dark'] .guaxi-reader-scrollbar.is-reader-scrolling::-webkit-scrollbar-thumb {
+:root[data-guaxi-theme='dark'] .code-segment::-webkit-scrollbar-thumb:hover {
   background-color: rgba(255, 255, 255, 0.26);
 }
 

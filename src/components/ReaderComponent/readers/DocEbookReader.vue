@@ -392,7 +392,7 @@
       </div>
     </div>
     <div v-else class="guaxi-doc-reader__body gdr-ebook">
-      <aside v-if="tocVisible" class="gdr-ebook__toc" :style="{ width: `${tocWidth}px` }">
+      <aside v-if="tocVisible" class="gdr-ebook__toc guaxi-reader-scrollbar" :style="{ width: `${tocWidth}px` }">
         <button
           v-for="(item, idx) in toc"
           :key="`${idx}-${item.href}`"
@@ -417,7 +417,7 @@
         aria-label="拖动调整目录宽度"
         @mousedown.prevent="startTocResize"
       />
-      <div class="gdr-ebook__main" :class="{ 'is-resizing': resizing }">
+      <div class="gdr-ebook__main" :class="{ 'is-resizing': resizing }" :style="{ background: surfaceBg }">
         <!--
           用 blob URL + src 而不是 srcdoc：章节文档一次成型、可直接挂载，
           切章时 revoke 掉即可释放内存；也避开 srcdoc 先创建 about:blank
@@ -456,7 +456,7 @@
         </div>
 
         <!-- 书签 -->
-        <div v-if="panelMode === 'bookmarks'" class="gdr-ebook__panel-body">
+        <div v-if="panelMode === 'bookmarks'" class="gdr-ebook__panel-body guaxi-reader-scrollbar">
           <button class="gdr-ebook__panel-action" @click="addBookmarkAtCurrent">
             <Icon :icon="bookmarkIcon" width="14" height="14" />
             在当前位置添加书签
@@ -483,7 +483,7 @@
         </div>
 
         <!-- 笔记 / 高亮 -->
-        <div v-else-if="panelMode === 'notes'" class="gdr-ebook__panel-body">
+        <div v-else-if="panelMode === 'notes'" class="gdr-ebook__panel-body guaxi-reader-scrollbar">
           <div class="guaxi-doc-reader__meta" style="padding: 8px 4px">
             在正文中选中文字后点「高亮」即可添加。共 {{ annotations.length }} 条。
           </div>
@@ -505,7 +505,7 @@
         </div>
 
         <!-- 显示设置 -->
-        <div v-else-if="panelMode === 'display'" class="gdr-ebook__panel-body">
+        <div v-else-if="panelMode === 'display'" class="gdr-ebook__panel-body guaxi-reader-scrollbar">
           <label class="gdr-ebook__setting">
             <span>字号</span>
             <input v-model.number="prefs.fontSize" type="range" min="12" max="30" step="1" @change="applyPrefs" />
@@ -679,6 +679,15 @@ const prefs = ref({
 
 /** 一本书的稳定标识：规范化路径。跨窗口/跨重启一致，才能恢复进度。 */
 const bookKey = computed(() => String(props.path || '').replace(/\\/g, '/').trim())
+
+/**
+ * 正文区底色：跟随「阅读设置」里的主题，而不是应用主题。
+ *
+ * 应用切到深色只该换工具栏与侧栏（chrome），正文（纸面）始终按书自己的主题来 ——
+ * 与 PDF 阅读器一致。这一层平时被 iframe 完全盖住，只在切章、重建文档的那一瞬露出来；
+ * 不设它就会闪一块深色，正好落在读者刚从旧章跳到新章的时刻。
+ */
+const surfaceBg = computed(() => (THEME_VARS[prefs.value.theme] || THEME_VARS.light).bg)
 
 // ───────────────────────── 面板状态 ─────────────────────────
 
@@ -871,7 +880,8 @@ const applySearchHighlight = (localIndex) => {
   const needle = normalizeWithMap(searchQuery.value).text
   const match = findMatches(normalized, needle)[localIndex]
   if (!match) {
-    nodes[0]?.parentElement?.scrollIntoView?.({ block: 'center', behavior: 'smooth' })
+    // 搜索是一次「定位」而不是一段浏览过程：直接落位，不做平滑滚动（与 PDF 阅读器一致）。
+    nodes[0]?.parentElement?.scrollIntoView?.({ block: 'center' })
     return
   }
 
@@ -898,7 +908,7 @@ const applySearchHighlight = (localIndex) => {
       })
     }
   }
-  firstMark?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+  firstMark?.scrollIntoView({ block: 'center' })
 }
 
 const clearSearchHighlights = () => {
@@ -1160,12 +1170,17 @@ let pendingAnchor = ''
 
 const frameDocElement = (id) => frameRef.value?.contentDocument?.getElementById?.(id) || null
 
-/** 在当前章节里滚到某个锚点；找不到返回 false。 */
+/** 在当前章节里滚到某个锚点；找不到返回 false。
+ *
+ * 直接落位、不做平滑滚动：「点了脚注/引用就跳到那一段」是一次定位，
+ * 与 PDF 阅读器的目录/链接跳转一致 —— 平滑滚动在长章里要滑上半秒，
+ * 途中还会不断触发滚动事件去存进度，越厚的书越像卡住。
+ */
 const scrollToAnchor = (id) => {
   const el = frameDocElement(id)
   if (!el) return false
   try {
-    el.scrollIntoView({ block: 'start', behavior: 'smooth' })
+    el.scrollIntoView({ block: 'start', behavior: 'auto' })
   } catch {
     el.scrollIntoView()
   }
