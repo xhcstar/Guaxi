@@ -38,6 +38,7 @@ const STALL_TIMEOUT_MS = 60 * 1000;
 
 const force = process.argv.includes('--force');
 const withCuda = process.argv.includes('--cuda');
+const skipModels = process.argv.includes('--libs-only') || process.env.SHERPA_SKIP_MODELS === '1';
 
 function info(message) {
   console.log(`[sherpa] ${message}`);
@@ -676,6 +677,11 @@ async function main() {
         ),
       )) > 10 * 1024 * 1024,
   });
+
+  if (skipModels) {
+    info('SHERPA_SKIP_MODELS 已启用：仅准备原生库，跳过 TTS/ASR/标点模型');
+    tasks.splice(1);
+  }
 
   const work = join(SRC_TAURI, '.sherpa-download-tmp');
   await mkdir(work, { recursive: true });

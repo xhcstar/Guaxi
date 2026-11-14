@@ -12,7 +12,7 @@
 [**English**](README.md) · **简体中文**
 
 [![License](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.1.0-informational.svg)](https://github.com/xhcstar/Guaxi/releases)
+[![Version](https://img.shields.io/badge/version-0.1.1-informational.svg)](https://github.com/xhcstar/Guaxi/releases)
 [![Tauri](https://img.shields.io/badge/Tauri-2.x-24C8DB.svg)](https://tauri.app)
 [![Rust](https://img.shields.io/badge/Rust-stable-000000.svg)](https://www.rust-lang.org)
 [![Vue](https://img.shields.io/badge/Vue-3.x-42B883.svg)](https://vuejs.org)
@@ -190,7 +190,7 @@ npm run tauri -- build --reuse-utils-zip      # utils 未变时复用已有分�
 
 ```text
 src-tauri/target/release/bundle/nsis/
-├── guaxi_0.1.0_x64-setup.exe     # NSIS 安装器
+├── guaxi_0.1.1_x64-setup.exe     # NSIS 安装器
 ├── extract_utils_bundles.exe     # 安装期解包 helper
 ├── README_utils_bundles.txt      # 分包清单（构建自动生成，发版核对用）
 └── utils_bundles/                # 若干 *.tar.zst + bundle-manifest.json
@@ -348,7 +348,7 @@ guaxi/
 | 项目 | 内容 |
 |---|---|
 | 名称 | Guaxi（智能知识管理系统） |
-| 版本 | v0.1.0（Preview，开发中） |
+| 版本 | v0.1.1（Preview，开发中） |
 | 许可 | GNU Affero General Public License v3.0 |
 | 主平台 | Windows 10/11 x64（主线，NSIS）· Linux x64（AppImage / deb / rpm，适配中） |
 | 形态 | 本地优先的桌面应用，无强制云端依赖 |
@@ -370,6 +370,7 @@ Guaxi 建立在这些优秀项目之上（节选，按用途分组）：
 | [Monaco Editor](https://microsoft.github.io/monaco-editor/) | 代码/Markdown 编辑器内核 | MIT |
 | [PDF.js](https://mozilla.github.io/pdf.js/) | PDF 渲染 | Apache-2.0 |
 | [pdfium-render](https://github.com/ajrcarey/pdfium-render) | PDF 渲染（Rust 绑定） | Apache-2.0 / MIT |
+| [PDFium](https://pdfium.googlesource.com/pdfium/) | PDF 渲染引擎（运行时库） | BSD-3-Clause |
 | [Excalidraw](https://excalidraw.com) | 白板 | MIT |
 | [ECharts](https://echarts.apache.org) | 图表 | Apache-2.0 |
 | [Graphology](https://graphology.github.io) | 图数据结构与社区检测 | MIT |

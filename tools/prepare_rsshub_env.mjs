@@ -88,6 +88,10 @@ function rsshubEntry() {
 }
 
 async function main() {
+  if (process.env.RSSHUB_SKIP === '1') {
+    info('RSSHUB_SKIP=1，跳过 RSSHub 构建（聚合功能降级）');
+    return;
+  }
   // 运行时前置：SlidevEnv 的 node.exe（RSSHub 运行时复用它）。缺失只告警——构建仍可进行，
   // 但要提醒用户运行时无 node 可用。
   const nodeBin = path.join(utilsDir, 'SlidevEnv', process.platform === 'win32' ? 'node.exe' : 'node');

@@ -1,0 +1,95 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CI: true
+  CARGO_TERM_COLOR: always
+  # Keep the first public build lean: the installer already contains the app and
+  # native runtime; speech models and RSSHub are optional and can be added later.
+  SHERPA_SKIP_MODELS: "1"
+  RSSHUB_SKIP: "1"
+
+jobs:
+  build-windows:
+    name: Windows x64
+    runs-on: windows-2022
+    timeout-minutes: 300
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+          key: windows-x64
+
+      - name: Cache speech libraries and models
+        uses: actions/cache@v4
+        with:
+          path: |
+            src-tauri/.sherpa-onnx-libs
+            src-tauri/utils/Models
+          key: sherpa-1.13.8-windows-x64
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Prepare PDFium runtime
+        run: npm run prepare:pdfium
+
+      - name: Build installer
+        run: npm run tauri -- build
+
+      - name: Package NSIS output
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path release-assets | Out-Null
+          Compress-Archive -Path "src-tauri/target/release/bundle/nsis/*" `
+            -DestinationPath "release-assets/guaxi-${{ github.ref_name }}-windows-x64.zip" -Force
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: guaxi-windows-x64
+          path: release-assets/guaxi-*-windows-x64.zip
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build-windows
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download installer
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release-assets/*
+          generate_release_notes: true
+          draft: false
+          prerelease: false

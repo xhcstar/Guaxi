@@ -5205,7 +5205,7 @@ dependencies = [
 
 [[package]]
 name = "guaxi"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "actix",
  "actix-cors",

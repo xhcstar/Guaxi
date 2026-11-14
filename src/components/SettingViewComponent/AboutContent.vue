@@ -227,7 +227,7 @@ import { createLogger } from '../../utils/logger'
 const logger = createLogger('AboutContent')
 const settingsStore = useSettingsStore()
 
-const version = ref('0.1.0')
+const version = ref('0.1.1')
 const platformLabel = ref('Windows · 桌面端')
 const copied = ref('')
 const year = new Date().getFullYear()
@@ -312,7 +312,7 @@ onMounted(async () => {
   try {
     version.value = await getVersion()
   } catch {
-    version.value = '0.1.0'
+    version.value = '0.1.1'
   }
 
   try {

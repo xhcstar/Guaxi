@@ -843,6 +843,24 @@ async function main() {
   await run('node', ['./tools/fetch_codex_sidecar.mjs'], {}, { label: 'Codex 侧车准备' });
   stageDone(codexStage);
 
+  // PDF 阅读与转换依赖 PDFium 动态库；Tauri 的 resources 会引用 src-tauri/libs。
+  // 二进制不随仓库分发，构建前按固定版本取一份；已有则跳过。
+  const pdfiumStage = stage('PDFium 运行时', 'src-tauri/libs，缺失则按固定版本下载');
+  const pdfiumExitCode = await run(
+    'node',
+    ['./tools/fetch_pdfium.mjs'],
+    {},
+    { label: 'PDFium 运行时准备' },
+  );
+  if (pdfiumExitCode !== 0) {
+    console.error(
+      '[tauri] PDFium 运行时准备失败。PDF 阅读/转换依赖该动态库，故在此中止；\n' +
+        '        可单独重试：node tools/fetch_pdfium.mjs',
+    );
+    process.exit(pdfiumExitCode);
+  }
+  stageDone(pdfiumStage);
+
   // 语音功能的原生库与模型。必须放在这里（而不是 only-in-build 分支里），原因有两条：
   //   · 原生库要赶在**任何** cargo 构建之前就位——sherpa-onnx 的 build.rs 找不到归档时
   //     会自己去联网下载，而只有系统代理（注册表）的环境下会直接卡住；

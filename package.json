@@ -1,7 +1,7 @@
 {
   "name": "Guaxi",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.1.1",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -23,6 +23,7 @@
     "sherpa:fetch": "node ./tools/fetch_sherpa_onnx_libs.mjs",
     "sherpa:fetch:force": "node ./tools/fetch_sherpa_onnx_libs.mjs --force",
     "sherpa:fetch:cuda": "node ./tools/fetch_sherpa_onnx_libs.mjs --cuda",
+    "prepare:pdfium": "node ./tools/fetch_pdfium.mjs",
     "sherpa:verify:cuda": "cargo run --quiet --manifest-path src-tauri/bundle-tools/Cargo.toml --target-dir src-tauri/target-bundle-tools --bin verify_cuda_runtime --",
     "rsshub:prepare": "node ./tools/prepare_rsshub_env.mjs",
     "rsshub:prepare:force": "node ./tools/prepare_rsshub_env.mjs --force",

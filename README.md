@@ -13,7 +13,7 @@ external feeds, tasks and utility apps into a single desktop surface — so that
 **English** · [简体中文](README.zh-CN.md)
 
 [![License](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.1.0-informational.svg)](https://github.com/xhcstar/Guaxi/releases)
+[![Version](https://img.shields.io/badge/version-0.1.1-informational.svg)](https://github.com/xhcstar/Guaxi/releases)
 [![Tauri](https://img.shields.io/badge/Tauri-2.x-24C8DB.svg)](https://tauri.app)
 [![Rust](https://img.shields.io/badge/Rust-stable-000000.svg)](https://www.rust-lang.org)
 [![Vue](https://img.shields.io/badge/Vue-3.x-42B883.svg)](https://vuejs.org)
@@ -204,7 +204,7 @@ leave one out and the installer aborts halfway through:
 
 ```text
 src-tauri/target/release/bundle/nsis/
-├── guaxi_0.1.0_x64-setup.exe     # NSIS installer
+├── guaxi_0.1.1_x64-setup.exe     # NSIS installer
 ├── extract_utils_bundles.exe     # install-time extraction helper
 ├── README_utils_bundles.txt      # bundle manifest (generated at build time, for release checks)
 └── utils_bundles/                # *.tar.zst files + bundle-manifest.json
@@ -380,7 +380,7 @@ guaxi/
 | Item | Value |
 |---|---|
 | Name | Guaxi (intelligent knowledge management system) |
-| Version | v0.1.0 (preview, in development) |
+| Version | v0.1.1 (preview, in development) |
 | License | GNU Affero General Public License v3.0 |
 | Platforms | Windows 10/11 x64 (mainline, NSIS) · Linux x64 (AppImage / deb / rpm, in progress) |
 | Form | Local-first desktop application, no mandatory cloud dependency |
@@ -402,6 +402,7 @@ Guaxi stands on these projects (a selection, grouped by role):
 | [Monaco Editor](https://microsoft.github.io/monaco-editor/) | Code / Markdown editor core | MIT |
 | [PDF.js](https://mozilla.github.io/pdf.js/) | PDF rendering | Apache-2.0 |
 | [pdfium-render](https://github.com/ajrcarey/pdfium-render) | PDF rendering (Rust bindings) | Apache-2.0 / MIT |
+| [PDFium](https://pdfium.googlesource.com/pdfium/) | PDF rendering engine (runtime library) | BSD-3-Clause |
 | [Excalidraw](https://excalidraw.com) | Whiteboard | MIT |
 | [ECharts](https://echarts.apache.org) | Charts | Apache-2.0 |
 | [Graphology](https://graphology.github.io) | Graph data structures and community detection | MIT |
