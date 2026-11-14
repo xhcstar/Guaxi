@@ -78,3 +78,21 @@ src-tauri/assets/vendor/guaxi-chart-preview.js
 src-tauri/utils/rsshub/
 
 .workbuddy/*
+
+# Local tool state, caches, and environment files (never commit)
+.agents/
+.bookshelf-preview/
+.cache/
+.claude/
+.codewhale/
+.deepseek/
+.feeds-preview/
+.readpos-preview/
+.trae/
+.vscode/
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx

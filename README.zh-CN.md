@@ -138,7 +138,6 @@ Guaxi 是一款面向**个人知识工作流**的桌面软件。它不要求你�
 
 ```bash
 git clone https://github.com/xhcstar/Guaxi.git
-# 或：git clone https://github.com/xhcstar/Guaxi
 cd Guaxi
 ```
 
@@ -353,7 +352,7 @@ guaxi/
 | 许可 | GNU Affero General Public License v3.0 |
 | 主平台 | Windows 10/11 x64（主线，NSIS）· Linux x64（AppImage / deb / rpm，适配中） |
 | 形态 | 本地优先的桌面应用，无强制云端依赖 |
-| 源码 | [github.com/xhcstar/Guaxi](https://github.com/xhcstar/Guaxi) · [github.com/xhcstar/Guaxi](https://github.com/xhcstar/Guaxi) |
+| 源码 | [github.com/xhcstar/Guaxi](https://github.com/xhcstar/Guaxi) |
 | 作者 / 维护者 | xhcstar |
 | 打包标识 | `com.guaxi.guaxi` |
 | 构建文档 | [`docs/design/TAURI_BUILD_PIPELINE.md`](docs/design/TAURI_BUILD_PIPELINE.md) |

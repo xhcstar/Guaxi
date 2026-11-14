@@ -27,10 +27,6 @@
             GitHub
             <Icon :icon="arrowUpRightIcon" width="13" height="13" />
           </button>
-          <button type="button" class="about-btn" @click="openExternal(repos.gitee.url)">
-            Gitee
-            <Icon :icon="arrowUpRightIcon" width="13" height="13" />
-          </button>
         </div>
       </div>
 
@@ -157,15 +153,10 @@
               {{ repos.github.label }}
               <Icon :icon="arrowUpRightIcon" width="12" height="12" />
             </button>
-            <button type="button" class="about-link" @click="openExternal(repos.gitee.url)">
-              <Icon :icon="gitBranchIcon" width="13" height="13" />
-              {{ repos.gitee.label }}
-              <Icon :icon="arrowUpRightIcon" width="12" height="12" />
-            </button>
             <button
               type="button"
               class="about-copy"
-              @click="copyText(`${repos.github.url}\n${repos.gitee.url}`)"
+              @click="copyText(repos.github.url)"
             >
               <Icon :icon="copied === 'repos' ? checkIcon : copyIcon" width="12" height="12" />
               {{ copied === 'repos' ? '已复制' : '复制仓库地址' }}
@@ -243,7 +234,6 @@ const year = new Date().getFullYear()
 
 const repos = Object.freeze({
   github: { label: 'github.com/xhcstar/Guaxi', url: 'https://github.com/xhcstar/Guaxi' },
-  gitee: { label: 'github.com/xhcstar/Guaxi', url: 'https://github.com/xhcstar/Guaxi' },
 })
 
 const capabilities = [

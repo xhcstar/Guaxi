@@ -146,7 +146,6 @@ Formulas and charts inside the editor are rendered locally as block-level elemen
 
 ```bash
 git clone https://github.com/xhcstar/Guaxi.git
-# or: git clone https://github.com/xhcstar/Guaxi
 cd Guaxi
 ```
 
@@ -385,7 +384,7 @@ guaxi/
 | License | GNU Affero General Public License v3.0 |
 | Platforms | Windows 10/11 x64 (mainline, NSIS) · Linux x64 (AppImage / deb / rpm, in progress) |
 | Form | Local-first desktop application, no mandatory cloud dependency |
-| Source | [github.com/xhcstar/Guaxi](https://github.com/xhcstar/Guaxi) · [github.com/xhcstar/Guaxi](https://github.com/xhcstar/Guaxi) |
+| Source | [github.com/xhcstar/Guaxi](https://github.com/xhcstar/Guaxi) |
 | Author / maintainer | xhcstar |
 | Bundle identifier | `com.guaxi.guaxi` |
 | Build docs | [`docs/design/TAURI_BUILD_PIPELINE.md`](docs/design/TAURI_BUILD_PIPELINE.md) |
