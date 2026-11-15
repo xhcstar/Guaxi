@@ -22,7 +22,9 @@ env:
 
 jobs:
   build-windows:
-    name: Windows x64 完整离线包
+    # 名字由「软件名 + 版本号 + 平台」组成：Actions 列表和下载下来的 job 日志目录都直接用它，
+    # 一眼能看出这次构建的是哪个版本、哪个平台。tag 构建取 ref 名；手动重发取 publish_tag。
+    name: Guaxi ${{ inputs.publish_tag || github.ref_name }} Windows x64 完整离线包
     runs-on: windows-2022
     timeout-minutes: 360
 
@@ -46,15 +48,18 @@ jobs:
           key: windows-x64
 
       # 语音模型（kokoro TTS / SenseVoice ASR / whisper / 标点）与 sherpa-onnx 原生库，
-      # 合计约 1 GB。缓存键带上取模型的脚本摘要：下载清单一变，旧缓存自动失效，
-      # 不会出现「新模型被旧缓存挡住、打进包里的还是老一套」。
+      # 合计约 1 GB；.sherpa-download-tmp 是下载暂存，解压成功后会清掉，留着它只是为了让
+      # 失败重跑不用再下 1.7 GB。缓存键不再跟脚本摘要走：改脚本里的日志/重试逻辑不该
+      # 让 4 GB 缓存全部失效，只有模型清单变了才手动把 -models-vN 往上加一版。
       - name: Cache speech libs and models
+        id: speech-cache
         uses: actions/cache@v4
         with:
           path: |
             src-tauri/.sherpa-onnx-libs
             src-tauri/utils/Models
-          key: sherpa-1.13.8-windows-x64-${{ hashFiles('tools/fetch_sherpa_onnx_libs.mjs') }}
+            src-tauri/.sherpa-download-tmp
+          key: sherpa-1.13.8-models-v1-windows-x64
 
       # RSSHub 要 clone + pnpm install + build，十几分钟起步。缓存里已有 dist 时
       # tools/prepare_rsshub_env.mjs 会直接跳过。想强制换一版 RSSHub 就改这里的版本号。
@@ -74,12 +79,26 @@ jobs:
       # utils 外置分包（此时已包含语音模型）→ extract_utils_bundles.exe → tauri build →
       # 把 utils_bundles/、helper、README 发布到 bundle/nsis/。
       # 这里刻意不再设置 SHERPA_SKIP_MODELS / RSSHUB_SKIP：少了模型和 RSSHub 的包，
-      # 用户装完是残缺的，必须在 CI 里就构建完整。
+      # 用户装完是残缺的，必须在 CI 里就构建完整。RSSHUB_STRICT=1 让 RSSHub 构建失败
+      # 直接中止（本地 dev 不设，仍可按需降级）。
       - name: Build full installer and external bundles
+        env:
+          RSSHUB_STRICT: '1'
         run: npm run tauri -- build
 
-      # RSSHub 缺失只会让聚合功能降级，构建本身不会失败；但发版时需要知道
-      # 这一版到底带没带它，所以在日志里明确标出来（::warning:: 会显示在 Actions 摘要里）。
+      # 构建失败（例如解压卡死、模型下载超时）也把已经落地的文件和下载暂存存进缓存：
+      # 归档还在就能跳过下载，已解好的模型目录也能直接复用，重跑不用从头再来。
+      - name: Save speech models even on failure
+        if: always() && steps.speech-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            src-tauri/.sherpa-onnx-libs
+            src-tauri/utils/Models
+            src-tauri/.sherpa-download-tmp
+          key: sherpa-1.13.8-models-v1-windows-x64
+
+      # 发布包必须完整：语音模型、RSSHub 产物、内置 node 缺一不可，缺了就不该发布。
       - name: Report optional components
         shell: pwsh
         run: |
@@ -88,11 +107,15 @@ jobs:
             throw '未找到任何 .onnx 语音模型，这个包是残缺的，不应发布。'
           }
           Write-Host ("[verify] 语音模型 {0} 个 · {1:N1} MB" -f $models.Count, (($models | Measure-Object Length -Sum).Sum / 1MB))
-          if (Test-Path 'src-tauri/utils/rsshub/dist/index.mjs') {
-            Write-Host '[verify] RSSHub 已打进包'
-          } else {
-            Write-Host '::warning::RSSHub 未构建成功，本版安装包的聚合功能会降级（其余功能不受影响）'
+          if (-not (Test-Path 'src-tauri/utils/rsshub/dist/index.mjs')) {
+            throw 'RSSHub 产物缺失，聚合功能不可用，不应发布。'
           }
+          Write-Host '[verify] RSSHub 已打进包'
+          $node = Get-Item 'src-tauri/utils/SlidevEnv/node.exe' -ErrorAction SilentlyContinue
+          if (-not $node -or $node.Length -lt 40MB) {
+            throw '内置 node 运行时缺失，RSSHub / Slidev 起不来，不应发布。'
+          }
+          Write-Host ("[verify] 内置 node {0:N1} MB" -f ($node.Length / 1MB))
 
       # 发布目录里是一堆并列的文件（setup.exe + utils_bundles/ + helper + README），
       # 必须整目录一起分发。脚本负责校验完整性、打 7z 分卷（每卷 < 2 GiB）、写 SHA-256。

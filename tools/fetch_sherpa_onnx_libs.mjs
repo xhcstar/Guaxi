@@ -17,7 +17,7 @@
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { mkdir, copyFile, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, basename, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const VERSION = '1.13.8';
@@ -32,9 +32,26 @@ const SRC_TAURI = resolve(HERE, '..', 'src-tauri');
 const LIBS_ROOT = join(SRC_TAURI, '.sherpa-onnx-libs', VERSION);
 const MODELS_ROOT = join(SRC_TAURI, 'utils', 'Models');
 
-// 单次下载的超时与低速看门狗。国内直连 GitHub 经常极慢，宁可早失败也不要挂住。
-const TOTAL_TIMEOUT_MS = 60 * 60 * 1000;
+// 下载策略：模型动辄几百 MB，而 runner / 公司网络到 GitHub release CDN 的单条连接
+// 经常被限速到几十 KB/s。所以这里三件事一起做：
+//   · 单次尝试只给 20 分钟，超时就重试（配合 -C - 从 .part 断点续传，进度不会丢）；
+//   · 连续 60 秒低于 10 KB/s 才判定为「死连接」并重连——旧值 1 KB/s 等于「再慢也不断」，
+//     日志里看起来就是一条卡了几十分钟不动的下载；
+//   · 多个文件并发下载，把总带宽用起来。
+const ATTEMPT_TIMEOUT_MS = 20 * 60 * 1000;
 const STALL_TIMEOUT_MS = 60 * 1000;
+const STALL_SPEED_LIMIT = 10 * 1024;
+const DOWNLOAD_RETRIES = 6;
+const DOWNLOAD_CONCURRENCY = 3;
+
+// 解压看门狗。bz2 解压是单线程的，一个大包卡住时整条构建会静默耗到 job 超时
+// （v0.1.1 的 CI 就是这样躺了 6 小时，日志停在「下载完成」之后再无输出）。
+// 所以解压期间每 15 秒报一次已写入字节数，并盯着目录是否还在增长：
+//   · 连续 4 分钟没有增长 → 判定卡死，杀掉进程树换下一个 tar；
+//   · 单包最长 40 分钟，即使进展极慢也不再等。
+const EXTRACT_PROGRESS_MS = 15 * 1000;
+const EXTRACT_STALL_MS = 4 * 60 * 1000;
+const EXTRACT_TIMEOUT_MS = 40 * 60 * 1000;
 
 const force = process.argv.includes('--force');
 const withCuda = process.argv.includes('--cuda');
@@ -123,59 +140,66 @@ async function resolveSystemProxy() {
 }
 
 async function download(url, destination, proxy) {
-  await mkdir(dirname(destination), { recursive: true });
+  const partial = `${destination}.part`;
+  await mkdir(dirname(partial), { recursive: true });
+  if (force) {
+    await rm(partial, { force: true });
+  }
+
   const args = [
     '-fL',
     '--connect-timeout',
     '30',
     '--max-time',
-    String(Math.round(TOTAL_TIMEOUT_MS / 1000)),
+    String(Math.round(ATTEMPT_TIMEOUT_MS / 1000)),
+    '--speed-limit',
+    String(STALL_SPEED_LIMIT),
     '--speed-time',
     String(Math.round(STALL_TIMEOUT_MS / 1000)),
-    '--speed-limit',
-    '1024',
     '--retry',
+    String(DOWNLOAD_RETRIES),
+    '--retry-delay',
     '2',
+    '--retry-all-errors',
     '--progress-bar',
     '-o',
-    destination,
+    partial,
   ];
   if (proxy) {
     args.push('--proxy', proxy);
   }
-  // 断点续传：模型动辄上 G，而代理链路经常中途挂住。保留 .part 让 curl 从断点继续，
-  // 比整个重下划算得多；配套 --retry-all-errors 才能把连接层错误也纳入重试。
-  args.push('-C', '-', '--retry-all-errors');
+  // 断点续传：模型动辄上 G，而链路经常中途挂住。保留 .part 让 curl 从断点继续，
+  // 比整个重下划算得多；--retry-all-errors 才能把连接层错误也纳入重试。
+  args.push('-C', '-');
   args.push(url);
 
-  const partial = `${destination}.part`;
-  if (force) {
-    await rm(partial, { force: true });
-  } else {
-    await mkdir(dirname(partial), { recursive: true });
-  }
-  // -o 的取值在参数表里位于 -C 之前，这里换成 .part 路径，成功后整体改名。
-  args[args.indexOf('-o') + 1] = partial;
+  // curl 的进度条走 stderr，被 run() 收进内存不显示，日志里只剩编排层的心跳。
+  // 这里自己按文件大小报进度和平均速率，卡住时一眼能看出是真慢还是断了。
+  const label = basename(destination);
+  const startedAt = Date.now();
+  const progressTimer = setInterval(async () => {
+    const bytes = await fileSize(partial);
+    const seconds = Math.max(1, (Date.now() - startedAt) / 1000);
+    info(
+      `下载中 ${label}：${(bytes / 1048576).toFixed(1)} MB · 平均 ${(bytes / 1024 / seconds).toFixed(0)} KB/s`,
+    );
+  }, 15000);
+  progressTimer.unref?.();
 
-  const result = await run('curl', args);
+  let result;
+  try {
+    result = await run('curl', args);
+  } finally {
+    clearInterval(progressTimer);
+  }
+
   if (result.code !== 0) {
     // 失败时保留 .part，下次继续；真正的完整性由后续解压（bzip2 CRC）把关。
     throw new Error(`下载失败：${url}\n${result.stderr.trim()}`);
   }
   await rm(destination, { force: true });
   await rename(partial, destination);
-}
-
-// 解压 .tar.bz2。
-//
-// Windows 上有个坑：从 Git Bash 里调起的 GNU tar 会把 `D:\...` 当成 `主机:路径`
-// 去连远程（报 "Cannot connect to D: resolve failed"），而从 cmd 里调起的 bsdtar 又正常。
-// 所以这里一律传**相对文件名**并指定 cwd，彻底绕开盘符里的冒号。
-async function extractTarBz2(archiveName, destinationName, cwd) {
-  const result = await run('tar', ['-xjf', archiveName, '-C', destinationName], { cwd });
-  if (result.code !== 0) {
-    throw new Error(`解压失败：${archiveName}\n${result.stderr.trim()}`);
-  }
+  info(`完成下载 ${label}：${((await fileSize(destination)) / 1048576).toFixed(1)} MB`);
 }
 
 async function fileSize(path) {
@@ -184,6 +208,165 @@ async function fileSize(path) {
   } catch {
     return 0;
   }
+}
+
+async function directorySize(path) {
+  let total = 0;
+  const entries = await readdir(path, { withFileTypes: true }).catch(() => []);
+  for (const entry of entries) {
+    const child = join(path, entry.name);
+    total += entry.isDirectory() ? await directorySize(child) : await fileSize(child);
+  }
+  return total;
+}
+
+// 解压 .tar.bz2。
+//
+// Windows 上有个坑：从 Git Bash 里调起的 GNU tar 会把 `D:\...` 当成 `主机:路径`
+// 去连远程（报 "Cannot connect to D: resolve failed"），而从 cmd 里调起的 bsdtar 又正常。
+// 所以这里一律传**相对文件名**并指定 cwd，彻底绕开盘符里的冒号。
+//
+// 另一个坑是解压工具本身：v0.1.1 的 CI 卡在这里耗掉了 6 小时——下载早就完成，三个 tar
+// 进程都还活着、没有任何输出、一个包都没落地。Windows 自带的 bsdtar 解大 .tar.bz2 时
+// 会偶发这种静默卡死；Git for Windows 的 GNU tar 走 bzip2 子进程，实测更稳，所以优先用它，
+// 失败再退回 PATH 里的 tar。无论用哪个都带看门狗，卡死几分钟内就会暴露并自动换下一个。
+function tarCandidates() {
+  const candidates = new Set();
+  const roots = [
+    process.env.ProgramFiles,
+    process.env['ProgramFiles(x86)'],
+    process.env.LOCALAPPDATA ? join(process.env.LOCALAPPDATA, 'Programs') : null,
+  ].filter(Boolean);
+  for (const root of roots) {
+    const candidate = join(root, 'Git', 'usr', 'bin', 'tar.exe');
+    if (existsSync(candidate)) {
+      candidates.add(candidate);
+    }
+  }
+  return candidates;
+}
+
+/// 候选 tar：Git for Windows 自带的 GNU tar 优先，其次 PATH 里的 tar。
+/// Git 不一定装在 Program Files（也可以是 scoop / 自定义目录），所以再按 `where git.exe`
+/// 的位置反推 `..\usr\bin\tar.exe`。
+async function resolveTarCandidates() {
+  const candidates = tarCandidates();
+  if (process.platform === 'win32') {
+    const { code, stdout } = await capture('where.exe', ['git.exe']);
+    if (code === 0) {
+      for (const line of stdout.split(/\r?\n/)) {
+        const git = line.trim();
+        const candidate = git ? join(dirname(git), '..', 'usr', 'bin', 'tar.exe') : '';
+        if (candidate && existsSync(candidate)) {
+          candidates.add(candidate);
+        }
+      }
+    }
+  }
+  return [...candidates, 'tar'];
+}
+
+function killProcessTree(child) {
+  if (process.platform === 'win32' && child.pid) {
+    // tar 只负责编排，真正解 bz2 的是它拉起的子进程，必须整棵树结束。
+    spawn('taskkill', ['/pid', String(child.pid), '/t', '/f'], { stdio: 'ignore' });
+    return;
+  }
+  child.kill('SIGKILL');
+}
+
+function extractWithTar(tar, archiveName, destinationName, cwd, destination) {
+  return new Promise((resolvePromise) => {
+    const child = spawn(tar, ['-xjf', archiveName, '-C', destinationName], {
+      cwd,
+      stdio: ['ignore', 'ignore', 'pipe'],
+    });
+    let stderr = '';
+    child.stderr?.on('data', (chunk) => {
+      stderr += chunk;
+    });
+
+    const startedAt = Date.now();
+    let written = 0;
+    let grownAt = startedAt;
+    let stopReason = null;
+    let probing = false;
+    let settled = false;
+    let timer = null;
+
+    const settle = (code, error) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearInterval(timer);
+      resolvePromise({ code, stopReason, stderr: error ? `${stderr}\n${error}`.trim() : stderr });
+    };
+
+    timer = setInterval(async () => {
+      if (probing || stopReason) {
+        return;
+      }
+      probing = true;
+      try {
+        const now = Date.now();
+        const bytes = await directorySize(destination);
+        if (bytes > written) {
+          written = bytes;
+          grownAt = now;
+        }
+        const seconds = Math.max(1, (now - startedAt) / 1000);
+        info(
+          `    解压 ${basename(archiveName)}：已写入 ${(bytes / 1048576).toFixed(1)} MB · 平均 ${(bytes / 1024 / seconds).toFixed(0)} KB/s`,
+        );
+        if (now - grownAt >= EXTRACT_STALL_MS) {
+          stopReason = 'stalled';
+        } else if (now - startedAt >= EXTRACT_TIMEOUT_MS) {
+          stopReason = 'timeout';
+        }
+      } finally {
+        probing = false;
+      }
+      if (stopReason) {
+        warn(
+          `解压${stopReason === 'stalled' ? '卡住：目标目录连续 4 分钟没有增长' : '超时'}，终止 ${basename(tar)}`,
+        );
+        killProcessTree(child);
+        // taskkill 失败时别无限等 close 事件。
+        setTimeout(() => settle(1), 15000);
+      }
+    }, EXTRACT_PROGRESS_MS);
+    timer.unref?.();
+
+    child.on('close', (code) => settle(code ?? 1));
+    child.on('error', (error) => settle(1, error.message));
+  });
+}
+
+async function extractTarBz2(archiveName, destinationName, cwd) {
+  const destination = join(cwd, destinationName);
+  const failures = [];
+  for (const tar of await resolveTarCandidates()) {
+    info(`解压 ${archiveName}（${basename(tar)}）`);
+    const result = await extractWithTar(tar, archiveName, destinationName, cwd, destination);
+    if (result.code === 0) {
+      info(`解压完成 ${archiveName}：${((await directorySize(destination)) / 1048576).toFixed(1)} MB`);
+      return;
+    }
+    const reason = result.stopReason ? `被看门狗终止（${result.stopReason}）` : `退出码 ${result.code}`;
+    const tail = result.stderr
+      .trim()
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .slice(-4)
+      .join(' | ');
+    warn(`解压失败（${basename(tar)} · ${reason}）：${tail || '无输出'}`);
+    failures.push(`${basename(tar)}: ${reason}${tail ? ` · ${tail}` : ''}`);
+    await rm(destination, { recursive: true, force: true });
+    await mkdir(destination, { recursive: true });
+  }
+  throw new Error(`解压失败：${archiveName}\n${failures.join('\n')}`);
 }
 
 /// 当前平台对应的静态库归档名。
@@ -608,6 +791,46 @@ async function prepareCudaLibs(proxy) {
   info('用 GPU 构建：npm run tauri -- build -- --no-default-features --features gpu（会自己带上 SHERPA_ONNX_LIB_DIR 与打包配置）');
 }
 
+/// 阶段一：把缺失的归档下载到 work。
+async function prefetchArchive(task, work, proxy) {
+  const archive = join(work, task.name);
+
+  // 归档还在就直接复用：模型动辄上 G，重下代价太高。
+  if (force || !existsSync(archive)) {
+    info(`下载 ${task.name} …`);
+    await download(task.url, archive, proxy);
+  } else {
+    info(`复用已下载的 ${task.name}`);
+  }
+}
+
+/// 阶段二：把归档解到目标位置。
+async function installTask(task, work) {
+  const archive = join(work, task.name);
+
+  await rm(task.target, { recursive: true, force: true });
+  await mkdir(dirname(task.target), { recursive: true });
+
+  if (task.extract === false || task.unpack === 'raw') {
+    // 原生库归档保持原样放置（由 build.rs 解压）；VAD 本身就是单个文件。
+    await rename(archive, task.target);
+  } else {
+    const stagingName = `${task.name}.extracted`;
+    const staging = join(work, stagingName);
+    await rm(staging, { recursive: true, force: true });
+    await mkdir(staging, { recursive: true });
+    await extractTarBz2(task.name, stagingName, work);
+
+    const stem = task.name.replace(/\.tar\.bz2$/i, '');
+    const nested = join(staging, stem);
+    const source = existsSync(nested) ? nested : (await firstSubdir(staging)) || staging;
+    await rename(source, task.target);
+    await rm(staging, { recursive: true, force: true });
+    await rm(archive, { force: true });
+  }
+  info(`完成：${task.target}`);
+}
+
 async function main() {
   const proxy = await resolveSystemProxy();
   info(proxy ? `使用代理：${proxy}` : '未检测到代理，直连下载');
@@ -686,42 +909,35 @@ async function main() {
   const work = join(SRC_TAURI, '.sherpa-download-tmp');
   await mkdir(work, { recursive: true });
 
+  const pending = [];
   for (const task of tasks) {
     if (!force && (await task.ready())) {
       info(`已存在，跳过：${task.target}`);
       continue;
     }
-    const archive = join(work, task.name);
+    pending.push(task);
+  }
 
-    // 归档还在就直接复用：模型动辄上 G，重下代价太高。
-    if (force || !existsSync(archive)) {
-      info(`下载 ${task.name} …`);
-      await download(task.url, archive, proxy);
-    } else {
-      info(`复用已下载的 ${task.name}`);
-    }
+  // 下载并发、解压串行：网络能靠多条连接叠带宽，而 bz2 解压本身是单线程，
+  // 三个大包同时解只会互相抢 CPU 和磁盘，日志里也看不出卡在哪个包。
+  let nextTaskIndex = 0;
+  const workers = Array.from(
+    { length: Math.min(DOWNLOAD_CONCURRENCY, pending.length) },
+    async () => {
+      while (true) {
+        const index = nextTaskIndex;
+        nextTaskIndex += 1;
+        if (index >= pending.length) {
+          return;
+        }
+        await prefetchArchive(pending[index], work, proxy);
+      }
+    },
+  );
+  await Promise.all(workers);
 
-    await rm(task.target, { recursive: true, force: true });
-    await mkdir(dirname(task.target), { recursive: true });
-
-    if (task.extract === false || task.unpack === 'raw') {
-      // 原生库归档保持原样放置（由 build.rs 解压）；VAD 本身就是单个文件。
-      await rename(archive, task.target);
-    } else {
-      const stagingName = `${task.name}.extracted`;
-      const staging = join(work, stagingName);
-      await rm(staging, { recursive: true, force: true });
-      await mkdir(staging, { recursive: true });
-      await extractTarBz2(task.name, stagingName, work);
-
-      const stem = task.name.replace(/\.tar\.bz2$/i, '');
-      const nested = join(staging, stem);
-      const source = existsSync(nested) ? nested : (await firstSubdir(staging)) || staging;
-      await rename(source, task.target);
-      await rm(staging, { recursive: true, force: true });
-      await rm(archive, { force: true });
-    }
-    info(`完成：${task.target}`);
+  for (const task of pending) {
+    await installTask(task, work);
   }
 
   if (withCuda) {

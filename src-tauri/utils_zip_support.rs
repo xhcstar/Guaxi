@@ -1206,6 +1206,24 @@ fn collect_units(
     units: &mut Vec<BundleUnit>,
     scan: &ScanProgress,
 ) -> Result<(), String> {
+    // 断链可能在进入条目枚举前就被当成一个「子单元」传进来（父目录触发了拆分）；
+    // 先探一下，别等 read_dir 用 NotFound 把整条打包打断。
+    if fs::symlink_metadata(path)
+        .map(|metadata| metadata.file_type().is_symlink())
+        .unwrap_or(false)
+    {
+        match fs::metadata(path) {
+            Ok(_) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                report_dangling_link(relative);
+                return Ok(());
+            }
+            Err(error) => {
+                return Err(format!("failed to read metadata {}: {error}", path.display()));
+            }
+        }
+    }
+
     if path.is_file() {
         let entry = file_entry(relative, path)?;
         scan.record(1);
@@ -1260,8 +1278,22 @@ fn collect_units(
     Ok(())
 }
 
-fn included_children(dir: &Path, relative: &Path) -> Result<Vec<(PathBuf, PathBuf)>, String> {
-    let mut entries = fs::read_dir(dir)
+/// 断链告警最多打 8 行，避免一棵坏树刷屏；后续同类只在数量上省略。
+fn report_dangling_link(relative: &Path) {
+    const MAX_LINES: usize = 8;
+    static REPORTED: AtomicUsize = AtomicUsize::new(0);
+    let index = REPORTED.fetch_add(1, Ordering::Relaxed);
+    if index < MAX_LINES {
+        progress_emit(&format!(
+            "[utils.bundle] 跳过失效的符号链接：{}",
+            relative.display()
+        ));
+    } else if index == MAX_LINES {
+        progress_emit("[utils.bundle] 还有更多失效的符号链接，不再逐条打印");
+    }
+}
+
+fn included_children(dir: &Path, relative: &Path) -> Result<Vec<(PathBuf, PathBuf)>, String> {    let mut entries = fs::read_dir(dir)
         .map_err(|e| format!("failed to read dir {}: {e}", dir.display()))?
         .flatten()
         .collect::<Vec<_>>();
@@ -1323,10 +1355,19 @@ fn collect_entries(
             .file_type()
             .map_err(|e| format!("failed to stat dir entry {}: {e}", path.display()))?;
         let link_target = if file_type.is_symlink() {
-            Some(
-                fs::metadata(&path)
-                    .map_err(|e| format!("failed to read metadata {}: {e}", path.display()))?,
-            )
+            match fs::metadata(&path) {
+                Ok(metadata) => Some(metadata),
+                // 断链没有内容可打包。典型来源是 pnpm 装到一半的 node_modules：
+                // 可选原生依赖构建失败后，虚拟 store 里会留下指向不存在目录的符号链接。
+                // 这是可选组件自己的残缺，不该让整条发布流程失败。
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                    report_dangling_link(&relative);
+                    continue;
+                }
+                Err(error) => {
+                    return Err(format!("failed to read metadata {}: {error}", path.display()));
+                }
+            }
         } else {
             None
         };

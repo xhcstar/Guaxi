@@ -15,11 +15,14 @@
 // 非 Windows 平台直接跳过：当前的 Slidev/RSSHub 运行路径只针对 Windows 适配。
 
 import { spawn } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { copyFile, mkdir, readdir, rm, stat } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const NODE_VERSION = process.env.GUAXI_NODE_VERSION || 'v22.11.0';
+// 版本必须跟着 RSSHub 的 engines 走（当前 ^24.15.0 || ^26.13.0）：v22.11 的 zlib 里
+// 没有 createZstdDecompress，RSSHub 依赖的 undici 8 一启动就崩。用 24.x LTS。
+const NODE_VERSION = process.env.GUAXI_NODE_VERSION || 'v24.22.3';
 const DIST_BASE = process.env.GUAXI_NODE_DIST || 'https://nodejs.org/dist';
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, '..');
@@ -43,6 +46,48 @@ function run(command, args, options = {}) {
     child.on('close', (code) => resolvePromise(code ?? 1));
     child.on('error', () => resolvePromise(1));
   });
+}
+
+function capture(command, args) {
+  return new Promise((resolvePromise) => {
+    let out = '';
+    const child = spawn(command, args, { stdio: ['ignore', 'pipe', 'ignore'] });
+    child.stdout.on('data', (chunk) => (out += chunk));
+    child.on('close', (code) => resolvePromise({ code: code ?? 1, out: out.trim() }));
+    child.on('error', () => resolvePromise({ code: 1, out: '' }));
+  });
+}
+
+// 解 zip 用 Windows 自带的 bsdtar：它不会踩 PowerShell 的坑。
+// 之前在 CI 上 `Expand-Archive -Force` 直接失败——PS7 的 Archive 模块去调
+// ExtractToDirectory 的三参数重载，报 "Cannot find an overload ... argument count: 3"，
+// 结果 node.exe 根本没解出来，而编排层又把这一步当成成功，离线包里的 RSSHub 起不来。
+// PowerShell 只作为退路，且不带 -Force（三参数重载正是它炸掉的地方，目标目录是空的）。
+async function extractZip(archive, destination) {
+  const candidates = [];
+  const systemTar = join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'tar.exe');
+  if (existsSync(systemTar)) {
+    candidates.push([systemTar, ['-xf', archive, '-C', destination]]);
+  }
+  candidates.push([
+    'powershell',
+    [
+      '-NoProfile',
+      '-NonInteractive',
+      '-Command',
+      `Expand-Archive -LiteralPath '${archive.replaceAll("'", "''")}' -DestinationPath '${destination.replaceAll("'", "''")}'`,
+    ],
+  ]);
+
+  const failures = [];
+  for (const [command, args] of candidates) {
+    const code = await run(command, args);
+    if (code === 0) {
+      return;
+    }
+    failures.push(`${command}: 退出码 ${code}`);
+  }
+  throw new Error(`解压失败（${failures.join('；')}）`);
 }
 
 async function findFile(root, name) {
@@ -69,8 +114,15 @@ async function main() {
 
   const existing = await sizeOf(destination);
   if (!force && existing >= MIN_NODE_BYTES) {
-    console.log(`[slidev-node] node.exe 已存在（${(existing / 1048576).toFixed(1)} MB），跳过`);
-    return;
+    // 只比大小会漏掉版本升级：老的 node.exe 同样「看起来正常」，但跑不了新版 RSSHub。
+    const { out: currentVersion } = await capture(destination, ['--version']);
+    if (currentVersion === NODE_VERSION) {
+      console.log(`[slidev-node] node.exe ${currentVersion} 已就绪，跳过`);
+      return;
+    }
+    console.log(
+      `[slidev-node] 现有 node.exe 是 ${currentVersion || '未知版本'}，需要 ${NODE_VERSION}，重新下载`,
+    );
   }
 
   const archiveName = `node-${NODE_VERSION}-win-x64.zip`;
@@ -100,17 +152,7 @@ async function main() {
   }
 
   console.log(`[slidev-node] 解压 ${archiveName}`);
-  // Windows 自带 bsdtar 也能解 zip，但 Expand-Archive 在各版 PowerShell 上都可用，
-  // 路径里出现空格时也不用额外转义。
-  const extractCode = await run('powershell', [
-    '-NoProfile',
-    '-NonInteractive',
-    '-Command',
-    `Expand-Archive -LiteralPath '${archive.replaceAll("'", "''")}' -DestinationPath '${TEMP_DIR.replaceAll("'", "''")}' -Force`,
-  ]);
-  if (extractCode !== 0) {
-    throw new Error(`解压失败（退出码 ${extractCode}）`);
-  }
+  await extractZip(archive, TEMP_DIR);
 
   const extractedNode = await findFile(TEMP_DIR, 'node.exe');
   if (!extractedNode) {
