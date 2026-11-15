@@ -99,3 +99,9 @@ src-tauri/utils/rsshub/
 *.key
 *.p12
 *.pfx
+
+# 发布打包产物（tools/package_release.ps1 与 CI 生成）
+release-assets/
+release-payload/
+release-notes.md
+src-tauri/utils/SlidevEnv/NodeJS-LICENSE.txt

@@ -877,3 +877,64 @@ npm run prepare:tauri-utils
 4. 改 `SKIPPED_DIRECTORIES` / `should_skip()` / `SPLIT_*` / `BUNDLE_FORMAT_VERSION`，都要连带更新单测与本文。
 5. 重命名 `prepare_utils_zip` 之类入口时，需同步：`package.json`、`tools/run_tauri_with_utils.mjs`、`build.rs`、CI 与本文。
 6. `installer-hooks.nsh` 里任何新增步骤都必须**失败即 `Abort`**（字体安装这种可降级的除外），不允许静默跳过。
+
+---
+
+## 13. CI 发布（GitHub Actions）
+
+`.github/workflows/release.yml` 在推送 `v*` tag 时构建并发布 Windows 完整离线包：
+
+1. **构建**：直接跑 `npm run tauri -- build`（与本地完全同一条链），
+   **不设** `SHERPA_SKIP_MODELS` / `RSSHUB_SKIP`——少了语音模型或 RSSHub 的包是残缺的，
+   必须在 CI 里就构建完整。模型（约 1 GB）、`utils/SlidevEnv/node.exe`（RSSHub/Slidev/LSP
+   的运行时，约 77 MB）与 RSSHub 构建产物分别缓存，键里带上对应脚本的摘要，
+   清单变了缓存自动失效。
+2. **打包**：`tools/package_release.ps1` 把 `bundle/nsis/` 整个复制成
+   `guaxi-<tag>-windows-x64/`（安装器 + `extract_utils_bundles.exe` + `utils_bundles/` +
+   README + 解压即见的安装说明），校验完整性后切成 7z 分卷，并生成 `SHA256SUMS.txt`
+   与 Release 正文 `release-notes.md`。
+3. **发布**：tag 构建在同一 job 内直接上传 Release（不走 Artifact 往返）；
+   手动 `workflow_dispatch` 不填 `publish_tag` 时只留构建产物，方便验证。
+   发布前会先删掉目标 Release 上的旧 `guaxi-*-windows-x64.zip` 与旧分卷，
+   避免下载页同时挂着两套互相矛盾的包。
+
+### 13.1 为什么必须分卷
+
+GitHub Release 对**单个资产**有 2 GiB 上限（2,147,483,648 字节），而完整包压缩后通常
+2–3 GB。所以脚本按 `-VolumeSizeMb 1800`（默认）切卷：
+
+```text
+guaxi-v0.1.1-windows-x64-full.7z.001
+guaxi-v0.1.1-windows-x64-full.7z.002
+SHA256SUMS.txt
+```
+
+用户下载**全部**卷到同一个文件夹，用 7-Zip / WinRAR 解压 `.001`。脚本会兜底检查每个
+产物都低于 2 GiB，超限直接失败而不是把上传失败留到 Release 步骤。
+
+### 13.2 完整性闸门
+
+`package_release.ps1` 在打卷之前强制校验：`*_x64-setup.exe`、`extract_utils_bundles.exe`、
+`utils_bundles/bundle-manifest.json` 必须存在，且 `utils_bundles` 总大小不低于
+`-MinimumBundleMb`（默认 500 MB）。低于阈值的包基本可以断定模型没进包（例如 CI 误开了
+`SHERPA_SKIP_MODELS`），脚本会直接失败——这类问题在下载页上是看不出来的，只能在发版前挡住。
+
+### 13.3 手动验证
+
+```bash
+npm run tauri -- build
+pwsh ./tools/package_release.ps1 -AllowSmallPayload   # 本地想快速验证打包流程时
+```
+
+产物在 `release-assets/`，Release 正文模板在 `release-notes.md`。
+
+### 13.4 重新发布已存在的版本
+
+版本号已经发过（例如 v0.1.1 的包缺模型），但需要换掉下载文件时，别改 tag：
+
+1. 把修复推到 `main`；
+2. Actions → Release → Run workflow，`publish_tag` 填 `v0.1.1`。
+
+工作流会按当前代码重新构建，删掉该 Release 上的旧资产，再上传新的分卷与校验值。
+`package_release.ps1` 会核对 `publish_tag` 与 `tauri.conf.json` 里的版本一致，
+防止把 v0.1.1 的文件发到别的版本号下。

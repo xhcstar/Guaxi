@@ -210,6 +210,14 @@ src-tauri/target/release/bundle/nsis/
 └── utils_bundles/                # *.tar.zst files + bundle-manifest.json
 ```
 
+A complete Windows package (speech models + RSSHub) is usually 2–3 GB, over GitHub Releases'
+**2 GiB per-file** limit. `tools/package_release.ps1` therefore splits it into 7z volumes
+(`guaxi-<tag>-windows-x64-full.7z.001/.002/…`, 1.8 GB each, plus `SHA256SUMS.txt`).
+Users download every volume into one folder and extract `.001`. The tag-triggered
+`.github/workflows/release.yml` does this automatically; the same script runs locally.
+To **re-publish an existing version** (e.g. a fixed build of v0.1.1), run the Release
+workflow manually with `publish_tag` set to that tag — the tag itself is untouched.
+
 **Linux (AppImage / deb / rpm, in progress)** — same command; artifacts land in
 `src-tauri/target/release/bundle/{appimage,deb,rpm}/`. Resource handling differs from Windows:
 `utils/__bundles/` is **embedded in the package as resources** and extracted into `utils/` on first
@@ -243,6 +251,7 @@ A Windows release directory additionally needs `cuda_runtime_bundles/`.
 | `npm run prepare:tauri-utils` | Regenerate the `utils` bundles without building an installer |
 | `npm run prepare:tauri-assets` | Copy the Excalidraw / Vditor static assets only |
 | `npm run build:chart-preview` | Regenerate the chart preview module (`include_str!`-ed into the binary) |
+| `npm run slidev:fetch-node` | Fetch the bundled Node (`utils/SlidevEnv/node.exe`, runtime for RSSHub / Slidev / LSP) |
 | `npm run test:frontend` | Frontend unit tests (`node --test`) |
 | `npm run check:*` | Static checks (search syntax, window routing, offline icons, responsiveness, …) |
 

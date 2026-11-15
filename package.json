@@ -23,6 +23,7 @@
     "sherpa:fetch": "node ./tools/fetch_sherpa_onnx_libs.mjs",
     "sherpa:fetch:force": "node ./tools/fetch_sherpa_onnx_libs.mjs --force",
     "sherpa:fetch:cuda": "node ./tools/fetch_sherpa_onnx_libs.mjs --cuda",
+    "slidev:fetch-node": "node ./tools/fetch_slidev_node.mjs",
     "prepare:pdfium": "node ./tools/fetch_pdfium.mjs",
     "sherpa:verify:cuda": "cargo run --quiet --manifest-path src-tauri/bundle-tools/Cargo.toml --target-dir src-tauri/target-bundle-tools --bin verify_cuda_runtime --",
     "rsshub:prepare": "node ./tools/prepare_rsshub_env.mjs",

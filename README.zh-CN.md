@@ -196,6 +196,14 @@ src-tauri/target/release/bundle/nsis/
 └── utils_bundles/                # 若干 *.tar.zst + bundle-manifest.json
 ```
 
+带语音模型与 RSSHub 的完整包通常在 2–3 GB，超过 GitHub Release **单文件 2 GiB** 的上限，
+所以发布时由 `tools/package_release.ps1` 打成 7z 分卷
+（`guaxi-<tag>-windows-x64-full.7z.001/.002/…`，每卷 1.8 GB，附 `SHA256SUMS.txt`）。
+用户把全部分卷下到同一个文件夹、解压 `.001` 即可；`.github/workflows/release.yml`
+在打 tag 时自动完成构建与发布，本地也可手动运行同一脚本。
+要**重发已经存在的版本**（例如 v0.1.1 修好构建后重发），在 Actions 里手动运行
+Release 工作流并把 `publish_tag` 填成该 tag 即可，无需改写 tag。
+
 **Linux（AppImage / deb / rpm，适配中）**：同一条命令即可，产物在
 `src-tauri/target/release/bundle/{appimage,deb,rpm}/`。资源处理方式与 Windows 不同：
 `utils/__bundles/` 作为 **resources 直接打进包**，应用首次启动时解包到 `utils/`，
@@ -226,6 +234,7 @@ CPU 与 GPU 各用一份 Cargo target 目录（`src-tauri/target` / `src-tauri/t
 | `npm run prepare:tauri-utils` | 只重新生成 `utils` 分包，不构建安装器 |
 | `npm run prepare:tauri-assets` | 单独复制 Excalidraw / Vditor 静态资源 |
 | `npm run build:chart-preview` | 重新生成图表预览模块（被 Rust `include_str!` 打进二进制） |
+| `npm run slidev:fetch-node` | 取内置 Node（`utils/SlidevEnv/node.exe`，RSSHub / Slidev / LSP 的运行时） |
 | `npm run test:frontend` | 前端单测（`node --test`） |
 | `npm run check:*` | 各类静态检查（搜索语法、窗口路由、离线图标、响应性等） |
 

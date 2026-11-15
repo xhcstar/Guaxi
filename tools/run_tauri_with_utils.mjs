@@ -798,7 +798,7 @@ async function main() {
     stageTotal += 1;
   }
   if (shouldPrepareForTauriCommand) {
-    stageTotal += 4 + (isWindows ? 1 : 0);
+    stageTotal += 5 + (isWindows ? 1 : 0);
   }
   stageTotal += 1;
   if (shouldPrepareForTauriCommand) {
@@ -965,6 +965,13 @@ async function main() {
       process.exit(prepareChartPreviewExitCode);
     }
     stageDone(chartStage);
+
+    // Slidev / LSP / RSSHub 的运行时都是内置的 `utils/SlidevEnv/node.exe`。
+    // 它是平台二进制、不进 git，干净机器和 CI 上都没有；缺了它，离线包即使带着
+    // rsshub/dist 也起不来。这里按固定版本补齐，幂等（已有则秒过）、失败不阻断。
+    const nodeStage = stage('内置 Node 运行时', 'utils/SlidevEnv/node.exe，已有则秒过');
+    await run('node', ['./tools/fetch_slidev_node.mjs'], {}, { label: 'Node 运行时准备' });
+    stageDone(nodeStage);
 
     // RSSHub 进程内集成：把 rsshub 装进 SlidevEnv/node_modules（复用其 node.exe），
     // 必须在 prepare_utils_zip 打包 utils 树之前，装好的 rsshub 才会被一起打进离线包。
