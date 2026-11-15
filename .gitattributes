@@ -13,3 +13,18 @@
 # ---------------------------------------------------------------------------
 public/excalidraw/** -text
 public/vditor/**     -text
+
+# ---------------------------------------------------------------------------
+# GitHub language statistics
+#
+# The repository is a Rust desktop shell; the Vue layer is the presentation
+# layer. Generated documentation, vendored frontend bundles and binary runtime
+# resources would otherwise dominate the language bar, so exclude them here.
+# Remove the last line if you want Vue to be counted again.
+# ---------------------------------------------------------------------------
+public/**                  linguist-vendored
+Convertor/**               linguist-vendored
+docs/**                    linguist-documentation
+src-tauri/assets/vendor/** linguist-vendored
+src-tauri/utils/**         linguist-vendored
+src/**/*.vue               linguist-detectable=false
