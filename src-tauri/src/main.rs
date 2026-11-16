@@ -1,4 +1,5 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
+// The desktop shell is implemented in Rust; the Vue layer under src/ is presentation.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use once_cell::sync::OnceCell;
