@@ -28,3 +28,4 @@ docs/**                    linguist-documentation
 src-tauri/assets/vendor/** linguist-vendored
 src-tauri/utils/**         linguist-vendored
 src/**/*.vue               linguist-detectable=false
+# Changing this file makes GitHub re-run the language detection.
